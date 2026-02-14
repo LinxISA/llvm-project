@@ -44,31 +44,35 @@ let TargetPrefix = "linx" in {
 
   // Descriptor-carrying staged forms (v0.3 auto-mode policy):
   //
-  // - layout_format is encoded via B.ARG.
-  // - lb0/lb1 are encoded via B.DIM.
+  // - arg is encoded via B.ARG (low bits: unified format, high bits: pad mode).
+  // - lb0/lb1/lb2 are encoded via B.DIM.
   // - B.IOR still binds the base GPR (and auxiliary metadata lanes can be
   //   added later without changing this intrinsic ABI).
   //
-  // <anyvector> @llvm.linx.tma.tload.desc(ptr base, i32 layout, i32 lb0,
-  //                                       i32 lb1, i32 immSizeCode)
+  // <anyvector> @llvm.linx.tma.tload.desc(ptr base, i32 arg, i32 lb0,
+  //                                       i32 lb1, i32 lb2, i32 immSizeCode)
   def int_linx_tma_tload_desc :
       Intrinsic<[llvm_anyvector_ty],
-                [llvm_ptr_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [llvm_ptr_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
+                 llvm_i32_ty],
                 [IntrReadMem, IntrArgMemOnly,
                  NoCapture<ArgIndex<0>>,
                  ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
-                 ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
+                 ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
+                 ImmArg<ArgIndex<5>>]>;
 
-  // void @llvm.linx.tma.tstore.desc(ptr base, <anyvector> tile, i32 layout,
-  //                                 i32 lb0, i32 lb1, i32 immSizeCode)
+  // void @llvm.linx.tma.tstore.desc(ptr base, <anyvector> tile, i32 arg,
+  //                                 i32 lb0, i32 lb1, i32 lb2, i32 immSizeCode)
   def int_linx_tma_tstore_desc :
       Intrinsic<[],
                 [llvm_ptr_ty, llvm_anyvector_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
+                 llvm_i32_ty],
                 [IntrWriteMem, IntrArgMemOnly,
                  NoCapture<ArgIndex<0>>,
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
-                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
+                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>,
+                 ImmArg<ArgIndex<6>>]>;
 
   // <anyvector> @llvm.linx.cube.mamulb(<anyvector> a, <anyvector> b,
   //                                    i32 immM, i32 immN, i32 immK)

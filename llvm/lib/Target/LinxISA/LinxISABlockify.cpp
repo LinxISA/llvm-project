@@ -673,6 +673,11 @@ public:
         return 3; // n
       };
 
+      auto checkTMAArg = [](int64_t Arg) {
+        if (Arg < 0 || Arg > 31 || ((Arg & 0x7) > 4))
+          report_fatal_error("Linx: TMA B.ARG must encode NORM/ND2NZ/ND2ZN/DN2NZ/DN2ZN");
+      };
+
       switch (PseudoMI->getOpcode()) {
       case LinxISA::PSEUDO_TMA_TLOAD: {
         const Register Dst = PseudoMI->getOperand(0).getReg();
@@ -688,13 +693,14 @@ public:
             .addImm(TMA_TLOAD);
 
         // Canonical descriptor-carrying TLOAD header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOTI.
+        //   B.DIM(LB0/LB1/LB2) + B.ARG + B.IOR + B.IOT/B.IOTI.
         //
         // The current PTO auto-mode bridge does not pass explicit layout/dim
         // metadata yet, so use bring-up defaults here:
-        //   LB0/LB1 = 0, format=0 (Normal), RegSrc1/2=zero, RegDst=zero.
+        //   LB0/LB1/LB2 = 0, format=0 (Normal), RegSrc1/2=zero, RegDst=zero.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, /*Imm=*/0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
             .addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
@@ -735,6 +741,7 @@ public:
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, /*Imm=*/0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
             .addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
@@ -765,7 +772,8 @@ public:
         const int64_t Layout = PseudoMI->getOperand(2).getImm();
         const int64_t LB0 = PseudoMI->getOperand(3).getImm();
         const int64_t LB1 = PseudoMI->getOperand(4).getImm();
-        const int64_t Size = PseudoMI->getOperand(5).getImm();
+        const int64_t LB2 = PseudoMI->getOperand(5).getImm();
+        const int64_t Size = PseudoMI->getOperand(6).getImm();
 
         const unsigned DstID = tileRegId(Dst);
         if (DstID >= 16)
@@ -774,8 +782,10 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
             .addImm(DType_I32)
             .addImm(TMA_TLOAD);
+        checkTMAArg(Layout);
         emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, LB2);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
@@ -811,9 +821,10 @@ public:
             .addImm(TMA_TSTORE);
 
         // Canonical descriptor-carrying TSTORE header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOTI.
+        //   B.DIM(LB0/LB1/LB2) + B.ARG + B.IOR + B.IOT/B.IOTI.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, /*Imm=*/0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
             .addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
@@ -845,14 +856,17 @@ public:
         const int64_t Layout = PseudoMI->getOperand(2).getImm();
         const int64_t LB0 = PseudoMI->getOperand(3).getImm();
         const int64_t LB1 = PseudoMI->getOperand(4).getImm();
-        const int64_t Size = PseudoMI->getOperand(5).getImm();
+        const int64_t LB2 = PseudoMI->getOperand(5).getImm();
+        const int64_t Size = PseudoMI->getOperand(6).getImm();
         const unsigned SrcID = tileRegId(Src);
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
             .addImm(DType_I32)
             .addImm(TMA_TSTORE);
+        checkTMAArg(Layout);
         emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, LB2);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)

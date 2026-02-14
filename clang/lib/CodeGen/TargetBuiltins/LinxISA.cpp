@@ -43,17 +43,19 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
     llvm::Value *Layout = EmitScalarExpr(E->getArg(1));
     llvm::Value *LB0 = EmitScalarExpr(E->getArg(2));
     llvm::Value *LB1 = EmitScalarExpr(E->getArg(3));
-    llvm::Value *Size = EmitScalarExpr(E->getArg(4));
+    llvm::Value *LB2 = EmitScalarExpr(E->getArg(4));
+    llvm::Value *Size = EmitScalarExpr(E->getArg(5));
     llvm::Type *I32 = Builder.getInt32Ty();
     Layout = Builder.CreateIntCast(Layout, I32, /*isSigned=*/false);
     LB0 = Builder.CreateIntCast(LB0, I32, /*isSigned=*/false);
     LB1 = Builder.CreateIntCast(LB1, I32, /*isSigned=*/false);
+    LB2 = Builder.CreateIntCast(LB2, I32, /*isSigned=*/false);
     Size = Builder.CreateIntCast(Size, I32, /*isSigned=*/false);
 
     llvm::Type *TileTy = ConvertType(E->getType());
     llvm::Function *F =
         CGM.getIntrinsic(llvm::Intrinsic::linx_tma_tload_desc, {TileTy});
-    return Builder.CreateCall(F, {Base, Layout, LB0, LB1, Size},
+    return Builder.CreateCall(F, {Base, Layout, LB0, LB1, LB2, Size},
                               "linx.tload.desc");
   }
   case LinxISA::BI__builtin_linx_tma_tstore_desc: {
@@ -62,17 +64,19 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
     llvm::Value *Layout = EmitScalarExpr(E->getArg(2));
     llvm::Value *LB0 = EmitScalarExpr(E->getArg(3));
     llvm::Value *LB1 = EmitScalarExpr(E->getArg(4));
-    llvm::Value *Size = EmitScalarExpr(E->getArg(5));
+    llvm::Value *LB2 = EmitScalarExpr(E->getArg(5));
+    llvm::Value *Size = EmitScalarExpr(E->getArg(6));
     llvm::Type *I32 = Builder.getInt32Ty();
     Layout = Builder.CreateIntCast(Layout, I32, /*isSigned=*/false);
     LB0 = Builder.CreateIntCast(LB0, I32, /*isSigned=*/false);
     LB1 = Builder.CreateIntCast(LB1, I32, /*isSigned=*/false);
+    LB2 = Builder.CreateIntCast(LB2, I32, /*isSigned=*/false);
     Size = Builder.CreateIntCast(Size, I32, /*isSigned=*/false);
 
     llvm::Function *F =
         CGM.getIntrinsic(llvm::Intrinsic::linx_tma_tstore_desc,
                          {Tile->getType()});
-    return Builder.CreateCall(F, {Base, Tile, Layout, LB0, LB1, Size});
+    return Builder.CreateCall(F, {Base, Tile, Layout, LB0, LB1, LB2, Size});
   }
   case LinxISA::BI__builtin_linx_cube_mamulb: {
     llvm::Value *A = EmitScalarExpr(E->getArg(0));

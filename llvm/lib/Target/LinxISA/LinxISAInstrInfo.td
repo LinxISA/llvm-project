@@ -427,7 +427,7 @@ def PSEUDO_TMA_TLOAD_ANY : Pseudo<(outs TILE:$dst), (ins GPR_Arch:$base, i64imm:
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
 def PSEUDO_TMA_TLOAD_DESC : Pseudo<(outs TILE_TU:$dst),
                                    (ins GPR_Arch:$base, i64imm:$layout, i64imm:$lb0,
-                                        i64imm:$lb1, i64imm:$size),
+                                        i64imm:$lb1, i64imm:$lb2, i64imm:$size),
                                    "# PSEUDO_TMA_TLOAD_DESC", []>;
 
 let hasSideEffects = 1, isBarrier = 1, mayStore = 1, Size = 4 in
@@ -437,7 +437,7 @@ def PSEUDO_TMA_TSTORE : Pseudo<(outs), (ins GPR_Arch:$base, TILE:$src, i64imm:$s
 let hasSideEffects = 1, isBarrier = 1, mayStore = 1, Size = 4 in
 def PSEUDO_TMA_TSTORE_DESC : Pseudo<(outs),
                                     (ins GPR_Arch:$base, TILE:$src, i64imm:$layout,
-                                         i64imm:$lb0, i64imm:$lb1, i64imm:$size),
+                                         i64imm:$lb0, i64imm:$lb1, i64imm:$lb2, i64imm:$size),
                                     "# PSEUDO_TMA_TSTORE_DESC", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in

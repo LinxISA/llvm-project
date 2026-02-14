@@ -1800,17 +1800,17 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     unsigned Fmt = 0;
     if (Up == "NORM.NORMAL")
       Fmt = 0;
+    else if (Up == "ND2NZ.NORMAL")
+      Fmt = 1;
     else if (Up == "ND2ZN.NORMAL")
+      Fmt = 2;
+    else if (Up == "DN2NZ.NORMAL")
       Fmt = 3;
     else if (Up == "DN2ZN.NORMAL")
-      Fmt = 8;
-    else if (Up == "DN2NZ.NORMAL")
-      Fmt = 9;
-    else if (Up == "NZ2DN.CANON")
-      Fmt = 28;
+      Fmt = 4;
     else
       return require(false,
-                     "unknown B.ARG layout name (use format=<imm> for raw values)");
+                     "unknown B.ARG layout name (NORM/ND2NZ/ND2ZN/DN2NZ/DN2ZN)");
 
     emitFieldImm(Fmt);
     return true;

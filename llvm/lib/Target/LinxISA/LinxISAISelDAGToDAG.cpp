@@ -520,13 +520,14 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     }
 
     if (IntrID == Intrinsic::linx_tma_tload_desc) {
-      // (chain, id, base, immLayout, immLB0, immLB1, immSizeCode)
+      // (chain, id, base, immLayout, immLB0, immLB1, immLB2, immSizeCode)
       auto *LayoutC = dyn_cast<ConstantSDNode>(N->getOperand(3));
       auto *LB0C = dyn_cast<ConstantSDNode>(N->getOperand(4));
       auto *LB1C = dyn_cast<ConstantSDNode>(N->getOperand(5));
-      auto *SizeC = dyn_cast<ConstantSDNode>(N->getOperand(6));
-      if (!LayoutC || !LB0C || !LB1C || !SizeC)
-        report_fatal_error("Linx: tma.tload.desc requires constant layout/lb0/lb1/size");
+      auto *LB2C = dyn_cast<ConstantSDNode>(N->getOperand(6));
+      auto *SizeC = dyn_cast<ConstantSDNode>(N->getOperand(7));
+      if (!LayoutC || !LB0C || !LB1C || !LB2C || !SizeC)
+        report_fatal_error("Linx: tma.tload.desc requires constant layout/lb0/lb1/lb2/size");
 
       SDValue Chain = N->getOperand(0);
       SDValue Base = N->getOperand(2);
@@ -536,9 +537,11 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           CurDAG->getTargetConstant(LB0C->getZExtValue(), DL, MVT::i64);
       SDValue LB1Imm =
           CurDAG->getTargetConstant(LB1C->getZExtValue(), DL, MVT::i64);
+      SDValue LB2Imm =
+          CurDAG->getTargetConstant(LB2C->getZExtValue(), DL, MVT::i64);
       SDValue SizeImm =
           CurDAG->getTargetConstant(SizeC->getZExtValue(), DL, MVT::i64);
-      SDValue Ops[] = {Base, LayoutImm, LB0Imm, LB1Imm, SizeImm, Chain};
+      SDValue Ops[] = {Base, LayoutImm, LB0Imm, LB1Imm, LB2Imm, SizeImm, Chain};
       SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TLOAD_DESC, DL,
                                            MVT::v1024i32, MVT::Other, Ops);
       ReplaceNode(N, Res);
@@ -659,13 +662,14 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     }
 
     if (IntrID == Intrinsic::linx_tma_tstore_desc) {
-      // (chain, id, base, tile, immLayout, immLB0, immLB1, immSizeCode)
+      // (chain, id, base, tile, immLayout, immLB0, immLB1, immLB2, immSizeCode)
       auto *LayoutC = dyn_cast<ConstantSDNode>(N->getOperand(4));
       auto *LB0C = dyn_cast<ConstantSDNode>(N->getOperand(5));
       auto *LB1C = dyn_cast<ConstantSDNode>(N->getOperand(6));
-      auto *SizeC = dyn_cast<ConstantSDNode>(N->getOperand(7));
-      if (!LayoutC || !LB0C || !LB1C || !SizeC)
-        report_fatal_error("Linx: tma.tstore.desc requires constant layout/lb0/lb1/size");
+      auto *LB2C = dyn_cast<ConstantSDNode>(N->getOperand(7));
+      auto *SizeC = dyn_cast<ConstantSDNode>(N->getOperand(8));
+      if (!LayoutC || !LB0C || !LB1C || !LB2C || !SizeC)
+        report_fatal_error("Linx: tma.tstore.desc requires constant layout/lb0/lb1/lb2/size");
 
       SDValue Chain = N->getOperand(0);
       SDValue Base = N->getOperand(2);
@@ -676,9 +680,11 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           CurDAG->getTargetConstant(LB0C->getZExtValue(), DL, MVT::i64);
       SDValue LB1Imm =
           CurDAG->getTargetConstant(LB1C->getZExtValue(), DL, MVT::i64);
+      SDValue LB2Imm =
+          CurDAG->getTargetConstant(LB2C->getZExtValue(), DL, MVT::i64);
       SDValue SizeImm =
           CurDAG->getTargetConstant(SizeC->getZExtValue(), DL, MVT::i64);
-      SDValue Ops[] = {Base, Tile, LayoutImm, LB0Imm, LB1Imm, SizeImm, Chain};
+      SDValue Ops[] = {Base, Tile, LayoutImm, LB0Imm, LB1Imm, LB2Imm, SizeImm, Chain};
       SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TSTORE_DESC, DL,
                                            MVT::Other, Ops);
       ReplaceNode(N, Res);

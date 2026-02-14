@@ -1156,14 +1156,28 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // Special-case: block argument format selector.
   if (AsmFmt.starts_with("B.ARG")) {
-    if (AsmFmt.contains("ND2ZN.normal") || AsmFmt.contains("DN2NZ.normal") ||
-        AsmFmt.contains("DN2ZN.normal") || AsmFmt.contains("NZ2DN.canon") ||
-        AsmFmt.contains("NORM.normal")) {
-      const StringRef Prefix = "B.ARG ";
-      StringRef Tail = AsmFmt;
-      if (Tail.starts_with(Prefix))
-        Tail = Tail.drop_front(Prefix.size());
-      OS << "B.ARG\t" << Tail;
+    if (AsmFmt.contains("NORM.normal")) {
+      OS << "B.ARG\tNORM.normal";
+      printAnnotation(OS, Annot);
+      return;
+    }
+    if (AsmFmt.contains("ND2ZN.normal")) {
+      OS << "B.ARG\tND2ZN.normal";
+      printAnnotation(OS, Annot);
+      return;
+    }
+    if (AsmFmt.contains("DN2NZ.normal")) {
+      OS << "B.ARG\tDN2NZ.normal";
+      printAnnotation(OS, Annot);
+      return;
+    }
+    if (AsmFmt.contains("DN2ZN.normal")) {
+      OS << "B.ARG\tDN2ZN.normal";
+      printAnnotation(OS, Annot);
+      return;
+    }
+    if (AsmFmt.contains("NZ2DN.canon")) {
+      OS << "B.ARG\tformat=28";
       printAnnotation(OS, Annot);
       return;
     }
@@ -1171,21 +1185,21 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned Format =
         static_cast<unsigned>(findFieldImm("format").value_or(0)) & 0x1fu;
     StringRef LayoutName = "format";
-    switch (Format) {
+    switch (Format & 0x7u) {
     case 0:
       LayoutName = "NORM.normal";
       break;
-    case 3:
+    case 1:
+      LayoutName = "ND2NZ.normal";
+      break;
+    case 2:
       LayoutName = "ND2ZN.normal";
       break;
-    case 8:
-      LayoutName = "DN2ZN.normal";
-      break;
-    case 9:
+    case 3:
       LayoutName = "DN2NZ.normal";
       break;
-    case 28:
-      LayoutName = "NZ2DN.canon";
+    case 4:
+      LayoutName = "DN2ZN.normal";
       break;
     default:
       LayoutName = "format";
