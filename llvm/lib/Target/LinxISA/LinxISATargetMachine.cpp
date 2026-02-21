@@ -28,6 +28,7 @@ LLVMInitializeLinxISATarget() {
   PassRegistry &PR = *PassRegistry::getPassRegistry();
   initializeLinxISAAsmPrinterPass(PR);
   initializeLinxISATileSSABalancePass(PR);
+  initializeLinxISAMemOpsCombinePass(PR);
   initializeLinxISABlockifyPass(PR);
   initializeLinxISASIMTAutoVectorizePass(PR);
   initializeLinxISADAGToDAGISelLegacyPass(PR);
@@ -103,6 +104,8 @@ public:
 
   void addPreEmitPass() override {
     addPass(createLinxISATileSSABalancePass());
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createLinxISAMemOpsCombinePass());
     addPass(createLinxISABlockifyPass());
   }
 };

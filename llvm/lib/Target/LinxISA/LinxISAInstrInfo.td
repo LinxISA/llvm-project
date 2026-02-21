@@ -48,6 +48,10 @@ def uimm12 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<12>(N->getZExtVal
   let ParserMatchClass = ImmAsmOperand;
 }
 
+def simm17 : Operand<i64>, PatLeaf<(i64 imm), [{ return isInt<17>(N->getSExtValue()); }]> {
+  let ParserMatchClass = ImmAsmOperand;
+}
+
 // SETC.*I encodes a shifted immediate: simm/uimm = imm12 << shamt (shamt is a
 // 5-bit field). Keep the MachineInstr operand as the *final* shifted value and
 // let MC lowering split it into {shamt, imm12}.
@@ -834,6 +838,34 @@ let mayLoad = 1, Size = 6 in {
   def HL_LD_PCR   : LinxISAInst<(outs GPR:$rd), (ins CallTarget:$sym), "", []>;
 }
 
+// 48-bit HL memory ops for dynamic instruction count reduction.
+//
+// - Writeback: pre/post-indexed addressing (base update is an explicit GPR result).
+// - Pair: two adjacent accesses transfer to/from two GPRs.
+let mayLoad = 1, Size = 6 in {
+  def HL_LWI_PO   : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWI_PR   : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWI_UPO  : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWI_UPR  : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+
+  def HL_LWUI_PO  : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWUI_PR  : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWUI_UPO : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWUI_UPR : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+
+  def HL_LDI_PO   : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LDI_PR   : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LDI_UPO  : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LDI_UPR  : LinxISAInst<(outs GPR:$rd,  GPR:$wb), (ins GPR:$base, simm17:$off), "", []>;
+
+  def HL_LWIP     : LinxISAInst<(outs GPR:$rd0, GPR:$rd1), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWIP_U   : LinxISAInst<(outs GPR:$rd0, GPR:$rd1), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWUIP    : LinxISAInst<(outs GPR:$rd0, GPR:$rd1), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LWUIP_U  : LinxISAInst<(outs GPR:$rd0, GPR:$rd1), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LDIP     : LinxISAInst<(outs GPR:$rd0, GPR:$rd1), (ins GPR:$base, simm17:$off), "", []>;
+  def HL_LDIP_U   : LinxISAInst<(outs GPR:$rd0, GPR:$rd1), (ins GPR:$base, simm17:$off), "", []>;
+}
+
 // Load register offset: base + (idx << shamt).
 let mayLoad = 1 in {
   def LB   : LinxISAInst<(outs GPR:$rd), (ins GPR:$base, GPR:$idx, uimm5:$shamt), "", []>;
@@ -868,6 +900,23 @@ let mayStore = 1, Size = 6 in {
   def HL_SH_PCR : LinxISAInst<(outs), (ins GPR:$rs, CallTarget:$sym), "", []>;
   def HL_SW_PCR : LinxISAInst<(outs), (ins GPR:$rs, CallTarget:$sym), "", []>;
   def HL_SD_PCR : LinxISAInst<(outs), (ins GPR:$rs, CallTarget:$sym), "", []>;
+}
+
+let mayStore = 1, Size = 6 in {
+  def HL_SWI_PO   : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+  def HL_SWI_PR   : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+  def HL_SWI_UPO  : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+  def HL_SWI_UPR  : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+
+  def HL_SDI_PO   : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+  def HL_SDI_PR   : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+  def HL_SDI_UPO  : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+  def HL_SDI_UPR  : LinxISAInst<(outs GPR:$wb), (ins GPR:$rs, GPR:$base, simm17:$off), "", []>;
+
+  def HL_SWIP     : LinxISAInst<(outs), (ins GPR:$rs0, GPR:$rs1, GPR:$base, simm17:$off), "", []>;
+  def HL_SWIP_U   : LinxISAInst<(outs), (ins GPR:$rs0, GPR:$rs1, GPR:$base, simm17:$off), "", []>;
+  def HL_SDIP     : LinxISAInst<(outs), (ins GPR:$rs0, GPR:$rs1, GPR:$base, simm17:$off), "", []>;
+  def HL_SDIP_U   : LinxISAInst<(outs), (ins GPR:$rs0, GPR:$rs1, GPR:$base, simm17:$off), "", []>;
 }
 
 // Store register offset: base + (idx << scale). The scale is implied by the

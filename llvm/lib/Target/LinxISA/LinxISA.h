@@ -27,12 +27,14 @@ enum class LinxCodeSizeBalanceMode : uint8_t {
 
 FunctionPass *createLinxISAISelDag(LinxISATargetMachine &TM);
 FunctionPass *createLinxISATileSSABalancePass();
+FunctionPass *createLinxISAMemOpsCombinePass();
 FunctionPass *createLinxISABlockifyPass();
 FunctionPass *createLinxISASIMTAutoVectorizePass();
 
 void initializeLinxISAAsmPrinterPass(PassRegistry &);
 void initializeLinxISADAGToDAGISelLegacyPass(PassRegistry &);
 void initializeLinxISATileSSABalancePass(PassRegistry &);
+void initializeLinxISAMemOpsCombinePass(PassRegistry &);
 void initializeLinxISABlockifyPass(PassRegistry &);
 void initializeLinxISASIMTAutoVectorizePass(PassRegistry &);
 

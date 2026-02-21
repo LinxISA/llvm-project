@@ -1,0 +1,132 @@
+# RUN: llc -mtriple=linx64 -mcpu=linx64 -run-pass=linx-memops-combine -o - %s | FileCheck %s
+
+# CHECK-LABEL: name: pair_load
+# CHECK: $r12, $r13 = HL_LWIP $r11, 0
+# CHECK-NOT: LWI
+
+# CHECK-LABEL: name: pair_store
+# CHECK: HL_SWIP $r12, $r13, $r11, 0
+# CHECK-NOT: SWI
+
+# CHECK-LABEL: name: post_index_load
+# CHECK: $r12, $r11 = HL_LDI_PO $r11, 1
+# CHECK-NOT: LDI
+# CHECK-NOT: ADDIri
+
+# CHECK-LABEL: name: pre_index_unscaled_load
+# CHECK: $r12, $r14 = HL_LWI_UPR $r11, 7
+# CHECK-NOT: LWI
+# CHECK-NOT: ADDIri
+
+# CHECK-LABEL: name: post_index_store
+# CHECK: $r11 = HL_SWI_PO $r12, $r11, 1
+# CHECK-NOT: SWI
+# CHECK-NOT: ADDIri
+
+# CHECK-LABEL: name: pre_index_store_neg
+# CHECK: $r14 = HL_SDI_PR $r12, $r11, -2
+# CHECK-NOT: SDI
+# CHECK-NOT: SUBIri
+
+--- |
+  define i64 @pair_load(i64 %x) { ret i64 0 }
+  define i64 @pair_store(i64 %x) { ret i64 0 }
+  define i64 @post_index_load(i64 %x) { ret i64 0 }
+  define i64 @pre_index_unscaled_load(i64 %x) { ret i64 0 }
+  define i64 @post_index_store(i64 %x) { ret i64 0 }
+  define i64 @pre_index_store_neg(i64 %x) { ret i64 0 }
+...
+---
+name:            pair_load
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r11', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r11
+
+    $r12 = LWI $r11, 0
+    $r13 = LWI $r11, 1
+    PSEUDO_RET implicit $r10
+...
+---
+name:            pair_store
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r11', virtual-reg: '' }
+  - { reg: '$r12', virtual-reg: '' }
+  - { reg: '$r13', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r11, $r12, $r13
+
+    SWI $r12, $r11, 0
+    SWI $r13, $r11, 1
+    PSEUDO_RET implicit $r10
+...
+---
+name:            post_index_load
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r11', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r11
+
+    $r12 = LDI $r11, 0
+    $r11 = ADDIri $r11, 8
+    PSEUDO_RET implicit $r10
+...
+---
+name:            pre_index_unscaled_load
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r11', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r11
+
+    $r14 = ADDIri $r11, 7
+    $r12 = LWI $r14, 0
+    PSEUDO_RET implicit $r10
+...
+---
+name:            post_index_store
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r11', virtual-reg: '' }
+  - { reg: '$r12', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r11, $r12
+
+    SWI $r12, $r11, 0
+    $r11 = ADDIri $r11, 4
+    PSEUDO_RET implicit $r10
+...
+---
+name:            pre_index_store_neg
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r11', virtual-reg: '' }
+  - { reg: '$r12', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r11, $r12
+
+    $r14 = SUBIri $r11, 16
+    SDI $r12, $r14, 0
+    PSEUDO_RET implicit $r10
+...

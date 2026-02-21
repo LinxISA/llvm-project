@@ -1272,6 +1272,19 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   };
 
   auto emitArrowDest = [&]() {
+    // Multi-dest forms: `->dst0, dst1`.
+    if (auto Op0 = findField("RegDst0")) {
+      if (Op0->isImm()) {
+        if (auto Op1 = findField("RegDst1"); Op1 && Op1->isImm()) {
+          // Today all multi-dest forms are scalar (5-bit GPRs).
+          unsigned Code0 = static_cast<unsigned>(Op0->getImm()) & 0x1fu;
+          unsigned Code1 = static_cast<unsigned>(Op1->getImm()) & 0x1fu;
+          OS << ",\t->" << reg5Name(Code0) << ", " << reg5Name(Code1);
+          return;
+        }
+      }
+    }
+
     if (auto Op = findField("RegDst")) {
       if (Op->isImm()) {
         unsigned Code = static_cast<unsigned>(Op->getImm());
@@ -1819,21 +1832,42 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     }
 
     auto scaleFromMnemonic = [&]() -> int64_t {
-      if (Mnem == "LBI" || Mnem == "LBUI" || Mnem == "SBI")
+      StringRef Up = Mnem;
+      if (Up.ends_with(".LOCAL"))
+        Up = Up.drop_back(StringRef(".LOCAL").size());
+
+      // Unscaled byte offsets.
+      if (Up.ends_with(".U") || Up.ends_with(".UPO") || Up.ends_with(".UPR"))
         return 1;
-      if (Mnem == "LHI" || Mnem == "LHUI" || Mnem == "SHI")
+
+      if (Up.starts_with("HL."))
+        Up = Up.drop_front(3);
+      if (Up.starts_with("C."))
+        Up = Up.drop_front(2);
+      StringRef Op = Up.split('.').first;
+
+      if (Op == "LBI" || Op == "LBUI" || Op == "SBI" || Op == "LBIP" ||
+          Op == "LBUIP" || Op == "SBIP")
+        return 1;
+      if (Op == "LHI" || Op == "LHUI" || Op == "SHI" || Op == "LHIP" ||
+          Op == "LHUIP" || Op == "SHIP")
         return 2;
-      if (Mnem == "LWI" || Mnem == "LWUI" || Mnem == "SWI" || Mnem == "C.LWI" ||
-          Mnem == "C.SWI")
+      if (Op == "LWI" || Op == "LWUI" || Op == "SWI" || Op == "LWIP" ||
+          Op == "LWUIP" || Op == "SWIP")
         return 4;
-      if (Mnem == "LDI" || Mnem == "SDI" || Mnem == "C.LDI" || Mnem == "C.SDI")
+      if (Op == "LDI" || Op == "SDI" || Op == "LDIP" || Op == "SDIP")
         return 8;
+
       return 1;
     };
 
     auto emitScaledImmOff = [&]() -> bool {
       std::optional<int64_t> Off;
-      if (auto V = findFieldImm("simm12"))
+      if (auto V = findFieldImm("simm17"))
+        Off = *V;
+      else if (auto V = findFieldImm("uimm17"))
+        Off = *V;
+      else if (auto V = findFieldImm("simm12"))
         Off = *V;
       else if (auto V = findFieldImm("uimm12"))
         Off = *V;
@@ -1864,51 +1898,77 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return;
     }
 
-    if (HasDest) {
-      // Loads: `[base, off]` / `[base, idx<type><<shamt>] , ->dst`.
-      OS << "[";
-      emitReg("SrcL"); // base
+    auto baseFieldFromAsmFmt = [&]() -> StringRef {
+      StringRef BaseField = "SrcL";
+      if (size_t L = AsmFmt.find('['); L != StringRef::npos) {
+        StringRef Inside = AsmFmt.substr(L + 1).split(']').first;
+        StringRef BasePart = Inside.split(',').first.trim();
+        if (BasePart.starts_with_insensitive("srcr"))
+          BaseField = "SrcR";
+        else if (BasePart.starts_with_insensitive("srcl"))
+          BaseField = "SrcL";
+      }
+      return BaseField;
+    };
+
+    std::optional<StringRef> ValueField;
+    {
+      StringRef Prefix = AsmFmt;
+      if (size_t L = Prefix.find('['); L != StringRef::npos)
+        Prefix = Prefix.take_front(L);
+      if (Prefix.contains_insensitive("SrcD"))
+        ValueField = "SrcD";
+      else if (Prefix.contains_insensitive("SrcL"))
+        ValueField = "SrcL";
+    }
+
+    std::optional<int64_t> ForcedShift;
+    if (AsmFmt.contains("<<1"))
+      ForcedShift = 1;
+    else if (AsmFmt.contains("<<2"))
+      ForcedShift = 2;
+    else if (AsmFmt.contains("<<3"))
+      ForcedShift = 3;
+
+    const StringRef BaseField = baseFieldFromAsmFmt();
+    const bool IsStore = ValueField.has_value();
+
+    if (IsStore) {
+      // Stores: `val[, val1], [base, off|idx] [, ->dst]`.
+      emitReg(*ValueField);
+      if (findField("SrcD1")) {
+        OS << ", ";
+        emitReg("SrcD1");
+      }
+      OS << ", [";
+      emitReg(BaseField);
       OS << ", ";
       if (IsRegOffset) {
-        emitSrcRWithTypeAndShift(/*ForcedShift=*/std::nullopt);
+        emitSrcRWithTypeAndShift(ForcedShift);
       } else {
         if (!emitScaledImmOff())
           OS << "0";
       }
       OS << "]";
-      emitArrowDest();
+      if (HasDest)
+        emitArrowDest();
       printAnnotation(OS, Annot);
       return;
     }
 
-    // Stores.
-    if (findField("SrcD")) {
-      // Reg-offset stores: `SrcD, [SrcL, SrcR<type><<k>]`.
-      emitReg("SrcD");
-      OS << ", [";
-      emitReg("SrcL"); // base
-      OS << ", ";
-      std::optional<int64_t> ForcedShift;
-      if (Mnem == "SH")
-        ForcedShift = 1;
-      else if (Mnem == "SW")
-        ForcedShift = 2;
-      else if (Mnem == "SD")
-        ForcedShift = 3;
-      emitSrcRWithTypeAndShift(ForcedShift);
-      OS << "]";
-      printAnnotation(OS, Annot);
-      return;
-    }
-
-    // Imm-offset stores: `SrcL, [SrcR, off]`.
-    emitReg("SrcL"); // value
-    OS << ", [";
-    emitReg("SrcR"); // base
+    // Loads: `[base, off|idx] , ->dst`.
+    OS << "[";
+    emitReg(BaseField);
     OS << ", ";
-    if (!emitScaledImmOff())
-      OS << "0";
+    if (IsRegOffset) {
+      emitSrcRWithTypeAndShift(/*ForcedShift=*/std::nullopt);
+    } else {
+      if (!emitScaledImmOff())
+        OS << "0";
+    }
     OS << "]";
+    if (HasDest)
+      emitArrowDest();
     printAnnotation(OS, Annot);
     return;
   }

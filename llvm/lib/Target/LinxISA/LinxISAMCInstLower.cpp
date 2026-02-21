@@ -1942,6 +1942,92 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
+  case LinxISA::HL_LWI_PO:
+  case LinxISA::HL_LWI_PR:
+  case LinxISA::HL_LWI_UPO:
+  case LinxISA::HL_LWI_UPR:
+  case LinxISA::HL_LWUI_PO:
+  case LinxISA::HL_LWUI_PR:
+  case LinxISA::HL_LWUI_UPO:
+  case LinxISA::HL_LWUI_UPR:
+  case LinxISA::HL_LDI_PO:
+  case LinxISA::HL_LDI_PR:
+  case LinxISA::HL_LDI_UPO:
+  case LinxISA::HL_LDI_UPR:
+  case LinxISA::HL_LWIP:
+  case LinxISA::HL_LWIP_U:
+  case LinxISA::HL_LWUIP:
+  case LinxISA::HL_LWUIP_U:
+  case LinxISA::HL_LDIP:
+  case LinxISA::HL_LDIP_U: {
+    StringRef Mnem;
+    switch (Opc) {
+    case LinxISA::HL_LWI_PO:
+      Mnem = "HL.LWI.PO";
+      break;
+    case LinxISA::HL_LWI_PR:
+      Mnem = "HL.LWI.PR";
+      break;
+    case LinxISA::HL_LWI_UPO:
+      Mnem = "HL.LWI.UPO";
+      break;
+    case LinxISA::HL_LWI_UPR:
+      Mnem = "HL.LWI.UPR";
+      break;
+    case LinxISA::HL_LWUI_PO:
+      Mnem = "HL.LWUI.PO";
+      break;
+    case LinxISA::HL_LWUI_PR:
+      Mnem = "HL.LWUI.PR";
+      break;
+    case LinxISA::HL_LWUI_UPO:
+      Mnem = "HL.LWUI.UPO";
+      break;
+    case LinxISA::HL_LWUI_UPR:
+      Mnem = "HL.LWUI.UPR";
+      break;
+    case LinxISA::HL_LDI_PO:
+      Mnem = "HL.LDI.PO";
+      break;
+    case LinxISA::HL_LDI_PR:
+      Mnem = "HL.LDI.PR";
+      break;
+    case LinxISA::HL_LDI_UPO:
+      Mnem = "HL.LDI.UPO";
+      break;
+    case LinxISA::HL_LDI_UPR:
+      Mnem = "HL.LDI.UPR";
+      break;
+    case LinxISA::HL_LWIP:
+      Mnem = "HL.LWIP";
+      break;
+    case LinxISA::HL_LWIP_U:
+      Mnem = "HL.LWIP.U";
+      break;
+    case LinxISA::HL_LWUIP:
+      Mnem = "HL.LWUIP";
+      break;
+    case LinxISA::HL_LWUIP_U:
+      Mnem = "HL.LWUIP.U";
+      break;
+    case LinxISA::HL_LDIP:
+      Mnem = "HL.LDIP";
+      break;
+    case LinxISA::HL_LDIP_U:
+      Mnem = "HL.LDIP.U";
+      break;
+    default:
+      llvm_unreachable("Unexpected opcode");
+    }
+
+    OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/48, /*Fields=*/4));
+    OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst0
+    OutMI.addOperand(MCOperand::createImm(R(1))); // RegDst1
+    OutMI.addOperand(MCOperand::createImm(R(2))); // SrcL (base)
+    OutMI.addOperand(MCOperand::createImm(I(3))); // simm17
+    return;
+  }
+
   case LinxISA::SBI:
   case LinxISA::SHI:
   case LinxISA::SWI:
@@ -1980,6 +2066,77 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL (value)
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcR (base)
     OutMI.addOperand(MCOperand::createImm(I(2))); // simm12 (scaled)
+    return;
+  }
+
+  case LinxISA::HL_SWI_PO:
+  case LinxISA::HL_SWI_PR:
+  case LinxISA::HL_SWI_UPO:
+  case LinxISA::HL_SWI_UPR:
+  case LinxISA::HL_SDI_PO:
+  case LinxISA::HL_SDI_PR:
+  case LinxISA::HL_SDI_UPO:
+  case LinxISA::HL_SDI_UPR:
+  case LinxISA::HL_SWIP:
+  case LinxISA::HL_SWIP_U:
+  case LinxISA::HL_SDIP:
+  case LinxISA::HL_SDIP_U: {
+    StringRef Mnem;
+    switch (Opc) {
+    case LinxISA::HL_SWI_PO:
+      Mnem = "HL.SWI.PO";
+      break;
+    case LinxISA::HL_SWI_PR:
+      Mnem = "HL.SWI.PR";
+      break;
+    case LinxISA::HL_SWI_UPO:
+      Mnem = "HL.SWI.UPO";
+      break;
+    case LinxISA::HL_SWI_UPR:
+      Mnem = "HL.SWI.UPR";
+      break;
+    case LinxISA::HL_SDI_PO:
+      Mnem = "HL.SDI.PO";
+      break;
+    case LinxISA::HL_SDI_PR:
+      Mnem = "HL.SDI.PR";
+      break;
+    case LinxISA::HL_SDI_UPO:
+      Mnem = "HL.SDI.UPO";
+      break;
+    case LinxISA::HL_SDI_UPR:
+      Mnem = "HL.SDI.UPR";
+      break;
+    case LinxISA::HL_SWIP:
+      Mnem = "HL.SWIP";
+      break;
+    case LinxISA::HL_SWIP_U:
+      Mnem = "HL.SWIP.U";
+      break;
+    case LinxISA::HL_SDIP:
+      Mnem = "HL.SDIP";
+      break;
+    case LinxISA::HL_SDIP_U:
+      Mnem = "HL.SDIP.U";
+      break;
+    default:
+      llvm_unreachable("Unexpected opcode");
+    }
+
+    OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/48, /*Fields=*/4));
+
+    if (Opc == LinxISA::HL_SWIP || Opc == LinxISA::HL_SWIP_U ||
+        Opc == LinxISA::HL_SDIP || Opc == LinxISA::HL_SDIP_U) {
+      OutMI.addOperand(MCOperand::createImm(R(0))); // SrcD
+      OutMI.addOperand(MCOperand::createImm(R(1))); // SrcD1
+      OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR (base)
+      OutMI.addOperand(MCOperand::createImm(I(3))); // simm17
+    } else {
+      OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst (writeback)
+      OutMI.addOperand(MCOperand::createImm(R(1))); // SrcD (value)
+      OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR (base)
+      OutMI.addOperand(MCOperand::createImm(I(3))); // simm17
+    }
     return;
   }
 
