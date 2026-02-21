@@ -340,14 +340,17 @@ add_mlir_upstream_c_api_library(MLIRCAPIPtr
   MLIRPtrDialect
 )
 
-add_mlir_upstream_c_api_library(MLIRCAPIPTO
-  PTO.cpp
+# LinxISA fork: PTO C API is optional.
+if (MLIR_ENABLE_LINXISA_PTO)
+  add_mlir_upstream_c_api_library(MLIRCAPIPTO
+    PTO.cpp
 
-  PARTIAL_SOURCES_INTENDED
-  LINK_LIBS PUBLIC
-  MLIRCAPIIR
-  MLIRPTODialect
-)
+    PARTIAL_SOURCES_INTENDED
+    LINK_LIBS PUBLIC
+    MLIRCAPIIR
+    MLIRPTODialect
+  )
+endif()
 
 add_mlir_upstream_c_api_library(MLIRCAPIQuant
   Quant.cpp

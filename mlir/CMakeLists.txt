@@ -18,6 +18,13 @@ endif()
 include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
+# LinxISA extensions
+set(_linxisa_pto_default ON)
+if (WIN32)
+  set(_linxisa_pto_default OFF)
+endif()
+option(MLIR_ENABLE_LINXISA_PTO "Enable LinxISA PTO dialect/transforms/tools" ${_linxisa_pto_default})
+
 if(MLIR_STANDALONE_BUILD)
   find_package(LLVM CONFIG REQUIRED)
   set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${LLVM_CMAKE_DIR})

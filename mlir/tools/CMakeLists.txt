@@ -7,7 +7,12 @@ add_subdirectory(mlir-reduce)
 add_subdirectory(mlir-rewrite)
 add_subdirectory(mlir-shlib)
 add_subdirectory(mlir-translate)
-add_subdirectory(ptoas)
+
+# LinxISA fork: PTO tool is optional.
+if (MLIR_ENABLE_LINXISA_PTO)
+  add_subdirectory(ptoas)
+endif()
+
 add_subdirectory(tblgen-lsp-server)
 add_subdirectory(tblgen-to-irdl)
 

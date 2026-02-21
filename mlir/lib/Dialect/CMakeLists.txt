@@ -44,7 +44,12 @@ add_subdirectory(Vector)
 add_subdirectory(WasmSSA)
 add_subdirectory(X86Vector)
 add_subdirectory(XeGPU)
-add_subdirectory(PTO)
+
+# LinxISA fork: PTO dialect/tooling is optional.
+# Controlled by the top-level option: MLIR_ENABLE_LINXISA_PTO.
+if (MLIR_ENABLE_LINXISA_PTO)
+  add_subdirectory(PTO)
+endif()
 
 set(LLVM_OPTIONAL_SOURCES
   Traits.cpp

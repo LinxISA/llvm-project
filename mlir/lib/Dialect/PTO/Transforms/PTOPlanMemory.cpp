@@ -935,7 +935,7 @@ bool MemPlan::IsEnoughForBuffersNoReuse(StorageEntry *rootStorageEntry,
 
 void MemPlan::PlanBuffersWithoutReuse(StorageEntry *rootStorageEntry,
                                       size_t alignUnit) {
-  uint offset = 0;
+  uint64_t offset = 0;
   rootStorageEntry->bitsOffset = offset;
   offset = AlignUp(rootStorageEntry->bufInfo->constBits, alignUnit);
   rootStorageEntry->alignedConstBits = offset;
