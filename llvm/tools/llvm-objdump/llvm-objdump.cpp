@@ -947,8 +947,9 @@ public:
 AMDGCNPrettyPrinter AMDGCNPrettyPrinterInst;
 
 // Per-section symbol map for LinxPrettyPrinter operand patching.
-thread_local const std::unordered_map<uint64_t, StringRef> *LinxPrettyAddrToSym =
-    nullptr;
+// NOTE: Keep this as a plain global (not thread_local) to avoid TLS init
+// dependencies in host tools.
+const std::unordered_map<uint64_t, StringRef> *LinxPrettyAddrToSym = nullptr;
 
 class LinxPrettyPrinter : public PrettyPrinter {
 public:
@@ -1175,8 +1176,7 @@ public:
     // MBB return labels), try to patch it using an exact symbol match.
     if (Buf.find("BSTART") != std::string::npos &&
         Buf.find("CALL") != std::string::npos && Buf.find("ra=") != std::string::npos) {
-      extern thread_local const std::unordered_map<uint64_t, StringRef> *
-          LinxPrettyAddrToSym;
+      extern const std::unordered_map<uint64_t, StringRef> *LinxPrettyAddrToSym;
       if (LinxPrettyAddrToSym) {
         size_t RaPos = Buf.find("ra=");
         size_t HexPos = RaPos == std::string::npos ? std::string::npos
