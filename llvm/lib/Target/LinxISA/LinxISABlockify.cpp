@@ -106,14 +106,14 @@ static void validateStrictTileSizeCode(int64_t SizeCode, StringRef Context) {
   }
 }
 
-static void validateTileOp10(int64_t TileOp10, StringRef Context) {
-  if (TileOp10 < 0 || TileOp10 > 1023)
+static void validateTileOpcode(int64_t TileOpcode, StringRef Context) {
+  if (TileOpcode < 0 || TileOpcode > 1023)
     report_fatal_error(Twine("Linx: ") + Context +
-                       " requires TileOp10 in range 0..1023");
+                       " requires TileOpcode in range 0..1023");
 }
 
-static bool isWhitelistedTEPLTileOp10(int64_t TileOp10) {
-  switch (TileOp10 & 0x3ff) {
+static bool isWhitelistedTEPLTileOpcode(int64_t TileOpcode) {
+  switch (TileOpcode & 0x3ff) {
   case 0x000:
   case 0x001:
   case 0x002:
@@ -125,39 +125,50 @@ static bool isWhitelistedTEPLTileOp10(int64_t TileOp10) {
   case 0x008:
   case 0x009:
   case 0x00a:
+  case 0x00b:
+  case 0x00c:
   case 0x00d:
   case 0x00e:
   case 0x00f:
+  case 0x010:
+  case 0x011:
+  case 0x012:
+  case 0x013:
+  case 0x014:
+  case 0x015:
+  case 0x016:
+  case 0x017:
+  case 0x018:
+  case 0x019:
+  case 0x01a:
+  case 0x01b:
+  case 0x01c:
+  case 0x01d:
+  case 0x01e:
+  case 0x01f:
   case 0x020:
   case 0x021:
   case 0x022:
+  case 0x023:
   case 0x024:
   case 0x025:
   case 0x026:
-  case 0x0c0: // TCOLEXPAND (strict v0.3)
-  case 0x0c1: // TROWEXPAND (strict v0.3)
-  case 0x040:
-  case 0x041:
-  case 0x042:
-  case 0x043:
-  case 0x044:
-  case 0x045:
-  case 0x060:
-  case 0x061:
-  case 0x062:
-  case 0x063:
+  case 0x027:
+  case 0x028:
+  case 0x029:
+  case 0x02a:
     return true;
   default:
     return false;
   }
 }
 
-static void validateWhitelistedTEPLTileOp10(int64_t TileOp10,
+static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
                                             StringRef Context) {
-  validateTileOp10(TileOp10, Context);
-  if (!isWhitelistedTEPLTileOp10(TileOp10))
+  validateTileOpcode(TileOpcode, Context);
+  if (!isWhitelistedTEPLTileOpcode(TileOpcode))
     report_fatal_error(Twine("Linx: ") + Context +
-                       " uses TileOp10 outside strict-v0.3 whitelist");
+                       " uses TileOpcode outside the canonical v0.4 TEPL set");
 }
 
 static void validateCubeDimImm(int64_t Dim, StringRef DimName,
@@ -1768,7 +1779,7 @@ public:
             .addReg(Base)        // RegSrc1: base pointer
             .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
 
-        // Bring-up v0.3 contract: B.IOTI is the canonical descriptor; encode the
+        // Canonical v0.4 contract: B.IOTI is the canonical descriptor; encode the
         // tile destination register in the first absent source slot (SrcTile1)
         // and set S0V/S1V to indicate no tile inputs.
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
@@ -2229,7 +2240,7 @@ public:
           report_fatal_error("Linx: CUBE.ACCCVT dtype must fit u5");
         if (QArg1 != 0)
           report_fatal_error(
-              "Linx: CUBE.ACCCVT currently requires qarg1=0 in strict-v0.3");
+              "Linx: CUBE.ACCCVT currently requires qarg1=0 in canonical v0.4");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID < 16)
@@ -2282,7 +2293,7 @@ public:
                                   ? PseudoMI->getOperand(2).getReg()
                                   : (IsSplat ? PseudoMI->getOperand(1).getReg()
                                              : Register());
-        const int64_t TileOp10 =
+        const int64_t TileOpcode =
             PseudoMI->getOperand(IsUnary ? 2 : (IsBinary ? 3 : (IsBinaryScalar ? 3 : 2)))
                 .getImm();
         const int64_t Size =
@@ -2297,7 +2308,7 @@ public:
                 : (IsSplat ? PseudoMI->getOperand(5).getImm()
                            : static_cast<int64_t>(TEPLMode::VV));
 
-        validateWhitelistedTEPLTileOp10(TileOp10, Ctx);
+        validateWhitelistedTEPLTileOpcode(TileOpcode, Ctx);
         validateStrictTileSizeCode(Size, Ctx);
         if (DType < 0 || DType > 31)
           report_fatal_error(Twine("Linx: ") + Ctx + " dtype must fit u5");
@@ -2327,7 +2338,7 @@ public:
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TEPL))
             .addImm(DType)
-            .addImm(TileOp10);
+            .addImm(TileOpcode);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
         if (IsBinaryScalar || IsSplat) {
           // TEPL scalar extensions bind scalar source through B.IOR.
@@ -2533,7 +2544,7 @@ public:
         const uint32_t AttrAQRLMask = (1u << 18) | (1u << 21);
         if ((Attr & ~AttrAQRLMask) != 0u) {
           report_fatal_error(
-              "Linx: vblock.launch only supports aq/rl B.ATTR bits in strict-v0.3");
+              "Linx: vblock.launch only supports aq/rl B.ATTR bits in canonical v0.4");
         }
         if (Attr != 0u) {
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ATTR))
@@ -2552,7 +2563,7 @@ public:
         auto emitIOR = [&](Register A, Register B, Register C) {
           if (A == LinxISA::R0 && B == LinxISA::R0 && C == LinxISA::R0)
             return;
-          // v0.3 bring-up contract: bind RI registers as an ordered namespace
+          // Canonical v0.4 contract: bind RI registers as an ordered namespace
           // via B.IOR sources (RegSrc1, RegSrc0, RegSrc2).
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
               .addReg(LinxISA::R0) // RegDst (unused in bring-up)

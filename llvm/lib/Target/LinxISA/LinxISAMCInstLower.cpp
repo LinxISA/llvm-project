@@ -372,11 +372,11 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
   case LinxISA::BSTART_TEPL: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t TileOp10 = I(1) & 0x3ff;
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.TEPL TileOp10, DataType",
+    const int64_t TileOpcode = I(1) & 0x3ff;
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.TEPL TileOpcode, DataType",
                                           /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
-    OutMI.addOperand(MCOperand::createImm(TileOp10));
+    OutMI.addOperand(MCOperand::createImm(TileOpcode));
     return;
   }
 

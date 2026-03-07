@@ -128,8 +128,8 @@ static StringRef dtypeName(unsigned DT) {
   }
 }
 
-static StringRef parTileOpName(unsigned TileOp10) {
-  switch (TileOp10 & 0x3ffu) {
+static StringRef parTileOpName(unsigned TileOpcode) {
+  switch (TileOpcode & 0x3ffu) {
   case 0:
     return "VCALL";
   case 2:
@@ -175,8 +175,8 @@ static StringRef cubeAliasMnemonic(unsigned Func) {
   }
 }
 
-static StringRef legacyPackedAliasMnemonic(unsigned TileOp10) {
-  switch (TileOp10 & 0x3ffu) {
+static StringRef legacyPackedAliasMnemonic(unsigned TileOpcode) {
+  switch (TileOpcode & 0x3ffu) {
   case 33:
     return tmaAliasMnemonic(0);
   case 65:
@@ -194,8 +194,8 @@ static StringRef legacyPackedAliasMnemonic(unsigned TileOp10) {
   }
 }
 
-static StringRef teplAliasMnemonic(unsigned TileOp10) {
-  switch (TileOp10 & 0x3ffu) {
+static StringRef teplAliasMnemonic(unsigned TileOpcode) {
+  switch (TileOpcode & 0x3ffu) {
   case 0x000:
     return "BSTART.TADD";
   case 0x001:
@@ -218,55 +218,77 @@ static StringRef teplAliasMnemonic(unsigned TileOp10) {
     return "BSTART.TSHL";
   case 0x00a:
     return "BSTART.TSHR";
-  case 0x00d:
+  case 0x00b:
     return "BSTART.TRELU";
-  case 0x00e:
+  case 0x00c:
     return "BSTART.TPRELU";
-  case 0x00f:
+  case 0x00d:
     return "BSTART.TCVT";
-  case 0x020:
-    return "BSTART.TROWMAX";
-  case 0x021:
-    return "BSTART.TROWMIN";
-  case 0x022:
-    return "BSTART.TROWSUM";
-  case 0x024:
-    return "BSTART.TCOLMAX";
-  case 0x025:
-    return "BSTART.TCOLMIN";
-  case 0x026:
-    return "BSTART.TCOLSUM";
-  case 0x0C0:
-    return "BSTART.TCOLEXPAND";
-  case 0x0C1:
-    return "BSTART.TROWEXPAND";
-  case 0x040:
+  case 0x00e:
     return "BSTART.TEXP";
-  case 0x041:
+  case 0x00f:
     return "BSTART.TLOG";
-  case 0x042:
+  case 0x010:
     return "BSTART.TSQRT";
-  case 0x043:
+  case 0x011:
     return "BSTART.TRSQRT";
-  case 0x044:
+  case 0x012:
+    return "BSTART.TROWMAX";
+  case 0x013:
+    return "BSTART.TROWMIN";
+  case 0x014:
+    return "BSTART.TROWSUM";
+  case 0x015:
+    return "BSTART.TCOLMAX";
+  case 0x016:
+    return "BSTART.TCOLMIN";
+  case 0x017:
+    return "BSTART.TCOLSUM";
+  case 0x018:
     return "BSTART.TRECIP";
-  case 0x045:
+  case 0x019:
     return "BSTART.TEXPANDS";
-  case 0x060:
+  case 0x01a:
     return "BSTART.TGATHER";
-  case 0x061:
+  case 0x01b:
     return "BSTART.TSCATTER";
-  case 0x062:
+  case 0x01c:
     return "BSTART.TRESHAPE";
-  case 0x063:
+  case 0x01d:
     return "BSTART.TTRANSPOSE";
+  case 0x01e:
+    return "BSTART.TCOLEXPAND";
+  case 0x01f:
+    return "BSTART.TROWEXPAND";
+  case 0x020:
+    return "BSTART.TADDS";
+  case 0x021:
+    return "BSTART.TSUBS";
+  case 0x022:
+    return "BSTART.TMULS";
+  case 0x023:
+    return "BSTART.TDIVS";
+  case 0x024:
+    return "BSTART.TMAXS";
+  case 0x025:
+    return "BSTART.TMINS";
+  case 0x026:
+    return "BSTART.TANDS";
+  case 0x027:
+    return "BSTART.TORS";
+  case 0x028:
+    return "BSTART.TXORS";
+  case 0x029:
+    return "BSTART.TSHLS";
+  case 0x02a:
+    return "BSTART.TSHRS";
   default:
     return StringRef();
   }
 }
 
-static bool isLegacyCubeTileOp(unsigned TileOp10) {
-  switch (TileOp10 & 0x3ffu) {
+static bool isLegacyCubeTileOp(unsigned TileOpcode) {
+  switch (TileOpcode & 0x3ffu) {
   case 2:
   case 66:
   case 258:
@@ -900,7 +922,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // Special-case: accelerator/tile block-start instructions.
   //
-  // v0.3-facing disassembly is typed (`BSTART.TMA` / `BSTART.CUBE` /
+  // Canonical v0.4 disassembly is typed (`BSTART.TMA` / `BSTART.CUBE` /
   // `BSTART.TEPL`) and also accepts direct typed aliases
   // (`BSTART.TLOAD`, `BSTART.TMATMUL`, `BSTART.TADD`, ...).
   static constexpr StringLiteral LegacyPackedStart = "BSTART." "PAR";
@@ -996,20 +1018,20 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return;
     }
 
-    const unsigned TileOp10 =
-        static_cast<unsigned>(findFieldImm("TileOp10").value_or(0)) & 0x3ffu;
-    ParStateOp = TileOp10;
+    const unsigned TileOpcode =
+        static_cast<unsigned>(findFieldImm("TileOpcode").value_or(0)) & 0x3ffu;
+    ParStateOp = TileOpcode;
 
     StringRef Alias;
     if (IsTypedTEPL) {
-      Alias = teplAliasMnemonic(TileOp10);
+      Alias = teplAliasMnemonic(TileOpcode);
       LastTileHeader = LastTileHeaderKind::TEPL;
     } else {
       // Legacy packed PAR encodes both TEPL and TMA/CUBE families; prefer
       // canonical typed aliases.
-      Alias = legacyPackedAliasMnemonic(TileOp10);
+      Alias = legacyPackedAliasMnemonic(TileOpcode);
       if (Alias.empty())
-        Alias = teplAliasMnemonic(TileOp10);
+        Alias = teplAliasMnemonic(TileOpcode);
       if (!Alias.empty() &&
           (Alias.starts_with("BSTART.TLOAD") || Alias.starts_with("BSTART.TSTORE") ||
            Alias.starts_with("BSTART.TMOV"))) {
@@ -1018,7 +1040,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                  (Alias.starts_with("BSTART.TMATMUL") ||
                   Alias.starts_with("BSTART.ACCCVT"))) {
         LastTileHeader = LastTileHeaderKind::CUBE;
-      } else if (!Alias.empty() || !isLegacyCubeTileOp(TileOp10)) {
+      } else if (!Alias.empty() || !isLegacyCubeTileOp(TileOpcode)) {
         LastTileHeader = LastTileHeaderKind::TEPL;
       } else {
         LastTileHeader = LastTileHeaderKind::None;
@@ -1036,13 +1058,13 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     } else {
       const char *TypedPrefix =
           IsLegacyPacked
-              ? (isLegacyCubeTileOp(TileOp10) ? "BSTART.CUBE" : "BSTART.TEPL")
+              ? (isLegacyCubeTileOp(TileOpcode) ? "BSTART.CUBE" : "BSTART.TEPL")
               : "BSTART.TEPL";
       OS << TypedPrefix << "\t";
-      if (StringRef N = parTileOpName(TileOp10); !N.empty())
+      if (StringRef N = parTileOpName(TileOpcode); !N.empty())
         OS << N;
       else
-        OS << utostr(TileOp10);
+        OS << utostr(TileOpcode);
       OS << ", ";
       printDataType();
     }
