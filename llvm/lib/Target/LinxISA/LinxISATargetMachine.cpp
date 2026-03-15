@@ -8,6 +8,7 @@
 
 #include "LinxISATargetMachine.h"
 #include "LinxISA.h"
+#include "LinxISASIMTAutoVectorize.h"
 #include "LinxISAMachineFunctionInfo.h"
 #include "LinxISATargetTransformInfo.h"
 #include "TargetInfo/LinxISATargetInfo.h"
@@ -15,7 +16,9 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Compiler.h"
 
 using namespace llvm;
@@ -126,4 +129,19 @@ MachineFunctionInfo *LinxISATargetMachine::createMachineFunctionInfo(
 TargetTransformInfo
 LinxISATargetMachine::getTargetTransformInfo(const Function &F) const {
   return TargetTransformInfo(std::make_unique<LinxISATTIImpl>(this, F));
+}
+
+void LinxISATargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
+  PB.registerOptimizerLastEPCallback(
+      [this](ModulePassManager &MPM, OptimizationLevel Level,
+             ThinOrFullLTOPhase Phase) {
+        (void)this;
+        (void)Phase;
+        if (Level == OptimizationLevel::O0 || Level == OptimizationLevel::O1)
+          return;
+
+        FunctionPassManager FPM;
+        FPM.addPass(LinxISASIMTAutoVectorizePass());
+        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+      });
 }

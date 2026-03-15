@@ -6,6 +6,8 @@ declare void @llvm.stackrestore(ptr)
 define i64 @stacksave_roundtrip(i64 %n) {
 ; CHECK-LABEL: stacksave_roundtrip:
 ; CHECK: FENTRY
+; CHECK: c.movr	sp,	->s7
+; CHECK: c.movr	s7,	->sp
 ; CHECK: FRET.STK
 entry:
   %sp = call ptr @llvm.stacksave()

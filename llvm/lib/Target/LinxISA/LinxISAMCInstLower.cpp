@@ -628,6 +628,60 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
          {"SrcRType", I(4)}});
     return;
   }
+  case LinxISA::PSEUDO_V_PSEL: {
+    emitNamedImmFields(
+        getSpecOpcode("V.PSEL", /*LengthBits=*/64, /*Fields=*/5),
+        {{"RegDst", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"SrcRType", 3},
+         {"SrcZero", 1}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_LB_BRG: {
+    emitNamedImmFields(
+        getSpecOpcode("V.LB.BRG", /*LengthBits=*/64, /*Fields=*/6),
+        {{"C", 0},
+         {"L", I(4)},
+         {"RegDst", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"shamt", I(3)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_LH_BRG: {
+    emitNamedImmFields(
+        getSpecOpcode("V.LH.BRG", /*LengthBits=*/64, /*Fields=*/6),
+        {{"C", 0},
+         {"L", I(4)},
+         {"RegDst", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"shamt", I(3)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_LBU_BRG: {
+    emitNamedImmFields(
+        getSpecOpcode("V.LBU.BRG", /*LengthBits=*/64, /*Fields=*/6),
+        {{"C", 0},
+         {"L", I(4)},
+         {"RegDst", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"shamt", I(3)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_LHU_BRG: {
+    emitNamedImmFields(
+        getSpecOpcode("V.LHU.BRG", /*LengthBits=*/64, /*Fields=*/6),
+        {{"C", 0},
+         {"L", I(4)},
+         {"RegDst", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"shamt", I(3)}});
+    return;
+  }
   case LinxISA::PSEUDO_V_LW_BRG: {
     emitNamedImmFields(
         getSpecOpcode("V.LW.BRG", /*LengthBits=*/64, /*Fields=*/6),
@@ -639,9 +693,71 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
          {"shamt", I(3)}});
     return;
   }
+  case LinxISA::PSEUDO_V_LWI_U: {
+    const char *Mnem = I(4) ? "V.LWI.U.BRG" : "V.LWI.U";
+    emitNamedImmFields(getSpecOpcode(Mnem, /*LengthBits=*/64, /*Fields=*/5),
+                       {{"C", 0},
+                        {"L", I(3)},
+                        {"RegDst", I(0)},
+                        {"SrcL", I(1)},
+                        {"simm24", I(2)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_LDI_U: {
+    const char *Mnem = I(4) ? "V.LDI.U.BRG" : "V.LDI.U";
+    emitNamedImmFields(getSpecOpcode(Mnem, /*LengthBits=*/64, /*Fields=*/5),
+                       {{"C", 0},
+                        {"L", I(3)},
+                        {"RegDst", I(0)},
+                        {"SrcL", I(1)},
+                        {"simm24", I(2)}});
+    return;
+  }
   case LinxISA::PSEUDO_V_SW_BRG: {
     emitNamedImmFields(
         getSpecOpcode("V.SW.BRG", /*LengthBits=*/64, /*Fields=*/6),
+        {{"C", 0},
+         {"L", I(4)},
+         {"SrcD", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"shamt", I(3)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_SWI_U: {
+    const char *Mnem = I(4) ? "V.SWI.U.BRG" : "V.SWI.U";
+    emitNamedImmFields(getSpecOpcode(Mnem, /*LengthBits=*/64, /*Fields=*/5),
+                       {{"C", 0},
+                        {"L", I(3)},
+                        {"SrcL", I(0)},
+                        {"SrcR", I(1)},
+                        {"simm24", I(2)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_SDI_U: {
+    const char *Mnem = I(4) ? "V.SDI.U.BRG" : "V.SDI.U";
+    emitNamedImmFields(getSpecOpcode(Mnem, /*LengthBits=*/64, /*Fields=*/5),
+                       {{"C", 0},
+                        {"L", I(3)},
+                        {"SrcL", I(0)},
+                        {"SrcR", I(1)},
+                        {"simm24", I(2)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_SB_BRG: {
+    emitNamedImmFields(
+        getSpecOpcode("V.SB.BRG", /*LengthBits=*/64, /*Fields=*/6),
+        {{"C", 0},
+         {"L", I(4)},
+         {"SrcD", I(0)},
+         {"SrcL", I(1)},
+         {"SrcR", I(2)},
+         {"shamt", I(3)}});
+    return;
+  }
+  case LinxISA::PSEUDO_V_SH_BRG: {
+    emitNamedImmFields(
+        getSpecOpcode("V.SH.BRG", /*LengthBits=*/64, /*Fields=*/6),
         {{"C", 0},
          {"L", I(4)},
          {"SrcD", I(0)},
@@ -744,6 +860,16 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
     OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
     OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
+    return;
+  }
+  case LinxISA::PSEUDO_V_B_Z: {
+    OutMI.setOpcode(getSpecOpcode("B.Z", /*LengthBits=*/32, /*Fields=*/1));
+    OutMI.addOperand(lowerBranchTarget(0)); // simm12 (pcrel)
+    return;
+  }
+  case LinxISA::PSEUDO_V_B_NZ: {
+    OutMI.setOpcode(getSpecOpcode("B.NZ", /*LengthBits=*/32, /*Fields=*/1));
+    OutMI.addOperand(lowerBranchTarget(0)); // simm12 (pcrel)
     return;
   }
   case LinxISA::PSEUDO_V_C_MOVR: {

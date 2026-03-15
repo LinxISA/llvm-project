@@ -25,6 +25,10 @@ static StringRef reg5Name(unsigned Code) {
 
 static void printReg10Name(raw_ostream &OS, unsigned Code) {
   Code &= 0x3ffu;
+  if (Code == 92u) {
+    OS << "p";
+    return;
+  }
   if (Code < 32u) {
     OS << reg5Name(Code);
     return;
@@ -2312,7 +2316,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Pretty printer for the common "SrcL, SrcR<type><<shamt>" operand form.
+  // Pretty printer for the common "SrcP, SrcL, SrcR<type><<shamt>" form.
   if (Form.mnemonic &&
       (StringRef(Form.mnemonic).equals_insensitive("CSEL") ||
        StringRef(Form.mnemonic).equals_insensitive("V.CSEL")) &&

@@ -44,6 +44,14 @@ static std::string toUpperStr(StringRef S) {
   return Out;
 }
 
+static bool isArchivedRawVectorOperandName(StringRef Name) {
+  const std::string Upper = toUpperStr(Name.trim());
+  return StringSwitch<bool>(Upper)
+      .Cases({"TE", "TF", "TG", "TH"}, true)
+      .Cases({"TO1", "TO2", "TO3"}, true)
+      .Default(false);
+}
+
 static std::optional<unsigned> parseRegCode(StringRef Name) {
   StringRef N = Name.trim();
   if (N.size() >= 2 && (N[0] == 'r' || N[0] == 'R') &&
@@ -66,6 +74,7 @@ static std::optional<unsigned> parseRegCode(StringRef Name) {
   //
   // Encoding: (Class << 5) | Index
   //   Class 1:  ri0..ri31     (ordered argument namespace from B.IOR)
+  //   Class 2:  p             (kernel EXEC mask; only index 28 is canonical)
   //   Class 3:  lc0..lc2      (hardware loop counters)
   //   Class 4:  vt / vt#n     (vector T-hand queue; index 0 is the push selector)
   //   Class 5:  vu / vu#n     (vector U-hand queue)
@@ -106,6 +115,8 @@ static std::optional<unsigned> parseRegCode(StringRef Name) {
 
   if (auto V = parsePrefixedIndex("RI", /*Class=*/1, /*MaxIndex=*/31))
     return *V;
+  if (Upper == "P")
+    return (2u << 5) | 28u;
   if (auto V = parsePrefixedIndex("LC", /*Class=*/3, /*MaxIndex=*/2))
     return *V;
 
@@ -1215,6 +1226,12 @@ bool LinxISAAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
   ParseStatus S = tryParseRegister(Reg, StartLoc, EndLoc);
   if (S.isSuccess())
     return false;
+  if (getTok().is(AsmToken::Identifier) &&
+      isArchivedRawVectorOperandName(getTok().getString())) {
+    return Error(getTok().getLoc(),
+                 "archived raw vector operand name is not allowed in canonical "
+                 "v0.4; use TA/TB/TC/TD/TO/TS");
+  }
   return Error(getTok().getLoc(), "expected register");
 }
 
@@ -1233,10 +1250,16 @@ bool LinxISAAsmParser::parseRegOperand(ParsedReg &Out) {
   StringRef Tok = getTok().getString();
   StringRef Base = Tok;
   StringRef Suffix;
-  if (size_t Dot = Tok.find('.'); Dot != StringRef::npos) {
+  if (size_t Dot = Tok.rfind('.'); Dot != StringRef::npos) {
     Base = Tok.take_front(Dot);
     Suffix = Tok.drop_front(Dot + 1);
   }
+  if (Base.ends_with_insensitive(".reuse"))
+    Base = Base.drop_back(strlen(".reuse"));
+  if (isArchivedRawVectorOperandName(Base))
+    return Error(getTok().getLoc(),
+                 "archived raw vector operand name is not allowed in canonical "
+                 "v0.4; use TA/TB/TC/TD/TO/TS");
 
   auto Code = parseRegCode(Base);
   if (!Code)

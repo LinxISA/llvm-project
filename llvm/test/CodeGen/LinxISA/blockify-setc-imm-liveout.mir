@@ -1,0 +1,90 @@
+# RUN: llc -mtriple=linx64 -run-pass=linx-blockify -o - %s | FileCheck %s
+#
+# Ensure the local `ADDWrr dst, src, zero` + `SETC_*I dst, imm` fold does not
+# erase the defining copy when `dst` remains live-out to successor blocks.
+#
+# CHECK-LABEL: name: setc_imm_addw_liveout
+# CHECK: $r7 = ADDWrr
+# CHECK-NOT: SETC_GEI $t1, 2
+# CHECK: SETC_GEI $r7, 2
+# CHECK: bb.1.entry:
+# CHECK: liveins: $r2, $r3, $r4, $r5, $r6, $r7
+
+--- |
+  define dso_local void @setc_imm_addw_liveout(ptr %cur, ptr %valp, ptr %callback) {
+  entry:
+    ret void
+  }
+...
+---
+name:            setc_imm_addw_liveout
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+  - { reg: '$r4', virtual-reg: '' }
+frameInfo:
+  stackSize:       16
+  adjustsStack:    true
+  hasCalls:        false
+  isCalleeSavedInfoValid: true
+fixedStack:      []
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: -8, size: 8, alignment: 8,
+      stack-id: default, callee-saved-register: '$r10', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+  - { id: 1, name: '', type: spill-slot, offset: -16, size: 8, alignment: 8,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x40000000), %bb.4(0x40000000)
+    liveins: $r2, $r3, $r4
+
+    FENTRY 10, 10, 16, implicit-def $r1
+    $r5 = ADDIri $r2, 0
+    $r2 = nuw ADDIri $r5, 80
+    $r6 = LWI $r5, 10
+    $r7 = ADDWrr killed $r6, $r0
+    $r8 = ADDIri $r0, 1
+    $r6 = ADDIri $r0, 0
+    BLT $r8, $r7, %bb.4
+
+  bb.1.entry:
+    successors: %bb.3(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $r3, $r4, $r5, $r6, $r7
+
+    BEQ $r7, $r6, %bb.3
+    JUMP %bb.2
+
+  bb.3:
+    successors: %bb.2(0x80000000)
+    liveins: $r1
+
+    FRET_STK 10, 10, 16, implicit-def $r1, implicit-def $r10, implicit $r1
+
+  bb.4.entry:
+    successors: %bb.2(0x40000000), %bb.5(0x40000000)
+    liveins: $r2, $r3, $r4, $r5, $r6, $r7
+
+    $r8 = ADDIri $r0, 2
+    BEQ $r7, $r8, %bb.2
+    JUMP %bb.5
+
+  bb.2:
+    liveins: $r1
+
+    FRET_STK 10, 10, 16, implicit-def $r1, implicit-def $r10, implicit $r1
+
+  bb.5:
+    liveins: $r1
+
+    FRET_STK 10, 10, 16, implicit-def $r1, implicit-def $r10, implicit $r1
+...

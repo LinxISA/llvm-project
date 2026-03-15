@@ -52,7 +52,7 @@ public:
                                 MachineBasicBlock::iterator MI) const override;
 
 protected:
-  bool hasFPImpl(const MachineFunction &MF) const override { return false; }
+  bool hasFPImpl(const MachineFunction &MF) const override;
 };
 
 } // namespace llvm

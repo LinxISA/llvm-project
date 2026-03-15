@@ -93,6 +93,12 @@ static std::optional<uint64_t> tileSizeCodeToBytes(unsigned SizeCode) {
   return 1ull << (SizeCode + 4u);
 }
 
+static std::optional<unsigned> tileBytesToSizeCode(uint64_t Bytes) {
+  if (Bytes < 16u || Bytes > 4096u || !isPowerOf2_64(Bytes))
+    return std::nullopt;
+  return static_cast<unsigned>(Log2_64(Bytes) - 4u);
+}
+
 static bool isStrictTileSizeCode(unsigned SizeCode) {
   std::optional<uint64_t> Bytes = tileSizeCodeToBytes(SizeCode);
   return Bytes && *Bytes >= 512u && *Bytes <= 4096u;
@@ -217,6 +223,14 @@ static uint64_t requirePositiveDimImm(int64_t Dim, StringRef DimName,
                        " > 0 for tile-byte validation (got " + Twine(Dim) +
                        ")");
   return static_cast<uint64_t>(Dim);
+}
+
+static bool isArchivedRawVectorOperandName(StringRef Name) {
+  std::string Upper = Name.trim().upper();
+  return StringSwitch<bool>(Upper)
+      .Cases({"TE", "TF", "TG", "TH"}, true)
+      .Cases({"TO1", "TO2", "TO3"}, true)
+      .Default(false);
 }
 
 static uint64_t computeTileBytesOrDie(StringRef Context, uint64_t Dim0,
@@ -611,6 +625,13 @@ public:
       unsigned Shamt = 0;
     };
 
+    struct VecPipeCursorState {
+      unsigned NextVt = 1;
+      unsigned NextVu = 1;
+      unsigned NextVm = 1;
+      unsigned NextVn = 1;
+    };
+
     auto toUpperStr = [](StringRef S) -> std::string {
       std::string Out;
       Out.reserve(S.size());
@@ -624,7 +645,7 @@ public:
       std::string Up = toUpperStr(Suffix);
       if (Up == "SW")
         return 0u;
-      if (Up == "UW")
+      if (Up == "UW" || Up == "UH")
         return 1u;
       if (Up == "NEG" || Up == "NOT")
         return 2u;
@@ -767,6 +788,8 @@ public:
         return 30u;
       if (Upper == "U#4" || Upper == "T")
         return 31u;
+      if (Upper == "P")
+        return 92u;
 
       return std::nullopt;
     };
@@ -792,6 +815,12 @@ public:
         Base = T.take_front(Dot).trim();
         Suffix = T.drop_front(Dot + 1).trim();
       }
+      if (Base.ends_with_insensitive(".reuse"))
+        Base = Base.drop_back(strlen(".reuse")).trim();
+      if (isArchivedRawVectorOperandName(Base))
+        report_fatal_error(
+            "Linx blockify: archived raw vector operand name is not allowed "
+            "in canonical v0.4; use TA/TB/TC/TD/TO/TS");
 
       auto RegCode = parseRegCode(Base);
       if (!RegCode)
@@ -815,8 +844,8 @@ public:
       }
     };
 
-    auto parseMemTriple = [&](StringRef MemExpr, ParsedVReg &Base,
-                              ParsedVReg &Index) -> bool {
+    auto parseMemTriple = [&](StringRef MemExpr, unsigned WantLaneShamt,
+                              ParsedVReg &Base, ParsedVReg &Index) -> bool {
       const size_t L = MemExpr.find('[');
       const size_t R = MemExpr.rfind(']');
       if (L == StringRef::npos || R == StringRef::npos || R <= L)
@@ -831,12 +860,37 @@ public:
       auto IndexOp = parseVecRegToken(Parts[2]);
       if (!BaseOp || !LaneOp || !IndexOp)
         return false;
-      // Bring-up contract: lane selector is lc0<<2.
+      // Bring-up contract: vector body memory lanes are lc0 shifted by the
+      // element size.
       const unsigned WantLc0Code = (3u << 5) | 0u;
-      if (LaneOp->Code != WantLc0Code || LaneOp->Shamt != 2u)
+      if (LaneOp->Code != WantLc0Code || LaneOp->Shamt != WantLaneShamt)
         return false;
       Base = *BaseOp;
       Index = *IndexOp;
+      return true;
+    };
+
+    auto parseMemImm = [&](StringRef MemExpr, unsigned WantLaneShamt,
+                           ParsedVReg &Base, int64_t &Imm) -> bool {
+      const size_t L = MemExpr.find('[');
+      const size_t R = MemExpr.rfind(']');
+      if (L == StringRef::npos || R == StringRef::npos || R <= L)
+        return false;
+      StringRef Inside = MemExpr.slice(L + 1, R).trim();
+      SmallVector<StringRef, 4> Parts;
+      splitCSV(Inside, Parts);
+      if (Parts.size() != 3)
+        return false;
+      auto BaseOp = parseVecRegToken(Parts[0]);
+      auto LaneOp = parseVecRegToken(Parts[1]);
+      if (!BaseOp || !LaneOp)
+        return false;
+      const unsigned WantLc0Code = (3u << 5) | 0u;
+      if (LaneOp->Code != WantLc0Code || LaneOp->Shamt != WantLaneShamt)
+        return false;
+      if (Parts[2].getAsInteger(/*Radix=*/0, Imm))
+        return false;
+      Base = *BaseOp;
       return true;
     };
 
@@ -853,8 +907,73 @@ public:
       return Out;
     };
 
+    auto getHeadQueueClass = [&](StringRef DstPart) -> std::optional<unsigned> {
+      StringRef Base = DstPart.trim();
+      if (size_t Dot = Base.rfind('.'); Dot != StringRef::npos)
+        Base = Base.take_front(Dot).trim();
+      std::string Upper = toUpperStr(Base);
+      if (Upper == "VT")
+        return 4u;
+      if (Upper == "VU")
+        return 5u;
+      if (Upper == "VM")
+        return 6u;
+      if (Upper == "VN")
+        return 7u;
+      return std::nullopt;
+    };
+
+    auto noteExplicitVecPipeDest = [&](StringRef DstPart,
+                                       VecPipeCursorState &PipeState) {
+      StringRef Base = DstPart.trim();
+      if (size_t Dot = Base.rfind('.'); Dot != StringRef::npos)
+        Base = Base.take_front(Dot).trim();
+      std::string Upper = toUpperStr(Base);
+      auto bumpCounter = [&](StringRef Prefix, unsigned &NextIndex) {
+        StringRef UpperRef(Upper);
+        if (!UpperRef.starts_with(Prefix))
+          return;
+        StringRef Tail = UpperRef.drop_front(Prefix.size());
+        if (!Tail.consume_front("#"))
+          return;
+        unsigned Index = 0;
+        if (Tail.getAsInteger(10, Index) || Index == 0)
+          return;
+        NextIndex = std::max(NextIndex, Index + 1);
+      };
+      bumpCounter("VT", PipeState.NextVt);
+      bumpCounter("VU", PipeState.NextVu);
+      bumpCounter("VM", PipeState.NextVm);
+      bumpCounter("VN", PipeState.NextVn);
+    };
+
+    auto assignVecPipeDstCode = [&](StringRef DstPart, unsigned ParsedCode,
+                                    VecPipeCursorState &PipeState)
+        -> unsigned {
+      auto nextCode = [&](unsigned Class, unsigned &NextIndex) {
+        return (Class << 5) | (NextIndex++ & 0x1fu);
+      };
+      if (auto HeadClass = getHeadQueueClass(DstPart)) {
+        switch (*HeadClass) {
+        case 4:
+          return nextCode(*HeadClass, PipeState.NextVt);
+        case 5:
+          return nextCode(*HeadClass, PipeState.NextVu);
+        case 6:
+          return nextCode(*HeadClass, PipeState.NextVm);
+        case 7:
+          return nextCode(*HeadClass, PipeState.NextVn);
+        default:
+          llvm_unreachable("unexpected vector head queue class");
+        }
+      }
+      noteExplicitVecPipeDest(DstPart, PipeState);
+      return ParsedCode;
+    };
+
     auto emitVectorBodyLine =
         [&](MachineBasicBlock &BodyBB, StringRef RawLine, StringRef CtxName,
+            VecPipeCursorState &PipeState,
             function_ref<MCSymbol *(StringRef)> LookupLabelSym) {
       StringRef Line = RawLine;
       if (size_t Semi = Line.find(';'); Semi != StringRef::npos)
@@ -908,6 +1027,20 @@ public:
         return;
       }
 
+      if (Head.equals_insensitive("b.z") || Head.equals_insensitive("b.nz")) {
+        std::string Label = normalizeLabel(Rest);
+        if (Label.empty())
+          fail("missing label in b.z/b.nz");
+        MCSymbol *Sym = LookupLabelSym(Label);
+        if (!Sym)
+          fail("undefined vector body label");
+        const unsigned Opc = Head.equals_insensitive("b.z")
+                                 ? LinxISA::PSEUDO_V_B_Z
+                                 : LinxISA::PSEUDO_V_B_NZ;
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc)).addSym(Sym);
+        return;
+      }
+
       if (Head.equals_insensitive("b.eq") || Head.equals_insensitive("b.ne") ||
           Head.equals_insensitive("b.lt") || Head.equals_insensitive("b.ge") ||
           Head.equals_insensitive("b.ltu") || Head.equals_insensitive("b.geu")) {
@@ -957,9 +1090,26 @@ public:
         if (!DstOp)
           return false;
         Dst = *DstOp;
+        Dst.Code = assignVecPipeDstCode(DstPart, DstOp->Code, PipeState);
         return true;
       };
 
+      auto parseArrowDstCode = [&](StringRef Expr, StringRef &SrcPart,
+                                   unsigned &DstCode) -> bool {
+        size_t Arrow = Expr.find("->");
+        if (Arrow == StringRef::npos)
+          return false;
+        SrcPart = Expr.take_front(Arrow).trim();
+        StringRef DstPart = Expr.drop_front(Arrow + 2).trim();
+        if (size_t Comma = DstPart.find(','); Comma != StringRef::npos)
+          DstPart = DstPart.take_front(Comma).trim();
+        auto DstOp = parseVecRegToken(DstPart);
+        if (!DstOp)
+          return false;
+        DstCode = assignVecPipeDstCode(DstPart, DstOp->Code, PipeState);
+        return true;
+      };
+    
       if (Head.equals_insensitive("c.movr")) {
         StringRef SrcPart;
         ParsedVReg Dst;
@@ -995,11 +1145,12 @@ public:
         const unsigned Opc = Head.equals_insensitive("v.add")
                                  ? LinxISA::PSEUDO_V_ADD
                                  : LinxISA::PSEUDO_V_SUB;
+        const unsigned SrcRType = (SrcR->SrcRType == 3u) ? 0u : SrcR->SrcRType;
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
             .addImm(Dst.Code)
             .addImm(SrcL->Code)
             .addImm(SrcR->Code)
-            .addImm(SrcR->SrcRType)
+            .addImm(SrcRType)
             .addImm(SrcR->Shamt);
 	        return;
 	      }
@@ -1075,8 +1226,8 @@ public:
 
 	      if (Head.starts_with_insensitive("v.cmp.")) {
 	        StringRef SrcPart;
-	        ParsedVReg Dst;
-	        if (!parseArrow(Rest, SrcPart, Dst))
+	        unsigned DstCode = 0;
+	        if (!parseArrowDstCode(Rest, SrcPart, DstCode))
           fail("expected '->Dst' in vector compare op");
         SmallVector<StringRef, 4> Ops;
         splitCSV(SrcPart, Ops);
@@ -1104,7 +1255,7 @@ public:
           fail("unsupported vector compare op");
 
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
-            .addImm(Dst.Code)
+            .addImm(DstCode)
             .addImm(SrcL->Code)
             .addImm(SrcR->Code);
         return;
@@ -1113,8 +1264,8 @@ public:
       if (Head.equals_insensitive("v.feq") || Head.equals_insensitive("v.fne") ||
           Head.equals_insensitive("v.flt") || Head.equals_insensitive("v.fge")) {
         StringRef SrcPart;
-        ParsedVReg Dst;
-        if (!parseArrow(Rest, SrcPart, Dst))
+        unsigned DstCode = 0;
+        if (!parseArrowDstCode(Rest, SrcPart, DstCode))
           fail("expected '->Dst' in vector FP compare op");
         SmallVector<StringRef, 4> Ops;
         splitCSV(SrcPart, Ops);
@@ -1135,7 +1286,7 @@ public:
         else if (Head.equals_insensitive("v.fge"))
           Opc = LinxISA::PSEUDO_V_FGE;
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
-            .addImm(Dst.Code)
+            .addImm(DstCode)
             .addImm(SrcL->Code)
             .addImm(SrcR->Code);
         return;
@@ -1182,44 +1333,93 @@ public:
         return;
       }
 
-      if (Head.equals_insensitive("v.csel")) {
+      if (Head.equals_insensitive("v.csel") ||
+          Head.equals_insensitive("v.psel")) {
         StringRef SrcPart;
         ParsedVReg Dst;
         if (!parseArrow(Rest, SrcPart, Dst))
-          fail("expected '->Dst' in v.csel");
+          fail("expected '->Dst' in vector select");
         SmallVector<StringRef, 6> Ops;
         splitCSV(SrcPart, Ops);
+        if (Head.equals_insensitive("v.psel")) {
+          if (Ops.size() != 2)
+            fail("expected two source operands for v.psel");
+          auto SrcP = parseVecRegToken(Ops[0]);
+          auto SrcL = parseVecRegToken(Ops[1]);
+          if (!SrcP || !SrcL)
+            fail("failed to parse source operands for v.psel");
+          BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_PSEL))
+              .addImm(Dst.Code)
+              .addImm(SrcP->Code)
+              .addImm(SrcL->Code);
+          return;
+        }
         if (Ops.size() != 3)
           fail("expected three source operands for v.csel");
         auto SrcP = parseVecRegToken(Ops[0]);
         auto SrcL = parseVecRegToken(Ops[1]);
         auto SrcR = parseVecRegToken(Ops[2]);
         if (!SrcP || !SrcL || !SrcR)
-          fail("failed to parse source operands for v.csel");
+          fail("failed to parse source operands for vector select");
+        const unsigned SrcRType = (SrcR->SrcRType == 3u) ? 0u : SrcR->SrcRType;
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_CSEL))
             .addImm(Dst.Code)
             .addImm(SrcP->Code)
             .addImm(SrcL->Code)
             .addImm(SrcR->Code)
-            .addImm(SrcR->SrcRType);
+            .addImm(SrcRType);
         return;
       }
 
-      if (Head.starts_with_insensitive("v.lw.brg") ||
+      if (Head.starts_with_insensitive("v.lb.brg") ||
+          Head.equals_insensitive("v.lb.local") ||
+          Head.starts_with_insensitive("v.lh.brg") ||
+          Head.equals_insensitive("v.lh.local") ||
+          Head.starts_with_insensitive("v.lbu.brg") ||
+          Head.equals_insensitive("v.lbu.local") ||
+          Head.starts_with_insensitive("v.lhu.brg") ||
+          Head.equals_insensitive("v.lhu.local") ||
+          Head.starts_with_insensitive("v.lw.brg") ||
           Head.equals_insensitive("v.lw.local")) {
         StringRef SrcPart;
         ParsedVReg Dst;
         if (!parseArrow(Rest, SrcPart, Dst))
-          fail("expected '->Dst' in v.lw");
+          fail("expected '->Dst' in v.l[b|h|w]");
         ParsedVReg Base, Index;
-        if (!parseMemTriple(SrcPart, Base, Index))
-          fail("expected memory form [base, lc0<<2, idx] in v.lw");
+        const bool IsSignedByte =
+            Head.starts_with_insensitive("v.lb.brg") ||
+            Head.equals_insensitive("v.lb.local");
+        const bool IsSignedHalf =
+            Head.starts_with_insensitive("v.lh.brg") ||
+            Head.equals_insensitive("v.lh.local");
+        const bool IsByte =
+            Head.starts_with_insensitive("v.lbu.brg") ||
+            Head.equals_insensitive("v.lbu.local");
+        const bool IsHalf =
+            Head.starts_with_insensitive("v.lhu.brg") ||
+            Head.equals_insensitive("v.lhu.local");
+        const bool IsNarrowByte = IsSignedByte || IsByte;
+        const bool IsNarrowHalf = IsSignedHalf || IsHalf;
+        const unsigned WantLaneShamt =
+            IsNarrowByte ? 0u : (IsNarrowHalf ? 1u : 2u);
+        if (!parseMemTriple(SrcPart, WantLaneShamt, Base, Index))
+          fail("expected memory form [base, lc0<<esize, idx] in v.l[b|h|w]");
         const unsigned LocalBit =
             (Head.contains_insensitive(".local") ||
+             Head.equals_insensitive("v.lb.local") ||
+             Head.equals_insensitive("v.lh.local") ||
+             Head.equals_insensitive("v.lbu.local") ||
+             Head.equals_insensitive("v.lhu.local") ||
              Head.equals_insensitive("v.lw.local"))
                 ? 1u
                 : 0u;
-        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_LW_BRG))
+        const unsigned Opc =
+            IsSignedByte    ? LinxISA::PSEUDO_V_LB_BRG
+            : IsSignedHalf ? LinxISA::PSEUDO_V_LH_BRG
+            : IsByte       ? LinxISA::PSEUDO_V_LBU_BRG
+            : IsHalf       ? LinxISA::PSEUDO_V_LHU_BRG
+                           : LinxISA::PSEUDO_V_LW_BRG;
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
             .addImm(Dst.Code)
             .addImm(Base.Code)
             .addImm(Index.Code)
@@ -1228,33 +1428,106 @@ public:
         return;
       }
 
-      if (Head.starts_with_insensitive("v.sw.brg") ||
+      if (Head.starts_with_insensitive("v.lwi.u") ||
+          Head.starts_with_insensitive("v.ldi.u")) {
+        StringRef SrcPart;
+        ParsedVReg Dst;
+        if (!parseArrow(Rest, SrcPart, Dst))
+          fail("expected '->Dst' in v.lwi/v.ldi");
+        ParsedVReg Base;
+        int64_t Imm = 0;
+        const bool IsDword = Head.starts_with_insensitive("v.ldi.u");
+        const unsigned LaneShamt = IsDword ? 3u : 2u;
+        if (!parseMemImm(SrcPart, LaneShamt, Base, Imm))
+          fail("expected memory form [base, lc0<<shift, simm] in v.lwi/v.ldi");
+        const unsigned LocalBit = Head.contains_insensitive(".local") ? 1u : 0u;
+        const unsigned BrgBit = Head.contains_insensitive(".brg") ? 1u : 0u;
+        const unsigned Opc =
+            IsDword ? LinxISA::PSEUDO_V_LDI_U : LinxISA::PSEUDO_V_LWI_U;
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
+            .addImm(Dst.Code)
+            .addImm(Base.Code)
+            .addImm(Imm)
+            .addImm(LocalBit)
+            .addImm(BrgBit);
+        return;
+      }
+
+      if (Head.starts_with_insensitive("v.sb.brg") ||
+          Head.equals_insensitive("v.sb.local") ||
+          Head.starts_with_insensitive("v.sh.brg") ||
+          Head.equals_insensitive("v.sh.local") ||
+          Head.starts_with_insensitive("v.sw.brg") ||
           Head.equals_insensitive("v.sw.local")) {
         const size_t LBr = Rest.find('[');
         if (LBr == StringRef::npos)
-          fail("expected memory operand in v.sw");
+          fail("expected memory operand in v.s[b|h|w]");
         StringRef ValuePart = Rest.take_front(LBr).trim();
         if (ValuePart.ends_with(","))
           ValuePart = ValuePart.drop_back().trim();
         StringRef MemPart = Rest.drop_front(LBr).trim();
         auto SrcD = parseVecRegToken(ValuePart);
         ParsedVReg Base, Index;
-        if (!SrcD || !parseMemTriple(MemPart, Base, Index))
-          fail("expected v.sw SrcD, [base, lc0<<2, idx]");
-        if (Index.Shamt < 2)
-          fail("v.sw index shift must be >= 2");
-        const unsigned EncodedShamt = Index.Shamt - 2;
+        const bool IsByte =
+            Head.starts_with_insensitive("v.sb.brg") ||
+            Head.equals_insensitive("v.sb.local");
+        const bool IsHalf =
+            Head.starts_with_insensitive("v.sh.brg") ||
+            Head.equals_insensitive("v.sh.local");
+        const unsigned WantLaneShamt = IsByte ? 0u : (IsHalf ? 1u : 2u);
+        if (!SrcD || !parseMemTriple(MemPart, WantLaneShamt, Base, Index))
+          fail("expected v.s[b|h|w] SrcD, [base, lc0<<esize, idx]");
+        const bool IsZeroIndex = Index.Code == 0u && Index.Shamt == 0u;
+        if (!IsByte && !IsZeroIndex && Index.Shamt < WantLaneShamt)
+          fail("v.sh/v.sw index shift must be >= lane shift");
+        const unsigned EncodedShamt =
+            IsByte ? Index.Shamt
+                   : (IsZeroIndex ? 0u : (Index.Shamt - WantLaneShamt));
         const unsigned LocalBit =
             (Head.contains_insensitive(".local") ||
+             Head.equals_insensitive("v.sb.local") ||
+             Head.equals_insensitive("v.sh.local") ||
              Head.equals_insensitive("v.sw.local"))
                 ? 1u
                 : 0u;
-        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_SW_BRG))
+        const unsigned Opc = IsByte    ? LinxISA::PSEUDO_V_SB_BRG
+                             : IsHalf ? LinxISA::PSEUDO_V_SH_BRG
+                                      : LinxISA::PSEUDO_V_SW_BRG;
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
             .addImm(SrcD->Code)
             .addImm(Base.Code)
             .addImm(Index.Code)
             .addImm(EncodedShamt)
             .addImm(LocalBit);
+        return;
+      }
+
+      if (Head.starts_with_insensitive("v.swi.u") ||
+          Head.starts_with_insensitive("v.sdi.u")) {
+        const size_t LBr = Rest.find('[');
+        if (LBr == StringRef::npos)
+          fail("expected memory operand in v.swi/v.sdi");
+        StringRef ValuePart = Rest.take_front(LBr).trim();
+        if (ValuePart.ends_with(","))
+          ValuePart = ValuePart.drop_back().trim();
+        StringRef MemPart = Rest.drop_front(LBr).trim();
+        auto SrcD = parseVecRegToken(ValuePart);
+        ParsedVReg Base;
+        int64_t Imm = 0;
+        const bool IsDword = Head.starts_with_insensitive("v.sdi.u");
+        const unsigned LaneShamt = IsDword ? 3u : 2u;
+        if (!SrcD || !parseMemImm(MemPart, LaneShamt, Base, Imm))
+          fail("expected v.swi/v.sdi Src, [base, lc0<<shift, simm]");
+        const unsigned LocalBit = Head.contains_insensitive(".local") ? 1u : 0u;
+        const unsigned BrgBit = Head.contains_insensitive(".brg") ? 1u : 0u;
+        const unsigned Opc =
+            IsDword ? LinxISA::PSEUDO_V_SDI_U : LinxISA::PSEUDO_V_SWI_U;
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
+            .addImm(SrcD->Code)
+            .addImm(Base.Code)
+            .addImm(Imm)
+            .addImm(LocalBit)
+            .addImm(BrgBit);
         return;
       }
 
@@ -1324,8 +1597,10 @@ public:
         return It->second;
       };
 
+      VecPipeCursorState PipeState;
       for (StringRef RawLine : Lines)
-        emitVectorBodyLine(BodyBB, RawLine, CtxName, lookupLabelSym);
+        emitVectorBodyLine(BodyBB, RawLine, CtxName, PipeState,
+                           lookupLabelSym);
     };
 
     auto getOrCreateVBlockBodySym = [&]() -> MCSymbol * {
@@ -1354,6 +1629,9 @@ public:
           BodyText = MFI->getVBlockBodyAsm();
       }
       emitVectorBodyText(*VBlockBodyBB, BodyText, "vblock body");
+      BuildMI(*VBlockBodyBB, VBlockBodyBB->end(), DebugLoc(),
+              TII.get(TargetOpcode::EH_LABEL))
+          .addSym(Ctx.getOrCreateSymbol(VBlockBodySym->getName() + ".end"));
 
       DecoupledBodyBBs.insert(VBlockBodyBB);
       Changed = true;
@@ -1385,6 +1663,9 @@ public:
           "  v.sw.local vt#1, [to, lc0<<2, lc1<<8]\n"
           "  C.BSTOP\n";
       emitVectorBodyText(*VTileAddBodyBB, StringRef(kBodyAsm), "vtile add body");
+      BuildMI(*VTileAddBodyBB, VTileAddBodyBB->end(), DebugLoc(),
+              TII.get(TargetOpcode::EH_LABEL))
+          .addSym(Ctx.getOrCreateSymbol(VTileAddBodySym->getName() + ".end"));
 
       DecoupledBodyBBs.insert(VTileAddBodyBB);
       Changed = true;
@@ -1416,6 +1697,9 @@ public:
           "  v.sw.local vt#1, [to, lc0<<2, lc1<<8]\n"
           "  C.BSTOP\n";
       emitVectorBodyText(*VTileSubBodyBB, StringRef(kBodyAsm), "vtile sub body");
+      BuildMI(*VTileSubBodyBB, VTileSubBodyBB->end(), DebugLoc(),
+              TII.get(TargetOpcode::EH_LABEL))
+          .addSym(Ctx.getOrCreateSymbol(VTileSubBodySym->getName() + ".end"));
 
       DecoupledBodyBBs.insert(VTileSubBodyBB);
       Changed = true;
@@ -2542,6 +2826,26 @@ public:
           report_fatal_error("Linx: vblock.launch attr_bits must fit 22 bits");
         const uint32_t Attr = static_cast<uint32_t>(AttrBits);
         const uint32_t AttrAQRLMask = (1u << 18) | (1u << 21);
+        bool EmitLocalScratch = false;
+        unsigned LocalScratchSizeCode = 0;
+        Attribute ScratchAttr =
+            MF.getFunction().getFnAttribute("linx-vblock-ts-bytes");
+        if (ScratchAttr.isStringAttribute()) {
+          uint64_t ScratchBytes = 0;
+          if (ScratchAttr.getValueAsString().getAsInteger(10, ScratchBytes)) {
+            report_fatal_error(
+                "Linx: linx-vblock-ts-bytes must be a decimal byte count");
+          }
+          if (ScratchBytes != 0) {
+            auto SizeCode = tileBytesToSizeCode(ScratchBytes);
+            if (!SizeCode) {
+              report_fatal_error(
+                  "Linx: linx-vblock-ts-bytes must be a power-of-two byte size in [16,4096]");
+            }
+            EmitLocalScratch = true;
+            LocalScratchSizeCode = *SizeCode;
+          }
+        }
         if ((Attr & ~AttrAQRLMask) != 0u) {
           report_fatal_error(
               "Linx: vblock.launch only supports aq/rl B.ATTR bits in canonical v0.4");
@@ -2576,6 +2880,29 @@ public:
         emitIOR(Bind3, Bind4, Bind5);
         emitIOR(Bind6, Bind7, Bind8);
         emitIOR(Bind9, Bind10, Bind11);
+
+        if (EmitLocalScratch) {
+          // Reserve the first two output descriptors for TO/TS so the body
+          // can use the canonical `.local` output-tile order.
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+              .addImm(dstTileFieldFromHand(TileHand::T))
+              .addImm(0)
+              .addImm(1)
+              .addImm(0)
+              .addImm(1)
+              .addImm(0)
+              .addImm(0)
+              .addImm(0);
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+              .addImm(dstTileFieldFromHand(TileHand::U))
+              .addImm(0)
+              .addImm(1)
+              .addImm(0)
+              .addImm(1)
+              .addImm(0)
+              .addImm(8)
+              .addImm(LocalScratchSizeCode);
+        }
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, Dim0);
         if (DynDim1)
@@ -5331,8 +5658,12 @@ public:
           if (NextMI.getOperand(0).getReg() != Dst)
             continue;
 
-          // If Dst is used again later, keep the ADDW.
-          if (hasAnyUseAfter(Dst, std::next(NextIt)))
+          // If Dst is used again later, or is live-out to a successor, keep
+          // the ADDW. The SETC immediate fold only rewrites the local compare;
+          // removing the defining copy would strand any cross-block uses of
+          // the original architectural register.
+          if (hasAnyUseAfter(Dst, std::next(NextIt)) ||
+              isPhysRegLiveOutOfBlock(Dst))
             continue;
 
           NextMI.getOperand(0).setReg(Src);

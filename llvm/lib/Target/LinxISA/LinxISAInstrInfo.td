@@ -616,17 +616,70 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
                              (ins i64imm:$dst, i64imm:$srcP, i64imm:$srcL,
                                   i64imm:$srcR, i64imm:$srcRType),
                              "# PSEUDO_V_CSEL", []>;
+  def PSEUDO_V_PSEL : Pseudo<(outs),
+                             (ins i64imm:$dst, i64imm:$srcP, i64imm:$srcL),
+                             "# PSEUDO_V_PSEL", []>;
 
+  let mayLoad = 1 in
+  def PSEUDO_V_LB_BRG : Pseudo<(outs),
+                               (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR,
+                                    i64imm:$shamt, i64imm:$localBit),
+                               "# PSEUDO_V_LB_BRG", []>;
+  let mayLoad = 1 in
+  def PSEUDO_V_LH_BRG : Pseudo<(outs),
+                               (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR,
+                                    i64imm:$shamt, i64imm:$localBit),
+                               "# PSEUDO_V_LH_BRG", []>;
+  let mayLoad = 1 in
+  def PSEUDO_V_LBU_BRG : Pseudo<(outs),
+                                (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR,
+                                     i64imm:$shamt, i64imm:$localBit),
+                                "# PSEUDO_V_LBU_BRG", []>;
+  let mayLoad = 1 in
+  def PSEUDO_V_LHU_BRG : Pseudo<(outs),
+                                (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR,
+                                     i64imm:$shamt, i64imm:$localBit),
+                                "# PSEUDO_V_LHU_BRG", []>;
   let mayLoad = 1 in
   def PSEUDO_V_LW_BRG : Pseudo<(outs),
                                (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR,
                                     i64imm:$shamt, i64imm:$localBit),
                                "# PSEUDO_V_LW_BRG", []>;
+  let mayLoad = 1 in
+  def PSEUDO_V_LWI_U : Pseudo<(outs),
+                              (ins i64imm:$dst, i64imm:$srcL, i64imm:$simm24,
+                                   i64imm:$localBit, i64imm:$brgBit),
+                              "# PSEUDO_V_LWI_U", []>;
+  let mayLoad = 1 in
+  def PSEUDO_V_LDI_U : Pseudo<(outs),
+                              (ins i64imm:$dst, i64imm:$srcL, i64imm:$simm24,
+                                   i64imm:$localBit, i64imm:$brgBit),
+                              "# PSEUDO_V_LDI_U", []>;
+  let mayStore = 1 in
+  def PSEUDO_V_SB_BRG : Pseudo<(outs),
+                               (ins i64imm:$srcD, i64imm:$srcL, i64imm:$srcR,
+                                    i64imm:$shamt, i64imm:$localBit),
+                               "# PSEUDO_V_SB_BRG", []>;
+  let mayStore = 1 in
+  def PSEUDO_V_SH_BRG : Pseudo<(outs),
+                               (ins i64imm:$srcD, i64imm:$srcL, i64imm:$srcR,
+                                    i64imm:$shamt, i64imm:$localBit),
+                               "# PSEUDO_V_SH_BRG", []>;
   let mayStore = 1 in
   def PSEUDO_V_SW_BRG : Pseudo<(outs),
                                (ins i64imm:$srcD, i64imm:$srcL, i64imm:$srcR,
                                     i64imm:$shamt, i64imm:$localBit),
                                "# PSEUDO_V_SW_BRG", []>;
+  let mayStore = 1 in
+  def PSEUDO_V_SWI_U : Pseudo<(outs),
+                              (ins i64imm:$srcD, i64imm:$base, i64imm:$simm24,
+                                   i64imm:$localBit, i64imm:$brgBit),
+                              "# PSEUDO_V_SWI_U", []>;
+  let mayStore = 1 in
+  def PSEUDO_V_SDI_U : Pseudo<(outs),
+                              (ins i64imm:$srcD, i64imm:$base, i64imm:$simm24,
+                                   i64imm:$localBit, i64imm:$brgBit),
+                              "# PSEUDO_V_SDI_U", []>;
 
   def PSEUDO_V_RDADD : Pseudo<(outs), (ins i64imm:$dst, i64imm:$srcL),
                               "# PSEUDO_V_RDADD", []>;
@@ -665,6 +718,10 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   def PSEUDO_V_B_GEU : Pseudo<(outs),
                               (ins i64imm:$srcL, i64imm:$srcR, BrTarget:$target),
                               "# PSEUDO_V_B_GEU", []>;
+  def PSEUDO_V_B_Z : Pseudo<(outs), (ins BrTarget:$target),
+                            "# PSEUDO_V_B_Z", []>;
+  def PSEUDO_V_B_NZ : Pseudo<(outs), (ins BrTarget:$target),
+                             "# PSEUDO_V_B_NZ", []>;
 }
 
 let hasSideEffects = 1, isTerminator = 1, isBarrier = 1, Size = 4 in

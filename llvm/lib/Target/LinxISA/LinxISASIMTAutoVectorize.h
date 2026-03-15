@@ -10,9 +10,11 @@
 #define LLVM_LIB_TARGET_LINXISA_LINXISASIMTAUTOVECTORIZER_H
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/PassManager.h"
 
 namespace llvm {
 
+class Function;
 class FunctionPass;
 
 bool linxSIMTAutoVectorizeEnabled();
@@ -20,6 +22,12 @@ StringRef linxSIMTAutoVectorizeMode();
 StringRef linxSIMTAutoVectorizeRemarksPath();
 
 FunctionPass *createLinxISASIMTAutoVectorizePass();
+
+class LinxISASIMTAutoVectorizePass
+    : public PassInfoMixin<LinxISASIMTAutoVectorizePass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
 
 } // namespace llvm
 

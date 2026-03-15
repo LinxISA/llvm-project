@@ -133,9 +133,13 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     bool PCRel = true;
     if (Name == "simm12" && Mnemonic.starts_with("B.")) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B12_PCREL);
-    } else if (Name == "simm12" && Mnemonic.starts_with("C.BSTART")) {
+    } else if ((Name == "simm22" || Name == "label") &&
+               Mnemonic.starts_with("B.")) {
+      Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_J22_PCREL);
+    } else if ((Name == "simm12" || Name == "label") &&
+               Mnemonic.starts_with("C.BSTART")) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CBSTART12_PCREL);
-    } else if (Name == "simm22" && Mnemonic == "J") {
+    } else if ((Name == "simm22" || Name == "label") && Mnemonic == "J") {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_J22_PCREL);
     } else if (Name == "simm17" && Mnemonic.starts_with("BSTART.")) {
       if (hasPltVariant(Expr))
@@ -180,7 +184,11 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
         Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_PCR17_STORE);
       }
     } else {
-      report_fatal_error("Linx: unsupported expression fixup");
+      SmallString<128> Msg;
+      raw_svector_ostream OS(Msg);
+      OS << "Linx: unsupported expression fixup for mnemonic '" << Mnemonic
+         << "', field '" << Name << "'";
+      report_fatal_error(OS.str());
     }
 
     Fixups.push_back(MCFixup::create(/*Offset=*/0, Expr, Kind, /*PCRel=*/PCRel));

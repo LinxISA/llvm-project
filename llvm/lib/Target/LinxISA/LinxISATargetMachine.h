@@ -18,6 +18,7 @@ namespace llvm {
 
 class Function;
 struct MachineFunctionInfo;
+class PassBuilder;
 class TargetSubtargetInfo;
 
 class LinxISATargetMachine : public CodeGenTargetMachineImpl {
@@ -46,6 +47,7 @@ public:
                             const TargetSubtargetInfo *STI) const override;
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
+  void registerPassBuilderCallbacks(PassBuilder &PB) override;
 };
 
 } // namespace llvm

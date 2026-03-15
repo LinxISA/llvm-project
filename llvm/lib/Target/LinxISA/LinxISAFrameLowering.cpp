@@ -38,6 +38,11 @@ static bool shouldEmitFrameMacros(const MachineFunction &MF) {
   return MFI.getStackSize() != 0 || !MFI.getCalleeSavedInfo().empty();
 }
 
+bool LinxISAFrameLowering::hasFPImpl(const MachineFunction &MF) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  return MFI.hasVarSizedObjects() || MFI.isFrameAddressTaken();
+}
+
 static std::pair<unsigned, unsigned>
 getFentryRangeEnc(const MachineFunction &MF) {
   const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
@@ -105,6 +110,10 @@ void LinxISAFrameLowering::determineCalleeSaves(MachineFunction &MF,
   // force saving `ra` so that FRET.STK has a valid restore slot.
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   const bool HasFrame = MFI.hasStackObjects();
+  const bool HasFP = hasFPImpl(MF);
+
+  if (HasFP)
+    SavedRegs.set(LinxISA::R18);
 
   const MCPhysReg *CSRs =
       MF.getSubtarget().getRegisterInfo()->getCalleeSavedRegs(&MF);
@@ -179,6 +188,12 @@ void LinxISAFrameLowering::emitPrologue(MachineFunction &MF,
       .addImm(RegEndEnc)
       .addImm(MacroStack);
   emitStackAdjustChunks(*PrologueBB, PrologueBB->end(), TII, ExtraStack, true);
+  if (hasFPImpl(MF)) {
+    BuildMI(*PrologueBB, PrologueBB->end(), DebugLoc(), TII.get(LinxISA::ADDIri),
+            LinxISA::R18)
+        .addReg(LinxISA::R1)
+        .addImm(0);
+  }
 }
 
 void LinxISAFrameLowering::emitEpilogue(MachineFunction &MF,
@@ -240,6 +255,12 @@ void LinxISAFrameLowering::emitEpilogue(MachineFunction &MF,
     MBB.addSuccessor(FExitBB);
     FExitBB->addSuccessor(TailBB);
 
+    if (hasFPImpl(MF)) {
+      BuildMI(*FExitBB, FExitBB->end(), DebugLoc(), TII.get(LinxISA::ADDIri),
+              LinxISA::R1)
+          .addReg(LinxISA::R18)
+          .addImm(0);
+    }
     emitStackAdjustChunks(*FExitBB, FExitBB->end(), TII, ExtraStack, false);
     BuildMI(*FExitBB, FExitBB->end(), DebugLoc(), TII.get(LinxISA::FEXIT))
         .addImm(RegBeginEnc)
@@ -291,6 +312,12 @@ void LinxISAFrameLowering::emitEpilogue(MachineFunction &MF,
   MF.insert(std::next(MBB.getIterator()), EpilogueBB);
   MBB.addSuccessor(EpilogueBB);
 
+  if (hasFPImpl(MF)) {
+    BuildMI(*EpilogueBB, EpilogueBB->end(), DebugLoc(), TII.get(LinxISA::ADDIri),
+            LinxISA::R1)
+        .addReg(LinxISA::R18)
+        .addImm(0);
+  }
   emitStackAdjustChunks(*EpilogueBB, EpilogueBB->end(), TII, ExtraStack, false);
   MachineInstrBuilder MIB =
       BuildMI(*EpilogueBB, EpilogueBB->end(), DebugLoc(),

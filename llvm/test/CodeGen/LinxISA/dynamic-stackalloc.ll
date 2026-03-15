@@ -9,6 +9,10 @@ entry:
 }
 
 ; CHECK-LABEL: f:
+; CHECK: FENTRY
+; CHECK: c.movr	sp,	->s7
 ; CHECK: addi
 ; CHECK: sub	sp,
 ; CHECK: ->sp
+; CHECK: c.movr	s7,	->sp
+; CHECK: FRET.STK
