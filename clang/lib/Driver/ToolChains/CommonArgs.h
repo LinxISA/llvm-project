@@ -145,7 +145,7 @@ llvm::StringRef getLTOParallelism(const llvm::opt::ArgList &Args,
 bool areOptimizationsEnabled(const llvm::opt::ArgList &Args);
 
 bool isUseSeparateSections(const llvm::Triple &Triple);
-
+bool isUseFunctionLayout(const llvm::Triple &Triple);
 /// \p EnvVar is split by system delimiter for environment variables.
 /// If \p ArgName is "-I", "-L", or an empty string, each entry from \p EnvVar
 /// is prefixed by \p ArgName then added to \p Args. Otherwise, for each

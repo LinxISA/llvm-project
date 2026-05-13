@@ -504,6 +504,18 @@ const char *DeclSpec::getSpecifierName(DeclSpec::TSCS S) {
   llvm_unreachable("Unknown typespec!");
 }
 
+const char *DeclSpec::getSpecifierName(DeclSpec::LTSCS S) {
+  switch (S) {
+  case DeclSpec::LTSCS_unspecified:
+    return "unspecified";
+  case DeclSpec::LTSCS___linda_thread:
+    return "__linda_thread";
+  case DeclSpec::LTSCS___linda_shared:
+    return "__linda_shared";
+  }
+  llvm_unreachable("Unknown typespec!");
+}
+
 const char *DeclSpec::getSpecifierName(TypeSpecifierWidth W) {
   switch (W) {
   case TypeSpecifierWidth::Unspecified:
@@ -685,6 +697,18 @@ bool DeclSpec::SetStorageClassSpecThread(TSCS TSC, SourceLocation Loc,
 
   ThreadStorageClassSpec = TSC;
   ThreadStorageClassSpecLoc = Loc;
+  return false;
+}
+
+bool DeclSpec::SetStorageClassSpecLINDAThread(LTSCS LTSC, SourceLocation Loc,
+                                              const char *&PrevSpec,
+                                              unsigned &DiagID) {
+  if (LINDAThreadStorageClassSpec != LTSCS_unspecified)
+    return BadSpecifier(LTSC, (LTSCS)LINDAThreadStorageClassSpec, PrevSpec,
+                        DiagID);
+
+  LINDAThreadStorageClassSpec = LTSC;
+  LINDAThreadStorageClassSpecLoc = Loc;
   return false;
 }
 
@@ -1341,6 +1365,31 @@ void DeclSpec::Finish(Sema &S, const PrintingPolicy &Policy) {
       // Discard the thread storage class specifier to recover.
       ThreadStorageClassSpec = TSCS_unspecified;
       ThreadStorageClassSpecLoc = SourceLocation();
+    }
+  }
+
+  if (LINDAThreadStorageClassSpec != LTSCS_unspecified) {
+    switch (StorageClassSpec) {
+    case SCS_unspecified:
+    case SCS_extern:
+    case SCS_private_extern:
+    case SCS_static:
+      break;
+    default:
+      if (S.getSourceManager().isBeforeInTranslationUnit(
+              getLINDAThreadStorageClassSpecLoc(), getStorageClassSpecLoc()))
+        S.Diag(getStorageClassSpecLoc(),
+               diag::err_invalid_decl_spec_combination)
+            << DeclSpec::getSpecifierName(getLINDAThreadStorageClassSpec())
+            << SourceRange(getLINDAThreadStorageClassSpecLoc());
+      else
+        S.Diag(getLINDAThreadStorageClassSpecLoc(),
+               diag::err_invalid_decl_spec_combination)
+            << DeclSpec::getSpecifierName(getStorageClassSpec())
+            << SourceRange(getStorageClassSpecLoc());
+      // Discard the thread storage class specifier to recover.
+      LINDAThreadStorageClassSpec = LTSCS_unspecified;
+      LINDAThreadStorageClassSpecLoc = SourceLocation();
     }
   }
 

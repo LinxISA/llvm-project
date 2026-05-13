@@ -228,6 +228,11 @@ public:
     return Rematted.count(ParentVNI);
   }
 
+  void willShrink(Register VReg) const {
+    if (TheDelegate)
+      TheDelegate->LRE_WillShrinkVirtReg(VReg);
+  }
+
   /// eraseVirtReg - Notify the delegate that Reg is no longer in use, and try
   /// to erase it from LIS.
   void eraseVirtReg(Register Reg);

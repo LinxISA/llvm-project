@@ -1252,6 +1252,121 @@ DEFINE_LIBUNWIND_FUNCTION(_ZN9libunwind15Registers_riscv6jumptoEv)
 
   ret                       // jump to ra
 
+#elif defined(__linx_v4)
+
+DEFINE_LIBUNWIND_FUNCTION(_ZN9libunwind16Registers_linxv46jumptoEv)
+//
+// void libunwind::Registers_linxv4::jumpto()
+//
+// On entry:
+//  thread_state pointer is in a0
+//
+C.BSTART RET
+  ldi [a0, 0 ], ->t
+  or zero, t#1, ->ra
+  setc.tgt t#1
+  // skip zero(r0) restore
+  ldi [a0, 16 ], -> r1
+  // skip a0(r2) for now
+  ldi [a0, 32 ], -> r3
+  ldi [a0, 40 ], -> r4
+  ldi [a0, 48 ], -> r5
+  ldi [a0, 56 ], -> r6
+  ldi [a0, 64 ], -> r7
+  ldi [a0, 72 ], -> r8
+  ldi [a0, 80 ], -> r9
+  // skip ra(r10) restore
+  ldi [a0, 96 ], -> r11
+  ldi [a0, 104], -> r12
+  ldi [a0, 112], -> r13
+  ldi [a0, 120], -> r14
+  ldi [a0, 128], -> r15
+  ldi [a0, 136], -> r16
+  ldi [a0, 144], -> r17
+  ldi [a0, 152], -> r18
+  ldi [a0, 160], -> r19
+  ldi [a0, 168], -> r20
+  ldi [a0, 176], -> r21
+  ldi [a0, 184], -> r22
+  ldi [a0, 192], -> r23
+  ldi [a0, 24 ], -> a0
+C.BSTOP
+
+#elif defined(__linx_v5)
+
+DEFINE_LIBUNWIND_FUNCTION(_ZN9libunwind16Registers_linxv56jumptoEv)
+//
+// void libunwind::Registers_linxv5::jumpto()
+//
+// On entry:
+//  thread_state pointer is in a0
+//
+C.BSTART RET
+  ldi [a0, 0 ], ->t
+  or zero, t#1, ->ra
+  setc.tgt t#1
+  // skip zero(r0) restore
+  ldi [a0, 16 ], -> r1
+  // skip a0(r2) for now
+  ldi [a0, 32 ], -> r3
+  ldi [a0, 40 ], -> r4
+  ldi [a0, 48 ], -> r5
+  ldi [a0, 56 ], -> r6
+  ldi [a0, 64 ], -> r7
+  ldi [a0, 72 ], -> r8
+  ldi [a0, 80 ], -> r9
+  // skip ra(r10) restore
+  ldi [a0, 96 ], -> r11
+  ldi [a0, 104], -> r12
+  ldi [a0, 112], -> r13
+  ldi [a0, 120], -> r14
+  ldi [a0, 128], -> r15
+  ldi [a0, 136], -> r16
+  ldi [a0, 144], -> r17
+  ldi [a0, 152], -> r18
+  ldi [a0, 160], -> r19
+  ldi [a0, 168], -> r20
+  ldi [a0, 176], -> r21
+  ldi [a0, 184], -> r22
+  ldi [a0, 192], -> r23
+  ldi [a0, 24 ], -> a0
+C.BSTOP
+
+#elif defined(__linx) && !defined(__linx_v4) && !defined(__linx_v5)
+
+DEFINE_LIBUNWIND_FUNCTION(_ZN9libunwind14Registers_linx6jumptoEv)
+//
+// void libunwind::Registers_linx::jumpto()
+//
+// On entry:
+//  thread_state pointer is in a0
+//
+bstart .L___ZN9libunwind14Registers_linx6jumptoEv_BB0_0.bstart
+bnext.ret
+bstop .L___ZN9libunwind14Registers_linx6jumptoEv_BB0_0.bstop
+.pushSection	.text.body._ZN9libunwind14Registers_linx6jumptoEv
+.L___ZN9libunwind14Registers_linx6jumptoEv_BB0_0.bstart:
+ldi [a0, 0 ], -> a1
+ori a1, 0, => ra
+ldi [a0, 2 ], => r1
+ldi [a0, 3 ], => r2
+ldi [a0, 4 ], => r3
+ldi [a0, 5 ], => r4
+ldi [a0, 6 ], => r5
+ldi [a0, 7 ], => r6
+ldi [a0, 8 ], => r7
+ldi [a0, 9 ], => r8
+ldi [a0, 10], => r9
+ldi [a0, 11], => r10
+ldi [a0, 12], => r11
+ldi [a0, 13], => r12
+ldi [a0, 14], => r13
+ldi [a0, 15], => r14
+ldi [a0, 16], => r15
+setc.tgt	a1
+.L___ZN9libunwind14Registers_linx6jumptoEv_BB0_0.bstop:
+bend
+
 #elif defined(__s390x__)
 
 DEFINE_LIBUNWIND_FUNCTION(_ZN9libunwind15Registers_s390x6jumptoEv)

@@ -2769,6 +2769,10 @@ public:
                       getApproximateEVTForLLT(ToTy, DL, Ctx));
   }
 
+  virtual bool isSExtFree(SDValue sdvalue) const {
+    return false;
+  }
+
   /// Return true if sign-extension from FromTy to ToTy is cheaper than
   /// zero-extension.
   virtual bool isSExtCheaperThanZExt(EVT FromTy, EVT ToTy) const {
@@ -3196,7 +3200,7 @@ private:
   /// This indicates the default register class to use for each ValueType the
   /// target supports natively.
   const TargetRegisterClass *RegClassForVT[MVT::VALUETYPE_SIZE];
-  uint16_t NumRegistersForVT[MVT::VALUETYPE_SIZE];
+  uint32_t NumRegistersForVT[MVT::VALUETYPE_SIZE];
   MVT RegisterTypeForVT[MVT::VALUETYPE_SIZE];
 
   /// This indicates the "representative" register class to use for each
@@ -4958,6 +4962,11 @@ public:
   // fact that this can be implemented as a ctlz/srl pair, so that the dag
   // combiner can fold the new nodes.
   SDValue lowerCmpEqZeroToCtlzSrl(SDValue Op, SelectionDAG &DAG) const;
+
+  // If the target wants to skip the common zero_extend combine, return true.
+  virtual bool isSkipCommonZextCombine(SDNode *Node, SelectionDAG &DAG) const {
+    return false;
+  }
 
 private:
   SDValue foldSetCCWithAnd(EVT VT, SDValue N0, SDValue N1, ISD::CondCode Cond,

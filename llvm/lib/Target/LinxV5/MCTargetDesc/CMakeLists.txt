@@ -1,0 +1,24 @@
+add_llvm_component_library(LLVMLinxV5Desc
+  LinxV5AsmBackend.cpp
+  LinxV5BaseInfo.cpp
+  LinxV5ELFObjectWriter.cpp
+  LinxV5InstPrinter.cpp
+  LinxV5MCAsmInfo.cpp
+  LinxV5MCCodeEmitter.cpp
+  LinxV5MCExpr.cpp
+  LinxV5MCObjectFileInfo.cpp
+  LinxV5MCTargetDesc.cpp
+  LinxV5MatInt.cpp
+  LinxV5TargetStreamer.cpp
+  LinxV5ELFStreamer.cpp
+  LinxV5CompressInst.cpp
+  LinxV5TileOpReader.cpp
+  LinxV5TileOpExpand.cpp
+  LINK_COMPONENTS
+  MC
+  LinxV5Info
+  Support
+
+  ADD_TO_COMPONENT
+  LinxV5
+)

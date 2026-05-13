@@ -4996,10 +4996,9 @@ TryReferenceInit(Sema &S, Expr *Init, QualType DeclType,
   return ICS;
 }
 
-static ImplicitConversionSequence
+ImplicitConversionSequence
 TryCopyInitialization(Sema &S, Expr *From, QualType ToType,
-                      bool SuppressUserConversions,
-                      bool InOverloadResolution,
+                      bool SuppressUserConversions, bool InOverloadResolution,
                       bool AllowObjCWritebackConversion,
                       bool AllowExplicit = false);
 
@@ -5307,12 +5306,10 @@ TryListConversion(Sema &S, InitListExpr *From, QualType ToType,
 /// conversion sequence (meaning that the argument cannot be passed to
 /// a parameter of this type). If @p SuppressUserConversions, then we
 /// do not permit any user-defined conversion sequences.
-static ImplicitConversionSequence
+ImplicitConversionSequence
 TryCopyInitialization(Sema &S, Expr *From, QualType ToType,
-                      bool SuppressUserConversions,
-                      bool InOverloadResolution,
-                      bool AllowObjCWritebackConversion,
-                      bool AllowExplicit) {
+                      bool SuppressUserConversions, bool InOverloadResolution,
+                      bool AllowObjCWritebackConversion, bool AllowExplicit) {
   if (InitListExpr *FromInitList = dyn_cast<InitListExpr>(From))
     return TryListConversion(S, FromInitList, ToType, SuppressUserConversions,
                              InOverloadResolution,AllowObjCWritebackConversion);

@@ -486,6 +486,60 @@ static uint64_t resolveRISCV(uint64_t Type, uint64_t Offset, uint64_t S,
   }
 }
 
+static bool supportsLinx64V5(uint64_t Type) {
+  switch (Type) {
+  case ELF::R_LinxV5_NONE:
+  case ELF::R_LinxV5_32:
+  case ELF::R_LinxV5_32_PCREL:
+  case ELF::R_LinxV5_64:
+  case ELF::R_LinxV5_ADD8:
+  case ELF::R_LinxV5_SUB8:
+  case ELF::R_LinxV5_ADD16:
+  case ELF::R_LinxV5_SUB16:
+  case ELF::R_LinxV5_ADD32:
+  case ELF::R_LinxV5_SUB32:
+  case ELF::R_LinxV5_ADD64:
+  case ELF::R_LinxV5_SUB64:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static uint64_t resolveLinx64V5(uint64_t Type, uint64_t Offset, uint64_t S,
+                                uint64_t LocData, int64_t Addend) {
+  int64_t RA = Addend;
+  uint64_t A = LocData;
+  switch (Type) {
+  case ELF::R_LinxV5_NONE:
+    return LocData;
+  case ELF::R_LinxV5_32:
+    return (S + RA) & 0xFFFFFFFF;
+  case ELF::R_LinxV5_32_PCREL:
+    return (S + RA - Offset) & 0xFFFFFFFF;
+  case ELF::R_LinxV5_64:
+    return S + RA;
+  case ELF::R_LinxV5_ADD8:
+    return (A + (S + RA)) & 0xFF;
+  case ELF::R_LinxV5_SUB8:
+    return (A - (S + RA)) & 0xFF;
+  case ELF::R_LinxV5_ADD16:
+    return (A + (S + RA)) & 0xFFFF;
+  case ELF::R_LinxV5_SUB16:
+    return (A - (S + RA)) & 0xFFFF;
+  case ELF::R_LinxV5_ADD32:
+    return (A + (S + RA)) & 0xFFFFFFFF;
+  case ELF::R_LinxV5_SUB32:
+    return (A - (S + RA)) & 0xFFFFFFFF;
+  case ELF::R_LinxV5_ADD64:
+    return (A + (S + RA));
+  case ELF::R_LinxV5_SUB64:
+    return (A - (S + RA));
+  default:
+    llvm_unreachable("Invalid relocation type");
+  }
+}
+
 static bool supportsCSKY(uint64_t Type) {
   switch (Type) {
   case ELF::R_CKCORE_NONE:
@@ -725,6 +779,9 @@ getRelocationResolver(const ObjectFile &Obj) {
         return {supportsAmdgpu, resolveAmdgpu};
       case Triple::riscv64:
         return {supportsRISCV, resolveRISCV};
+      case Triple::linx64v5:
+      case Triple::linx64v5be:
+        return {supportsLinx64V5, resolveLinx64V5};
       default:
         return {nullptr, nullptr};
       }

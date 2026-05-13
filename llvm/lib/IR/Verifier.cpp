@@ -284,7 +284,7 @@ class Verifier : public InstVisitor<Verifier>, VerifierSupport {
   // would plus the shift value by 1, the alignment size should
   // not exceed 2^14, otherwise it can NOT be properly lowered
   // in backend.
-  static constexpr unsigned ParamMaxAlignment = 1 << 14;
+  static constexpr unsigned ParamMaxAlignment = 1 << 24;
   DominatorTree DT;
 
   /// When verifying a basic block, keep track of all of the

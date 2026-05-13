@@ -70,6 +70,9 @@ STATISTIC(NumTailMerge , "Number of block tails merged");
 STATISTIC(NumHoist     , "Number of times common instructions are hoisted");
 STATISTIC(NumTailCalls,  "Number of tail calls optimized");
 
+static cl::opt<cl::boolOrDefault> FlagEnableOptBranch("enable-optimize-branch",
+                              cl::init(cl::BOU_TRUE), cl::Hidden);
+
 static cl::opt<cl::boolOrDefault> FlagEnableTailMerge("enable-tail-merge",
                               cl::init(cl::BOU_UNSET), cl::Hidden);
 
@@ -123,6 +126,13 @@ INITIALIZE_PASS(BranchFolderPass, DEBUG_TYPE,
 bool BranchFolderPass::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
+
+  // HACK: Linx mbb-group is not so friendly for mbb layout optimization.
+  // Do more work or remove this feature is needed.
+  for (auto &MBB : MF) {
+    if (MBB.isMBBGroupMember())
+      return false;
+  }
 
   TargetPassConfig *PassConfig = &getAnalysis<TargetPassConfig>();
   // TailMerge can create jump into if branches that make CFG irreducible for
@@ -185,6 +195,9 @@ bool BranchFolder::OptimizeFunction(MachineFunction &MF,
                                     MachineLoopInfo *mli, bool AfterPlacement) {
   if (!tii) return false;
 
+  if (FlagEnableOptBranch != cl::BOU_TRUE)
+    return false;
+
   TriedMerging.clear();
 
   MachineRegisterInfo &MRI = MF.getRegInfo();
@@ -198,21 +211,35 @@ bool BranchFolder::OptimizeFunction(MachineFunction &MF,
   if (!UpdateLiveIns)
     MRI.invalidateLiveness();
 
+  IsLinx64 = MF.getTarget().getTargetTriple().isLinx() ||
+             MF.getTarget().getTargetTriple().isLinxV4() ||
+             MF.getTarget().getTargetTriple().isLinxV5();
+
   bool MadeChange = false;
 
   // Recalculate EH scope membership.
   EHScopeMembership = getEHScopeMembership(MF);
 
   bool MadeChangeThisIteration = true;
-  while (MadeChangeThisIteration) {
-    MadeChangeThisIteration    = TailMergeBlocks(MF);
-    // No need to clean up if tail merging does not change anything after the
-    // block placement.
-    if (!AfterBlockPlacement || MadeChangeThisIteration)
-      MadeChangeThisIteration |= OptimizeBranches(MF);
-    if (EnableHoistCommonCode)
-      MadeChangeThisIteration |= HoistCommonCode(MF);
-    MadeChange |= MadeChangeThisIteration;
+
+  if (IsLinx64) {
+    while (MadeChangeThisIteration) {
+      if (!AfterBlockPlacement || MadeChangeThisIteration) {
+        MadeChangeThisIteration = OptimizeBranches(MF);
+      }
+      MadeChange |= MadeChangeThisIteration;
+    }
+  } else {
+    while (MadeChangeThisIteration) {
+      MadeChangeThisIteration    = TailMergeBlocks(MF);
+      // No need to clean up if tail merging does not change anything after the
+      // block placement.
+      if (!AfterBlockPlacement || MadeChangeThisIteration)
+        MadeChangeThisIteration |= OptimizeBranches(MF);
+      if (EnableHoistCommonCode)
+        MadeChangeThisIteration |= HoistCommonCode(MF);
+      MadeChange |= MadeChangeThisIteration;
+    }
   }
 
   // See if any jump tables have become dead as the code generator
@@ -1366,6 +1393,19 @@ ReoptimizeBlock:
       if (MachineJumpTableInfo *MJTI = MF.getJumpTableInfo())
         MJTI->ReplaceMBBInJumpTables(MBB, &*FallThrough);
       MadeChange = true;
+    } else if (IsLinx64) {
+      // Very conservative elimination of empty blocks
+      if (MBB->pred_size() == 1) {
+        MachineBasicBlock *Pred = *MBB->pred_begin();
+        if (Pred->isLayoutSuccessor(MBB) && (Pred->succ_size() == 1) &&
+            !Pred->getLastNonDebugInstr()->isBranch()) {
+          LLVM_DEBUG(dbgs() << "\nRemoving empty MBB: " << *MBB);
+          Pred->removeSuccessor(MBB);
+          // MBB is dead now, clear in RemoveDeadBlock later
+          Pred->transferSuccessors(MBB);
+          MadeChange = true;
+        }
+      }
     }
     return MadeChange;
   }
@@ -1400,9 +1440,18 @@ ReoptimizeBlock:
     // predecessor of a block.
     // This has to check PrevBB->succ_size() because EH edges are ignored by
     // analyzeBranch.
+    // In Linx, we don't merge common blocks, only merge branch blocks
+    bool ShouldMerge = false;
+    if (!IsLinx64) {
+      ShouldMerge = true;
+    } else if (!IsEmptyBlock(MBB) &&
+               (MBB->getFirstNonDebugInstr() == MBB->getLastNonDebugInstr()) &&
+               MBB->getFirstNonDebugInstr()->isBranch()) {
+      ShouldMerge = true;
+    }
     if (PriorCond.empty() && !PriorTBB && MBB->pred_size() == 1 &&
         PrevBB.succ_size() == 1 &&
-        !MBB->hasAddressTaken() && !MBB->isEHPad()) {
+        !MBB->hasAddressTaken() && !MBB->isEHPad() && ShouldMerge) {
       LLVM_DEBUG(dbgs() << "\nMerging into block: " << PrevBB
                         << "From MBB: " << *MBB);
       // Remove redundant DBG_VALUEs first.
@@ -1621,6 +1670,15 @@ ReoptimizeBlock:
             } else {
               DidChange = true;
               PMBB->ReplaceUsesOfBlockWith(MBB, CurTBB);
+	      // BlockISA: replace the uses of this block in lconst
+              // instructions; Such instruction should only appear in multi-exit
+              // hyperblocks at the moment;
+              for (MachineInstr &MI : PMBB->instrs()) {
+                for (MachineOperand &MO : MI.uses()) {
+                  if (MO.isMBB() && MO.getMBB() == MBB)
+                    MO.setMBB(CurTBB);
+                }
+              }
               // If this change resulted in PMBB ending in a conditional
               // branch where both conditions go to the same destination,
               // change this to an unconditional branch.

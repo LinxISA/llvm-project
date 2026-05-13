@@ -683,6 +683,11 @@ bool VectorType::isValidElementType(Type *ElemTy) {
 
 FixedVectorType *FixedVectorType::get(Type *ElementType, unsigned NumElts) {
   assert(NumElts > 0 && "#Elements of a VectorType must be greater than 0");
+  StructType *SType = dyn_cast<StructType>(ElementType);
+  while (SType && SType->elements().size() == 1) {
+    ElementType = SType->elements()[0];
+    SType = dyn_cast<StructType>(ElementType);
+  }
   assert(isValidElementType(ElementType) && "Element type of a VectorType must "
                                             "be an integer, floating point, or "
                                             "pointer type.");

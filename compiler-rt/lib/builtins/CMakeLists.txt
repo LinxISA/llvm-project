@@ -181,8 +181,14 @@ set(GENERIC_SOURCES
   umodti3.c
 )
 
+# Check if __linx is defined in the compiler
+include(CheckCCompilerFlag)
+check_c_compiler_flag("-D__linx" HAVE_LINX_MACRO)
+
+
 # Build BF16 files only when "__bf16" is available.
-if(COMPILER_RT_HAS_BFLOAT16 AND NOT APPLE)
+# Linx not support bf16 in scale type.
+if(COMPILER_RT_HAS_BFLOAT16 AND NOT APPLE AND NOT HAVE_LINX_MACRO)
   set(GENERIC_SOURCES
     ${GENERIC_SOURCES}
     truncdfbf2.c
@@ -671,6 +677,25 @@ set(riscv64_SOURCES
   ${riscv_SOURCES}
 )
 
+set(linx64_SOURCES
+  linx64/check_addr.c
+  ${GENERIC_SOURCES}
+  ${GENERIC_TF_SOURCES}
+)
+
+set(linx64v4_SOURCES
+  ${GENERIC_SOURCES}
+  ${GENERIC_TF_SOURCES}
+)
+set(linx64v4be_SOURCES ${linx64v4_SOURCES})
+
+set(linx64v5_SOURCES
+  linx64v5/tnop.S
+  ${GENERIC_SOURCES}
+  ${GENERIC_TF_SOURCES}
+)
+set(linx64v5be_SOURCES ${linx64v5_SOURCES})
+
 set(sparc_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
 set(sparcv9_SOURCES ${GENERIC_SOURCES} ${GENERIC_TF_SOURCES})
 
@@ -745,7 +770,7 @@ else ()
                            SOURCE "#if !(__ARM_FP & 0x8)
                                    #error No double-precision support!
                                    #endif
-                                   int main(void) { return 0; }")
+                                   int main() { return 0; }")
           if(NOT COMPILER_RT_HAS_${arch}_VFP_DP)
             list(REMOVE_ITEM ${arch}_SOURCES ${arm_Thumb1_VFPv2_DP_SOURCES})
           endif()

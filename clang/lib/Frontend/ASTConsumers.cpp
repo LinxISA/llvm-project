@@ -18,10 +18,13 @@
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/Diagnostic.h"
+#include "clang/Basic/DiagnosticIDs.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "clang/Lex/Preprocessor.h"
+#include "clang/AST/ASTDiagnostic.h"
 using namespace clang;
 
 //===----------------------------------------------------------------------===//
@@ -214,4 +217,132 @@ void ASTViewer::HandleTopLevelSingleDecl(Decl *D) {
 
 std::unique_ptr<ASTConsumer> clang::CreateASTViewer() {
   return std::make_unique<ASTViewer>();
+}
+
+namespace {
+struct PathInfo {
+  SourceLocation Loc;
+  SourceManager &SM;
+  SmallVector<SourceRange, 4> Ranges;
+  unsigned DiagID;
+  PathInfo(SourceLocation L, SourceManager &S, unsigned ID,
+           ArrayRef<SourceRange> Ranges = None)
+      : Loc(std::move(L)), SM(S), DiagID(ID) {
+    for (const auto &SR : Ranges) {
+      this->Ranges.push_back(SR);
+    }
+  }
+};
+
+struct comp {
+  bool operator()(struct PathInfo left, struct PathInfo right) const {
+    unsigned LineLeft = left.SM.getSpellingLineNumber(left.Loc);
+    unsigned LineRight = right.SM.getSpellingLineNumber(right.Loc);
+    unsigned ColLeft = left.SM.getSpellingColumnNumber(left.Loc);
+    unsigned ColRight = right.SM.getSpellingColumnNumber(right.Loc);
+    if (LineLeft == LineRight && ColLeft == ColRight &&
+        left.DiagID == right.DiagID)
+      return false;
+
+    if (LineLeft != LineRight)
+      return LineLeft < LineRight;
+
+    if (ColLeft != ColRight)
+      return ColLeft < ColRight;
+
+    return left.DiagID < right.DiagID;
+  }
+};
+
+using SwitchBranch = llvm::SmallVector<const Stmt *, 2>;
+class ASTDuplicatedChecker : public ASTConsumer, public IdenticalExprVisitor {
+public:
+  Preprocessor &PP;
+  DiagnosticsEngine *Diags;
+  SourceManager &SourceMgr;
+
+private:
+  std::vector<unsigned> DiagIDs = {
+      diag::warn_duplicated_exp1,     diag::warn_duplicated_exp2,
+      diag::warn_duplicated_branches, diag::warn_duplicated_cond_2,
+      diag::warn_duplicated_cond,     diag::warn_duplicated_exp3,
+      diag::warn_duplicated_exp4,     diag::warn_duplicated_exp5,
+      diag::warn_duplicated_branches2};
+
+public:
+  ASTDuplicatedChecker(CompilerInstance &CI)
+      : PP(CI.getPreprocessor()), SourceMgr(CI.getSourceManager()) {}
+  ASTDuplicatedChecker(Preprocessor &PP, SourceManager &SourceMgr)
+      : PP(PP), SourceMgr(SourceMgr) {}
+
+  bool needIgnore(DiagType DiagID, SourceLocation Loc);
+  void reportIdentical(DiagType DiagID, const Stmt *S = nullptr,
+                       const Expr *Op = nullptr,
+                       ArrayRef<SourceRange> Sr = None);
+  void Initialize(ASTContext &Context) override {
+    this->Context = &Context;
+    Diags = &PP.getDiagnostics();
+  }
+
+  void HandleTranslationUnit(ASTContext &Context) override {
+    TraverseDecl(Context.getTranslationUnitDecl());
+    for (auto it : warns) {
+      DiagnosticBuilder DB = Diags->Report(it.Loc, it.DiagID);
+      for (const auto &SR : it.Ranges) {
+        DB << SR;
+      }
+    }
+    warns.clear();
+  }
+
+private:
+  std::set<PathInfo, comp> warns;
+};
+} // namespace
+
+bool ASTDuplicatedChecker::needIgnore(DiagType DiagID, SourceLocation Loc) {
+  if (Diags->isIgnored(DiagIDs[DiagID], Loc))
+    return true;
+  return false;
+}
+
+void ASTDuplicatedChecker::reportIdentical(DiagType DiagID, const Stmt *S,
+                                           const Expr *Op,
+                                           ArrayRef<SourceRange> Sr) {
+  switch (DiagID) {
+  case BitwiseOperator:
+  case LogicalOperator:
+  case AlwaysEqual:
+  case AlwaysTrue:
+  case AlwaysFalse: {
+    PathInfo ELoc(static_cast<const BinaryOperator *>(Op)->getExprLoc(),
+                  SourceMgr, DiagIDs[DiagID], Sr);
+    warns.insert(ELoc);
+    break;
+  }
+  case IdenticalBranches: {
+    PathInfo ELoc(S->getBeginLoc(), SourceMgr, DiagIDs[DiagID]);
+    warns.insert(ELoc);
+    break;
+  }
+  case InnerIdenticalConditions:
+  case PrevIdenticalConditions: {
+    PathInfo ELoc(Op->getBeginLoc(), SourceMgr, DiagIDs[DiagID], Sr);
+    warns.insert(ELoc);
+    break;
+  }
+  case IdenticalExpressions: {
+    PathInfo ELoc(static_cast<const ConditionalOperator *>(Op)->getColonLoc(),
+                  SourceMgr, DiagIDs[DiagID], Sr);
+    warns.insert(ELoc);
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+std::unique_ptr<ASTConsumer>
+clang::CreateASTDuplicatedChecker(Preprocessor &PP, SourceManager &SourceMgr) {
+  return std::make_unique<ASTDuplicatedChecker>(PP, SourceMgr);
 }

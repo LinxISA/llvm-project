@@ -313,8 +313,7 @@ InstrEmitter::AddRegisterOperand(MachineInstrBuilder &MIB,
   // and II requires a GR32_NOSP, just constrain VReg to GR32_NOSP.
   if (II) {
     const TargetRegisterClass *OpRC = nullptr;
-    if (IIOpNum < II->getNumOperands())
-      OpRC = TII->getRegClass(*II, IIOpNum, TRI, *MF);
+    OpRC = TII->getRegClass(*II, IIOpNum, TRI, *MF);
 
     if (OpRC) {
       unsigned MinNumRegs = MinRCSize;
@@ -431,7 +430,7 @@ void InstrEmitter::AddOperand(MachineInstrBuilder &MIB,
   } else if (ExternalSymbolSDNode *ES = dyn_cast<ExternalSymbolSDNode>(Op)) {
     MIB.addExternalSymbol(ES->getSymbol(), ES->getTargetFlags());
   } else if (auto *SymNode = dyn_cast<MCSymbolSDNode>(Op)) {
-    MIB.addSym(SymNode->getMCSymbol());
+    MIB.addSym(SymNode->getMCSymbol(), SymNode->getTargetFlags());
   } else if (BlockAddressSDNode *BA = dyn_cast<BlockAddressSDNode>(Op)) {
     MIB.addBlockAddress(BA->getBlockAddress(),
                         BA->getOffset(),

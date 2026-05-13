@@ -70,7 +70,7 @@ static cl::opt<bool> DisableBlockPlacement("disable-block-placement",
 static cl::opt<bool> EnableBlockPlacementStats("enable-block-placement-stats",
     cl::Hidden, cl::desc("Collect probability-driven block placement stats"));
 static cl::opt<bool> DisableSSC("disable-ssc", cl::Hidden,
-    cl::desc("Disable Stack Slot Coloring"));
+    cl::desc("Disable Stack Slot Coloring"), cl::init(true));
 static cl::opt<bool> DisableMachineDCE("disable-machine-dce", cl::Hidden,
     cl::desc("Disable Machine Dead Code Elimination"));
 static cl::opt<bool> DisableEarlyIfConversion("disable-early-ifcvt", cl::Hidden,
@@ -1197,7 +1197,9 @@ void TargetPassConfig::addMachinePasses() {
 
   // Insert prolog/epilog code.  Eliminate abstract frame index references...
   if (getOptLevel() != CodeGenOpt::None) {
-    addPass(&PostRAMachineSinkingID);
+    if (!TM->getTargetTriple().isLinx() && !TM->getTargetTriple().isLinxV4() &&
+        !TM->getTargetTriple().isLinxV5())
+      addPass(&PostRAMachineSinkingID);
     addPass(&ShrinkWrapID);
   }
 
@@ -1219,78 +1221,86 @@ void TargetPassConfig::addMachinePasses() {
   if (EnableImplicitNullChecks)
     addPass(&ImplicitNullChecksID);
 
-  // Second pass scheduler.
-  // Let Target optionally insert this pass by itself at some other
-  // point.
-  if (getOptLevel() != CodeGenOpt::None &&
-      !TM->targetSchedulesPostRAScheduling()) {
-    if (MISchedPostRA)
-      addPass(&PostMachineSchedulerID);
-    else
-      addPass(&PostRASchedulerID);
-  }
-
-  // GC
-  if (addGCPasses()) {
-    if (PrintGCInfo)
-      addPass(createGCInfoPrinter(dbgs()));
-  }
-
-  // Basic block placement.
   if (getOptLevel() != CodeGenOpt::None)
     addBlockPlacement();
 
-  // Insert before XRay Instrumentation.
-  addPass(&FEntryInserterID);
-
-  addPass(&XRayInstrumentationID);
-  addPass(&PatchableFunctionID);
-
-  if (EnableFSDiscriminator && !FSNoFinalDiscrim)
-    // Add FS discriminators here so that all the instruction duplicates
-    // in different BBs get their own discriminators. With this, we can "sum"
-    // the SampleFDO counters instead of using MAX. This will improve the
-    // SampleFDO profile quality.
-    addPass(createMIRAddFSDiscriminatorsPass(
-        sampleprof::FSDiscriminatorPass::PassLast));
-
-  addPreEmitPass();
-
-  if (TM->Options.EnableIPRA)
-    // Collect register usage information and produce a register mask of
-    // clobbered registers, to be used to optimize call sites.
-    addPass(createRegUsageInfoCollector());
-
-  // FIXME: Some backends are incompatible with running the verifier after
-  // addPreEmitPass.  Maybe only pass "false" here for those targets?
-  addPass(&FuncletLayoutID);
-
-  addPass(&StackMapLivenessID);
-  addPass(&LiveDebugValuesID);
-
-  if (TM->Options.EnableMachineOutliner && getOptLevel() != CodeGenOpt::None &&
-      EnableMachineOutliner != RunOutliner::NeverOutline) {
-    bool RunOnAllFunctions =
-        (EnableMachineOutliner == RunOutliner::AlwaysOutline);
-    bool AddOutliner =
-        RunOnAllFunctions || TM->Options.SupportsDefaultOutlining;
-    if (AddOutliner)
-      addPass(createMachineOutlinerPass(RunOnAllFunctions));
-  }
-
-  // Machine function splitter uses the basic block sections feature. Both
-  // cannot be enabled at the same time. Basic block sections takes precedence.
-  // FIXME: In principle, BasicBlockSection::Labels and splitting can used
-  // together. Update this check once we have addressed any issues.
-  if (TM->getBBSectionsType() != llvm::BasicBlockSection::None) {
-    if (TM->getBBSectionsType() == llvm::BasicBlockSection::List) {
-      addPass(llvm::createBasicBlockSectionsProfileReaderPass(
-          TM->getBBSectionsFuncListBuf()));
+  // Second pass scheduler.
+  // Let Target optionally insert this pass by itself at some other
+  // point.
+  if (!TM->getTargetTriple().isLinx() && !TM->getTargetTriple().isLinxV4() &&
+      !TM->getTargetTriple().isLinxV5()) {
+    if (getOptLevel() != CodeGenOpt::None &&
+        !TM->targetSchedulesPostRAScheduling()) {
+      if (MISchedPostRA)
+        addPass(&PostMachineSchedulerID);
+      else
+        addPass(&PostRASchedulerID);
     }
-    addPass(llvm::createBasicBlockSectionsPass());
-  } else if (TM->Options.EnableMachineFunctionSplitter ||
-             EnableMachineFunctionSplitter) {
-    addPass(createMachineFunctionSplitterPass());
+
+    // GC
+    if (addGCPasses()) {
+      if (PrintGCInfo)
+        addPass(createGCInfoPrinter(dbgs()));
+    }
+
+    // Basic block placement.
+    if (getOptLevel() != CodeGenOpt::None)
+      addBlockPlacement();
+
+    // Insert before XRay Instrumentation.
+    addPass(&FEntryInserterID);
+
+    addPass(&XRayInstrumentationID);
+    addPass(&PatchableFunctionID);
+
+    if (EnableFSDiscriminator && !FSNoFinalDiscrim)
+      // Add FS discriminators here so that all the instruction duplicates
+      // in different BBs get their own discriminators. With this, we can "sum"
+      // the SampleFDO counters instead of using MAX. This will improve the
+      // SampleFDO profile quality.
+      addPass(createMIRAddFSDiscriminatorsPass(
+          sampleprof::FSDiscriminatorPass::PassLast));
+
+    addPreEmitPass();
+
+    if (TM->Options.EnableIPRA)
+      // Collect register usage information and produce a register mask of
+      // clobbered registers, to be used to optimize call sites.
+      addPass(createRegUsageInfoCollector());
+
+    // FIXME: Some backends are incompatible with running the verifier after
+    // addPreEmitPass.  Maybe only pass "false" here for those targets?
+    addPass(&FuncletLayoutID);
+
+    addPass(&StackMapLivenessID);
+    addPass(&LiveDebugValuesID);
+
+    if (TM->Options.EnableMachineOutliner &&
+        getOptLevel() != CodeGenOpt::None &&
+        EnableMachineOutliner != RunOutliner::NeverOutline) {
+      bool RunOnAllFunctions =
+          (EnableMachineOutliner == RunOutliner::AlwaysOutline);
+      bool AddOutliner =
+          RunOnAllFunctions || TM->Options.SupportsDefaultOutlining;
+      if (AddOutliner)
+        addPass(createMachineOutlinerPass(RunOnAllFunctions));
+    }
+
+    // Machine function splitter uses the basic block sections feature. Both
+    // cannot be enabled at the same time. Basic block sections takes
+    // precedence.
+    // FIXME: In principle, BasicBlockSection::Labels and splitting can used
+    // together. Update this check once we have addressed any issues.
+    if (TM->getBBSectionsType() != llvm::BasicBlockSection::None) {
+      if (TM->getBBSectionsType() == llvm::BasicBlockSection::List) {
+        addPass(llvm::createBasicBlockSectionsProfileReaderPass(
+            TM->getBBSectionsFuncListBuf()));
+      }
+      addPass(llvm::createBasicBlockSectionsPass());
+    } else if (TM->Options.EnableMachineFunctionSplitter ||
+               EnableMachineFunctionSplitter) {
+      addPass(createMachineFunctionSplitterPass());
+    }
   }
 
   if (!DisableCFIFixup && TM->Options.EnableCFIFixup)
@@ -1494,6 +1504,8 @@ void TargetPassConfig::addOptimizedRegAlloc() {
   // PreRA instruction scheduling.
   addPass(&MachineSchedulerID);
 
+  addRightBeforeRegAlloc();
+
   if (addRegAssignAndRewriteOptimized()) {
     // Perform stack slot coloring and post-ra machine LICM.
     addPass(&StackSlotColoringID);
@@ -1505,11 +1517,6 @@ void TargetPassConfig::addOptimizedRegAlloc() {
     // Copy propagate to forward register uses and try to eliminate COPYs that
     // were not coalesced.
     addPass(&MachineCopyPropagationID);
-
-    // Run post-ra machine LICM to hoist reloads / remats.
-    //
-    // FIXME: can this move into MachineLateOptimization?
-    addPass(&MachineLICMID);
   }
 }
 
@@ -1521,13 +1528,6 @@ void TargetPassConfig::addOptimizedRegAlloc() {
 void TargetPassConfig::addMachineLateOptimization() {
   // Branch folding must be run after regalloc and prolog/epilog insertion.
   addPass(&BranchFolderPassID);
-
-  // Tail duplication.
-  // Note that duplicating tail just increases code size and degrades
-  // performance for targets that require Structured Control Flow.
-  // In addition it can also make CFG irreducible. Thus we disable it.
-  if (!TM->requiresStructuredCFG())
-    addPass(&TailDuplicateID);
 
   // Copy propagation.
   addPass(&MachineCopyPropagationID);

@@ -24,6 +24,7 @@
 #include "Targets/Hexagon.h"
 #include "Targets/Lanai.h"
 #include "Targets/Le64.h"
+#include "Targets/LinxV5.h"
 #include "Targets/M68k.h"
 #include "Targets/MSP430.h"
 #include "Targets/Mips.h"
@@ -424,6 +425,15 @@ TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return new LinuxTargetInfo<RISCV64TargetInfo>(Triple, Opts);
     default:
       return new RISCV64TargetInfo(Triple, Opts);
+    }
+
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    switch (os) {
+    case llvm::Triple::Linux:
+      return new LinuxTargetInfo<Linx64V5TargetInfo>(Triple, Opts);
+    default:
+      return new Linx64V5TargetInfo(Triple, Opts);
     }
 
   case llvm::Triple::sparc:

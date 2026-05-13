@@ -185,6 +185,9 @@ def m_x86_Features_Group : OptionGroup<"<x86 features group>">,
 def m_riscv_Features_Group : OptionGroup<"<riscv features group>">,
                              Group<m_Group>, DocName<"RISCV">;
 
+def m_linx_Features_Group : OptionGroup<"<linx features group>">,
+                            Group<m_Group>, DocName<"Linx">;
+
 def m_libc_Group : OptionGroup<"<m libc group>">, Group<m_mips_Features_Group>,
                    Flags<[HelpHidden]>;
 
@@ -1517,6 +1520,9 @@ defm eliminate_unused_debug_types : OptOutCC1FFlag<"eliminate-unused-debug-types
 def femit_all_decls : Flag<["-"], "femit-all-decls">, Group<f_Group>, Flags<[CC1Option]>,
   HelpText<"Emit all declarations, even if unused">,
   MarshallingInfoFlag<LangOpts<"EmitAllDecls">>;
+def femit_var_decls_inorder : Flag<["-"], "femit-var-decls-inorder">, Group<f_Group>, Flags<[CC1Option]>,
+  HelpText<"Emit toplevel variables declarations in order">,
+  MarshallingInfoFlag<LangOpts<"EmitVarDeclsInorder">>;
 defm emulated_tls : BoolFOption<"emulated-tls",
   CodeGenOpts<"EmulatedTLS">, DefaultFalse,
   PosFlag<SetTrue, [CC1Option], "Use emutls functions to access thread_local variables">,
@@ -2144,6 +2150,11 @@ def flax_vector_conversions_EQ : Joined<["-"], "flax-vector-conversions=">, Grou
 def flax_vector_conversions : Flag<["-"], "flax-vector-conversions">, Group<f_Group>,
   Alias<flax_vector_conversions_EQ>, AliasArgs<["integer"]>;
 def flimited_precision_EQ : Joined<["-"], "flimited-precision=">, Group<f_Group>;
+def flive_patching_EQ : Joined<["-"], "flive-patching=">, Flags<[CoreOption, CC1Option]>, Group<f_Group>,
+  HelpText<"Control IPA optimizations to provide a safe compilation for live-patching.">, Values<"inline-only-static, inline-clone">;
+def flive_patching : Flag<["-"], "flive-patching">, Group<f_Group>, Flags<[CoreOption, CC1Option]>,
+  Alias<flive_patching_EQ>, AliasArgs<["inline-clone"]>,
+  HelpText<"Enable live-patching in 'inline-clone' mode">;
 def fapple_link_rtlib : Flag<["-"], "fapple-link-rtlib">, Group<f_Group>,
   HelpText<"Force linking the clang builtins runtime library">;
 def flto_EQ : Joined<["-"], "flto=">, Flags<[CoreOption, CC1Option]>, Group<f_Group>,
@@ -2372,6 +2383,7 @@ def fmudflapth : Flag<["-"], "fmudflapth">, Group<f_Group>;
 def fmudflap : Flag<["-"], "fmudflap">, Group<f_Group>;
 def fnested_functions : Flag<["-"], "fnested-functions">, Group<f_Group>;
 def fnext_runtime : Flag<["-"], "fnext-runtime">, Group<f_Group>;
+def fno_argpro : Flag<["-"], "fno-argpro">, Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_asm : Flag<["-"], "fno-asm">, Group<f_Group>;
 def fno_asynchronous_unwind_tables : Flag<["-"], "fno-asynchronous-unwind-tables">, Group<f_Group>;
 def fno_assume_sane_operator_new : Flag<["-"], "fno-assume-sane-operator-new">, Group<f_Group>,
@@ -2388,9 +2400,16 @@ defm digraphs : BoolFOption<"digraphs",
   PosFlag<SetTrue, [], "Enable alternative token representations '<:', ':>', '<%', '%>', '%:', '%:%:' (default)">,
   NegFlag<SetFalse, [], "Disallow alternative token representations '<:', ':>', '<%', '%>', '%:', '%:%:'">,
   BothFlags<[CC1Option]>>;
+def fno_dae : Flag<["-"], "fno-dae">, Group<f_clang_Group>, Flags<[CC1Option]>;
+def fno_constmerge : Flag<["-"], "fno-constmerge">, Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_eliminate_unused_debug_symbols : Flag<["-"], "fno-eliminate-unused-debug-symbols">, Group<f_Group>;
+def fno_globalopt : Flag<["-"], "fno-globalopt">, Group<f_Group>;
 def fno_inline_functions : Flag<["-"], "fno-inline-functions">, Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_inline : Flag<["-"], "fno-inline">, Group<f_clang_Group>, Flags<[CC1Option]>;
+def fipa_cp : Flag<["-"], "fipa-cp">, Group<f_clang_Group>, Flags<[CC1Option]>;
+def fno_ipa_cp : Flag<["-"], "fno-ipa-cp">, Group<f_clang_Group>, Flags<[CC1Option]>;
+def fpartial_inlining : Flag<["-"], "fpartial-inlining">, Group<f_clang_Group>, Flags<[CC1Option]>;
+def fno_partial_inlining : Flag<["-"], "fno-partial-inlining">, Group<f_clang_Group>, Flags<[CC1Option]>;
 def fno_global_isel : Flag<["-"], "fno-global-isel">, Group<f_clang_Group>,
   HelpText<"Disables the global instruction selector">;
 def fno_experimental_isel : Flag<["-"], "fno-experimental-isel">, Group<f_clang_Group>,
@@ -3490,6 +3509,16 @@ def mcmodel_EQ_medany : Flag<["-"], "mcmodel=medany">, Group<m_riscv_Features_Gr
   HelpText<"Equivalent to -mcmodel=medium, compatible with RISC-V gcc.">;
 def menable_experimental_extensions : Flag<["-"], "menable-experimental-extensions">, Group<m_Group>,
   HelpText<"Enable use of experimental RISC-V extensions.">;
+
+def mlinda_global_var_as_thread_local : Flag<["-"], "mlinda-global-var-as-thread-local">, Group<m_linx_Features_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"Treat global variable without tls or section modifier as tls.">,
+  MarshallingInfoFlag<LangOpts<"LINDAGlobalVarAsTLS">>;
+
+def mlxbc : Flag<["-"], "mlxbc">, Group<m_linx_Features_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"enable cuda stype calling like `foo<<<dimx, dimy, dimz>>>(args)' in c/c++ language">,
+  MarshallingInfoFlag<LangOpts<"LinxBlockC">>;
 
 def munaligned_access : Flag<["-"], "munaligned-access">, Group<m_arm_Features_Group>,
   HelpText<"Allow memory accesses to be unaligned (AArch32/AArch64 only)">;
@@ -4738,8 +4767,6 @@ defm inline_functions_called_once : BooleanFFlag<"inline-functions-called-once">
 def finline_limit_EQ : Joined<["-"], "finline-limit=">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm finline_limit : BooleanFFlag<"inline-limit">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm inline_small_functions : BooleanFFlag<"inline-small-functions">,
-    Group<clang_ignored_gcc_optimization_f_Group>;
-defm ipa_cp : BooleanFFlag<"ipa-cp">,
     Group<clang_ignored_gcc_optimization_f_Group>;
 defm ivopts : BooleanFFlag<"ivopts">, Group<clang_ignored_gcc_optimization_f_Group>;
 defm semantic_interposition : BoolFOption<"semantic-interposition",

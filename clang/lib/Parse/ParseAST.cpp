@@ -15,6 +15,8 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/Stmt.h"
+#include "clang/Basic/DiagnosticIDs.h"
+#include "clang/Frontend/ASTConsumers.h"
 #include "clang/Parse/ParseDiagnostic.h"
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/CodeCompleteConsumer.h"
@@ -195,6 +197,17 @@ void clang::ParseAST(Sema &S, bool PrintStats, bool SkipFunctionBodies) {
     if (Interface)
       S.getASTContext().setModuleForCodeGen(CodegenModule);
   }
+
+  if (!S.getDiagnostics().isIgnored(diag::warn_duplicated_branches,
+                                    SourceLocation()) ||
+      !S.getDiagnostics().isIgnored(diag::warn_duplicated_cond,
+                                    SourceLocation())) {
+    std::unique_ptr<ASTConsumer> DuplicatedChecker =
+        CreateASTDuplicatedChecker(S.getPreprocessor(), S.getSourceManager());
+    DuplicatedChecker->Initialize(S.getASTContext());
+    DuplicatedChecker->HandleTranslationUnit(S.getASTContext());
+  }
+
   Consumer->HandleTranslationUnit(S.getASTContext());
 
   // Finalize the template instantiation observer chain.

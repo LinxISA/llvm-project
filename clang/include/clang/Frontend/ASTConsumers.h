@@ -15,6 +15,7 @@
 
 #include "clang/AST/ASTDumperUtils.h"
 #include "clang/Basic/LLVM.h"
+#include "clang/Frontend/CompilerInstance.h"
 #include <memory>
 
 namespace clang {
@@ -43,7 +44,7 @@ std::unique_ptr<ASTConsumer> CreateASTDeclNodeLister();
 // the AST and displays it with the graph viewer "dotty".  Also outputs
 // function declarations to stderr.
 std::unique_ptr<ASTConsumer> CreateASTViewer();
-
+std::unique_ptr<ASTConsumer> CreateASTDuplicatedChecker(Preprocessor &PP, SourceManager &SourceMgr);
 } // end clang namespace
 
 #endif

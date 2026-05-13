@@ -74,6 +74,11 @@ STATISTIC(
     IPNumInstReplaced,
     "Number of instructions replaced with (simpler) instruction by IPSCCP");
 
+// Command line option to disable IPSCCP. The default is false:
+static cl::opt<bool> DisableIPSCCP(
+    "disable-ipsccp", cl::init(false), cl::Hidden,
+    cl::desc("Disable Interprocedural Sparse Conditional Constant Propagation"));
+
 // Helper to check if \p LV is either a constant or a constant
 // range with a single element. This should cover exactly the same cases as the
 // old ValueLatticeElement::isConstant() and is intended to be used in the
@@ -468,6 +473,9 @@ bool llvm::runIPSCCP(
     Module &M, const DataLayout &DL,
     std::function<const TargetLibraryInfo &(Function &)> GetTLI,
     function_ref<AnalysisResultsForFn(Function &)> getAnalysis) {
+  if (DisableIPSCCP)
+    return false;
+
   SCCPSolver Solver(DL, GetTLI, M.getContext());
 
   // Loop over all functions, marking arguments to those with their addresses

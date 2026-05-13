@@ -144,7 +144,7 @@ STATISTIC(NumSelects, "Number of selects optimized");
 STATISTIC(NumUncoalescableCopies, "Number of uncoalescable copies optimized");
 STATISTIC(NumRewrittenCopies, "Number of copies rewritten");
 STATISTIC(NumNAPhysCopies, "Number of non-allocatable physical copies removed");
-
+STATISTIC(NumImmInstFold, "Number of immediate-instr folded");
 namespace {
 
   class ValueTrackerResult;
@@ -204,7 +204,6 @@ namespace {
                          DenseMap<Register, MachineInstr *> &ImmDefMIs);
     bool foldImmediate(MachineInstr &MI, SmallSet<Register, 4> &ImmDefRegs,
                        DenseMap<Register, MachineInstr *> &ImmDefMIs);
-
     /// Finds recurrence cycles, but only ones that formulated around
     /// a def operand and a use operand that are tied. If there is a use
     /// operand commutable with the tied use operand, find recurrence cycle

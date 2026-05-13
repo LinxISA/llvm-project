@@ -210,6 +210,8 @@ public:
 
   void tryAddingPcLoadReferenceComment(int64_t Value, uint64_t Address) const;
 
+  virtual void processSymbolsBeforeDisasm(const SectionSymbolsTy &Symbols){};
+
   /// Set \p Symzer as the current symbolizer.
   /// This takes ownership of \p Symzer, and deletes the previously set one.
   void setSymbolizer(std::unique_ptr<MCSymbolizer> Symzer);

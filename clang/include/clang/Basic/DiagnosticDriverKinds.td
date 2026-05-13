@@ -29,6 +29,8 @@ def err_drv_invalid_arch_name : Error<
   "invalid arch name '%0'">;
 def err_drv_invalid_riscv_arch_name : Error<
   "invalid arch name '%0', %1">;
+def err_drv_invalid_linx_arch_name : Error<
+  "invalid arch name '%0', %1">;
 def warn_drv_invalid_arch_name_with_suggestion : Warning<
   "ignoring invalid /arch: argument '%0'; for %select{64|32}1-bit expected one of %2">,
   InGroup<UnusedCommandLineArgument>;
@@ -339,6 +341,7 @@ def err_drv_small_columns : Error<
 def err_drv_invalid_malign_branch_EQ : Error<
   "invalid argument '%0' to -malign-branch=; each element must be one of: %1">;
 
+def warn_default_is_O2 : Warning<"No optimization level found, using O2 default">, InGroup<InvalidCommandLineArgument>;
 def warn_O4_is_O3 : Warning<"-O4 is equivalent to -O3">, InGroup<Deprecated>;
 def warn_drv_optimization_value : Warning<"optimization level '%0' is not supported; using '%1%2' instead">,
   InGroup<InvalidCommandLineArgument>;
@@ -685,4 +688,7 @@ def warn_drv_sarif_format_unstable : Warning<
 
 def err_drv_riscv_unsupported_with_linker_relaxation : Error<
   "%0 is unsupported with RISC-V linker relaxation (-mrelax)">;
+
+def warn_missing_include_dirs : Warning<
+  "no such include directory: '%0'">, InGroup<MissingIncludeDirs>, DefaultIgnore;
 }

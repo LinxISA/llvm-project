@@ -122,6 +122,9 @@ private:
   // (15 + 4 + 2 + 2 + 2 + 3 + 1 + 1 + 1 + 1) == 32.
   unsigned SubClassData : GlobalValueSubClassDataBits;
 
+  // If true when the entry node is created by a incomplete array type
+  unsigned IsCreatedByIncompleteArrayType;
+
   friend class Constant;
 
   void destroyConstantImpl();
@@ -276,6 +279,14 @@ public:
   PointerType *getType() const { return cast<PointerType>(User::getType()); }
 
   Type *getValueType() const { return ValueType; }
+
+  void setIncompleteArrayCreateType(bool type) {
+    IsCreatedByIncompleteArrayType = type;
+  }
+
+  bool isCreatedByIncompleteArrayType() const {
+    return IsCreatedByIncompleteArrayType;
+  }
 
   bool isImplicitDSOLocal() const {
     return hasLocalLinkage() ||

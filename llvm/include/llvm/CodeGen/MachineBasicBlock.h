@@ -140,6 +140,10 @@ private:
   /// Zero to represent no maximum.
   unsigned MaxBytesForAlignment = 0;
 
+  /// Belonging Linx Region ID. Default is -1, which means not belong any Linx
+  /// Region.
+  int MBBGroupID = -1;
+
   /// Indicate that this basic block is entered via an exception handler.
   bool IsEHPad = false;
 
@@ -543,6 +547,12 @@ public:
   void setMaxBytesForAlignment(unsigned MaxBytes) {
     MaxBytesForAlignment = MaxBytes;
   }
+
+  int getMBBGroupID() const { return MBBGroupID; }
+
+  bool isMBBGroupMember() const { return MBBGroupID >= 0; }
+
+  void setMBBGroupID(int ID) { MBBGroupID = ID; }
 
   /// Returns true if the block is a landing pad. That is this basic block is
   /// entered via an exception handler.
@@ -1090,6 +1100,9 @@ public:
 
   /// Return the MCSymbol for this basic block.
   MCSymbol *getSymbol() const;
+
+  /// Set the MCSymbol for this basic block.
+  void setSymbol(MCSymbol *TargetSymbol) const;
 
   /// Return the EHCatchret Symbol for this basic block.
   MCSymbol *getEHCatchretSymbol() const;

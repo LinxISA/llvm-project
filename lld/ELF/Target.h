@@ -184,6 +184,7 @@ TargetInfo *getMSP430TargetInfo();
 TargetInfo *getPPC64TargetInfo();
 TargetInfo *getPPCTargetInfo();
 TargetInfo *getRISCVTargetInfo();
+TargetInfo *getLinxV5TargetInfo();
 TargetInfo *getSPARCV9TargetInfo();
 TargetInfo *getX86TargetInfo();
 TargetInfo *getX86_64TargetInfo();
@@ -225,6 +226,7 @@ void addPPC64SaveRestore();
 uint64_t getPPC64TocBase();
 uint64_t getAArch64Page(uint64_t expr);
 void riscvFinalizeRelax(int passes);
+void linxv5FinalizeRelax(int passes);
 
 class AArch64Relaxer {
   bool safeToRelaxAdrpLdr = true;

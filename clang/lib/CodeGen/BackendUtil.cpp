@@ -78,6 +78,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Scalar/LinxUnalignedAccessOpt.h"
 #include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/CanonicalizeAliases.h"
@@ -986,6 +987,10 @@ void EmitAssemblyHelper::RunCodegenPipeline(
   // FIXME: make the new PM work with the codegen pipeline.
   legacy::PassManager CodeGenPasses;
 
+  if (TargetTriple.isLinx() || TargetTriple.isLinxV4() ||
+      TargetTriple.isLinxV5()) {
+    CodeGenPasses.add(createLinxUnalignedAccessOptPass());
+  }
   // Append any output we need to the pass manager.
   switch (Action) {
   case Backend_EmitAssembly:

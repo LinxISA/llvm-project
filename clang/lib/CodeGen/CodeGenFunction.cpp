@@ -79,6 +79,7 @@ CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
   EHStack.setCGF(this);
 
   SetFastMathFlags(CurFPFeatures);
+  LinxHyperRegionIndex = 0;
 }
 
 CodeGenFunction::~CodeGenFunction() {

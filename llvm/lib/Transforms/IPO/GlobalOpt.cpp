@@ -92,6 +92,10 @@ STATISTIC(NumCXXDtorsRemoved, "Number of global C++ destructors removed");
 STATISTIC(NumInternalFunc, "Number of internal functions");
 STATISTIC(NumColdCC, "Number of functions marked coldcc");
 
+static cl::opt<bool> DisableGlobalOpt(
+    "disable-globalopt", cl::init(false), cl::Hidden,
+    cl::desc("Disable GlobalOpt"));
+
 static cl::opt<bool>
     EnableColdCCStressTest("enable-coldcc-stress-test",
                            cl::desc("Enable stress test of coldcc by adding "
@@ -2003,7 +2007,7 @@ OptimizeFunctions(Module &M,
     // FIXME: We should also hoist alloca affected by this to the entry
     // block if possible.
     if (F.getAttributes().hasAttrSomewhere(Attribute::InAlloca) &&
-        !F.hasAddressTaken() && !hasMustTailCallers(&F) && !F.isVarArg()) {
+        !F.hasAddressTaken() && !hasMustTailCallers(&F)) {
       RemoveAttribute(&F, Attribute::InAlloca);
       Changed = true;
     }
@@ -2542,6 +2546,9 @@ PreservedAnalyses GlobalOptPass::run(Module &M, ModuleAnalysisManager &AM) {
     };
     auto DeleteFnCallback = [&FAM](Function &F) { FAM.clear(F, F.getName()); };
 
+    if (DisableGlobalOpt)
+      return PreservedAnalyses::all();
+
     if (!optimizeGlobalsInModule(M, DL, GetTLI, GetTTI, GetBFI, LookupDomTree,
                                  ChangedCFGCallback, DeleteFnCallback))
       return PreservedAnalyses::all();
@@ -2566,7 +2573,7 @@ struct GlobalOptLegacyPass : public ModulePass {
   }
 
   bool runOnModule(Module &M) override {
-    if (skipModule(M))
+    if (DisableGlobalOpt || skipModule(M))
       return false;
 
     auto &DL = M.getDataLayout();

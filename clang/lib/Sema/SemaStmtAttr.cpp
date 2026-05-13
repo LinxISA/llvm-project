@@ -68,6 +68,21 @@ static Attr *handleSuppressAttr(Sema &S, Stmt *St, const ParsedAttr &A,
       S.Context, A, DiagnosticIdentifiers.data(), DiagnosticIdentifiers.size());
 }
 
+static Attr *handleLinxAttr(Sema &S, Stmt *St, const ParsedAttr &A,
+                            SourceRange) {
+  IdentifierLoc *OptionLoc = A.getArgAsIdent(1);
+  bool PragmaHyperRegion = OptionLoc->Ident->getName() == "block";
+
+  LinxAttr::OptionType Option;
+  if (PragmaHyperRegion) {
+    Option = LinxAttr::Block;
+  } else {
+    assert(0 && "Error: Unsupport pragma linx format!");
+  }
+
+  return LinxAttr::CreateImplicit(S.Context, Option, A.getRange());
+}
+
 static Attr *handleLoopHintAttr(Sema &S, Stmt *St, const ParsedAttr &A,
                                 SourceRange) {
   IdentifierLoc *PragmaNameLoc = A.getArgAsIdent(0);
@@ -469,6 +484,8 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
     return handleAlwaysInlineAttr(S, St, A, Range);
   case ParsedAttr::AT_FallThrough:
     return handleFallThroughAttr(S, St, A, Range);
+  case ParsedAttr::AT_Linx:
+    return handleLinxAttr(S, St, A, Range);
   case ParsedAttr::AT_LoopHint:
     return handleLoopHintAttr(S, St, A, Range);
   case ParsedAttr::AT_OpenCLUnrollHint:

@@ -1180,6 +1180,120 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
   li     a0, 0  // return UNW_ESUCCESS
   ret           // jump to ra
 
+#elif defined(__linx_v4)
+
+#
+# extern int __unw_getcontext(unw_context_t* thread_state)
+#
+# On entry:
+#  thread_state pointer is in a0
+#
+DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+C.BSTART RET
+  sdi ra , [a0, 0  ] // store ra as pc
+  sdi r0 , [a0, 8  ]
+  sdi r1 , [a0, 16 ]
+  sdi r2 , [a0, 24 ]
+  sdi r3 , [a0, 32 ]
+  sdi r4 , [a0, 40 ]
+  sdi r5 , [a0, 48 ]
+  sdi r6 , [a0, 56 ]
+  sdi r7 , [a0, 64 ]
+  sdi r8 , [a0, 72 ]
+  sdi r9 , [a0, 80 ]
+  sdi r10, [a0, 88 ]
+  sdi r11, [a0, 96 ]
+  sdi r12, [a0, 104]
+  sdi r13, [a0, 112]
+  sdi r14, [a0, 120]
+  sdi r15, [a0, 128]
+  sdi r16, [a0, 136]
+  sdi r17, [a0, 144]
+  sdi r18, [a0, 152]
+  sdi r19, [a0, 160]
+  sdi r20, [a0, 168]
+  sdi r21, [a0, 176]
+  sdi r22, [a0, 184]
+  sdi r23, [a0, 192]
+  setc.tgt	ra
+  ori zero, 0, -> a0
+C.BSTOP
+
+#elif defined(__linx_v5)
+
+#
+# extern int __unw_getcontext(unw_context_t* thread_state)
+#
+# On entry:
+#  thread_state pointer is in a0
+#
+DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+C.BSTART RET
+  sdi ra , [a0, 0  ] // store ra as pc
+  sdi r0 , [a0, 8  ]
+  sdi r1 , [a0, 16 ]
+  sdi r2 , [a0, 24 ]
+  sdi r3 , [a0, 32 ]
+  sdi r4 , [a0, 40 ]
+  sdi r5 , [a0, 48 ]
+  sdi r6 , [a0, 56 ]
+  sdi r7 , [a0, 64 ]
+  sdi r8 , [a0, 72 ]
+  sdi r9 , [a0, 80 ]
+  sdi r10, [a0, 88 ]
+  sdi r11, [a0, 96 ]
+  sdi r12, [a0, 104]
+  sdi r13, [a0, 112]
+  sdi r14, [a0, 120]
+  sdi r15, [a0, 128]
+  sdi r16, [a0, 136]
+  sdi r17, [a0, 144]
+  sdi r18, [a0, 152]
+  sdi r19, [a0, 160]
+  sdi r20, [a0, 168]
+  sdi r21, [a0, 176]
+  sdi r22, [a0, 184]
+  sdi r23, [a0, 192]
+  setc.tgt	ra
+  ori zero, 0, -> a0
+C.BSTOP
+
+#elif defined(__linx) && !defined(__linx_v4) && !defined(__linx_v5)
+
+#
+# extern int __unw_getcontext(unw_context_t* thread_state)
+#
+# On entry:
+#  thread_state pointer is in a0
+#
+DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+bstart .L___unw_getcontext_BB0_0.bstart
+bnext.ret
+bstop .L___unw_getcontext_BB0_0.bstop
+.pushSection	.text.body.__unw_getcontext
+.L___unw_getcontext_BB0_0.bstart:
+sdi ra , [a0, 0 ] // store ra as pc
+sdi r0,  [a0, 1 ]
+sdi r1 , [a0, 2 ]
+sdi r2 , [a0, 3 ]
+sdi r3 , [a0, 4 ]
+sdi r4 , [a0, 5 ]
+sdi r5 , [a0, 6 ]
+sdi r6 , [a0, 7 ]
+sdi r7 , [a0, 8 ]
+sdi r8 , [a0, 9 ]
+sdi r9 , [a0, 10]
+sdi r10, [a0, 11]
+sdi r11, [a0, 12]
+sdi r12, [a0, 13]
+sdi r13, [a0, 14]
+sdi r14, [a0, 15]
+sdi r15, [a0, 16]
+setc.tgt	ra
+ori zero, 0, => a0
+.L___unw_getcontext_BB0_0.bstop:
+bend
+
 #elif defined(__s390x__)
 
 //

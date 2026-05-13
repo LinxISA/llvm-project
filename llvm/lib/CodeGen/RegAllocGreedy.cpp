@@ -14,7 +14,6 @@
 #include "RegAllocGreedy.h"
 #include "AllocationOrder.h"
 #include "InterferenceCache.h"
-#include "LiveDebugVariables.h"
 #include "RegAllocBase.h"
 #include "RegAllocEvictionAdvisor.h"
 #include "SpillPlacement.h"
@@ -32,6 +31,7 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/CalcSpillWeights.h"
 #include "llvm/CodeGen/EdgeBundles.h"
+#include "llvm/CodeGen/LiveDebugVariables.h"
 #include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalUnion.h"
 #include "llvm/CodeGen/LiveIntervals.h"
@@ -2271,8 +2271,13 @@ MCRegister RAGreedy::selectOrSplitImpl(const LiveInterval &VirtReg,
   // Wait until the second time, when all smaller ranges have been allocated.
   // This gives a better picture of the interference to split around.
   if (Stage < RS_Split) {
-    ExtraInfo->setStage(VirtReg, RS_Split);
-    LLVM_DEBUG(dbgs() << "wait for second round\n");
+    if (TRI->allowRASplit(*MF, VirtReg)) {
+      ExtraInfo->setStage(VirtReg, RS_Split);
+      LLVM_DEBUG(dbgs() << "wait for second round\n");
+    } else {
+      ExtraInfo->setStage(VirtReg, RS_Spill);
+      LLVM_DEBUG(dbgs() << "go to spill\n");
+    }
     NewVRegs.push_back(VirtReg.reg());
     return 0;
   }
@@ -2308,7 +2313,13 @@ MCRegister RAGreedy::selectOrSplitImpl(const LiveInterval &VirtReg,
                        TimerGroupDescription, TimePassesIsEnabled);
     LiveRangeEdit LRE(&VirtReg, NewVRegs, *MF, *LIS, VRM, this, &DeadRemats);
     spiller().spill(LRE);
-    ExtraInfo->setStage(NewVRegs.begin(), NewVRegs.end(), RS_Done);
+    SmallVector<Register, 4> GotoDone;
+    for (auto Reg : NewVRegs) {
+      if (TRI->shouldDoFullStageRAFromSpill(Reg, VirtReg.reg(), MRI))
+        continue;
+      GotoDone.push_back(Reg);
+    }
+    ExtraInfo->setStage(GotoDone.begin(), GotoDone.end(), RS_Done);
 
     // Tell LiveDebugVariables about the new ranges. Ranges not being covered by
     // the new regs are kept in LDV (still mapping to the old register), until

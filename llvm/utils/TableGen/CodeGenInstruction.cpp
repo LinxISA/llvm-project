@@ -103,6 +103,16 @@ CGIOperandList::CGIOperandList(Record *R) : TheDef(R) {
       // in MIOperandInfo.
       if (unsigned NumArgs = MIOpInfo->getNumArgs())
         NumOps = NumArgs;
+      // If this is an named variable_ops
+      if (MIOpInfo->getNumArgs() == 1 &&
+          dyn_cast<DefInit>(MIOpInfo->getArg(0))->getDef()->getName() ==
+              "variable_ops") {
+        assert(i == e - 1 && "A named variable_ops should be the last operand");
+        if (i < NumDefs)
+          VariadicOuts = true;
+        isVariadic = true;
+        NumOps = 0;
+      }
 
       if (Rec->isSubClassOf("PredicateOp"))
         isPredicable = true;

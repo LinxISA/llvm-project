@@ -43,6 +43,9 @@
   // For ARM EHABI, Bionic didn't implement dl_iterate_phdr until API 21. After
   // API 21, dl_iterate_phdr exists, but dl_unwind_find_exidx is much faster.
   #define _LIBUNWIND_USE_DL_UNWIND_FIND_EXIDX 1
+#elif defined(__linx) && !defined(__linx_v4) && !defined(__linx_v5)
+  #define _LIBUNWIND_SUPPORT_DWARF_UNWIND 1
+  #define _LIBUNWIND_SUPPORT_DWARF_INDEX 1
 #elif defined(_AIX)
 // The traceback table at the end of each function is used for unwinding.
 #define _LIBUNWIND_SUPPORT_TBTAB_UNWIND 1
@@ -114,7 +117,8 @@
 
 #if defined(__i386__) || defined(__x86_64__) || defined(__powerpc__) ||        \
     (!defined(__APPLE__) && defined(__arm__)) || defined(__aarch64__) ||       \
-    defined(__mips__) || defined(__riscv) || defined(__hexagon__) ||           \
+    defined(__mips__) || defined(__riscv) || defined(__linx) ||                \
+    defined(__linx_v4) || defined(__linx_v5) || defined(__hexagon__) ||        \
     defined(__sparc__) || defined(__s390x__)
 #if !defined(_LIBUNWIND_BUILD_SJLJ_APIS)
 #define _LIBUNWIND_BUILD_ZERO_COST_APIS

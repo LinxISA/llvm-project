@@ -22,6 +22,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/Sema.h"
+#include "clang/Parse/LinxHint.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Frontend/OpenMP/OMPContext.h"
 #include "llvm/Support/Compiler.h"
@@ -202,6 +203,7 @@ class Parser : public CodeCompletionHandler {
   std::unique_ptr<PragmaHandler> MSAllocText;
   std::unique_ptr<PragmaHandler> CUDAForceHostDeviceHandler;
   std::unique_ptr<PragmaHandler> OptimizeHandler;
+  std::unique_ptr<PragmaHandler> LinxHandler;
   std::unique_ptr<PragmaHandler> LoopHintHandler;
   std::unique_ptr<PragmaHandler> UnrollHintHandler;
   std::unique_ptr<PragmaHandler> NoUnrollHintHandler;
@@ -780,6 +782,8 @@ private:
   /// #pragma clang __debug captured
   StmtResult HandlePragmaCaptured();
 
+  bool HandlePragmaLinx(LinxHint &Hint);
+  
   /// Handle the annotation token produced for
   /// #pragma clang loop and #pragma unroll.
   bool HandlePragmaLoopHint(LoopHint &Hint);
@@ -2109,6 +2113,9 @@ private:
   StmtResult ParseReturnStatement();
   StmtResult ParseAsmStatement(bool &msAsm);
   StmtResult ParseMicrosoftAsmStatement(SourceLocation AsmLoc);
+  StmtResult ParsePragmaLinx(StmtVector &Stmts, ParsedStmtContext StmtCtx,
+				 SourceLocation *TrailingElseLoc,
+				 ParsedAttributes &Attrs);
   StmtResult ParsePragmaLoopHint(StmtVector &Stmts, ParsedStmtContext StmtCtx,
                                  SourceLocation *TrailingElseLoc,
                                  ParsedAttributes &Attrs);

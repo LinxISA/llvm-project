@@ -78,6 +78,8 @@ add_llvm_component_library(LLVMScalarOpts
   TailRecursionElimination.cpp
   TLSVariableHoist.cpp
   WarnMissedTransforms.cpp
+  LinxUnalignedAccessOpt.cpp
+  VectorDecompose.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/Transforms

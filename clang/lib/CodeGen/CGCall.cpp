@@ -69,7 +69,8 @@ unsigned CodeGenTypes::ClangCallConvToLLVMCallConv(CallingConv CC) {
   case CC_PreserveMost: return llvm::CallingConv::PreserveMost;
   case CC_PreserveAll: return llvm::CallingConv::PreserveAll;
   case CC_Swift: return llvm::CallingConv::Swift;
-  case CC_SwiftAsync: return llvm::CallingConv::SwiftTail;
+  case CC_SwiftAsync:
+    return llvm::CallingConv::SwiftTail;
   }
 }
 
@@ -1780,6 +1781,47 @@ static void AddAttributesFromAssumes(llvm::AttrBuilder &FuncAttrs,
                            llvm::join(Attrs.begin(), Attrs.end(), ","));
 }
 
+static void AddAttributesFromOptimize(llvm::AttrBuilder &FuncAttrs,
+                                      const Decl *Callee) {
+  if (!Callee)
+    return;
+
+  const OptimizeAttr *OptAttrObj = Callee->getAttr<OptimizeAttr>();
+  if (!OptAttrObj)
+    return;
+
+  for (const auto &OA : OptAttrObj->optAttrs()) {
+    switch (OA) {
+    case OptimizeAttr::Fast:
+      FuncAttrs.addAttribute("OPT-Ofast");
+      break;
+    case OptimizeAttr::MinSize:
+      FuncAttrs.addAttribute("OPT-Oz");
+      break;
+    case OptimizeAttr::OptSize:
+      FuncAttrs.addAttribute("OPT-Os");
+      break;
+    case OptimizeAttr::NoOpts:
+      FuncAttrs.addAttribute("OPT-O0");
+      break;
+    case OptimizeAttr::TreeVectorize:
+      FuncAttrs.addAttribute("OPT-tree-vectorize");
+      break;
+    case OptimizeAttr::UnrollLoops:
+      FuncAttrs.addAttribute("OPT-unroll-loops");
+      break;
+    case OptimizeAttr::OmitFramePointer:
+      FuncAttrs.addAttribute("OPT-omit-frame-pointer");
+      break;
+    case OptimizeAttr::NoOmitFramePointer:
+      FuncAttrs.addAttribute("OPT-no-omit-frame-pointer");
+      break;
+    default:
+      llvm_unreachable("invalid enum");
+    }
+  }
+}
+
 bool CodeGenModule::MayDropFunctionReturn(const ASTContext &Context,
                                           QualType ReturnType) {
   // We can't just discard the return value for a record type with a
@@ -1792,15 +1834,14 @@ bool CodeGenModule::MayDropFunctionReturn(const ASTContext &Context,
   return ReturnType.isTriviallyCopyableType(Context);
 }
 
-void CodeGenModule::getDefaultFunctionAttributes(StringRef Name,
-                                                 bool HasOptnone,
-                                                 bool AttrOnCallSite,
-                                               llvm::AttrBuilder &FuncAttrs) {
+void CodeGenModule::getDefaultFunctionAttributes(
+    StringRef Name, bool HasOptnone, bool HasOptsize, bool HasMinsize,
+    bool AttrOnCallSite, llvm::AttrBuilder &FuncAttrs) {
   // OptimizeNoneAttr takes precedence over -Os or -Oz. No warning needed.
   if (!HasOptnone) {
-    if (CodeGenOpts.OptimizeSize)
+    if (CodeGenOpts.OptimizeSize || HasOptsize)
       FuncAttrs.addAttribute(llvm::Attribute::OptimizeForSize);
-    if (CodeGenOpts.OptimizeSize == 2)
+    if (CodeGenOpts.OptimizeSize == 2 || HasMinsize)
       FuncAttrs.addAttribute(llvm::Attribute::MinSize);
   }
 
@@ -1832,6 +1873,11 @@ void CodeGenModule::getDefaultFunctionAttributes(StringRef Name,
       FpKind = "all";
       break;
     }
+    // optimize attr's priority is higher than command line args
+    if (FuncAttrs.contains("OPT-omit-frame-pointer"))
+      FpKind = "none";
+    if (FuncAttrs.contains("OPT-no-omit-frame-pointer"))
+      FpKind = "all";
     FuncAttrs.addAttribute("frame-pointer", FpKind);
 
     if (CodeGenOpts.LessPreciseFPMAD)
@@ -1948,15 +1994,17 @@ void CodeGenModule::getDefaultFunctionAttributes(StringRef Name,
 
 void CodeGenModule::addDefaultFunctionDefinitionAttributes(llvm::Function &F) {
   llvm::AttrBuilder FuncAttrs(F.getContext());
-  getDefaultFunctionAttributes(F.getName(), F.hasOptNone(),
+  getDefaultFunctionAttributes(F.getName(), F.hasOptNone(), F.hasOptSize(),
+                               F.hasMinSize(),
                                /* AttrOnCallSite = */ false, FuncAttrs);
   // TODO: call GetCPUAndFeaturesAttributes?
   F.addFnAttrs(FuncAttrs);
 }
 
 void CodeGenModule::addDefaultFunctionDefinitionAttributes(
-                                                   llvm::AttrBuilder &attrs) {
+    llvm::AttrBuilder &attrs) {
   getDefaultFunctionAttributes(/*function name*/ "", /*optnone*/ false,
+                               /*optsize*/ false, /*minsize*/ false,
                                /*for call*/ false, attrs);
   GetCPUAndFeaturesAttributes(GlobalDecl(), attrs);
 }
@@ -2089,8 +2137,11 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
   // Attach assumption attributes to the declaration. If this is a call
   // site, attach assumptions from the caller to the call as well.
   AddAttributesFromAssumes(FuncAttrs, TargetDecl);
+  AddAttributesFromOptimize(FuncAttrs, TargetDecl);
 
   bool HasOptnone = false;
+  bool HasOptsize = false;
+  bool HasMinsize = false;
   // The NoBuiltinAttr attached to the target FunctionDecl.
   const NoBuiltinAttr *NBA = nullptr;
 
@@ -2167,6 +2218,12 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
       FuncAttrs.addAttribute(llvm::Attribute::NoCallback);
 
     HasOptnone = TargetDecl->hasAttr<OptimizeNoneAttr>();
+
+    HasOptnone = HasOptnone || FuncAttrs.contains("OPT-O0");
+    HasOptsize = FuncAttrs.contains("OPT-Os") || FuncAttrs.contains("OPT-Oz") ||
+                 FuncAttrs.contains("OPT-Ofast");
+    HasMinsize = FuncAttrs.contains("OPT-Oz");
+
     if (auto *AllocSize = TargetDecl->getAttr<AllocSizeAttr>()) {
       Optional<unsigned> NumElemsParam;
       if (AllocSize->getNumElemsParam().isValid())
@@ -2200,7 +2257,8 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
   addNoBuiltinAttributes(FuncAttrs, getLangOpts(), NBA);
 
   // Collect function IR attributes based on global settiings.
-  getDefaultFunctionAttributes(Name, HasOptnone, AttrOnCallSite, FuncAttrs);
+  getDefaultFunctionAttributes(Name, HasOptnone, HasOptsize, HasMinsize,
+                               AttrOnCallSite, FuncAttrs);
 
   // Override some default IR attributes based on declaration-specific
   // information.
@@ -2801,6 +2859,15 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
       auto AI = Fn->getArg(FirstIRArg);
       llvm::Type *LTy = ConvertType(Arg->getType());
 
+      if (CurCodeDecl && (CurCodeDecl->hasAttr<LinxBLKFuncVECAttr>() ||
+                          CurCodeDecl->hasAttr<LinxBLKFuncMTCAttr>())) {
+        llvm::Argument *AI = Fn->getArg(FirstIRArg);
+        if (Arg->getType()->isExtVectorType() &&
+            Arg->hasAttr<LinxBLKFuncOutAttr>()) {
+          AI->addAttr(llvm::Attribute::LinxBLKFuncOut);
+        }
+      }
+
       // Prepare parameter attributes. So far, only attributes for pointer
       // parameters are prepared. See
       // http://llvm.org/docs/LangRef.html#paramattrs.
@@ -2881,6 +2948,10 @@ void CodeGenFunction::EmitFunctionProlog(const CGFunctionInfo &FI,
         // Set 'noalias' if an argument type has the `restrict` qualifier.
         if (Arg->getType().isRestrictQualified())
           AI->addAttr(llvm::Attribute::NoAlias);
+
+        if (Arg->hasAttr<LinxNoAliasAttr>()) {
+          AI->addAttr(llvm::Attribute::LinxNoAlias);
+        }
       }
 
       // Prepare the argument value. If we have the trivial case, handle it

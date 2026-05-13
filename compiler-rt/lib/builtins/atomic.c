@@ -91,6 +91,79 @@ __inline static void unlock(Lock *l) { OSSpinLockUnlock(l); }
 __inline static void lock(Lock *l) { OSSpinLockLock(l); }
 static Lock locks[SPINLOCK_COUNT]; // initialized to OS_SPINLOCK_INIT which is 0
 
+#elif defined(__linx)
+
+#if defined(__linx_v4) || defined(__linx_v5)
+typedef uint32_t Lock;
+__inline static void unlock(Lock *l) {}
+__inline static void lock(Lock *l) {}
+static Lock locks[SPINLOCK_COUNT] = {0};
+#else
+typedef uint32_t Lock;
+__inline static void unlock(Lock *l) {
+  __asm__ __volatile__ (
+    "bstart 1f\n"
+    "b.sys\n"
+    "bnext.fall\n"
+    "battr none.aqrl\n"
+    "bstop 2f\n"
+    ".pushsection .text.body\n"
+    "1:\n"
+    "2:\n"
+    "bend\n"
+    ".popsection\n"
+    "bstart 3f\n"
+    "b.stdlp\n"
+    "bnext.fall\n"
+    "bstop 4f\n"
+    ".pushsection .text.body\n"
+    "3:\n"
+    "swi zero, [%0, 0]\n"
+    "4:\n"
+    "bend\n"
+    ".popsection\n"
+    :
+    : "r"(l)
+    : "memory"
+  );
+}
+__inline static void lock(Lock *l) {
+  __asm__ __volatile__ (
+    "1:\n"
+    "bstart 2f\n"
+    "b.stdlp\n"
+    "bnext.cond 1b\n"
+    "bstop 3f\n"
+    ".pushsection .text.body\n"
+    "2:\n"
+    "lr.w [%0]\n"
+    "ori zero, 1\n"
+    "sc.w t#1, [%0]\n"
+    "or t#1, t#3\n"
+    "addiw t#1, 0\n"
+    "setc.ne t#1, zero\n"
+    "3:\n"
+    "bend\n"
+    ".popsection\n"
+    "bstart 4f\n"
+    "b.sys\n"
+    "bnext.fall\n"
+    "battr none.aqrl\n"
+    "bstop 5f\n"
+    ".pushsection .text.body\n"
+    "4:\n"
+    "5:\n"
+    "bend\n"
+    ".popsection\n"
+    :
+    : "r"(l)
+    : "memory"
+  );
+}
+/// locks for atomic operations
+__linda_shared static Lock locks[SPINLOCK_COUNT] = {0};
+#endif
+
 #else
 _Static_assert(__atomic_always_lock_free(sizeof(uintptr_t), 0),
                "Implementation assumes lock-free pointer-size cmpxchg");
@@ -164,6 +237,15 @@ static __inline Lock *lock_for_pointer(void *ptr) {
       break;                                                                   \
     }                                                                          \
   } while (0)
+
+#if defined(__linx_v4) || defined(__linx_v5)
+#define lock_for_pointer(ptr) (0)
+#define IS_LOCK_FREE_1(p) (0)
+#define IS_LOCK_FREE_2(p) (0)
+#define IS_LOCK_FREE_4(p) (0)
+#define IS_LOCK_FREE_8(p) (0)
+#define IS_LOCK_FREE_16(p) (0)
+#endif
 
 /// Whether atomic operations for the given size (and alignment) are lock-free.
 bool __atomic_is_lock_free_c(size_t size, void *ptr) {

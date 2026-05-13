@@ -4079,7 +4079,7 @@ ASTContext::getDependentVectorType(QualType VecType, Expr *SizeExpr,
 /// the specified element type and size. VectorType must be a built-in type.
 QualType
 ASTContext::getExtVectorType(QualType vecType, unsigned NumElts) const {
-  assert(vecType->isBuiltinType() || vecType->isDependentType());
+  assert(vecType->isBuiltinType() || vecType->isDependentType() || vecType->isStructureType());
 
   // Check if we've already instantiated a vector of this type.
   llvm::FoldingSetNodeID ID;
@@ -11390,6 +11390,15 @@ static GVALinkage basicGVALinkageForFunction(const ASTContext &Context,
       return External;
 
     // C99 inline semantics, where the symbol is not externally visible.
+    if (!(FD->isInlineSpecified() && FD->getStorageClass() == SC_Extern)) {
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Warning,
+          "function %0 is c99 inline, where the symbol is not externally "
+          "visible(may be eliminated), suggest to modify static inline.");
+      Diags.Report(FD->getLocation(), DiagID)
+          << FD->getDeclName().getAsString();
+    }
     return GVA_AvailableExternally;
   }
 
@@ -11554,6 +11563,16 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
     if (VD->getDescribedVarTemplate() ||
         isa<VarTemplatePartialSpecializationDecl>(VD))
       return false;
+    if (VD->hasAttr<LinxNoAliasAttr>()) {
+      return true;
+    }
+    if (VD->hasAttr<LinxBLKFuncOutAttr>() || VD->hasAttr<LinxBLKFuncInAttr>()) {
+      return true;
+    }
+    if (VD->hasAttr<LinxBLKFuncVECAttr>() ||
+        VD->hasAttr<LinxBLKFuncMTCAttr>()) {
+      return true;
+    }
   } else if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
     // We never need to emit an uninstantiated function template.
     if (FD->getTemplatedKind() == FunctionDecl::TK_FunctionTemplate)

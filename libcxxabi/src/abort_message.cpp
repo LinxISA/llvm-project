@@ -26,6 +26,19 @@
 #   define _LIBCXXABI_USE_CRASHREPORTER_CLIENT
 #endif
 
+#ifdef LINX6188_DRB
+extern "C" int SRE_printf(const char *format, ...);
+void abort_message(const char* format, ...)
+{
+    SRE_printf("libc++abi: ");
+    va_list list;
+    va_start(list, format);
+    SRE_printf(format, list);
+    va_end(list);
+    SRE_printf("\n");
+    abort();
+}
+#else
 void abort_message(const char* format, ...)
 {
     // Write message to stderr. We do this before formatting into a
@@ -77,3 +90,4 @@ void abort_message(const char* format, ...)
 
     abort();
 }
+#endif

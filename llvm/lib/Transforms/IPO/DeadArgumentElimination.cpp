@@ -40,6 +40,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
@@ -57,6 +58,11 @@ STATISTIC(NumArgumentsEliminated, "Number of unread args removed");
 STATISTIC(NumRetValsEliminated, "Number of unused return values removed");
 STATISTIC(NumArgumentsReplacedWithPoison,
           "Number of unread args replaced with poison");
+
+// Command line option to disable DeadArgumentElimination. The default is false:
+static cl::opt<bool> DisableDeadArgeLim(
+    "disable-deadargelim", cl::init(false), cl::Hidden,
+    cl::desc("Disable DeadArgumentElimination"));
 
 namespace {
 
@@ -1084,6 +1090,9 @@ bool DeadArgumentEliminationPass::removeDeadStuffFromFunction(Function *F) {
 PreservedAnalyses DeadArgumentEliminationPass::run(Module &M,
                                                    ModuleAnalysisManager &) {
   bool Changed = false;
+
+  if (DisableDeadArgeLim)
+    return PreservedAnalyses::all();
 
   // First pass: Do a simple check to see if any functions can have their "..."
   // removed.  We can do this if they never call va_start.  This loop cannot be

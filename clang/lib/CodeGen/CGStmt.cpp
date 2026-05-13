@@ -30,6 +30,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/SaveAndRestore.h"
 
@@ -48,6 +49,22 @@ void CodeGenFunction::EmitStopPoint(const Stmt *S) {
 
     LastStopPoint = Loc;
   }
+}
+
+static bool hasLinxAttr(ArrayRef<const Attr *> Attrs) {
+  for (const auto *A : Attrs)
+    if (isa<LinxAttr>(A))
+      return true;
+
+  return false;
+}
+
+static LinxAttr::OptionType getLinxOptionType(ArrayRef<const Attr *> Attrs) {
+  for (const auto *A : Attrs)
+    if (isa<LinxAttr>(A))
+      return dyn_cast<LinxAttr>(A)->getOption();
+
+  llvm::report_fatal_error("Can not find pragma Linx Option in attrs!");
 }
 
 void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
@@ -97,6 +114,11 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
     llvm_unreachable("invalid statement class to emit generically");
   case Stmt::NullStmtClass:
   case Stmt::CompoundStmtClass:
+    if (hasLinxAttr(Attrs))
+      EmitLinxCompoundStmt(cast<CompoundStmt>(*S), Attrs);
+     else
+      llvm_unreachable("should have emitted these statements as simple");
+    break;
   case Stmt::DeclStmtClass:
   case Stmt::LabelStmtClass:
   case Stmt::AttributedStmtClass:
@@ -435,7 +457,10 @@ bool CodeGenFunction::EmitSimpleStmt(const Stmt *S,
   case Stmt::NullStmtClass:
     break;
   case Stmt::CompoundStmtClass:
-    EmitCompoundStmt(cast<CompoundStmt>(*S));
+    if (hasLinxAttr(Attrs))
+      return false;
+    else
+      EmitCompoundStmt(cast<CompoundStmt>(*S));
     break;
   case Stmt::DeclStmtClass:
     EmitDeclStmt(cast<DeclStmt>(*S));
@@ -466,6 +491,27 @@ bool CodeGenFunction::EmitSimpleStmt(const Stmt *S,
     break;
   }
   return true;
+}
+
+Address CodeGenFunction::EmitLinxHyperRegionStmt(const CompoundStmt &S) {
+  // Insert intrinsics at Hyper Region start and end block for hint back-end.
+  Builder.CreateIntrinsic(llvm::Intrinsic::linx_hyper_region_start, {},
+                          {Builder.getInt64(LinxHyperRegionIndex)}, nullptr, "");
+  Address A = EmitCompoundStmt(S);
+  Builder.CreateIntrinsic(llvm::Intrinsic::linx_hyper_region_end, {},
+                          {Builder.getInt64(LinxHyperRegionIndex)}, nullptr, "");
+
+  ++LinxHyperRegionIndex;
+  return A;
+}
+
+Address CodeGenFunction::EmitLinxCompoundStmt(const CompoundStmt &S, ArrayRef<const Attr *> Attrs) {
+  switch (getLinxOptionType(Attrs)) {
+  case LinxAttr::Block:
+    return EmitLinxHyperRegionStmt(S);
+  default:
+    llvm_unreachable("Unsupport option for Pragma Linx.");
+  }
 }
 
 /// EmitCompoundStmt - Emit a compound statement {..} node.  If GetLast is true,
@@ -710,6 +756,10 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       break;
     case attr::AlwaysInline:
       alwaysinline = true;
+      break;
+    case attr::Linx:
+      assert(S.getSubStmt()->getStmtClass() == Expr::CompoundStmtClass &&
+		"For pragma linx, the top-level stmt of attritube must be CompoundStmt");
       break;
     case attr::MustTail:
       const Stmt *Sub = S.getSubStmt();

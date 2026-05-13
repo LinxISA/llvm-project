@@ -1,0 +1,39 @@
+//==- BuiltinsLinxV5.def - LinxV5 Builtin function database -----*- C++ -*-==//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file defines the LinxV5-specific builtin function database.  Users of
+// this file must define the BUILTIN macro to make use of this information.
+//
+//===----------------------------------------------------------------------===//
+
+#if defined(BUILTIN) && !defined(TARGET_BUILTIN)
+#   define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BUILTIN(ID, TYPE, ATTRS)
+#endif
+
+BUILTIN(__builtin_linx_get_system_reg, "ULiULi", "n")
+
+BUILTIN(blkv_max,  "v.", "nt")
+BUILTIN(blkv_min, "v.", "nt")
+BUILTIN(blkv_fabs, "v.", "nt")
+BUILTIN(blkv_fsqrt, "v.", "nt")
+BUILTIN(blkv_fexp, "v.", "nt")
+BUILTIN(blkv_shuffle_bfly, "v.", "nt")
+BUILTIN(blkv_rdmax,  "v.", "nt")
+BUILTIN(blkv_rdmin, "v.", "nt")
+BUILTIN(blkv_rdadd,  "v.", "nt")
+BUILTIN(blkv_rdor,   "v.", "nt")
+
+BUILTIN(blk_matmul, "v.", "nt")
+BUILTIN(blk_matmul_ac, "v.", "nt")
+BUILTIN(blk_matmulmx, "v.", "nt")
+BUILTIN(blk_matmulmx_ac, "v.", "nt")
+BUILTIN(blk_matmulmxb, "v.", "nt")
+BUILTIN(blk_matmulmxb_ac, "v.", "nt")
+BUILTIN(blk_tload, "v.", "nt")
+BUILTIN(blk_tstore, "v.", "nt")
+BUILTIN(blk_acccvt, "v.", "nt")

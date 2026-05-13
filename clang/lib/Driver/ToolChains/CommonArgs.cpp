@@ -426,6 +426,20 @@ std::string tools::getCPUName(const Driver &D, const ArgList &Args,
       return "ck810";
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+    if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
+      return A->getValue();
+    return "";
+
+  case llvm::Triple::linx64v4:
+  case llvm::Triple::linx64v4be:
+    if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
+      return A->getValue();
+    return "";
+
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
     if (const Arg *A = Args.getLastArg(options::OPT_mcpu_EQ))
       return A->getValue();
     return "";
@@ -478,6 +492,11 @@ llvm::StringRef tools::getLTOParallelism(const ArgList &Args, const Driver &D) {
 // CloudABI and PS4/PS5 use -ffunction-sections and -fdata-sections by default.
 bool tools::isUseSeparateSections(const llvm::Triple &Triple) {
   return Triple.getOS() == llvm::Triple::CloudABI || Triple.isPS();
+}
+
+// BlockISA use -ffunction-sections by default.
+bool tools::isUseFunctionLayout(const llvm::Triple &Triple) {
+  return Triple.isLinx() || Triple.isLinxV4() || Triple.isLinxV5();
 }
 
 void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
@@ -1506,7 +1525,12 @@ static void AddUnwindLibrary(const ToolChain &TC, const Driver &D,
                              ArgStringList &CmdArgs, const ArgList &Args) {
   ToolChain::UnwindLibType UNW = TC.GetUnwindLibType(Args);
   // Targets that don't use unwind libraries.
+  // currently only static link is supported on Linx and libgcc_eh.a doesn't
+  // exist if option --disable-shared is applied.
   if ((TC.getTriple().isAndroid() && UNW == ToolChain::UNW_Libgcc) ||
+      (TC.getTriple().isLinx() && UNW == ToolChain::UNW_Libgcc) ||
+      (TC.getTriple().isLinxV4() && UNW == ToolChain::UNW_Libgcc) ||
+      (TC.getTriple().isLinxV5() && UNW == ToolChain::UNW_Libgcc) ||
       TC.getTriple().isOSIAMCU() || TC.getTriple().isOSBinFormatWasm() ||
       UNW == ToolChain::UNW_None)
     return;

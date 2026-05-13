@@ -1498,7 +1498,8 @@ static QualType ConvertDeclSpecToType(TypeProcessingState &state) {
     // do not diagnose _Float16 usage to avoid false alarm.
     // ToDo: more precise diagnostics for CUDA.
     if (!S.Context.getTargetInfo().hasFloat16Type() && !S.getLangOpts().CUDA &&
-        !(S.getLangOpts().OpenMP && S.getLangOpts().OpenMPIsDevice))
+        !(S.getLangOpts().OpenMP && S.getLangOpts().OpenMPIsDevice) &&
+        !S.getLangOpts().LinxBlockC)
       S.Diag(DS.getTypeSpecTypeLoc(), diag::err_type_unsupported)
         << "_Float16";
     Result = Context.Float16Ty;
@@ -2691,7 +2692,7 @@ QualType Sema::BuildExtVectorType(QualType T, Expr *ArraySize,
   // We explictly allow bool elements in ext_vector_type for C/C++.
   bool IsNoBoolVecLang = getLangOpts().OpenCL || getLangOpts().OpenCLCPlusPlus;
   if ((!T->isDependentType() && !T->isIntegerType() &&
-       !T->isRealFloatingType()) ||
+       !T->isRealFloatingType()) && !T->isStructureType() ||
       (IsNoBoolVecLang && T->isBooleanType())) {
     Diag(AttrLoc, diag::err_attribute_invalid_vector_type) << T;
     return QualType();
@@ -2735,6 +2736,7 @@ QualType Sema::BuildMatrixType(QualType ElementTy, Expr *NumRows, Expr *NumCols,
   // Check element type, if it is not dependent.
   if (!ElementTy->isDependentType() &&
       !MatrixType::isValidElementType(ElementTy)) {
+    ElementTy.dump();
     Diag(AttrLoc, diag::err_attribute_invalid_matrix_type) << ElementTy;
     return QualType();
   }
@@ -8224,6 +8226,47 @@ static void HandleLifetimeBoundAttr(TypeProcessingState &State,
   }
 }
 
+static void HandleLinxNoAliasAttr(TypeProcessingState &State, QualType &CurType,
+                                  ParsedAttr &Attr) {
+  Sema &S = State.getSema();
+  if (!CurType->isPointerType()) {
+    S.Diag(Attr.getLoc(), diag::err_typecheck_invalid_noalias_not_pointer)
+        << CurType;
+    return;
+  }
+  CurType = State.getAttributedType(
+      createSimpleAttr<LinxNoAliasAttr>(State.getSema().Context, Attr), CurType,
+      CurType);
+  return;
+}
+
+static void HandleLinxBLKFuncOutAttr(TypeProcessingState &State,
+                                     QualType &CurType, ParsedAttr &Attr) {
+  Sema &S = State.getSema();
+  CurType = State.getAttributedType(
+      createSimpleAttr<LinxBLKFuncOutAttr>(State.getSema().Context, Attr),
+      CurType, CurType);
+  return;
+}
+
+static void HandleLinxBLKFuncInAttr(TypeProcessingState &State,
+                                    QualType &CurType, ParsedAttr &Attr) {
+  Sema &S = State.getSema();
+  CurType = State.getAttributedType(
+      createSimpleAttr<LinxBLKFuncInAttr>(State.getSema().Context, Attr),
+      CurType, CurType);
+  return;
+}
+
+template <class A>
+static void HandleLinxBLKFuncAttr(TypeProcessingState &State, QualType &CurType,
+                                  ParsedAttr &Attr) {
+  Sema &S = State.getSema();
+  CurType = State.getAttributedType(createSimpleAttr<A>(S.Context, Attr),
+                                    CurType, CurType);
+  return;
+}
+
 static void processTypeAttrs(TypeProcessingState &state, QualType &type,
                              TypeAttrLocation TAL,
                              const ParsedAttributesView &attrs) {
@@ -8493,6 +8536,30 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
     case ParsedAttr::AT_AnnotateType: {
       HandleAnnotateTypeAttr(state, type, attr);
       attr.setUsedAsTypeAttr();
+      break;
+    }
+    case ParsedAttr::AT_LinxNoAlias: {
+      HandleLinxNoAliasAttr(state, type, attr);
+      attr.setUsedAsTypeAttr();
+      break;
+    }
+    case ParsedAttr::AT_LinxBLKFuncOut: {
+      HandleLinxBLKFuncOutAttr(state, type, attr);
+      attr.setUsedAsTypeAttr();
+      break;
+    }
+    case ParsedAttr::AT_LinxBLKFuncIn: {
+      HandleLinxBLKFuncInAttr(state, type, attr);
+      attr.setUsedAsTypeAttr();
+      break;
+    }
+    case ParsedAttr::AT_LinxBLKFuncVEC: {
+      HandleLinxBLKFuncAttr<LinxBLKFuncVECAttr>(state, type, attr);
+      break;
+    }
+
+    case ParsedAttr::AT_LinxBLKFuncMTC: {
+      HandleLinxBLKFuncAttr<LinxBLKFuncMTCAttr>(state, type, attr);
       break;
     }
     }

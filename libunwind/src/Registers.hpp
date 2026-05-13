@@ -38,6 +38,9 @@ enum {
   REGISTERS_SPARC64,
   REGISTERS_HEXAGON,
   REGISTERS_RISCV,
+  REGISTERS_LINX,
+  REGISTERS_LINXV4,
+  REGISTERS_LINXV5,
   REGISTERS_VE,
   REGISTERS_S390X,
 };
@@ -4300,6 +4303,501 @@ inline void Registers_riscv::setVectorRegister(int, v128) {
   _LIBUNWIND_ABORT("no riscv vector register support yet");
 }
 #endif // _LIBUNWIND_TARGET_RISCV
+
+#if defined(_LIBUNWIND_TARGET_LINX)
+
+// This check makes it safe when LIBUNWIND_ENABLE_CROSS_UNWINDING enabled.
+typedef uint64_t reg_t;
+// Use Max possible width when cross unwinding
+typedef uint64_t reg_t;
+typedef double fp_t;
+
+class _LIBUNWIND_HIDDEN Registers_linx {
+public:
+  Registers_linx();
+  Registers_linx(const void *registers);
+
+  bool validRegister(int num) const;
+  reg_t getRegister(int num) const;
+  void setRegister(int num, reg_t value);
+  bool validFloatRegister(int num) const;
+  fp_t getFloatRegister(int num) const;
+  void setFloatRegister(int num, fp_t value);
+  bool validVectorRegister(int num) const;
+  v128 getVectorRegister(int num) const;
+  void setVectorRegister(int num, v128 value);
+  static const char *getRegisterName(int num);
+  void jumpto();
+  static constexpr int lastDwarfRegNum() {
+    return _LIBUNWIND_HIGHEST_DWARF_REGISTER_LINX;
+  }
+  static int getArch() { return REGISTERS_LINX; }
+
+  reg_t getSP() const { return _registers.__gpr[1]; }
+  void setSP(reg_t value) { _registers.__gpr[1] = value; }
+  reg_t getIP() const { return _registers.__bpc; }
+  void setIP(reg_t value) { _registers.__bpc = value; }
+
+private:
+  struct linxv3_thread_state_t {
+    uint64_t __bpc;     // Problem Status Word: Address (PC)
+    uint64_t __gpr[16]; // General Purpose Registers
+  };
+
+  linxv3_thread_state_t _registers;
+};
+
+inline Registers_linx::Registers_linx(const void *registers) {
+  static_assert((check_fit<Registers_linx, unw_context_t>::does_fit),
+                "linx registers do not fit into unw_context_t");
+  memcpy(&_registers, registers, sizeof(_registers));
+}
+
+inline Registers_linx::Registers_linx() {
+  memset(&_registers, 0, sizeof(_registers));
+}
+
+inline bool Registers_linx::validRegister(int regNum) const {
+  if (regNum == UNW_REG_IP)
+    return true;
+  if (regNum == UNW_REG_SP)
+    return true;
+  if (regNum < 0)
+    return false;
+  if (regNum > UNW_LINX_R15)
+    return false;
+  return true;
+}
+
+inline reg_t Registers_linx::getRegister(int regNum) const {
+  if (regNum == UNW_REG_IP)
+    return _registers.__bpc;
+  if (regNum == UNW_REG_SP)
+    return _registers.__gpr[1];
+  if ((regNum >= 0) && (regNum < 16))
+    return _registers.__gpr[regNum];
+  _LIBUNWIND_ABORT("unsupported linx register");
+}
+
+inline void Registers_linx::setRegister(int regNum, reg_t value) {
+  if (regNum == UNW_REG_IP)
+    _registers.__bpc = value;
+  else if (regNum == UNW_REG_SP)
+    _registers.__gpr[1] = value;
+  else if ((regNum >= 0) && (regNum < 16))
+    _registers.__gpr[regNum] = value;
+  else
+    _LIBUNWIND_ABORT("unsupported linx register");
+}
+
+inline const char *Registers_linx::getRegisterName(int regNum) {
+  switch (regNum) {
+  case UNW_REG_IP:
+    return "pc";
+  case UNW_LINX_R0:
+    return "ra";
+  case UNW_REG_SP:
+  case UNW_LINX_R1:
+    return "sp";
+  case UNW_LINX_R2:
+    return "a0";
+  case UNW_LINX_R3:
+    return "a1";
+  case UNW_LINX_R4:
+    return "a2";
+  case UNW_LINX_R5:
+    return "s0";
+  case UNW_LINX_R6:
+    return "s1";
+  case UNW_LINX_R7:
+    return "s2";
+  case UNW_LINX_R8:
+    return "s3";
+  case UNW_LINX_R9:
+    return "s4";
+  case UNW_LINX_R10:
+    return "s5";
+  case UNW_LINX_R11:
+    return "a3";
+  case UNW_LINX_R12:
+    return "a4";
+  case UNW_LINX_R13:
+    return "a5";
+  case UNW_LINX_R14:
+    return "x0";
+  case UNW_LINX_R15:
+    return "x1";
+  default:
+    return "unknown register";
+  }
+}
+
+inline bool Registers_linx::validFloatRegister(int regNum) const {
+  return false;
+}
+
+inline void Registers_linx::setFloatRegister(int regNum, fp_t value) {
+  _LIBUNWIND_ABORT("Linx doesn't have float registers");
+}
+
+inline fp_t Registers_linx::getFloatRegister(int regNum) const {
+  _LIBUNWIND_ABORT("Linx doesn't have float registers");
+}
+
+inline bool Registers_linx::validVectorRegister(int) const { return false; }
+
+inline v128 Registers_linx::getVectorRegister(int) const {
+  _LIBUNWIND_ABORT("no linx vector register support yet");
+}
+
+inline void Registers_linx::setVectorRegister(int, v128) {
+  _LIBUNWIND_ABORT("no linx vector register support yet");
+}
+#endif // _LIBUNWIND_TARGET_LINX
+
+#if defined(_LIBUNWIND_TARGET_LINXV4)
+
+// This check makes it safe when LIBUNWIND_ENABLE_CROSS_UNWINDING enabled.
+typedef uint64_t reg_t;
+// Use Max possible width when cross unwinding
+typedef uint64_t reg_t;
+typedef double fp_t;
+
+class _LIBUNWIND_HIDDEN Registers_linxv4 {
+public:
+  Registers_linxv4();
+  Registers_linxv4(const void *registers);
+
+  bool validRegister(int num) const;
+  reg_t getRegister(int num) const;
+  void setRegister(int num, reg_t value);
+  bool validFloatRegister(int num) const;
+  fp_t getFloatRegister(int num) const;
+  void setFloatRegister(int num, fp_t value);
+  bool validVectorRegister(int num) const;
+  v128 getVectorRegister(int num) const;
+  void setVectorRegister(int num, v128 value);
+  static const char *getRegisterName(int num);
+  void jumpto();
+  static constexpr int lastDwarfRegNum() {
+    return _LIBUNWIND_HIGHEST_DWARF_REGISTER_LINXV4;
+  }
+  static int getArch() { return REGISTERS_LINXV4; }
+
+  reg_t getSP() const { return _registers.__gpr[1]; }
+  void setSP(reg_t value) { _registers.__gpr[1] = value; }
+  reg_t getIP() const { return _registers.__bpc; }
+  void setIP(reg_t value) { _registers.__bpc = value; }
+
+private:
+  struct linxv4_thread_state_t {
+    uint64_t __bpc;     // Problem Status Word: Address (PC)
+    uint64_t __gpr[24]; // General Purpose Registers
+  };
+
+  linxv4_thread_state_t _registers;
+};
+
+inline Registers_linxv4::Registers_linxv4(const void *registers) {
+  static_assert((check_fit<Registers_linxv4, unw_context_t>::does_fit),
+                "linx registers do not fit into unw_context_t");
+  memcpy(&_registers, registers, sizeof(_registers));
+}
+
+inline Registers_linxv4::Registers_linxv4() {
+  memset(&_registers, 0, sizeof(_registers));
+}
+
+inline bool Registers_linxv4::validRegister(int regNum) const {
+  if (regNum == UNW_REG_IP)
+    return true;
+  if (regNum == UNW_REG_SP)
+    return true;
+  if (regNum < 0)
+    return false;
+  if (regNum > UNW_LINXV4_R23)
+    return false;
+  return true;
+}
+
+inline reg_t Registers_linxv4::getRegister(int regNum) const {
+  if (regNum == UNW_REG_IP)
+    return _registers.__bpc;
+  if (regNum == UNW_REG_SP)
+    return _registers.__gpr[1];
+  if ((regNum > 0) && (regNum < 24))
+    return _registers.__gpr[regNum];
+  if (regNum == UNW_LINXV4_R0)
+    return 0;
+  _LIBUNWIND_ABORT("unsupported linx register");
+}
+
+inline void Registers_linxv4::setRegister(int regNum, reg_t value) {
+  if (regNum == UNW_REG_IP)
+    _registers.__bpc = value;
+  else if (regNum == UNW_REG_SP)
+    _registers.__gpr[1] = value;
+  else if (regNum == UNW_LINXV4_R0)
+    /* R0 is hardwired to zero */
+    return;
+  else if ((regNum > 0) && (regNum < 24))
+    _registers.__gpr[regNum] = value;
+  else
+    _LIBUNWIND_ABORT("unsupported linx register");
+}
+
+inline const char *Registers_linxv4::getRegisterName(int regNum) {
+  switch (regNum) {
+  case UNW_REG_IP:
+    return "pc";
+  case UNW_LINXV4_R0:
+    return "zero";
+  case UNW_REG_SP:
+  case UNW_LINXV4_R1:
+    return "sp";
+  case UNW_LINXV4_R2:
+    return "a0";
+  case UNW_LINXV4_R3:
+    return "a1";
+  case UNW_LINXV4_R4:
+    return "a2";
+  case UNW_LINXV4_R5:
+    return "a3";
+  case UNW_LINXV4_R6:
+    return "a4";
+  case UNW_LINXV4_R7:
+    return "a5";
+  case UNW_LINXV4_R8:
+    return "a6";
+  case UNW_LINXV4_R9:
+    return "a7";
+  case UNW_LINXV4_R10:
+    return "ra";
+  case UNW_LINXV4_R11:
+    return "s0";
+  case UNW_LINXV4_R12:
+    return "s1";
+  case UNW_LINXV4_R13:
+    return "s2";
+  case UNW_LINXV4_R14:
+    return "s3";
+  case UNW_LINXV4_R15:
+    return "s4";
+  case UNW_LINXV4_R16:
+    return "s5";
+  case UNW_LINXV4_R17:
+    return "s6";
+  case UNW_LINXV4_R18:
+    return "s7";
+  case UNW_LINXV4_R19:
+    return "s8";
+  case UNW_LINXV4_R20:
+    return "x0";
+  case UNW_LINXV4_R21:
+    return "x1";
+  case UNW_LINXV4_R22:
+    return "x2";
+  case UNW_LINXV4_R23:
+    return "x3";
+  default:
+    return "unknown register";
+  }
+}
+
+inline bool Registers_linxv4::validFloatRegister(int regNum) const {
+  return false;
+}
+
+inline void Registers_linxv4::setFloatRegister(int regNum, fp_t value) {
+  _LIBUNWIND_ABORT("Linx doesn't have float registers");
+}
+
+inline fp_t Registers_linxv4::getFloatRegister(int regNum) const {
+  _LIBUNWIND_ABORT("Linx doesn't have float registers");
+}
+
+inline bool Registers_linxv4::validVectorRegister(int) const { return false; }
+
+inline v128 Registers_linxv4::getVectorRegister(int) const {
+  _LIBUNWIND_ABORT("no linx vector register support yet");
+}
+
+inline void Registers_linxv4::setVectorRegister(int, v128) {
+  _LIBUNWIND_ABORT("no linx vector register support yet");
+}
+#endif // _LIBUNWIND_TARGET_LINXV4
+
+#if defined(_LIBUNWIND_TARGET_LINXV5)
+
+// This check makes it safe when LIBUNWIND_ENABLE_CROSS_UNWINDING enabled.
+typedef uint64_t reg_t;
+// Use Max possible width when cross unwinding
+typedef uint64_t reg_t;
+typedef double fp_t;
+
+class _LIBUNWIND_HIDDEN Registers_linxv5 {
+public:
+  Registers_linxv5();
+  Registers_linxv5(const void *registers);
+
+  bool validRegister(int num) const;
+  reg_t getRegister(int num) const;
+  void setRegister(int num, reg_t value);
+  bool validFloatRegister(int num) const;
+  fp_t getFloatRegister(int num) const;
+  void setFloatRegister(int num, fp_t value);
+  bool validVectorRegister(int num) const;
+  v128 getVectorRegister(int num) const;
+  void setVectorRegister(int num, v128 value);
+  static const char *getRegisterName(int num);
+  void jumpto();
+  static constexpr int lastDwarfRegNum() {
+    return _LIBUNWIND_HIGHEST_DWARF_REGISTER_LINXV5;
+  }
+  static int getArch() { return REGISTERS_LINXV5; }
+
+  reg_t getSP() const { return _registers.__gpr[1]; }
+  void setSP(reg_t value) { _registers.__gpr[1] = value; }
+  reg_t getIP() const { return _registers.__bpc; }
+  void setIP(reg_t value) { _registers.__bpc = value; }
+
+private:
+  struct linxv5_thread_state_t {
+    uint64_t __bpc;     // Problem Status Word: Address (PC)
+    uint64_t __gpr[24]; // General Purpose Registers
+  };
+
+  linxv5_thread_state_t _registers;
+};
+
+inline Registers_linxv5::Registers_linxv5(const void *registers) {
+  static_assert((check_fit<Registers_linxv5, unw_context_t>::does_fit),
+                "linx registers do not fit into unw_context_t");
+  memcpy(&_registers, registers, sizeof(_registers));
+}
+
+inline Registers_linxv5::Registers_linxv5() {
+  memset(&_registers, 0, sizeof(_registers));
+}
+
+inline bool Registers_linxv5::validRegister(int regNum) const {
+  if (regNum == UNW_REG_IP)
+    return true;
+  if (regNum == UNW_REG_SP)
+    return true;
+  if (regNum < 0)
+    return false;
+  if (regNum > UNW_LINXV5_R23)
+    return false;
+  return true;
+}
+
+inline reg_t Registers_linxv5::getRegister(int regNum) const {
+  if (regNum == UNW_REG_IP)
+    return _registers.__bpc;
+  if (regNum == UNW_REG_SP)
+    return _registers.__gpr[1];
+  if ((regNum > 0) && (regNum < 24))
+    return _registers.__gpr[regNum];
+  if (regNum == UNW_LINXV5_R0)
+    return 0;
+  _LIBUNWIND_ABORT("unsupported linx register");
+}
+
+inline void Registers_linxv5::setRegister(int regNum, reg_t value) {
+  if (regNum == UNW_REG_IP)
+    _registers.__bpc = value;
+  else if (regNum == UNW_REG_SP)
+    _registers.__gpr[1] = value;
+  else if (regNum == UNW_LINXV5_R0)
+    /* R0 is hardwired to zero */
+    return;
+  else if ((regNum > 0) && (regNum < 24))
+    _registers.__gpr[regNum] = value;
+  else
+    _LIBUNWIND_ABORT("unsupported linx register");
+}
+
+inline const char *Registers_linxv5::getRegisterName(int regNum) {
+  switch (regNum) {
+  case UNW_REG_IP:
+    return "pc";
+  case UNW_LINXV5_R0:
+    return "zero";
+  case UNW_REG_SP:
+  case UNW_LINXV5_R1:
+    return "sp";
+  case UNW_LINXV5_R2:
+    return "a0";
+  case UNW_LINXV5_R3:
+    return "a1";
+  case UNW_LINXV5_R4:
+    return "a2";
+  case UNW_LINXV5_R5:
+    return "a3";
+  case UNW_LINXV5_R6:
+    return "a4";
+  case UNW_LINXV5_R7:
+    return "a5";
+  case UNW_LINXV5_R8:
+    return "a6";
+  case UNW_LINXV5_R9:
+    return "a7";
+  case UNW_LINXV5_R10:
+    return "ra";
+  case UNW_LINXV5_R11:
+    return "s0";
+  case UNW_LINXV5_R12:
+    return "s1";
+  case UNW_LINXV5_R13:
+    return "s2";
+  case UNW_LINXV5_R14:
+    return "s3";
+  case UNW_LINXV5_R15:
+    return "s4";
+  case UNW_LINXV5_R16:
+    return "s5";
+  case UNW_LINXV5_R17:
+    return "s6";
+  case UNW_LINXV5_R18:
+    return "s7";
+  case UNW_LINXV5_R19:
+    return "s8";
+  case UNW_LINXV5_R20:
+    return "x0";
+  case UNW_LINXV5_R21:
+    return "x1";
+  case UNW_LINXV5_R22:
+    return "x2";
+  case UNW_LINXV5_R23:
+    return "x3";
+  default:
+    return "unknown register";
+  }
+}
+
+inline bool Registers_linxv5::validFloatRegister(int regNum) const {
+  return false;
+}
+
+inline void Registers_linxv5::setFloatRegister(int regNum, fp_t value) {
+  _LIBUNWIND_ABORT("Linx doesn't have float registers");
+}
+
+inline fp_t Registers_linxv5::getFloatRegister(int regNum) const {
+  _LIBUNWIND_ABORT("Linx doesn't have float registers");
+}
+
+inline bool Registers_linxv5::validVectorRegister(int) const { return false; }
+
+inline v128 Registers_linxv5::getVectorRegister(int) const {
+  _LIBUNWIND_ABORT("no linx vector register support yet");
+}
+
+inline void Registers_linxv5::setVectorRegister(int, v128) {
+  _LIBUNWIND_ABORT("no linx vector register support yet");
+}
+#endif // _LIBUNWIND_TARGET_LINXV5
 
 #if defined(_LIBUNWIND_TARGET_VE)
 /// Registers_ve holds the register state of a thread in a VE process.

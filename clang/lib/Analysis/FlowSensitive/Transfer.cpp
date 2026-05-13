@@ -496,8 +496,10 @@ public:
 
       Env.setStorageLocation(*S, *ArgLoc);
     } else if (S->getDirectCallee() != nullptr &&
-               S->getDirectCallee()->getBuiltinID() ==
-                   Builtin::BI__builtin_expect) {
+               (S->getDirectCallee()->getBuiltinID() ==
+                    Builtin::BI__builtin_expect ||
+                S->getDirectCallee()->getBuiltinID() ==
+                    Builtin::BI__builtin_branch_hint)) {
       assert(S->getNumArgs() > 0);
       assert(S->getArg(0) != nullptr);
       // `__builtin_expect` returns by-value, so strip away any potential

@@ -8657,11 +8657,13 @@ void Sema::CodeCompleteObjCPropertySynthesizeIvar(
                             Results.data(), Results.size());
 }
 
+namespace {
 // Mapping from selectors to the methods that implement that selector, along
 // with the "in original class" flag.
 typedef llvm::DenseMap<Selector,
                        llvm::PointerIntPair<ObjCMethodDecl *, 1, bool>>
     KnownMethodsMap;
+}
 
 /// Find all of the methods that reside in the given container
 /// (and its superclasses, protocols, etc.) that meet the given

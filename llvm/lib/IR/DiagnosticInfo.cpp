@@ -352,6 +352,32 @@ bool DiagnosticInfoOptimizationFailure::isEnabled() const {
   return getSeverity() == DS_Warning;
 }
 
+DiagnosticInfoBadOptimization::DiagnosticInfoBadOptimization(
+    const char *PassName, StringRef RemarkName, Instruction *OI, Instruction *NI)
+      : DiagnosticInfoWithLocationBase(DK_BadOptimization, DS_Warning,
+                                       *OI->getFunction(), OI->getDebugLoc()),
+        PassName(PassName), RemarkName(RemarkName), OInstr(OI), NInstr(NI) {}
+
+std::string DiagnosticInfoBadOptimization::getMsg() const {
+  std::string Str;
+  raw_string_ostream OS(Str);
+
+  OS << "The following instruction is folded by " << getRemarkName()
+     << " during " << getPassName()
+     << ", which may be unexpected. Please comfirm it.\n"
+     << "  origin instruction:\n"
+     << *OInstr
+     << "\n  new instruction:\n"
+     << *NInstr
+     << "\n which corresponds to code or function is:";
+  OS.flush();
+  return Str;
+}
+
+void DiagnosticInfoBadOptimization::print(DiagnosticPrinter &DP) const {
+  DP << getMsg();
+}
+
 void DiagnosticInfoUnsupported::print(DiagnosticPrinter &DP) const {
   std::string Str;
   raw_string_ostream OS(Str);

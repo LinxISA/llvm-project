@@ -4473,6 +4473,10 @@ public:
                                    AssociatedNamespaceSet &AssociatedNamespaces,
                                    AssociatedClassSet &AssociatedClasses);
 
+  void DiagnoseRedundantDecls(NamedDecl *D);
+  void RedundantAlaisValueDecls(NamedDecl *D, const LookupResult &R);
+  bool checkForFriendFunc(const NamedDecl *D1, const Decl *D2);
+
   void FilterLookupForScope(LookupResult &R, DeclContext *Ctx, Scope *S,
                             bool ConsiderLinkage, bool AllowInlineNamespace);
 
@@ -5170,9 +5174,10 @@ public:
   /// This helps prevent bugs due to typos, such as:
   ///     if (condition);
   ///       do_stuff();
-  void DiagnoseEmptyStmtBody(SourceLocation StmtLoc,
-                             const Stmt *Body,
-                             unsigned DiagID);
+
+  // [BiSheng] Stmt empty-body doesn't check different line
+  void DiagnoseEmptyStmtBody(SourceLocation StmtLoc, const Stmt *Body,
+                             unsigned DiagID, bool IsIfstmt = false);
 
   /// Warn if a for/while loop statement \p S, which is followed by
   /// \p PossibleBody, has a suspicious null statement as a body.
@@ -5728,6 +5733,10 @@ public:
                         ADLCallKind UsesADL = ADLCallKind::NotADL);
 
   ExprResult ActOnCUDAExecConfigExpr(Scope *S, SourceLocation LLLLoc,
+                                     MultiExprArg ExecConfig,
+                                     SourceLocation GGGLoc);
+
+  ExprResult ActOnLinxBlockCExecConfigExpr(Scope *S, SourceLocation LLLLoc,
                                      MultiExprArg ExecConfig,
                                      SourceLocation GGGLoc);
 
@@ -10717,6 +10726,10 @@ public:
                              SourceLocation LParenLoc, MultiExprArg ArgExprs,
                              SourceLocation RParenLoc, Expr *ExecConfig);
 
+  ExprResult ActOnLinxBlockCCall(ExprResult Call, Scope *Scope,
+                             SourceLocation LParenLoc, MultiExprArg ArgExprs,
+                             SourceLocation RParenLoc, Expr *ExecConfig);
+
   /// Handle a `omp begin declare variant`.
   void ActOnOpenMPBeginDeclareVariant(SourceLocation Loc, OMPTraitInfo &TI);
 
@@ -12821,6 +12834,8 @@ public:
   /// parameters specified via <<<>>>.
   std::string getCudaConfigureFuncName() const;
 
+  std::string getLinxVcallFuncName() const;
+
   /// \name Code completion
   //@{
   /// Describes the context in which code completion occurs.
@@ -13019,6 +13034,10 @@ public:
   // Extra semantic analysis beyond the C type system
 
 public:
+  // For Linx L2DP global variable declaration warning
+  void CheckLinxL2DPGlobalDecl(VarDecl *VD, const Declarator &D);
+
+public:
   SourceLocation getLocationOfStringLiteralByte(const StringLiteral *SL,
                                                 unsigned ByteNo) const;
 
@@ -13117,6 +13136,16 @@ private:
   bool CheckRISCVLMUL(CallExpr *TheCall, unsigned ArgNum);
   bool CheckRISCVBuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
                                      CallExpr *TheCall);
+  bool CheckLinxV5BuiltinSysGetReg(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinTwoSrcFloat(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinReduce(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinBLKCall(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinBLKMXCall(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinBLKACCCVT(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinFPArith(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinSHFL(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
+                                      CallExpr *TheCall);
 
   bool SemaBuiltinVAStart(unsigned BuiltinID, CallExpr *TheCall);
   bool SemaBuiltinVAStartARMMicrosoft(CallExpr *Call);
@@ -13171,6 +13200,12 @@ private:
   bool SemaBuiltinElementwiseMath(CallExpr *TheCall);
   bool PrepareBuiltinElementwiseMathOneArgCall(CallExpr *TheCall);
   bool PrepareBuiltinReduceMathOneArgCall(CallExpr *TheCall);
+
+  ExprResult SemaBuiltinLinxVCallPar(Sema &S, CallExpr *TheCall,
+                                     ExprResult CallResult);
+
+  ExprResult SemaBuiltinBLKVGetTilePtr(CallExpr *TheCall,
+                                       ExprResult CallResult);
 
   // Matrix builtin handling.
   ExprResult SemaBuiltinMatrixTranspose(CallExpr *TheCall,

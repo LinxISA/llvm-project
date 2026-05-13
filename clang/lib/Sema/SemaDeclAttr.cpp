@@ -4794,6 +4794,40 @@ static void handleOptimizeNoneAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
     D->addAttr(Optnone);
 }
 
+// 'optimize' attribute only accept string argument, just warning if invalid type
+static void handleOptimizeAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  if (!AL.checkAtLeastNumArgs(S, 1))
+    return;
+
+  SmallVector<OptimizeAttr::OptAttrKind, 8> OptAttrs;
+  for (unsigned ArgIndex = 0; ArgIndex < AL.getNumArgs(); ++ArgIndex) {
+    if (AL.isArgIdent(ArgIndex)) {
+      S.Diag(AL.getLoc(), diag::warn_invalid_optimize_attr_type) << AL;
+      return;
+    }
+
+    Expr *ArgExpr = AL.getArgAsExpr(ArgIndex);
+    SourceLocation Loc = ArgExpr->getBeginLoc();
+    const auto *Literal = dyn_cast<StringLiteral>(ArgExpr->IgnoreParenCasts());
+    if (!Literal) {
+      S.Diag(Loc, diag::warn_invalid_optimize_attr_type) << AL;
+      return;
+    }
+
+    StringRef OptAttrStr = Literal->getString();
+    OptimizeAttr::OptAttrKind OptAttr;
+    if (!OptimizeAttr::ConvertStrToOptAttrKind(OptAttrStr, OptAttr)) {
+      S.Diag(Loc, diag::warn_invalid_optimize_attr_argument) << AL << OptAttrStr;
+      return;
+    }
+
+    OptAttrs.push_back(OptAttr);
+  }
+
+  D->addAttr(::new (S.Context)
+                 OptimizeAttr(S.Context, AL, OptAttrs.data(), OptAttrs.size()));
+}
+
 static void handleConstantAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   const auto *VD = cast<VarDecl>(D);
   if (VD->hasLocalStorage()) {
@@ -7470,6 +7504,21 @@ static void handleInterruptAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   case llvm::Triple::riscv64:
     handleRISCVInterruptAttr(S, D, AL);
     break;
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+    S.Diag(D->getLocation(), diag::err_attribute_not_supported_on_arch)
+        << &AL << S.Context.getTargetInfo().getTriple().getArchName();
+    break;
+  case llvm::Triple::linx64v4:
+  case llvm::Triple::linx64v4be:
+    S.Diag(D->getLocation(), diag::err_attribute_not_supported_on_arch)
+        << &AL << S.Context.getTargetInfo().getTriple().getArchName();
+    break;
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    S.Diag(D->getLocation(), diag::err_attribute_not_supported_on_arch)
+        << &AL << S.Context.getTargetInfo().getTriple().getArchName();
+    break;
   default:
     handleARMInterruptAttr(S, D, AL);
     break;
@@ -7973,6 +8022,48 @@ static void handleOpenCLAccessAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   }
 
   D->addAttr(::new (S.Context) OpenCLAccessAttr(S.Context, AL));
+}
+
+static void handleLinxNoAliasAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  bool IsLinx = S.Context.getTargetInfo().getTriple().isLinxClass();
+  if (!IsLinx) {
+    S.Diag(AL.getLoc(), diag::err_type_unsupported) << AL;
+    return;
+  }
+  if (!isa<ParmVarDecl>(D)) {
+    S.Diag(AL.getLoc(), diag::err_attribute_noalias_not_param_var) << AL;
+    return;
+  }
+
+
+  D->addAttr(::new (S.Context) LinxNoAliasAttr(S.Context, AL));
+}
+
+static void handleLinxBLKFuncOutAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  if (!isa<ParmVarDecl>(D)) {
+    S.Diag(AL.getLoc(), diag::err_attribute_not_param) << AL;
+    return;
+  }
+
+  D->addAttr(::new (S.Context) LinxBLKFuncOutAttr(S.Context, AL));
+}
+
+static void handleLinxBLKFuncInAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  if (!isa<ParmVarDecl>(D)) {
+    S.Diag(AL.getLoc(), diag::err_attribute_not_param) << AL;
+    return;
+  }
+
+  D->addAttr(::new (S.Context) LinxBLKFuncInAttr(S.Context, AL));
+}
+
+template <class A>
+static void handleLinxBLKFuncAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  if (!isa<FunctionDecl>(D)) {
+    S.Diag(AL.getLoc(), diag::err_attribute_not_function) << AL;
+    return;
+  }
+  D->addAttr(::new (S.Context) A(S.Context, AL));
 }
 
 static void handleZeroCallUsedRegsAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
@@ -8580,6 +8671,9 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
   case ParsedAttr::AT_OptimizeNone:
     handleOptimizeNoneAttr(S, D, AL);
     break;
+  case ParsedAttr::AT_Optimize:
+    handleOptimizeAttr(S, D, AL);
+    break;
   case ParsedAttr::AT_EnumExtensibility:
     handleEnumExtensibilityAttr(S, D, AL);
     break;
@@ -9092,6 +9186,30 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
 
   case ParsedAttr::AT_UsingIfExists:
     handleSimpleAttribute<UsingIfExistsAttr>(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_LinxNoAlias:
+    handleLinxNoAliasAttr(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_LinxBLKFuncOut:
+    handleLinxBLKFuncOutAttr(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_LinxBLKFuncIn:
+    handleLinxBLKFuncInAttr(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_LinxBLKFuncVEC:
+    handleLinxBLKFuncAttr<LinxBLKFuncVECAttr>(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_LinxBLKFuncMTC:
+    handleLinxBLKFuncAttr<LinxBLKFuncMTCAttr>(S, D, AL);
+    break;
+
+  case ParsedAttr::AT_LinxBLKFuncNoSpill:
+    handleLinxBLKFuncAttr<LinxBLKFuncNoSpillAttr>(S, D, AL);
     break;
   }
 }

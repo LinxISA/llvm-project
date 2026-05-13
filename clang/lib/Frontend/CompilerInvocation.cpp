@@ -1628,6 +1628,12 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
     Opts.setInlining(CodeGenOptions::NormalInlining);
   }
 
+  // [BiSheng] TailCall pass is controlled by foptimize-sibling-calls and
+  // flive-patching
+  if (Args.hasArg(options::OPT_flive_patching_EQ, options::OPT_flive_patching)) {
+    Opts.DisableTailCalls = 1;
+  }
+
   // PIC defaults to -fno-direct-access-external-data while non-PIC defaults to
   // -fdirect-access-external-data.
   Opts.DirectAccessExternalData =

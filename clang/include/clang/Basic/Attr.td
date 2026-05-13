@@ -2283,6 +2283,19 @@ def OptimizeNone : InheritableAttr {
   let Documentation = [OptnoneDocs];
 }
 
+def Optimize : InheritableAttr {
+  let Spellings = [GCC<"optimize">];
+  let Args = [VariadicEnumArgument<"OptAttrs", "OptAttrKind",
+                                   ["Ofast", "Oz", "Os", "O0",
+                                    "tree-vectorize", "unroll-loops",
+                                    "omit-frame-pointer", "no-omit-frame-pointer"],
+                                   ["Fast", "MinSize", "OptSize", "NoOpts",
+                                    "TreeVectorize", "UnrollLoops",
+                                    "OmitFramePointer", "NoOmitFramePointer"]>];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [OptimizeDocs];
+}
+
 def Overloadable : Attr {
   let Spellings = [Clang<"overloadable">];
   let Subjects = SubjectList<[Function], ErrorDiag>;
@@ -3620,6 +3633,28 @@ def InitSeg : Attr {
   }];
 }
 
+def Linx : Attr {
+  let Spellings = [Pragma<"", "linx">];
+
+  let Args = [EnumArgument<"Option", "OptionType",
+                          ["block"],
+                          ["Block"]>];
+  let AdditionalMembers = [{
+  static const char *getOptionName(int Option) {
+    switch(Option) {
+    case Block: return "block";
+    }
+    llvm_unreachable("Unhandled Linx option.");
+  }
+  void printPrettyPragma(raw_ostream &OS, const PrintingPolicy &Policy) const {
+    return;
+  }
+  }];
+  let Documentation = [LinxDocs];
+  let HasCustomParsing = 1;
+
+}
+
 def LoopHint : Attr {
   /// #pragma clang loop <option> directive
   /// vectorize: vectorizes loop operations if State == Enable.
@@ -4046,4 +4081,35 @@ def FunctionReturnThunks : InheritableAttr,
   >];
   let Subjects = SubjectList<[Function]>;
   let Documentation = [FunctionReturnThunksDocs];
+}
+
+def LinxNoAlias : DeclOrTypeAttr {
+  let Spellings = [Keyword<"__noalias__">];
+  let Documentation = [Undocumented];
+}
+
+def LinxBLKFuncOut : DeclOrTypeAttr {
+  let Spellings = [Keyword<"__out__">];
+  let Documentation = [Undocumented];
+}
+
+def LinxBLKFuncIn : DeclOrTypeAttr {
+  let Spellings = [Keyword<"__in__">];
+  let Documentation = [Undocumented];
+}
+
+def LinxBLKFuncVEC : DeclOrTypeAttr {
+  let Spellings = [Keyword<"__vec__">];
+  let Documentation = [Undocumented];
+}
+
+def LinxBLKFuncMTC : DeclOrTypeAttr {
+  let Spellings = [Keyword<"__mtc__">];
+  let Documentation = [Undocumented];
+}
+
+def LinxBLKFuncNoSpill : InheritableAttr {
+  let Spellings = [GNU<"nospill">, Declspec<"nospill">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
 }

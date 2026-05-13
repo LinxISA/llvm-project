@@ -1270,6 +1270,8 @@ public:
 
   void EmitExternalDeclaration(const VarDecl *D);
 
+  void EmitDeclarationInOrder(const VarDecl *D);
+
   void EmitVTable(CXXRecordDecl *Class);
 
   void RefreshTypeCacheForClass(const CXXRecordDecl *Class);
@@ -1708,6 +1710,7 @@ private:
   /// addDefaultFunctionDefinitionAttributes.  Builds a set of function
   /// attributes to add to a function with the given properties.
   void getDefaultFunctionAttributes(StringRef Name, bool HasOptnone,
+                                    bool HasOptsize, bool HasMinsize,
                                     bool AttrOnCallSite,
                                     llvm::AttrBuilder &FuncAttrs);
 

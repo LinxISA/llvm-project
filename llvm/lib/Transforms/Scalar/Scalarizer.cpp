@@ -1012,6 +1012,9 @@ bool ScalarizerVisitor::finish() {
 
 PreservedAnalyses ScalarizerPass::run(Function &F, FunctionAnalysisManager &AM) {
   Module &M = *F.getParent();
+  if (!F.getFnAttribute("__mtc__").isValid() &&
+      !F.getFnAttribute("__vec__").isValid())
+    return PreservedAnalyses::none();
   unsigned ParallelLoopAccessMDKind =
       M.getContext().getMDKindID("llvm.mem.parallel_loop_access");
   DominatorTree *DT = &AM.getResult<DominatorTreeAnalysis>(F);

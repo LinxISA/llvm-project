@@ -6627,6 +6627,12 @@ ExprResult Sema::ActOnCallExpr(Scope *Scope, Expr *Fn, SourceLocation LParenLoc,
   if (LangOpts.OpenMP)
     Call = ActOnOpenMPCall(Call, Scope, LParenLoc, ArgExprs, RParenLoc,
                            ExecConfig);
+  if (LangOpts.LinxBlockC) {
+    Call = ActOnLinxBlockCCall(Call, Scope, LParenLoc, ArgExprs, RParenLoc,
+                           ExecConfig);
+    if (!Call.get())
+      return Call;
+  }
   if (LangOpts.CPlusPlus) {
     CallExpr *CE = dyn_cast<CallExpr>(Call.get());
     if (CE)
@@ -6673,7 +6679,7 @@ ExprResult Sema::BuildCallExpr(Scope *Scope, Expr *Fn, SourceLocation LParenLoc,
     // Determine whether this is a dependent call inside a C++ template,
     // in which case we won't do any semantic analysis now.
     if (Fn->isTypeDependent() || Expr::hasAnyTypeDependentArguments(ArgExprs)) {
-      if (ExecConfig) {
+      if (ExecConfig && LangOpts.CUDA) {
         return CUDAKernelCallExpr::Create(Context, Fn,
                                           cast<CallExpr>(ExecConfig), ArgExprs,
                                           Context.DependentTy, VK_PRValue,
@@ -7009,12 +7015,12 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
   unsigned NumParams = Proto ? Proto->getNumParams() : 0;
 
   CallExpr *TheCall;
-  if (Config) {
+  if (Config && LangOpts.CUDA) {
     assert(UsesADL == ADLCallKind::NotADL &&
-           "CUDAKernelCallExpr should not use ADL");
+          "CUDAKernelCallExpr should not use ADL");
     TheCall = CUDAKernelCallExpr::Create(Context, Fn, cast<CallExpr>(Config),
-                                         Args, ResultTy, VK_PRValue, RParenLoc,
-                                         CurFPFeatureOverrides(), NumParams);
+                                        Args, ResultTy, VK_PRValue, RParenLoc,
+                                        CurFPFeatureOverrides(), NumParams);
   } else {
     TheCall =
         CallExpr::Create(Context, Fn, Args, ResultTy, VK_PRValue, RParenLoc,
@@ -7042,10 +7048,11 @@ ExprResult Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
     // case, rebuild the node with enough storage. The waste of space is
     // immaterial since this only happens when some typos were corrected.
     if (CorrectedTypos && Args.size() < NumParams) {
-      if (Config)
+      if (Config && LangOpts.CUDA) {
         TheCall = CUDAKernelCallExpr::Create(
             Context, Fn, cast<CallExpr>(Config), Args, ResultTy, VK_PRValue,
             RParenLoc, CurFPFeatureOverrides(), NumParams);
+      }
       else
         TheCall =
             CallExpr::Create(Context, Fn, Args, ResultTy, VK_PRValue, RParenLoc,

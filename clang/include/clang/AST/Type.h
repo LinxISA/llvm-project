@@ -3510,7 +3510,7 @@ public:
   /// * the standard floating types float or double
   /// * a half-precision floating point type, if one is supported on the target
   static bool isValidElementType(QualType T) {
-    return T->isDependentType() ||
+    return T->isDependentType() || T->isStructureType() ||
            (T->isRealType() && !T->isBooleanType() && !T->isEnumeralType());
   }
 

@@ -285,6 +285,10 @@ def err_cyclic_alias : Error<
 def err_ifunc_resolver_return : Error<
   "ifunc resolver function must return a pointer">;
 
+def err_incomplete_inorder_conflict : Error<
+  "variable has incomplete type %0, conflict with "
+  "-femit-var-decls-inorder option">;
+
 def warn_atomic_op_misaligned : Warning<
   "misaligned atomic operation may incur "
   "significant performance penalty"

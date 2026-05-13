@@ -35,6 +35,10 @@ set(aarch64_only_files
   arm64intr.h
   )
 
+set(linx_files
+  linx_blkc.h
+  )
+
 set(cuda_files
   __clang_cuda_builtin_vars.h
   __clang_cuda_math.h
@@ -230,6 +234,7 @@ set(files
   ${webassembly_files}
   ${windows_only_files}
   ${utility_files}
+  ${linx_files}
   )
 
 set(cuda_wrapper_files
@@ -412,6 +417,7 @@ add_header_target("systemz-resource-headers" "${systemz_files}")
 add_header_target("ve-resource-headers" "${ve_files}")
 add_header_target("webassembly-resource-headers" "${webassembly_files}")
 add_header_target("x86-resource-headers" "${x86_files}")
+add_header_target("linx-resource-headers" "${linx_files}")
 
 # Other header groupings
 add_header_target("hlsl-resource-headers" ${hlsl_files})
@@ -469,6 +475,12 @@ install(
   DESTINATION ${header_install_dir}
   EXCLUDE_FROM_ALL
   COMPONENT aarch64-resource-headers)
+
+install(
+  FILES ${linx_files}
+  DESTINATION ${header_install_dir}
+  EXCLUDE_FROM_ALL
+  COMPONENT linx-resource-headers)
 
 install(
   FILES ${cuda_wrapper_files}

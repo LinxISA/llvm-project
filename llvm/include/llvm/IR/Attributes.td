@@ -64,6 +64,12 @@ def AllocSize : IntAttr<"allocsize", [FnAttr]>;
 /// inline=always.
 def AlwaysInline : EnumAttr<"alwaysinline", [FnAttr]>;
 
+/// linx access
+def LinxNoAlias : EnumAttr<"linx_noalias", [ParamAttr]>;
+
+/// linx block function argument attr
+def LinxBLKFuncOut : EnumAttr<"__out__", [ParamAttr]>;
+
 /// Function can access memory only using pointers based on its arguments.
 def ArgMemOnly : EnumAttr<"argmemonly", [FnAttr]>;
 

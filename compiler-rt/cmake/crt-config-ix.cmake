@@ -27,10 +27,11 @@ set(PPC32 powerpc powerpcspe)
 set(PPC64 powerpc64 powerpc64le)
 set(RISCV32 riscv32)
 set(RISCV64 riscv64)
+set(LINX64 linx64 linx64v4 linx64v4be linx64v5 linx64v5be)
 set(VE ve)
 
 set(ALL_CRT_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${PPC32}
-    ${PPC64} ${RISCV32} ${RISCV64} ${VE} ${HEXAGON})
+	${PPC64} ${RISCV32} ${RISCV64} ${LINX64} ${VE} ${HEXAGON})
 
 include(CompilerRTUtils)
 

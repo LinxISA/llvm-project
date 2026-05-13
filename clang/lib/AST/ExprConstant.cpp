@@ -11986,6 +11986,7 @@ bool IntExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
   }
 
   case Builtin::BI__builtin_expect:
+  case Builtin::BI__builtin_branch_hint:
   case Builtin::BI__builtin_expect_with_probability:
     return Visit(E->getArg(0));
 

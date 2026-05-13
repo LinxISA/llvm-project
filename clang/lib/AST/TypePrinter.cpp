@@ -1772,7 +1772,9 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   case attr::Pascal: OS << "pascal"; break;
   case attr::MSABI: OS << "ms_abi"; break;
   case attr::SysVABI: OS << "sysv_abi"; break;
-  case attr::RegCall: OS << "regcall"; break;
+  case attr::RegCall:
+    OS << "regcall";
+    break;
   case attr::Pcs: {
     OS << "pcs(";
    QualType t = T->getEquivalentType();
@@ -1802,6 +1804,21 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
     break;
   case attr::ArmMveStrictPolymorphism:
     OS << "__clang_arm_mve_strict_polymorphism";
+    break;
+  case attr::LinxNoAlias:
+    OS << "__noalias__";
+    break;
+  case attr::LinxBLKFuncOut:
+    OS << "__out__";
+    break;
+  case attr::LinxBLKFuncIn:
+    OS << "__in__";
+    break;
+  case attr::LinxBLKFuncVEC:
+    OS << "__vec__";
+    break;
+  case attr::LinxBLKFuncMTC:
+    OS << "__mtc__";
     break;
   }
   OS << "))";

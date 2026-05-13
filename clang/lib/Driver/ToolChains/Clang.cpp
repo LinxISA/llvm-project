@@ -11,6 +11,7 @@
 #include "Arch/AArch64.h"
 #include "Arch/ARM.h"
 #include "Arch/CSKY.h"
+#include "Arch/LinxV5.h"
 #include "Arch/M68k.h"
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
@@ -327,6 +328,10 @@ static void getTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   case llvm::Triple::riscv64:
     riscv::getRISCVTargetFeatures(D, Triple, Args, Features);
     break;
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    linxv5::getLinxV5TargetFeatures(D, Triple, Args, Features);
+    break;
   case llvm::Triple::systemz:
     systemz::getSystemZTargetFeatures(D, Args, Features);
     break;
@@ -533,6 +538,12 @@ static bool useFramePointerForTargetByDefault(const ArgList &Args,
   case llvm::Triple::ppc64le:
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+  case llvm::Triple::linx64v4:
+  case llvm::Triple::linx64v4be:
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
   case llvm::Triple::amdgcn:
   case llvm::Triple::r600:
   case llvm::Triple::csky:
@@ -1300,6 +1311,7 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
     getToolChain().AddCudaIncludeArgs(Args, CmdArgs);
   if (JA.isOffloading(Action::OFK_HIP))
     getToolChain().AddHIPIncludeArgs(Args, CmdArgs);
+  getToolChain().AddTargetPreprocessingOptions(JA, Args, CmdArgs);
 
   // If we are offloading to a target via OpenMP we need to include the
   // openmp_wrappers folder which contains alternative system headers.
@@ -1515,6 +1527,12 @@ static bool isSignedCharDefault(const llvm::Triple &Triple) {
   case llvm::Triple::ppc64le:
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+  case llvm::Triple::linx64v4:
+  case llvm::Triple::linx64v4be:
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
   case llvm::Triple::systemz:
   case llvm::Triple::xcore:
     return false;
@@ -1811,6 +1829,11 @@ void Clang::RenderTargetOptions(const llvm::Triple &EffectiveTriple,
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
     AddRISCVTargetArgs(Args, CmdArgs);
+    break;
+
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    AddLinxV5TargetArgs(Args, CmdArgs);
     break;
 
   case llvm::Triple::sparc:
@@ -2187,6 +2210,44 @@ void Clang::AddRISCVTargetArgs(const ArgList &Args,
     CmdArgs.push_back("-tune-cpu");
     CmdArgs.push_back(Name.data());
   }
+}
+
+static void SetLinxV5SmallDataLimit(const ToolChain &TC, const ArgList &Args,
+                                    ArgStringList &CmdArgs) {
+  const Driver &D = TC.getDriver();
+  const llvm::Triple &Triple = TC.getTriple();
+  // Default small data limitation is eight.
+  const char *SmallDataLimit = "8";
+  // Get small data limitation.
+  if (const auto A = Args.getLastArg(options::OPT_shared, options::OPT_fpic,
+                                     options::OPT_fPIC)) {
+    D.Diag(diag::err_drv_unsupported_opt) << A->getOption().getName();
+  } else if (Args.getLastArgValue(options::OPT_mcmodel_EQ)
+                 .equals_insensitive("large") &&
+             Triple.isLinxV5()) {
+    // Not support linker relaxation for RV64 with large code model.
+    SmallDataLimit = "0";
+    if (Args.hasArg(options::OPT_G)) {
+      D.Diag(diag::warn_drv_unsupported_sdata);
+    }
+  } else if (Arg *A = Args.getLastArg(options::OPT_G)) {
+    SmallDataLimit = A->getValue();
+  }
+  // Forward the -msmall-data-limit= option.
+  CmdArgs.push_back("-msmall-data-limit");
+  CmdArgs.push_back(SmallDataLimit);
+}
+
+void Clang::AddLinxV5TargetArgs(const ArgList &Args,
+                                ArgStringList &CmdArgs) const {
+  const llvm::Triple &Triple = getToolChain().getTriple();
+  StringRef ABIName = linxv5::getLinxV5ABI(Args, Triple);
+
+  CmdArgs.push_back("-target-abi");
+  CmdArgs.push_back(ABIName.data());
+
+  SetLinxV5SmallDataLimit(getToolChain(), Args, CmdArgs);
+  Args.AddLastArg(CmdArgs, options::OPT_mlinda_global_var_as_thread_local);
 }
 
 void Clang::AddSparcTargetArgs(const ArgList &Args,
@@ -5576,9 +5637,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   bool UseSeparateSections = isUseSeparateSections(Triple);
+  bool UseFunctionLayout = isUseFunctionLayout(Triple);
 
   if (Args.hasFlag(options::OPT_ffunction_sections,
-                   options::OPT_fno_function_sections, UseSeparateSections)) {
+                   options::OPT_fno_function_sections,
+                   UseSeparateSections || UseFunctionLayout)) {
     CmdArgs.push_back("-ffunction-sections");
   }
 
@@ -5677,6 +5740,36 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // When building with ccache, it will pass -D options to clang even on
   // preprocessed inputs and configure concludes that -fPIC is not supported.
   Args.ClaimAllArgs(options::OPT_D);
+
+  // Linx Toolchain only supports -O2 and -O3, compatible with -O4
+  // Other optimization levels are untested, report error
+  // If user don't give optimization level, default is O2
+  // Options.td O_Group includes: O0, O4, Ofast, O(others)
+  if (Triple.isLinx() || Triple.isLinxV4()) {
+    if (const Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+      if (A->getOption().matches(options::OPT_O0) ||
+          A->getOption().matches(options::OPT_Ofast)) {
+        D.Diag(diag::err_drv_unsupported_option_argument)
+            << "Optimization Level" << A->getOption().getName();
+      } else if (A->getOption().matches(options::OPT_O4)) {
+        // Let Clang handle it.
+      } else {
+        assert(A->getOption().matches(options::OPT_O) &&
+               "Unrecognized -O flag");
+        StringRef OptLevel(A->getValue());
+        if (OptLevel != "2" && OptLevel != "3") {
+          D.Diag(diag::err_drv_unsupported_option_argument)
+              << "Optimization Level"
+              << (A->getOption().getName().str() + OptLevel.str());
+        }
+      }
+    } else {
+      // When there is no optimization level,
+      // adding "-O2" to the tail of argument list by default
+      D.Diag(diag::warn_default_is_O2);
+      CmdArgs.push_back("-O2");
+    }
+  }
 
   // Manually translate -O4 to -O3; let clang reject others.
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
@@ -6041,6 +6134,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Forward -f (flag) options which we can pass directly.
   Args.AddLastArg(CmdArgs, options::OPT_femit_all_decls);
+  Args.AddLastArg(CmdArgs, options::OPT_femit_var_decls_inorder);
   Args.AddLastArg(CmdArgs, options::OPT_fheinous_gnu_extensions);
   Args.AddLastArg(CmdArgs, options::OPT_fdigraphs, options::OPT_fno_digraphs);
   Args.AddLastArg(CmdArgs, options::OPT_femulated_tls,
@@ -6579,6 +6673,28 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.addOptInFlag(CmdArgs, options::OPT_fgnu89_inline,
                     options::OPT_fno_gnu89_inline);
 
+  StringRef PatchingLevel = "none";
+  if (Arg *A = Args.getLastArg(options::OPT_flive_patching_EQ,
+                               options::OPT_flive_patching)) {
+    PatchingLevel = A->getValue();
+    if (PatchingLevel == "inline-only-static" || PatchingLevel == "inline-clone") {
+      if (PatchingLevel == "inline-only-static") {
+        CmdArgs.push_back("-mllvm");
+        CmdArgs.push_back("-disable-partial-inlining");
+        CmdArgs.push_back("-mllvm");
+        CmdArgs.push_back("-disable-ipsccp");
+        CmdArgs.push_back("-mllvm");
+        CmdArgs.push_back("-disable-argpromotion");
+      }
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-deadargelim");
+      A->render(Args, CmdArgs);
+    } else {
+      D.Diag(diag::err_drv_unsupported_option_argument)
+          << A->getOption().getName() << PatchingLevel;
+    }
+  }
+
   const Arg *InlineArg = Args.getLastArg(options::OPT_finline_functions,
                                          options::OPT_finline_hint_functions,
                                          options::OPT_fno_inline_functions);
@@ -6588,6 +6704,65 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   } else if (InlineArg) {
     InlineArg->render(Args, CmdArgs);
   }
+
+  // [BiSheng] Adaptation with HCC: add fpartial-inlining and
+  // fno-partial_inlining options.
+  if (Arg *A = Args.getLastArg(options::OPT_fno_partial_inlining,
+                               options::OPT_fpartial_inlining)) {
+    if (A->getOption().matches(options::OPT_fno_partial_inlining)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-partial-inlining");
+    } else if (A->getOption().matches(options::OPT_fpartial_inlining)) {
+      if (PatchingLevel == "inline-only-static")
+        D.Diag(diag::err_drv_argument_not_allowed_with)
+            << "-flive-patching=inline-only-static" << A->getSpelling();
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-enable-partial-inlining");
+    }
+  }
+
+  // [BiSheng] Adaptation with HCC: add fipa-cp and fno-ipa-cp options.
+  if (Arg *A = Args.getLastArg(options::OPT_fno_ipa_cp,
+                               options::OPT_fipa_cp)) {
+    if (A->getOption().matches(options::OPT_fno_ipa_cp)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-ipsccp");
+    } else if (A->getOption().matches(options::OPT_fipa_cp)) {
+      if (PatchingLevel == "inline-only-static")
+        D.Diag(diag::err_drv_argument_not_allowed_with)
+            << "-flive-patching=inline-only-static" << A->getSpelling();
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-enable-ipsccp");
+    }
+  }
+
+  // [BiSheng] Add option control DeadArgumentElimination
+  if (Arg *A = Args.getLastArg(options::OPT_fno_dae))
+    if (A->getOption().matches(options::OPT_fno_dae)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-deadargelim");
+    }
+
+  // [BiSheng] Add option control ArgumentPromotion
+  if (Arg *A = Args.getLastArg(options::OPT_fno_argpro))
+    if (A->getOption().matches(options::OPT_fno_argpro)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-argpromotion");
+    }
+
+  // [BiSheng] Add option control ConstantMerge
+  if (Arg *A = Args.getLastArg(options::OPT_fno_constmerge))
+    if (A->getOption().matches(options::OPT_fno_constmerge)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-constmerge");
+    }
+
+    // [BiSheng] Add option control ConstantMerge
+  if (Arg *A = Args.getLastArg(options::OPT_fno_globalopt))
+    if (A->getOption().matches(options::OPT_fno_globalopt)) {
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back("-disable-globalopt");
+    }
 
   // FIXME: Find a better way to determine whether the language has modules
   // support by default, or just assume that all languages do.
@@ -7849,6 +8024,15 @@ void ClangAs::AddRISCVTargetArgs(const ArgList &Args,
   CmdArgs.push_back(ABIName.data());
 }
 
+void ClangAs::AddLinxV5TargetArgs(const ArgList &Args,
+                                  ArgStringList &CmdArgs) const {
+  const llvm::Triple &Triple = getToolChain().getTriple();
+  StringRef ABIName = linxv5::getLinxV5ABI(Args, Triple);
+
+  CmdArgs.push_back("-target-abi");
+  CmdArgs.push_back(ABIName.data());
+}
+
 void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
                            const InputInfo &Output, const InputInfoList &Inputs,
                            const ArgList &Args,
@@ -8044,6 +8228,10 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
     AddRISCVTargetArgs(Args, CmdArgs);
+    break;
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    AddLinxV5TargetArgs(Args, CmdArgs);
     break;
   }
 

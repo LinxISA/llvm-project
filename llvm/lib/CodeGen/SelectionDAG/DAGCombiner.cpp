@@ -8184,6 +8184,8 @@ SDValue DAGCombiner::MatchLoadCombine(SDNode *N) {
     assert(L->hasNUsesOfValue(1, 0) && L->isSimple() &&
            !L->isIndexed() &&
            "Must be enforced by calculateByteProvider");
+    if (!L->getOffset().isUndef())
+      L->dump(&DAG);
     assert(L->getOffset().isUndef() && "Unindexed load must have undef offset");
 
     // All loads must share the same chain
@@ -12219,6 +12221,10 @@ static SDValue widenCtPop(SDNode *Extend, SelectionDAG &DAG) {
 }
 
 SDValue DAGCombiner::visitZERO_EXTEND(SDNode *N) {
+  if (TLI.isSkipCommonZextCombine(N, DAG)) {
+    return SDValue();
+  }
+
   SDValue N0 = N->getOperand(0);
   EVT VT = N->getValueType(0);
 

@@ -64,6 +64,7 @@ bool BuiltinFunctionChecker::evalCall(const CallEvent &Call,
 
   case Builtin::BI__builtin_unpredictable:
   case Builtin::BI__builtin_expect:
+  case Builtin::BI__builtin_branch_hint:
   case Builtin::BI__builtin_expect_with_probability:
   case Builtin::BI__builtin_assume_aligned:
   case Builtin::BI__builtin_addressof:

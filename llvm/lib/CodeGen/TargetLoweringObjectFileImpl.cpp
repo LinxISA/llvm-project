@@ -255,6 +255,26 @@ void TargetLoweringObjectFileELF::Initialize(MCContext &Ctx,
     break;
   case Triple::riscv32:
   case Triple::riscv64:
+  case Triple::linx64:
+  case Triple::linx64be:
+    LSDAEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
+    PersonalityEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
+                          dwarf::DW_EH_PE_sdata4;
+    TTypeEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
+                    dwarf::DW_EH_PE_sdata4;
+    CallSiteEncoding = dwarf::DW_EH_PE_udata4;
+    break;
+  case Triple::linx64v4:
+  case Triple::linx64v4be:
+    LSDAEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
+    PersonalityEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
+                          dwarf::DW_EH_PE_sdata4;
+    TTypeEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
+                    dwarf::DW_EH_PE_sdata4;
+    CallSiteEncoding = dwarf::DW_EH_PE_udata4;
+    break;
+  case Triple::linx64v5:
+  case Triple::linx64v5be:
     LSDAEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
     PersonalityEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
                           dwarf::DW_EH_PE_sdata4;

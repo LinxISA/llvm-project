@@ -17,11 +17,14 @@
 #include "llvm/Analysis/CmpInstAnalysis.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombiner.h"
 
@@ -33,6 +36,10 @@ using namespace PatternMatch;
 // How many times is a select replaced by one of its operands?
 STATISTIC(NumSel, "Number of select opts");
 
+// [BiSheng CPU] control foldGEPICmp opt and note. The default is false:
+static cl::opt<bool> EnableFoldGEPIcmp(
+    "enable-foldGEPicmp", cl::init(false), cl::Hidden,
+    cl::desc("Enable foldGEPICmp"));
 
 /// Compute Result = In1+In2, returning true if the result overflowed for this
 /// type.
@@ -843,7 +850,7 @@ Instruction *InstCombinerImpl::foldGEPICmp(GEPOperator *GEPLHS, Value *RHS,
   Value *PtrBase = GEPLHS->getOperand(0);
   // FIXME: Support vector pointer GEPs.
   if (PtrBase == RHS && GEPLHS->isInBounds() &&
-      !GEPLHS->getType()->isVectorTy()) {
+      !GEPLHS->getType()->isVectorTy() && EnableFoldGEPIcmp) {
     // ((gep Ptr, OFFSET) cmp Ptr)   ---> (OFFSET cmp 0).
     // This transformation (ignoring the base and scales) is valid because we
     // know pointers can't overflow since the gep is inbounds.  See if we can
@@ -853,8 +860,22 @@ Instruction *InstCombinerImpl::foldGEPICmp(GEPOperator *GEPLHS, Value *RHS,
     // If not, synthesize the offset the hard way.
     if (!Offset)
       Offset = EmitGEPOffset(GEPLHS);
-    return new ICmpInst(ICmpInst::getSignedPredicate(Cond), Offset,
-                        Constant::getNullValue(Offset->getType()));
+    Instruction *NI = new ICmpInst(ICmpInst::getSignedPredicate(Cond), Offset,
+                                   Constant::getNullValue(Offset->getType()));
+
+    // [BiSheng CPU] emit info when add -Rpass=instcombine
+    OptimizationRemark R = OptimizationRemark(DEBUG_TYPE, "instcombine", &I);
+    std::string Str;
+    raw_string_ostream OS(Str);
+    OS << "The following instruction is folded by foldGEPICmp during "
+       << DEBUG_TYPE << ", which may be unexpected. Please comfirm it.\n"
+       << "  origin instruction:\n"
+       << I << "\n  new instruction:\n"
+       << *NI << "\n which corresponds to code is:";
+    OS.flush();
+    R << Str;
+    ORE.emit(R);
+    return NI;
   }
 
   if (GEPLHS->isInBounds() && ICmpInst::isEquality(Cond) &&

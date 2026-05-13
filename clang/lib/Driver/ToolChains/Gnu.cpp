@@ -9,6 +9,8 @@
 #include "Gnu.h"
 #include "Arch/ARM.h"
 #include "Arch/CSKY.h"
+
+#include "Arch/LinxV5.h"
 #include "Arch/Mips.h"
 #include "Arch/PPC.h"
 #include "Arch/RISCV.h"
@@ -273,6 +275,18 @@ static const char *getLDMOption(const llvm::Triple &T, const ArgList &Args) {
     return "elf32lriscv";
   case llvm::Triple::riscv64:
     return "elf64lriscv";
+  case llvm::Triple::linx64:
+    return "elf64llinx";
+  case llvm::Triple::linx64be:
+    return "elf64blinx";
+  case llvm::Triple::linx64v4:
+    return "elf64llinxv4";
+  case llvm::Triple::linx64v4be:
+    return "elf64blinxv4";
+  case llvm::Triple::linx64v5:
+    return "elf64llinxv5";
+  case llvm::Triple::linx64v5be:
+    return "elf64blinxv5";
   case llvm::Triple::sparc:
   case llvm::Triple::sparcel:
     return "elf32_sparc";
@@ -446,6 +460,14 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back(IsBigEndian ? "-EB" : "-EL");
   }
 
+  if (Arch == llvm::Triple::linx64be) {
+    CmdArgs.push_back("-EB");
+  }
+
+  if (Arch == llvm::Triple::linx64v4be) {
+    CmdArgs.push_back("-EB");
+  }
+
   // Most Android ARM64 targets should enable the linker fix for erratum
   // 843419. Only non-Cortex-A53 devices are allowed to skip this flag.
   if (Arch == llvm::Triple::aarch64 && isAndroid) {
@@ -576,6 +598,13 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (OnlyLibstdcxxStatic)
         CmdArgs.push_back("-Bstatic");
       ToolChain.AddCXXStdlibLibArgs(Args, CmdArgs);
+
+      // TODO:Why other archs do not need to add the following two options
+      if (Triple.isLinx() && Triple.isMusl()) {
+        CmdArgs.push_back("-lc++abi");
+        CmdArgs.push_back("-lunwind");
+      }
+
       if (OnlyLibstdcxxStatic)
         CmdArgs.push_back("-Bdynamic");
     }
@@ -647,8 +676,12 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (Args.hasArg(options::OPT_fsplit_stack))
         CmdArgs.push_back("--wrap=pthread_create");
 
-      if (!Args.hasArg(options::OPT_nolibc))
+      if (!Args.hasArg(options::OPT_nolibc)) {
+        if (ToolChain.getTriple().isLinxV4() ||
+            ToolChain.getTriple().isLinxV5())
+          CmdArgs.push_back("-ljemalloc");
         CmdArgs.push_back("-lc");
+      }
 
       // Add IAMCU specific libs, if needed.
       if (IsIAMCU)
@@ -792,6 +825,19 @@ void tools::gnutools::Assembler::ConstructJob(Compilation &C,
     CmdArgs.push_back(MArchName.data());
     if (!Args.hasFlag(options::OPT_mrelax, options::OPT_mno_relax, true))
       Args.addOptOutFlag(CmdArgs, options::OPT_mrelax, options::OPT_mno_relax);
+    break;
+  }
+  case llvm::Triple::linx64v5be:
+  case llvm::Triple::linx64v5: {
+    StringRef ABIName = linxv5::getLinxV5ABI(Args, getToolChain().getTriple());
+    if (getToolChain().getArch() == llvm::Triple::linx64v5be)
+      CmdArgs.push_back("-EB");
+    CmdArgs.push_back("-mabi");
+    CmdArgs.push_back(ABIName.data());
+    StringRef MArchName =
+        linxv5::getLinxV5Arch(Args, getToolChain().getTriple());
+    CmdArgs.push_back("-march");
+    CmdArgs.push_back(MArchName.data());
     break;
   }
   case llvm::Triple::sparc:
@@ -1761,6 +1807,29 @@ static void findRISCVMultilibs(const Driver &D,
     Result.Multilibs = RISCVMultilibs;
 }
 
+static void findLinxMultilibs(const Driver &D, const llvm::Triple &TargetTriple,
+                              StringRef Path, const ArgList &Args,
+                              const DetectedMultilibs &Result) {
+  // TODO: add multi-lib support if neeeded
+  return;
+}
+
+static void findLinxV4Multilibs(const Driver &D,
+                                const llvm::Triple &TargetTriple,
+                                StringRef Path, const ArgList &Args,
+                                DetectedMultilibs &Result) {
+  // TODO: add multi-lib support if neeeded
+  return;
+}
+
+static void findLinxV5Multilibs(const Driver &D,
+                                const llvm::Triple &TargetTriple,
+                                StringRef Path, const ArgList &Args,
+                                DetectedMultilibs &Result) {
+  // TODO: add multi-lib support if neeeded
+  return;
+}
+
 static bool findBiarchMultilibs(const Driver &D,
                                 const llvm::Triple &TargetTriple,
                                 StringRef Path, const ArgList &Args,
@@ -2282,6 +2351,26 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
                                                "riscv64-linux-gnu",
                                                "riscv64-unknown-elf"};
 
+  static const char *const Linx64LibDirs[] = {"/lib64", "/lib"};
+  static const char *const Linx64Triples[] = {"linx64-unknown-linux-gnu",
+                                              "linx64-linux-gnu"};
+
+  static const char *const Linx64V4LibDirs[] = {"/lib64", "/lib"};
+  static const char *const Linx64V4Triples[] = {"linx64v4-unknown-linux-gnu",
+                                                "linx64v4-linux-gnu"};
+
+  static const char *const Linx64V4BELibDirs[] = {"/lib64", "/lib"};
+  static const char *const Linx64V4BETriples[] = {
+      "linx64v4be-unknown-linux-gnu", "linx64v4be-linux-gnu"};
+
+  static const char *const Linx64V5LibDirs[] = {"/lib64", "/lib"};
+  static const char *const Linx64V5Triples[] = {"linx64v5-unknown-linux-gnu",
+                                                "linx64v5-linux-gnu"};
+
+  static const char *const Linx64V5BELibDirs[] = {"/lib64", "/lib"};
+  static const char *const Linx64V5BETriples[] = {
+      "linx64v5be-unknown-linux-gnu", "linx64v5be-linux-gnu"};
+
   static const char *const SPARCv8LibDirs[] = {"/lib32", "/lib"};
   static const char *const SPARCv8Triples[] = {"sparc-linux-gnu",
                                                "sparcv8-linux-gnu"};
@@ -2544,6 +2633,27 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
     BiarchLibDirs.append(begin(RISCV32LibDirs), end(RISCV32LibDirs));
     BiarchTripleAliases.append(begin(RISCV32Triples), end(RISCV32Triples));
     break;
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+    LibDirs.append(begin(Linx64LibDirs), end(Linx64LibDirs));
+    TripleAliases.append(begin(Linx64Triples), end(Linx64Triples));
+    break;
+  case llvm::Triple::linx64v4:
+    LibDirs.append(begin(Linx64V4LibDirs), end(Linx64V4LibDirs));
+    TripleAliases.append(begin(Linx64V4Triples), end(Linx64V4Triples));
+    break;
+  case llvm::Triple::linx64v4be:
+    LibDirs.append(begin(Linx64V4BELibDirs), end(Linx64V4BELibDirs));
+    TripleAliases.append(begin(Linx64V4BETriples), end(Linx64V4BETriples));
+    break;
+  case llvm::Triple::linx64v5:
+    LibDirs.append(begin(Linx64V5LibDirs), end(Linx64V5LibDirs));
+    TripleAliases.append(begin(Linx64V5Triples), end(Linx64V5Triples));
+    break;
+  case llvm::Triple::linx64v5be:
+    LibDirs.append(begin(Linx64V5BELibDirs), end(Linx64V5BELibDirs));
+    TripleAliases.append(begin(Linx64V5BETriples), end(Linx64V5BETriples));
+    break;
   case llvm::Triple::sparc:
   case llvm::Triple::sparcel:
     LibDirs.append(begin(SPARCv8LibDirs), end(SPARCv8LibDirs));
@@ -2595,6 +2705,12 @@ bool Generic_GCC::GCCInstallationDetector::ScanGCCForMultilibs(
       return false;
   } else if (TargetTriple.isRISCV()) {
     findRISCVMultilibs(D, TargetTriple, Path, Args, Detected);
+  } else if (TargetTriple.isLinx()) {
+    findLinxMultilibs(D, TargetTriple, Path, Args, Detected);
+  } else if (TargetTriple.isLinxV4()) {
+    findLinxV4Multilibs(D, TargetTriple, Path, Args, Detected);
+  } else if (TargetTriple.isLinxV5()) {
+    findLinxV5Multilibs(D, TargetTriple, Path, Args, Detected);
   } else if (isMSP430(TargetArch)) {
     findMSP430Multilibs(D, TargetTriple, Path, Args, Detected);
   } else if (TargetArch == llvm::Triple::avr) {
@@ -2772,6 +2888,10 @@ Generic_GCC::Generic_GCC(const Driver &D, const llvm::Triple &Triple,
   getProgramPaths().push_back(getDriver().getInstalledDir());
   if (getDriver().getInstalledDir() != getDriver().Dir)
     getProgramPaths().push_back(getDriver().Dir);
+  if (Triple.isLinx()) {
+    // add binutils tools installed path for Linx
+    getProgramPaths().push_back(D.InstalledDir + "/linx64");
+  }
 }
 
 Generic_GCC::~Generic_GCC() {}
@@ -2863,6 +2983,11 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
   case llvm::Triple::ppc64le:
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
+  case llvm::Triple::linx64v4:
+  case llvm::Triple::linx64v4be:
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    return true;
   case llvm::Triple::sparc:
   case llvm::Triple::sparcel:
   case llvm::Triple::sparcv9:
@@ -2873,6 +2998,9 @@ bool Generic_GCC::IsIntegratedAssemblerDefault() const {
   case llvm::Triple::x86:
   case llvm::Triple::x86_64:
     return true;
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+    return false;
   default:
     return false;
   }

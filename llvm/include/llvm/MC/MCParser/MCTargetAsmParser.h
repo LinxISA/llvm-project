@@ -366,6 +366,8 @@ public:
   bool isParsingMSInlineAsm () { return ParsingMSInlineAsm; }
   void setParsingMSInlineAsm (bool Value) { ParsingMSInlineAsm = Value; }
 
+  virtual void startParsingInlineAsm() {}
+
   MCTargetOptions getTargetOptions() const { return MCOptions; }
 
   void setSemaCallback(MCAsmParserSemaCallback *Callback) {

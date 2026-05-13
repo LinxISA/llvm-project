@@ -1,0 +1,18 @@
+[Huawei][Component] <--- 50-character summary --->
+
+Offering: Bisheng
+
+<------- Detailed description of the patch, 72 characters wide. ------->
+
+# If you are cherry-picking or back-porting an open-source patch, use
+# the following instead:
+#
+# [Backport] <-- Summary from original commit --->
+#
+# Reference: <-- GitHub/Phabricator URL -->
+#
+# Originally By: <-- Author's Name -->
+#
+# <---------- Description from the original commit message. ----------->
+#
+# <---- Additional notes, e.g. conflict resolution, bug fix, etc. ----->

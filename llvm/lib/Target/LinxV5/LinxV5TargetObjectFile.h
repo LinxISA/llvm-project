@@ -1,0 +1,40 @@
+//===-- LinxV5TargetObjectFile.h - LinxV5 Object Info -*- C++ ---------*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_LIB_TARGET_LINXV5_LINXV5TARGETOBJECTFILE_H
+#define LLVM_LIB_TARGET_LINXV5_LINXV5TARGETOBJECTFILE_H
+
+#include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
+
+namespace llvm {
+
+/// This implementation is used for LinxV5 ELF targets.
+class LinxV5ELFTargetObjectFile : public TargetLoweringObjectFileELF {
+  MCSection *SmallDataSection;
+  MCSection *SmallBSSSection;
+  unsigned SSThreshold = 8;
+
+public:
+  void Initialize(MCContext &Ctx, const TargetMachine &TM) override;
+
+  /// Return true if this global address should be placed into small data/bss
+  /// section.
+  bool isGlobalInSmallSection(const GlobalObject *GO,
+                              const TargetMachine &TM) const;
+
+  MCSection *SelectSectionForGlobal(const GlobalObject *GO, SectionKind Kind,
+                                    const TargetMachine &TM) const override;
+
+  void getModuleMetadata(Module &M) override;
+
+  bool isInSmallSection(uint64_t Size) const;
+};
+
+} // end namespace llvm
+
+#endif

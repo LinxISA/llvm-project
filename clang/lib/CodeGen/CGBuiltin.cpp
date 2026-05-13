@@ -41,6 +41,7 @@
 #include "llvm/IR/IntrinsicsARM.h"
 #include "llvm/IR/IntrinsicsBPF.h"
 #include "llvm/IR/IntrinsicsHexagon.h"
+#include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/IR/IntrinsicsPowerPC.h"
 #include "llvm/IR/IntrinsicsR600.h"
@@ -544,6 +545,21 @@ static Value *emitUnaryBuiltin(CodeGenFunction &CGF, const CallExpr *E,
   return CGF.Builder.CreateCall(F, Src0, Name);
 }
 
+// Emit a simple mangled intrinsic that has 1 argument and a return type
+// matching the argument type.
+static Value *emitGetTilePtrBuiltin(CodeGenFunction &CGF, const CallExpr *E,
+                                    unsigned IntrinsicID,
+                                    llvm::StringRef Name = "") {
+  llvm::Value *Src0 = CGF.EmitScalarExpr(E->getArg(0));
+
+  QualType RetQualType = E->getType();
+  llvm::Type *RetType = CGF.ConvertType(RetQualType);
+
+  Function *F = CGF.CGM.getIntrinsic(IntrinsicID, {RetType, Src0->getType()});
+
+  return CGF.Builder.CreateCall(F, Src0, Name);
+}
+
 // Emit an intrinsic that has 2 operands of the same type as its result.
 static Value *emitBinaryBuiltin(CodeGenFunction &CGF,
                                 const CallExpr *E,
@@ -665,6 +681,121 @@ static llvm::Value *EmitOverflowIntrinsic(CodeGenFunction &CGF,
   llvm::Value *Tmp = CGF.Builder.CreateCall(Callee, {X, Y});
   Carry = CGF.Builder.CreateExtractValue(Tmp, 1);
   return CGF.Builder.CreateExtractValue(Tmp, 0);
+}
+
+static llvm::Intrinsic::ID parseLinxVCallIntID(const CallExpr *E) {
+  unsigned NumMatrixOuts = 0, NumMatrixIns = 0;
+  const Expr *TileFn = E->getArg(0);
+  const ImplicitCastExpr *Cast = dyn_cast<ImplicitCastExpr>(TileFn);
+  const DeclRefExpr *Ref = dyn_cast<DeclRefExpr>(Cast->getSubExpr());
+  const FunctionDecl *FD = dyn_cast<FunctionDecl>(Ref->getDecl());
+  bool isMCall = FD->hasAttr<LinxBLKFuncMTCAttr>();
+  for (unsigned i = 0; i < FD->getNumParams(); ++i) {
+    const ParmVarDecl *Arg = FD->getParamDecl(i);
+    if (!isa<ExtVectorType>(Arg->getOriginalType().getCanonicalType()))
+      continue;
+    if (Arg->hasAttr<LinxBLKFuncOutAttr>()) {
+      NumMatrixOuts++;
+    } else if (Arg->hasAttr<LinxBLKFuncInAttr>())
+      NumMatrixIns++;
+  }
+  auto getVCallIntId = [NumMatrixOuts, NumMatrixIns]() {
+    int dNum = NumMatrixOuts;
+    int uNum = NumMatrixIns;
+    Twine IntName = Twine("llvm.linx.vcall.par.") + std::to_string(dNum) + "d" +
+                    std::to_string(uNum) + "u";
+    return Function::lookupIntrinsicID(IntName.str());
+  };
+
+  auto getMCallIntId = [NumMatrixIns, NumMatrixOuts]() {
+    int dNum = NumMatrixOuts;
+    int uNum = NumMatrixIns;
+    Twine IntName = Twine("llvm.linx.mcall.par.") + std::to_string(dNum) + "d" +
+                    std::to_string(uNum) + "u";
+    return Function::lookupIntrinsicID(IntName.str());
+  };
+
+  return isMCall ? getMCallIntId() : getVCallIntId();
+}
+
+static void parseLinxVCallIntParams(const CallExpr *E,
+                                    SmallVectorImpl<const Expr *> &Rets,
+                                    SmallVectorImpl<const Expr *> &Args) {
+  const Expr *TileFn = E->getArg(0);
+  const ImplicitCastExpr *Cast = dyn_cast<ImplicitCastExpr>(TileFn);
+  const DeclRefExpr *Ref = dyn_cast<DeclRefExpr>(Cast->getSubExpr());
+  const FunctionDecl *FD = dyn_cast<FunctionDecl>(Ref->getDecl());
+  std::set<unsigned> OutputIdx;
+  std::set<unsigned> InputIdx;
+  for (unsigned i = 0; i < FD->getNumParams(); ++i) {
+    const ParmVarDecl *Arg = FD->getParamDecl(i);
+    if (!isa<ExtVectorType>(Arg->getOriginalType().getCanonicalType()))
+      continue;
+    if (Arg->hasAttr<LinxBLKFuncOutAttr>()) {
+      OutputIdx.insert(i);
+    } else {
+      InputIdx.insert(i);
+    }
+  }
+  Args.push_back(E->getArg(0)); // tileop
+  Args.push_back(E->getArg(1)); // dim x
+  Args.push_back(E->getArg(2)); // dim y
+  Args.push_back(E->getArg(3)); // dim z
+  const Expr *const *RealArgs = E->getArgs() + 4;
+
+  // Reorder the argument. Move all scalar args behind all matrix
+  // args. And keep its self-order. It's OK because the matrix argument
+  // always takes different abi register class to the scalar argument.
+  // FIXME: Maybe generate call is a better way.
+  SmallVector<const Expr *> SArgs;
+  for (unsigned i = 0; i < E->getNumArgs() - 4; ++i) {
+    if (OutputIdx.count(i))
+      Rets.push_back(RealArgs[i]);
+    else if (InputIdx.count(i))
+      Args.push_back(RealArgs[i]);
+    else
+      SArgs.push_back(RealArgs[i]);
+  }
+
+  Args.append(SArgs);
+}
+
+static Value *emitLinxVCallInt(CodeGenFunction &CGF, llvm::Intrinsic::ID IntID,
+                               SmallVectorImpl<const Expr *> &Rets,
+                               SmallVectorImpl<const Expr *> &Args) {
+  SmallVector<LValue> RetVals;
+  SmallVector<llvm::Type *> Tys; // overloaded type
+
+  for (int i = 0; i < Rets.size(); ++i) {
+    RetVals.push_back(CGF.EmitLValue(Rets[i]));
+    Tys.push_back(CGF.getTypes().ConvertType(Rets[i]->getType()));
+  }
+
+  SmallVector<Value *> ArgVals;
+  for (size_t i = 0; i < Args.size(); ++i) {
+    auto *Arg = Args[i];
+    Value *Val;
+    if (Arg->isGLValue())
+      Val = CGF.EmitLValue(Arg).getPointer(CGF);
+    else
+      Val = CGF.EmitScalarExpr(Arg);
+    ArgVals.push_back(Val);
+    if (Val->getType()->isVectorTy())
+      Tys.push_back(Val->getType());
+  }
+
+  Function *Int = CGF.CGM.getIntrinsic(IntID, Tys);
+  Value *Call = CGF.Builder.CreateCall(Int, ArgVals, "");
+
+  if (Rets.size() == 1) {
+    CGF.EmitStoreOfScalar(Call, RetVals[0]);
+  } else {
+    for (int i = 0; i < Rets.size(); ++i) {
+      Value *Ret = CGF.Builder.CreateExtractValue(Call, i);
+      CGF.EmitStoreOfScalar(Ret, RetVals[i]);
+    }
+  }
+  return Call;
 }
 
 static Value *emitRangedBuiltin(CodeGenFunction &CGF,
@@ -2748,6 +2879,25 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
         Builder.CreateCall(FnExpect, {ArgValue, ExpectedValue}, "expval");
     return RValue::get(Result);
   }
+  case Builtin::BI__builtin_branch_hint: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    llvm::Type *ArgType = ArgValue->getType();
+
+    Value *ExpectedValue = EmitScalarExpr(E->getArg(1));
+    if (CGM.getCodeGenOpts().OptimizationLevel == 0)
+      return RValue::get(ArgValue);
+
+    Function *FnExpect = CGM.getIntrinsic(Intrinsic::expect, ArgType);
+    Value *Result =
+        Builder.CreateCall(FnExpect, {ArgValue, ExpectedValue}, "expval");
+
+    if (auto *InstCall = dyn_cast<Instruction>(Result)) {
+      LLVMContext &Context = CGM.getLLVMContext();
+      InstCall->setMetadata("linx_branch_hint",
+                            llvm::MDNode::get(Context, None));
+    }
+    return RValue::get(Result);
+  }
   case Builtin::BI__builtin_expect_with_probability: {
     Value *ArgValue = EmitScalarExpr(E->getArg(0));
     llvm::Type *ArgType = ArgValue->getType();
@@ -3159,6 +3309,31 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
   case Builtin::BI__builtin_reduce_and:
     return RValue::get(emitUnaryBuiltin(
         *this, E, llvm::Intrinsic::vector_reduce_and, "rdx.and"));
+
+  case Builtin::BI__linx_vcall_par: {
+    llvm::Intrinsic::ID IntID = parseLinxVCallIntID(E);
+    SmallVector<const Expr *> NewRets;
+    SmallVector<const Expr *> NewArgs;
+    parseLinxVCallIntParams(E, NewRets, NewArgs);
+
+    return RValue::get(emitLinxVCallInt(*this, IntID, NewRets, NewArgs));
+  }
+
+  case Builtin::BIblkv_get_tile_ptr:
+    return RValue::get(
+        emitGetTilePtrBuiltin(*this, E, llvm::Intrinsic::blkv_get_tile_ptr));
+
+  case Builtin::BIblkv_get_index_x:
+    return RValue::get(Builder.CreateCall(
+        CGM.getIntrinsic(llvm::Intrinsic::blkv_get_index_x)));
+
+  case Builtin::BIblkv_get_index_y:
+    return RValue::get(Builder.CreateCall(
+        CGM.getIntrinsic(llvm::Intrinsic::blkv_get_index_y)));
+
+  case Builtin::BIblkv_get_index_z:
+    return RValue::get(Builder.CreateCall(
+        CGM.getIntrinsic(llvm::Intrinsic::blkv_get_index_z)));
 
   case Builtin::BI__builtin_matrix_transpose: {
     auto *MatrixTy = E->getArg(0)->getType()->castAs<ConstantMatrixType>();
@@ -5433,6 +5608,9 @@ static Value *EmitTargetArchBuiltinExpr(CodeGenFunction *CGF,
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
     return CGF->EmitRISCVBuiltinExpr(BuiltinID, E, ReturnValue);
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    return CGF->EmitLinxV5BuiltinExpr(BuiltinID, E, ReturnValue);
   default:
     return nullptr;
   }
@@ -19065,6 +19243,268 @@ Value *CodeGenFunction::EmitHexagonBuiltinExpr(unsigned BuiltinID,
   } // switch
 
   return nullptr;
+}
+
+llvm::Value *CodeGenFunction::EmitLinxV5GetSysReg(const CallExpr *E,
+                                                  llvm::Intrinsic::ID ID) {
+  SmallVector<llvm::Value *> Args;
+  Args.push_back(EmitScalarExpr(E->getArg(0)));
+  Args.push_back(EmitScalarExpr(E->getArg(1)));
+
+  SmallVector<llvm::Type *> OverloadTypes;
+  llvm::Function *F = CGM.getIntrinsic(ID, OverloadTypes);
+  return Builder.CreateCall(F, Args, "");
+}
+
+// BLK built-in format:
+// arg0, arg1, arg2: Dim-X, Dim-Y, Dim-Z
+// arg3, arg4: Tile ElementType-A, Tile ElementType-B
+// arg5: Tile Output
+// arg6, arg7, (arg8): Tile Input
+llvm::Value *CodeGenFunction::EmitLinxV5BLK(const CallExpr *E,
+                                            llvm::Intrinsic::ID ID,
+                                            unsigned TileNum) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned i = 0, e = 5; i != e; ++i) {
+      Value *UInt64Value = Builder.CreateIntCast(EmitScalarExpr(E->getArg(i)),
+                                                 Builder.getInt64Ty(), false);
+      Args.push_back(UInt64Value);
+  }
+
+  SmallVector<llvm::Type *> OverloadTypes;
+  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+  for (unsigned i = 0, e = TileNum; i != e; ++i) {
+      unsigned TileIndex = i + 6;
+      Args.push_back(EmitScalarExpr(E->getArg(TileIndex)));
+      OverloadTypes.push_back(ConvertType(E->getArg(TileIndex)->getType()));
+  }
+
+  llvm::Function *F = CGM.getIntrinsic(ID, OverloadTypes);
+  Value *Call = Builder.CreateCall(F, Args, "");
+  EmitStoreOfScalar(Call, EmitLValue(E->getArg(5)));
+
+  return Call;
+}
+
+// BLKMX built-in format:
+// arg0, arg1, arg2: Dim-M, Dim-N, Dim-K
+// arg3, arg4: AType, BType
+// arg5: Tile Output
+// arg6, arg7, ...: Tile Input
+llvm::Value *CodeGenFunction::EmitLinxV5BLKMX(const CallExpr *E,
+                                              llvm::Intrinsic::ID ID,
+                                              unsigned TileNum) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned i = 0, e = 5; i != e; ++i) {
+      Value *UInt64Value = Builder.CreateIntCast(EmitScalarExpr(E->getArg(i)),
+                                                 Builder.getInt64Ty(), false);
+      Args.push_back(UInt64Value);
+  }
+
+  SmallVector<llvm::Type *> OverloadTypes;
+  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+
+  for (unsigned i = 0, e = TileNum; i != e; ++i) {
+      unsigned TileIndex = i + 6;
+      Args.push_back(EmitScalarExpr(E->getArg(TileIndex)));
+      OverloadTypes.push_back(ConvertType(E->getArg(TileIndex)->getType()));
+  }
+
+  llvm::Function *F = CGM.getIntrinsic(ID, OverloadTypes);
+  Value *Call = Builder.CreateCall(F, Args, "");
+  EmitStoreOfScalar(Call, EmitLValue(E->getArg(5)));
+
+  return Call;
+}
+
+llvm::Value *CodeGenFunction::EmitLinxV5FPArith(const CallExpr *E,
+                                                llvm::Intrinsic::ID ID) {
+  Value *Val = EmitScalarExpr(E->getArg(0));
+
+  Function *Callee = CGM.getIntrinsic(ID, Val->getType());
+  return Builder.CreateCall(Callee, Val);
+}
+
+llvm::Value *CodeGenFunction::EmitLinxV5TwoSrcFloat(const CallExpr *E,
+                                                    llvm::Intrinsic::ID ID) {
+  Value *LHS = EmitScalarExpr(E->getArg(0));
+  Value *RHS = EmitScalarExpr(E->getArg(1));
+
+  Function *Callee = CGM.getIntrinsic(ID, LHS->getType());
+  return Builder.CreateCall(Callee, {LHS, RHS});
+}
+
+llvm::Value *CodeGenFunction::EmitLinxV5SHFL(const CallExpr *E,
+                                            llvm::Intrinsic::ID ID) {
+    Value *LHS = EmitScalarExpr(E->getArg(0));
+    Value *RHS = EmitScalarExpr(E->getArg(1));
+
+    Function *Callee = CGM.getIntrinsic(ID, {LHS->getType(), RHS->getType()});
+    return Builder.CreateCall(Callee, {LHS, RHS});
+}
+
+llvm::Value *CodeGenFunction::EmitLinxV5Reduce(const CallExpr *E,
+                                               llvm::Intrinsic::ID ID) {
+    Value *Val = EmitScalarExpr(E->getArg(0));
+
+    Function *Callee = CGM.getIntrinsic(ID, Val->getType());
+    return Builder.CreateCall(Callee, Val);
+}
+
+// BLK built-in format:
+// arg0, arg1, arg2: LB0, LB1, LB2
+// arg3, arg4, arg5: DataType, PadValue, Layout
+// arg6: Tile Output
+// arg7: DType *
+// arg8: Stride
+llvm::Value *CodeGenFunction::EmitLinxV5TLoad(const CallExpr *E) {
+    SmallVector<llvm::Value *> Args;
+    for (unsigned i = 0, e = 6; i != e; ++i) {
+      Value *UInt64Value = Builder.CreateIntCast(EmitScalarExpr(E->getArg(i)),
+                                                 Builder.getInt64Ty(), false);
+      Args.push_back(UInt64Value);
+    }
+
+    SmallVector<llvm::Type *> OverloadTypes;
+    OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+
+    Value *PtrVal = EmitScalarExpr(E->getArg(7));
+    Args.push_back(PtrVal);
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(8)),
+                                         Builder.getInt64Ty(), false));
+
+    llvm::Function *F =
+        CGM.getIntrinsic(Intrinsic::linx_blk_tload, OverloadTypes);
+    Value *Call = Builder.CreateCall(F, Args, "");
+    EmitStoreOfScalar(Call, EmitLValue(E->getArg(6)));
+
+    return Call;
+}
+
+// BLK built-in format:
+// arg0, arg1, arg2: LB0, LB1, LB2
+// arg3, arg4: DataType, Layout
+// arg5: DType *
+// arg6: Stride
+// arg7: Tile Input
+llvm::Value *CodeGenFunction::EmitLinxV5TStore(const CallExpr *E) {
+    SmallVector<llvm::Value *> Args;
+    for (unsigned i = 0, e = 5; i != e; ++i) {
+      Value *UInt64Value = Builder.CreateIntCast(EmitScalarExpr(E->getArg(i)),
+                                                 Builder.getInt64Ty(), false);
+      Args.push_back(UInt64Value);
+    }
+
+    Value *PtrVal = EmitScalarExpr(E->getArg(5));
+    Args.push_back(PtrVal);
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(6)),
+                                         Builder.getInt64Ty(), false));
+
+    SmallVector<llvm::Type *> OverloadTypes;
+    Args.push_back(EmitScalarExpr(E->getArg(7)));
+    OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
+
+    llvm::Function *F =
+        CGM.getIntrinsic(Intrinsic::linx_blk_tstore, OverloadTypes);
+    Value *Call = Builder.CreateCall(F, Args, "");
+
+    return Call;
+}
+
+// blk_acccvt:
+// arg0, arg1: M, N
+// arg2, arg3, arg4, arg5: SrcType, DstType, Layout, canon
+// arg6: out tile
+// arg7: acc tile
+llvm::Value *CodeGenFunction::EmitLinxV5ACCCVT(const CallExpr *E) {
+    SmallVector<llvm::Value *> Args;
+    SmallVector<llvm::Type *> OverloadTypes;
+    for (unsigned i = 0, e = 6; i != e; ++i) {
+      Value *UInt64Value = Builder.CreateIntCast(EmitScalarExpr(E->getArg(i)),
+                                                 Builder.getInt64Ty(), false);
+      Args.push_back(UInt64Value);
+    }
+
+    Args.push_back(EmitScalarExpr(E->getArg(7)));
+    OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+    OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
+
+    llvm::Function *F =
+        CGM.getIntrinsic(Intrinsic::linx_blk_acccvt, OverloadTypes);
+    Value *Call = Builder.CreateCall(F, Args, "");
+    EmitStoreOfScalar(Call, EmitLValue(E->getArg(6)));
+
+    return Call;
+}
+
+Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
+                                              const CallExpr *E,
+                                              ReturnValueSlot ReturnValue) {
+  SmallVector<llvm::Value *> Ops;
+  SmallVector<llvm::Type *> OverloadTypes;
+  llvm::Intrinsic::ID ID = Intrinsic::not_intrinsic;
+
+  switch (BuiltinID) {
+  default:
+      llvm_unreachable("unexpected builtin ID");
+  case LinxV5::BI__builtin_linx_get_system_reg:
+      ID = Intrinsic::linx_get_sysreg;
+      return EmitLinxV5GetSysReg(E, ID);
+  case LinxV5::BIblk_matmul:
+      ID = Intrinsic::linx_blk_matmul;
+      return EmitLinxV5BLK(E, ID, 2);
+  case LinxV5::BIblk_matmul_ac:
+      ID = Intrinsic::linx_blk_matmul_ac;
+      return EmitLinxV5BLK(E, ID, 3);
+  case LinxV5::BIblk_matmulmx:
+      ID = Intrinsic::linx_blk_matmulmx;
+      return EmitLinxV5BLKMX(E, ID, 4);
+  case LinxV5::BIblk_matmulmxb:
+      ID = Intrinsic::linx_blk_matmulmxb;
+      return EmitLinxV5BLKMX(E, ID, 3);
+  case LinxV5::BIblk_matmulmx_ac:
+      ID = Intrinsic::linx_blk_matmulmx_ac;
+      return EmitLinxV5BLKMX(E, ID, 5);
+  case LinxV5::BIblk_matmulmxb_ac:
+      ID = Intrinsic::linx_blk_matmulmxb_ac;
+      return EmitLinxV5BLKMX(E, ID, 4);
+  case LinxV5::BIblkv_fabs:
+      ID = Intrinsic::linx_blkv_fabs;
+      return EmitLinxV5FPArith(E, ID);
+  case LinxV5::BIblkv_fsqrt:
+      ID = Intrinsic::linx_blkv_fsqrt;
+      return EmitLinxV5FPArith(E, ID);
+  case LinxV5::BIblkv_fexp:
+      ID = Intrinsic::linx_blkv_fexp;
+      return EmitLinxV5FPArith(E, ID);
+  case LinxV5::BIblkv_max:
+      ID = Intrinsic::linx_blkv_max;
+      return EmitLinxV5TwoSrcFloat(E, ID);
+  case LinxV5::BIblkv_min:
+      ID = Intrinsic::linx_blkv_min;
+      return EmitLinxV5TwoSrcFloat(E, ID);
+  case LinxV5::BIblkv_rdmax:
+      ID = Intrinsic::linx_blkv_rdmax;
+      return EmitLinxV5Reduce(E, ID);
+  case LinxV5::BIblkv_rdmin:
+      ID = Intrinsic::linx_blkv_rdmin;
+      return EmitLinxV5Reduce(E, ID);
+  case LinxV5::BIblkv_rdadd:
+      ID = Intrinsic::linx_blkv_rdadd;
+      return EmitLinxV5Reduce(E, ID);
+  case LinxV5::BIblkv_rdor:
+      ID = Intrinsic::linx_blkv_rdor;
+      return EmitLinxV5Reduce(E, ID);
+  case LinxV5::BIblkv_shuffle_bfly:
+      ID = Intrinsic::linx_shuffle_bfly;
+      return EmitLinxV5SHFL(E, ID);
+  case LinxV5::BIblk_tload:
+      return EmitLinxV5TLoad(E);
+  case LinxV5::BIblk_tstore:
+      return EmitLinxV5TStore(E);
+  case LinxV5::BIblk_acccvt:
+      return EmitLinxV5ACCCVT(E);
+  }
 }
 
 Value *CodeGenFunction::EmitRISCVBuiltinExpr(unsigned BuiltinID,

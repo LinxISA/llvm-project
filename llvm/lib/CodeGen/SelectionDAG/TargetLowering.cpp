@@ -812,6 +812,9 @@ SDValue TargetLowering::SimplifyMultipleUseDemandedBits(
   case ISD::SIGN_EXTEND_INREG: {
     // If none of the extended bits are demanded, eliminate the sextinreg.
     SDValue Op0 = Op.getOperand(0);
+    const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+    if (TLI.isSExtFree(Op0))
+      break;
     EVT ExVT = cast<VTSDNode>(Op.getOperand(1))->getVT();
     unsigned ExBits = ExVT.getScalarSizeInBits();
     if (DemandedBits.getActiveBits() <= ExBits)

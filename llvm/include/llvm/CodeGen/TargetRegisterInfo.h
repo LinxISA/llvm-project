@@ -1078,11 +1078,27 @@ public:
     return false;
   }
 
+  /// return false to disable RS_Split stage of RA
+  virtual bool
+  allowRASplit(const MachineFunction &MF, const LiveInterval &VirtReg) const {
+    return true;
+  }
+
   /// When prioritizing live ranges in register allocation, if this hook returns
   /// true then the AllocationPriority of the register class will be treated as
   /// more important than whether the range is local to a basic block or global.
   virtual bool
   regClassPriorityTrumpsGlobalness(const MachineFunction &MF) const {
+    return false;
+  }
+
+  /// Some subtarget like Linx could not use only a single RegClass to
+  /// spill/reload. Instead, other RegClass regs are generated. We need
+  /// to tell RA not to mark these regs as RS_Done, it needs a full stage
+  /// RA.
+  virtual bool
+  shouldDoFullStageRAFromSpill(Register NewVReg, Register Spill,
+                               const MachineRegisterInfo *MRI) const {
     return false;
   }
 

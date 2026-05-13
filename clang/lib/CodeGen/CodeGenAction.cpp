@@ -454,6 +454,7 @@ namespace clang {
     /// Specialized handler for misexpect warnings.
     /// Note that misexpect remarks are emitted through ORE
     void MisExpectDiagHandler(const llvm::DiagnosticInfoMisExpect &D);
+    void BadOptimizationDiagHandler(const llvm::DiagnosticInfoBadOptimization &D);
   };
 
   void BackendConsumer::anchor() {}
@@ -854,6 +855,25 @@ void BackendConsumer::MisExpectDiagHandler(
         << Filename << Line << Column;
 }
 
+void BackendConsumer::BadOptimizationDiagHandler(
+    const llvm::DiagnosticInfoBadOptimization &D) {
+  StringRef Filename;
+  unsigned Line, Column;
+  bool BadDebugInfo = false;
+  FullSourceLoc Loc =
+      getBestLocationFromDebugLoc(D, BadDebugInfo, Filename, Line, Column);
+
+  Diags.Report(Loc, diag::warn_usr_message) << D.getMsg();
+
+  if (BadDebugInfo)
+    // If we were not able to translate the file:line:col information
+    // back to a SourceLocation, at least emit a note stating that
+    // we could not translate this location. This can happen in the
+    // case of #line directives.
+    Diags.Report(Loc, diag::note_fe_backend_invalid_loc)
+        << Filename << Line << Column;
+}
+
 /// This function is invoked when the backend needs
 /// to report something to the user.
 void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
@@ -930,6 +950,9 @@ void BackendConsumer::DiagnosticHandlerImpl(const DiagnosticInfo &DI) {
     return;
   case llvm::DK_MisExpect:
     MisExpectDiagHandler(cast<DiagnosticInfoMisExpect>(DI));
+    return;
+  case llvm::DK_BadOptimization:
+    BadOptimizationDiagHandler(cast<DiagnosticInfoBadOptimization>(DI));
     return;
   default:
     // Plugin IDs are not bound to any value as they are set dynamically.

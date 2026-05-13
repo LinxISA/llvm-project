@@ -117,6 +117,7 @@ class TargetRegisterInfo;
     bool EnableTailMerge;
     bool EnableHoistCommonCode;
     bool UpdateLiveIns;
+    bool IsLinx64;
     unsigned MinCommonTailLength;
     const TargetInstrInfo *TII;
     const MachineRegisterInfo *MRI;

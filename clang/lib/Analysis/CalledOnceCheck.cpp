@@ -357,6 +357,7 @@ public:
     // that we are likely to see in conditions.
     switch (CE->getBuiltinCallee()) {
     case Builtin::BI__builtin_expect:
+    case Builtin::BI__builtin_branch_hint:
     case Builtin::BI__builtin_expect_with_probability: {
       assert(CE->getNumArgs() >= 2);
 

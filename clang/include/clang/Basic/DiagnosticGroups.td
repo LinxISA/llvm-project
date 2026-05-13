@@ -248,6 +248,8 @@ def Documentation : DiagGroup<"documentation",
 
 def EmptyBody : DiagGroup<"empty-body">;
 def Exceptions : DiagGroup<"exceptions">;
+def DuplicatedCond : DiagGroup<"duplicated-cond">;
+def DuplicatedBranches : DiagGroup<"duplicated-branches">;
 def DeclarationAfterStatement : DiagGroup<"declaration-after-statement">;
 
 def GNUEmptyInitializer : DiagGroup<"gnu-empty-initializer">;
@@ -473,7 +475,7 @@ def MaxUnsignedZero : DiagGroup<"max-unsigned-zero">;
 def MissingBraces : DiagGroup<"missing-braces">;
 def MissingDeclarations: DiagGroup<"missing-declarations">;
 def : DiagGroup<"missing-format-attribute">;
-def : DiagGroup<"missing-include-dirs">;
+def MissingIncludeDirs : DiagGroup<"missing-include-dirs">;
 def MissingNoreturn : DiagGroup<"missing-noreturn">;
 def MultiChar : DiagGroup<"multichar">;
 def : DiagGroup<"nested-externs">;
@@ -547,6 +549,7 @@ def ObjCPointerIntrospect : DiagGroup<"deprecated-objc-pointer-introspection", [
 def ObjCMultipleMethodNames : DiagGroup<"objc-multiple-method-names">;
 def ObjCFlexibleArray : DiagGroup<"objc-flexible-array">;
 def ObjCBoxing : DiagGroup<"objc-boxing">;
+def OldStyleDeclaration : DiagGroup<"old-style-declaration">;
 def CompletionHandler : DiagGroup<"completion-handler">;
 def CalledOnceParameter : DiagGroup<"called-once-parameter", [CompletionHandler]>;
 def OpenCLUnsupportedRGBA: DiagGroup<"opencl-unsupported-rgba">;
@@ -567,7 +570,8 @@ def PointerArith : DiagGroup<"pointer-arith", [GNUPointerArith]>;
 def PoundWarning : DiagGroup<"#warnings">;
 def PoundPragmaMessage : DiagGroup<"#pragma-messages">,
                          DiagCategory<"#pragma message Directive">;
-def : DiagGroup<"redundant-decls">;
+def RedundantDecls : DiagGroup<"redundant-decls">;
+def RedundantDeclsForInclude : DiagGroup<"redundant-decls-include">;
 def RedeclaredClassMember : DiagGroup<"redeclared-class-member">;
 def GNURedeclaredEnum : DiagGroup<"gnu-redeclared-enum">;
 def RedundantMove : DiagGroup<"redundant-move">;
@@ -601,7 +605,7 @@ def ShadowAll : DiagGroup<"shadow-all", [Shadow, ShadowFieldInConstructor,
 def Shorten64To32 : DiagGroup<"shorten-64-to-32">;
 def : DiagGroup<"sign-promo">;
 def SignCompare : DiagGroup<"sign-compare">;
-def : DiagGroup<"switch-default">;
+def SwitchDefault : DiagGroup<"switch-default">;
 def : DiagGroup<"synth">;
 def SizeofArrayArgument : DiagGroup<"sizeof-array-argument">;
 def SizeofArrayDecay : DiagGroup<"sizeof-array-decay">;
@@ -979,6 +983,7 @@ def Extra : DiagGroup<"extra", [
     EmptyInitStatement,
     StringConcatation,
     FUseLdPath,
+    OldStyleDeclaration,
   ]>;
 
 def Most : DiagGroup<"most", [
@@ -1380,3 +1385,5 @@ def BranchProtection : DiagGroup<"branch-protection">;
 // HLSL diagnostic groups
 // Warnings for HLSL Clang extensions
 def HLSLExtension : DiagGroup<"hlsl-extensions">;
+
+def LindaGlobalVarDecl : DiagGroup<"linda-global-var-scope-decl">;

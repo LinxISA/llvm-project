@@ -51,8 +51,8 @@ using TreePatternNodePtr = std::shared_ptr<TreePatternNode>;
 /// the storage and use std::array as the bit container.
 struct MachineValueTypeSet {
   static_assert(std::is_same<std::underlying_type<MVT::SimpleValueType>::type,
-                             uint8_t>::value,
-                "Change uint8_t here to the SimpleValueType's type");
+                             uint16_t>::value,
+                "Change uint16_t here to the SimpleValueType's type");
   static unsigned constexpr Capacity = std::numeric_limits<uint8_t>::max()+1;
   using WordType = uint64_t;
   static unsigned constexpr WordWidth = CHAR_BIT*sizeof(WordType);

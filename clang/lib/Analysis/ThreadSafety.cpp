@@ -1391,11 +1391,11 @@ const CallExpr* ThreadSafetyAnalyzer::getTrylockCallExpr(const Stmt *Cond,
     return nullptr;
 
   if (const auto *CallExp = dyn_cast<CallExpr>(Cond)) {
-    if (CallExp->getBuiltinCallee() == Builtin::BI__builtin_expect)
+    if (CallExp->getBuiltinCallee() == Builtin::BI__builtin_expect ||
+        CallExp->getBuiltinCallee() == Builtin::BI__builtin_branch_hint)
       return getTrylockCallExpr(CallExp->getArg(0), C, Negate);
     return CallExp;
-  }
-  else if (const auto *PE = dyn_cast<ParenExpr>(Cond))
+  } else if (const auto *PE = dyn_cast<ParenExpr>(Cond))
     return getTrylockCallExpr(PE->getSubExpr(), C, Negate);
   else if (const auto *CE = dyn_cast<ImplicitCastExpr>(Cond))
     return getTrylockCallExpr(CE->getSubExpr(), C, Negate);

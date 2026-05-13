@@ -441,6 +441,7 @@ class InstructionEncoding {
 
   // The "namespace" in which this instruction exists, on targets like ARM
   // which multiple ISA namespaces exist.
+  list<string> DecoderNamespaces = [];
   string DecoderNamespace = "";
 
   // List of predicates which will be turned into isel matching code.

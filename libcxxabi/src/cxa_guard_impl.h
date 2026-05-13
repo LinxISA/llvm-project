@@ -154,6 +154,12 @@ uint32_t PlatformThreadID() {
   static_assert(sizeof(mach_port_t) == sizeof(uint32_t), "");
   return static_cast<uint32_t>(pthread_mach_thread_np(std::__libcpp_thread_get_current_id()));
 }
+#elif defined(LINX6188_DRB) && defined(_LIBCPP_HAS_THREAD_API_PTHREAD)
+extern "C" uint32_t DRB_GetCoreID(void);
+uint32_t PlatformThreadID() {
+  static_assert(sizeof(pid_t) == sizeof(uint32_t), "");
+  return DRB_GetCoreID();
+}
 #elif defined(SYS_gettid) && defined(_LIBCPP_HAS_THREAD_API_PTHREAD)
 uint32_t PlatformThreadID() {
   static_assert(sizeof(pid_t) == sizeof(uint32_t), "");

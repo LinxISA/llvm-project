@@ -3151,6 +3151,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
   while (true) {
     bool isInvalid = false;
     bool isStorageClass = false;
+    bool isFunctionSpecifier = false;
     const char *PrevSpec = nullptr;
     unsigned DiagID = 0;
 
@@ -3763,6 +3764,16 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       (void)ConsumeToken();
       continue;
 
+    case tok::kw___noalias__:
+    case tok::kw___out__:
+    case tok::kw___in__:
+    case tok::kw___vec__:
+    case tok::kw___mtc__:
+      DS.getAttributes().addNew(Tok.getIdentifierInfo(), Loc, nullptr, Loc,
+                                nullptr, 0, ParsedAttr::AS_Keyword);
+      (void)ConsumeToken();
+      continue;
+
     // storage-class-specifier
     case tok::kw_typedef:
       isInvalid = DS.SetStorageClassSpec(Actions, DeclSpec::SCS_typedef, Loc,
@@ -3836,10 +3847,33 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
                                                Loc, PrevSpec, DiagID);
       isStorageClass = true;
       break;
+    case tok::kw___linda_shared:
+      if (DS.getLINDAThreadStorageClassSpec() ==
+          DeclSpec::LTSCS___linda_thread) {
+        Diag(Tok, diag::err_shared_conflict_with_thread)
+            << DS.getSpecifierName(DeclSpec::LTSCS___linda_shared)
+            << DS.getSpecifierName(DeclSpec::LTSCS___linda_thread);
+      }
+      isInvalid = DS.SetStorageClassSpecLINDAThread(
+          DeclSpec::LTSCS___linda_shared, Loc, PrevSpec, DiagID);
+      isStorageClass = true;
+      break;
+    case tok::kw___linda_thread:
+      if (DS.getLINDAThreadStorageClassSpec() ==
+          DeclSpec::LTSCS___linda_shared) {
+        Diag(Tok, diag::err_shared_conflict_with_thread)
+            << DS.getSpecifierName(DeclSpec::LTSCS___linda_thread)
+            << DS.getSpecifierName(DeclSpec::LTSCS___linda_shared);
+      }
+      isInvalid = DS.SetStorageClassSpecLINDAThread(
+          DeclSpec::LTSCS___linda_thread, Loc, PrevSpec, DiagID);
+      isStorageClass = true;
+      break;
 
     // function-specifier
     case tok::kw_inline:
       isInvalid = DS.setFunctionSpecInline(Loc, PrevSpec, DiagID);
+      isFunctionSpecifier = true;
       break;
     case tok::kw_virtual:
       // C++ for OpenCL does not allow virtual function qualifier, to avoid
@@ -3852,6 +3886,7 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
         isInvalid = true;
       } else {
         isInvalid = DS.setFunctionSpecVirtual(Loc, PrevSpec, DiagID);
+        isFunctionSpecifier = true;
       }
       break;
     case tok::kw_explicit: {
@@ -3884,12 +3919,14 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       }
       isInvalid = DS.setFunctionSpecExplicit(ExplicitLoc, PrevSpec, DiagID,
                                              ExplicitSpec, CloseParenLoc);
+      isFunctionSpecifier = true;
       break;
     }
     case tok::kw__Noreturn:
       if (!getLangOpts().C11)
         Diag(Tok, diag::ext_c11_feature) << Tok.getName();
       isInvalid = DS.setFunctionSpecNoreturn(Loc, PrevSpec, DiagID);
+      isFunctionSpecifier = true;
       break;
 
     // alignment-specifier
@@ -4280,6 +4317,12 @@ void Parser::ParseDeclarationSpecifiers(DeclSpec &DS,
       // Need to support trailing type qualifiers (e.g. "id<p> const").
       // If a type specifier follows, it will be diagnosed elsewhere.
       continue;
+    }
+
+    unsigned Specs = DS.getParsedSpecifiers();
+    if (!getLangOpts().CPlusPlus && (isFunctionSpecifier || isStorageClass)) {
+      if ((Specs & DeclSpec::PQ_TypeQualifier) || DS.hasTypeSpecifier())
+        Diag(Tok, diag::warn_old_style_declaration) << Tok.getName();
     }
 
     DS.SetRangeEnd(ConsumedEnd.isValid() ? ConsumedEnd : Tok.getLocation());
@@ -5271,6 +5314,11 @@ bool Parser::isTypeSpecifierQualifier() {
   case tok::kw___read_only:
   case tok::kw___read_write:
   case tok::kw___write_only:
+  case tok::kw___noalias__:
+  case tok::kw___out__:
+  case tok::kw___in__:
+  case tok::kw___vec__:
+  case tok::kw___mtc__:
     return true;
 
   case tok::kw_private:
@@ -5347,6 +5395,8 @@ bool Parser::isDeclarationSpecifier(bool DisambiguatingWithExpression) {
   case tok::kw___thread:
   case tok::kw_thread_local:
   case tok::kw__Thread_local:
+  case tok::kw___linda_thread:
+  case tok::kw___linda_shared:
 
     // Modules
   case tok::kw___module_private__:
@@ -5503,6 +5553,11 @@ bool Parser::isDeclarationSpecifier(bool DisambiguatingWithExpression) {
   case tok::kw___read_only:
   case tok::kw___read_write:
   case tok::kw___write_only:
+  case tok::kw___noalias__:
+  case tok::kw___out__:
+  case tok::kw___in__:
+  case tok::kw___vec__:
+  case tok::kw___mtc__:
 #define GENERIC_IMAGE_TYPE(ImgType, Id) case tok::kw_##ImgType##_t:
 #include "clang/Basic/OpenCLImageTypes.def"
 
@@ -5774,6 +5829,16 @@ void Parser::ParseTypeQualifierListOpt(
 
     // Objective-C 'kindof' types.
     case tok::kw___kindof:
+      DS.getAttributes().addNew(Tok.getIdentifierInfo(), Loc, nullptr, Loc,
+                                nullptr, 0, ParsedAttr::AS_Keyword);
+      (void)ConsumeToken();
+      continue;
+
+    case tok::kw___noalias__:
+    case tok::kw___out__:
+    case tok::kw___in__:
+    case tok::kw___vec__:
+    case tok::kw___mtc__:
       DS.getAttributes().addNew(Tok.getIdentifierInfo(), Loc, nullptr, Loc,
                                 nullptr, 0, ParsedAttr::AS_Keyword);
       (void)ConsumeToken();

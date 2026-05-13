@@ -59,6 +59,7 @@ class TargetRegisterClass;
 class TargetRegisterInfo;
 class TargetSchedModel;
 class TargetSubtargetInfo;
+class LiveRangeEdit;
 
 template <class T> class SmallVectorImpl;
 
@@ -370,6 +371,10 @@ public:
   virtual bool isAsCheapAsAMove(const MachineInstr &MI) const {
     return MI.isAsCheapAsAMove();
   }
+
+  /// Return true if the target is not Linx.
+  /// Targets for different archs need to override this.
+  virtual bool isHoistRemat(const MachineInstr &MI) const { return true; }
 
   /// Return true if the instruction should be sunk by MachineSink.
   ///
@@ -1494,6 +1499,9 @@ public:
   virtual bool isSafeToMoveRegClassDefs(const TargetRegisterClass *RC) const {
     return true;
   }
+
+  /// Return true if it's safe to change the def register of a instr
+  virtual bool allowPropagateDef(const MachineInstr &MI) const { return true; }
 
   /// Test if the given instruction should be considered a scheduling boundary.
   /// This primarily includes labels and terminators.

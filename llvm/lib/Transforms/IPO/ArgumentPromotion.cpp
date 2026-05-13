@@ -65,6 +65,7 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
@@ -80,6 +81,11 @@ using namespace llvm;
 
 STATISTIC(NumArgumentsPromoted, "Number of pointer arguments promoted");
 STATISTIC(NumArgumentsDead, "Number of dead pointer args eliminated");
+
+// Command line option to disable DeadArgumentPromotion. The default is false:
+static cl::opt<bool> DisableArgumentPromotion(
+    "disable-argpromotion", cl::init(false), cl::Hidden,
+    cl::desc("Disable ArgumentPromotion"));
 
 namespace {
 
@@ -806,6 +812,9 @@ PreservedAnalyses ArgumentPromotionPass::run(LazyCallGraph::SCC &C,
                                              LazyCallGraph &CG,
                                              CGSCCUpdateResult &UR) {
   bool Changed = false, LocalChange;
+
+  if (DisableArgumentPromotion)
+    return PreservedAnalyses::all();
 
   // Iterate until we stop promoting from this SCC.
   do {

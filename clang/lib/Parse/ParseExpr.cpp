@@ -2031,10 +2031,18 @@ Parser::ParsePostfixExpressionSuffix(ExprResult LHS) {
         }
 
         if (!LHS.isInvalid()) {
-          ExprResult ECResult = Actions.ActOnCUDAExecConfigExpr(getCurScope(),
-                                    OpenLoc,
-                                    ExecConfigExprs,
-                                    CloseLoc);
+          ExprResult ECResult;
+          if (getLangOpts().LinxBlockC) {
+            ECResult = Actions.ActOnLinxBlockCExecConfigExpr(getCurScope(),
+                                OpenLoc,
+                                ExecConfigExprs,
+                                CloseLoc);
+          } else {
+            ECResult = Actions.ActOnCUDAExecConfigExpr(getCurScope(),
+                                OpenLoc,
+                                ExecConfigExprs,
+                                CloseLoc);
+          }
           if (ECResult.isInvalid())
             LHS = ExprError();
           else

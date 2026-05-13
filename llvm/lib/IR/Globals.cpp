@@ -31,8 +31,9 @@ using namespace llvm;
 // GlobalValue should be a Constant, plus a type, a module, some flags, and an
 // intrinsic ID. Add an assert to prevent people from accidentally growing
 // GlobalValue while adding flags.
+
 static_assert(sizeof(GlobalValue) ==
-                  sizeof(Constant) + 2 * sizeof(void *) + 2 * sizeof(unsigned),
+                  sizeof(Constant) + 2 * sizeof(void *) + 4 * sizeof(unsigned),
               "unexpected GlobalValue size growth");
 
 // GlobalObject adds a comdat.

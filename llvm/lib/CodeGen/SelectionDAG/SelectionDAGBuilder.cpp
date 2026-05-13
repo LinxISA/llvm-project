@@ -8528,7 +8528,24 @@ getRegistersForValue(SelectionDAG &DAG, const SDLoc &DL,
   // Get the actual register value type.  This is important, because the user
   // may have asked for (e.g.) the AX register in i32 type.  We need to
   // remember that AX is actually i16 to get the right extension.
-  const MVT RegVT = *TRI.legalclasstypes_begin(*RC);
+  MVT RegVT = *TRI.legalclasstypes_begin(*RC);
+  // Some targets represent many types to one class. Here we can try to pick a
+  // best type.
+  for (const auto *I = TRI.legalclasstypes_begin(*RC); *I != MVT::Other; ++I) {
+    if (*I == RefOpInfo.ConstraintVT.SimpleTy) {
+      RegVT = *I;
+      break;
+    }
+    if (*I == MVT::vAny) {
+      for (MVT Candidate : MVT::fixedlen_vector_valuetypes()) {
+        if (Candidate == RefOpInfo.ConstraintVT.SimpleTy) {
+          RegVT = Candidate;
+          break;
+        }
+      }
+      break;
+    }
+  }
 
   if (OpInfo.ConstraintVT != MVT::Other && RegVT != MVT::Untyped) {
     // If this is an FP operand in an integer register (or visa versa), or more

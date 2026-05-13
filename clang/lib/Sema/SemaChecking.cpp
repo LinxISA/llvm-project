@@ -102,6 +102,11 @@
 
 using namespace clang;
 using namespace sema;
+extern ImplicitConversionSequence
+TryCopyInitialization(Sema &S, Expr *From, QualType ToType,
+                      bool SuppressUserConversions, bool InOverloadResolution,
+                      bool AllowObjCWritebackConversion,
+                      bool AllowExplicit = false);
 
 SourceLocation Sema::getLocationOfStringLiteralByte(const StringLiteral *SL,
                                                     unsigned ByteNo) const {
@@ -1981,6 +1986,9 @@ bool Sema::CheckTSBuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
     return CheckRISCVBuiltinFunctionCall(TI, BuiltinID, TheCall);
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
+    return CheckLinxV5BuiltinFunctionCall(TI, BuiltinID, TheCall);
   }
 }
 
@@ -2626,6 +2634,12 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
 
   case Builtin::BI__builtin_matrix_column_major_store:
     return SemaBuiltinMatrixColumnMajorStore(TheCall, TheCallResult);
+
+  case Builtin::BI__linx_vcall_par:
+    return SemaBuiltinLinxVCallPar(*this, TheCall, TheCallResult);
+
+  case Builtin::BIblkv_get_tile_ptr:
+    return SemaBuiltinBLKVGetTilePtr(TheCall, TheCallResult);
 
   case Builtin::BI__builtin_get_device_side_mangled_name: {
     auto Check = [](CallExpr *TheCall) {
@@ -3323,6 +3337,33 @@ static bool isValidBPFPreserveEnumValueArg(Expr *Arg) {
 
   // The enum value must be supported.
   return llvm::is_contained(ET->getDecl()->enumerators(), Enumerator);
+}
+
+void Sema::CheckLinxL2DPGlobalDecl(VarDecl *VD, const Declarator &D) {
+  DeclSpec::TSCS TSCSpec = D.getDeclSpec().getThreadStorageClassSpec();
+  DeclSpec::LTSCS LTSCSpec = D.getDeclSpec().getLINDAThreadStorageClassSpec();
+  // decl with linda_thread/linda_shared specifier
+  if (LTSCSpec != DeclSpec::LTSCS_unspecified) {
+    // linda_shared/linda_thread keywords only apply on global var.
+    if (VD->hasLocalStorage())
+      Diag(D.getDeclSpec().getLINDAThreadStorageClassSpecLoc(),
+           diag::err_shared_non_global)
+          << DeclSpec::getSpecifierName(LTSCSpec);
+
+    if (TSCSpec != TSCS_unspecified) {
+      // linda_shared/linda_thread confilcts with __thread/thread_local
+      // variables.
+      Diag(D.getDeclSpec().getLINDAThreadStorageClassSpecLoc(),
+           diag::err_shared_conflict_with_thread)
+          << DeclSpec::getSpecifierName(LTSCSpec)
+          << DeclSpec::getSpecifierName(TSCSpec);
+    }
+  } else {
+    if (VD->hasGlobalStorage() &&
+        !(D.getDeclSpec().getTypeQualifiers() & DeclSpec::TQ_const)) {
+      Diag(VD->getLocation(), diag::warn_linx_l2dp_data_placement) << VD;
+    }
+  }
 }
 
 bool Sema::CheckBPFBuiltinFunctionCall(unsigned BuiltinID,
@@ -4443,6 +4484,192 @@ bool Sema::CheckRISCVBuiltinFunctionCall(const TargetInfo &TI,
   }
 
   return false;
+}
+bool Sema::CheckLinxV5BuiltinSysGetReg(CallExpr *TheCall) {
+  Expr *Arg0 = TheCall->getArg(0);
+  if (!Arg0->isIntegerConstantExpr(Context)) {
+    return Diag(TheCall->getBeginLoc(), diag::err_linx_builtin_requires_imm)
+           << TheCall->getSourceRange();
+  }
+
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinBLKCall(CallExpr *TheCall) {
+  Expr *DimX = TheCall->getArg(0);
+  Expr *DimY = TheCall->getArg(1);
+  Expr *DimZ = TheCall->getArg(2);
+  if (!DimX->getType()->isIntegerType() || !DimY->getType()->isIntegerType() ||
+      !DimZ->getType()->isIntegerType())
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_dim_requires_integer)
+           << TheCall->getSourceRange();
+
+  Expr *AType = TheCall->getArg(3);
+  if (!AType->isIntegerConstantExpr(Context)) {
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_datatype_requires_imm)
+           << TheCall->getSourceRange();
+  }
+
+  Expr *BType = TheCall->getArg(4);
+  if (!BType->isIntegerConstantExpr(Context)) {
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_datatype_requires_imm)
+           << TheCall->getSourceRange();
+  }
+  // Do we need check for vector type?
+  // TODO: Add check for M * K = Tile Size
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinBLKMXCall(CallExpr *TheCall) {
+  Expr *DimM = TheCall->getArg(0);
+  Expr *DimN = TheCall->getArg(1);
+  Expr *DimK = TheCall->getArg(2);
+
+  if (!DimM->getType()->isIntegerType() || !DimN->getType()->isIntegerType() ||
+      !DimK->getType()->isIntegerType())
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_dim_requires_integer)
+           << TheCall->getSourceRange();
+
+  Expr *AType = TheCall->getArg(3);
+  if (!AType->isIntegerConstantExpr(Context)) {
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_datatype_requires_imm)
+           << TheCall->getSourceRange();
+  }
+
+  Expr *BType = TheCall->getArg(4);
+  if (!BType->isIntegerConstantExpr(Context)) {
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_datatype_requires_imm)
+           << TheCall->getSourceRange();
+  }
+
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinBLKACCCVT(CallExpr *TheCall) {
+  Expr *DimM = TheCall->getArg(0);
+  Expr *DimN = TheCall->getArg(1);
+  if (!DimM->getType()->isIntegerType() || !DimN->getType()->isIntegerType())
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_dim_requires_integer)
+           << TheCall->getSourceRange();
+
+  Expr *TileSize = TheCall->getArg(2);
+  if (!TileSize->isIntegerConstantExpr(Context)) {
+    return Diag(TheCall->getBeginLoc(),
+                diag::err_linxv5_blk_tile_size_requires_imm)
+           << TheCall->getSourceRange();
+  }
+
+  // Do we need check for vector type?
+  // TODO: Add check for M * K = Tile Size
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinFPArith(CallExpr *TheCall) {
+  if (TheCall->getNumArgs() != 1) {
+    return Diag(TheCall->getEndLoc(), diag::err_typecheck_call_too_many_args)
+           << TheCall->getNumArgs();
+  }
+
+  Expr *Arg = TheCall->getArg(0);
+  if (!Arg->getType()->isRealFloatingType()) {
+    return Diag(Arg->getBeginLoc(), diag::err_linx_FPArith_invalid_type)
+           << Arg->getType();
+  }
+
+  TheCall->setType(Arg->getType());
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinTwoSrcFloat(CallExpr *TheCall) {
+  if (TheCall->getNumArgs() != 2) {
+    return Diag(TheCall->getEndLoc(), diag::err_typecheck_call_too_many_args)
+           << TheCall->getNumArgs();
+  }
+
+  QualType ArgTy0 = TheCall->getArg(0)->getType().getCanonicalType().getUnqualifiedType();
+  QualType ArgTy1 = TheCall->getArg(1)->getType().getCanonicalType().getUnqualifiedType();
+
+  if (ArgTy0 != ArgTy1) {
+    return Diag(TheCall->getArg(1)->getBeginLoc(),
+                diag::err_linx_builtin_type_mismatch)
+           << ArgTy0 << ArgTy1;
+  }
+  TheCall->setType(ArgTy0);
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinSHFL(CallExpr *TheCall) {
+  if (TheCall->getNumArgs() != 2) {
+    return Diag(TheCall->getEndLoc(), diag::err_typecheck_call_too_many_args)
+           << TheCall->getNumArgs();
+  }
+
+  QualType ArgTy0 = TheCall->getArg(0)->getType();
+  QualType ArgTy1 = TheCall->getArg(1)->getType();
+
+  if (!ArgTy1->isIntegerType()) {
+    return Diag(TheCall->getArg(1)->getBeginLoc(),
+                diag::err_typecheck_expect_int)
+           << ArgTy1;
+  }
+
+  TheCall->setType(ArgTy0);
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinReduce(CallExpr *TheCall) {
+  if (TheCall->getNumArgs() != 1) {
+    return Diag(TheCall->getEndLoc(), diag::err_typecheck_call_too_many_args)
+           << TheCall->getNumArgs();
+  }
+
+  QualType ArgTy = TheCall->getArg(0)->getType().getCanonicalType().getUnqualifiedType();
+  TheCall->setType(ArgTy);
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
+                                          unsigned BuiltinID,
+                                          CallExpr *TheCall) {
+  switch (BuiltinID) {
+  case LinxV5::BI__builtin_linx_get_system_reg:
+    return CheckLinxV5BuiltinSysGetReg(TheCall);
+  case LinxV5::BIblk_matmul:
+  case LinxV5::BIblk_matmul_ac:
+  case LinxV5::BIblk_tload:
+  case LinxV5::BIblk_tstore:
+    return CheckLinxV5BuiltinBLKCall(TheCall);
+  case LinxV5::BIblk_matmulmx:
+  case LinxV5::BIblk_matmulmxb:
+  case LinxV5::BIblk_matmulmx_ac:
+  case LinxV5::BIblk_matmulmxb_ac:
+    return CheckLinxV5BuiltinBLKMXCall(TheCall);
+  case LinxV5::BIblk_acccvt:
+    return CheckLinxV5BuiltinBLKACCCVT(TheCall);
+  case LinxV5::BIblkv_fabs:
+  case LinxV5::BIblkv_fsqrt:
+  case LinxV5::BIblkv_fexp:
+    return CheckLinxV5BuiltinFPArith(TheCall);
+  case LinxV5::BIblkv_max:
+  case LinxV5::BIblkv_min:
+    return CheckLinxV5BuiltinTwoSrcFloat(TheCall);
+  case LinxV5::BIblkv_shuffle_bfly:
+    return CheckLinxV5BuiltinSHFL(TheCall);
+  case LinxV5::BIblkv_rdmax:
+  case LinxV5::BIblkv_rdmin:
+  case LinxV5::BIblkv_rdadd:
+  case LinxV5::BIblkv_rdor:
+    return CheckLinxV5BuiltinReduce(TheCall);
+  default:
+    return false;
+  }
 }
 
 bool Sema::CheckSystemZBuiltinFunctionCall(unsigned BuiltinID,
@@ -13076,6 +13303,9 @@ static void AnalyzeAssignment(Sema &S, BinaryOperator *E) {
       return AnalyzeImplicitConversions(S, E->getRHS()->IgnoreParenImpCasts(),
                                         E->getOperatorLoc());
     }
+    // [BiSheng] Disable check from enum to bitfield
+    if (E->getRHS()->IgnoreParenImpCasts()->getType()->isEnumeralType())
+      return;
   }
 
   AnalyzeImplicitConversions(S, E->getRHS(), E->getOperatorLoc());
@@ -16741,7 +16971,7 @@ void Sema::checkUnsafeExprAssigns(SourceLocation Loc,
 
 static bool ShouldDiagnoseEmptyStmtBody(const SourceManager &SourceMgr,
                                         SourceLocation StmtLoc,
-                                        const NullStmt *Body) {
+                                        const NullStmt *Body, bool IsIfStmt) {
   // Do not warn if the body is a macro that expands to nothing, e.g:
   //
   // #define CALL(x)
@@ -16764,15 +16994,14 @@ static bool ShouldDiagnoseEmptyStmtBody(const SourceManager &SourceMgr,
     return false;
 
   // Warn if null statement and body are on the same line.
-  if (StmtLine != BodyLine)
+  if (!IsIfStmt && StmtLine != BodyLine)
     return false;
 
   return true;
 }
 
-void Sema::DiagnoseEmptyStmtBody(SourceLocation StmtLoc,
-                                 const Stmt *Body,
-                                 unsigned DiagID) {
+void Sema::DiagnoseEmptyStmtBody(SourceLocation StmtLoc, const Stmt *Body,
+                                 unsigned DiagID, bool IsIfstmt) {
   // Since this is a syntactic check, don't emit diagnostic for template
   // instantiations, this just adds noise.
   if (CurrentInstantiationScope)
@@ -16784,7 +17013,7 @@ void Sema::DiagnoseEmptyStmtBody(SourceLocation StmtLoc,
     return;
 
   // Do the usual checks.
-  if (!ShouldDiagnoseEmptyStmtBody(SourceMgr, StmtLoc, NBody))
+  if (!ShouldDiagnoseEmptyStmtBody(SourceMgr, StmtLoc, NBody, IsIfstmt))
     return;
 
   Diag(NBody->getSemiLoc(), DiagID);
@@ -16818,8 +17047,9 @@ void Sema::DiagnoseEmptyLoopBody(const Stmt *S,
   if (Diags.isIgnored(DiagID, NBody->getSemiLoc()))
     return;
 
+  // [BiSheng] LoopStmt empty-body doesn't check different line
   // Do the usual checks.
-  if (!ShouldDiagnoseEmptyStmtBody(SourceMgr, StmtLoc, NBody))
+  if (!ShouldDiagnoseEmptyStmtBody(SourceMgr, StmtLoc, NBody, false))
     return;
 
   // `for(...);' and `while(...);' are popular idioms, so in order to keep
@@ -17641,6 +17871,119 @@ getAndVerifyMatrixDimension(Expr *Expr, StringRef Name, Sema &S) {
     return {};
   }
   return Dim;
+}
+
+ExprResult Sema::SemaBuiltinLinxVCallPar(Sema &S, CallExpr *TheCall,
+                                         ExprResult CallResult) {
+  Expr *TileOp = TheCall->getArg(0);
+  Expr *DimX = TheCall->getArg(1);
+  Expr *DimY = TheCall->getArg(2);
+  Expr *DimZ = TheCall->getArg(3);
+
+  // -- * legality checking * --
+  auto checkArg = [&](Expr *Arg, QualType Ty) {
+    AssignConvertType ConvTy =
+        CheckAssignmentConstraints(Arg->getExprLoc(), Ty, Arg->getType());
+    return DiagnoseAssignmentResult(ConvTy, Arg->getExprLoc(), Ty,
+                                    Arg->getType(), Arg, AA_Assigning);
+  };
+
+  if (!isa<DeclRefExpr>(TileOp) && !isa<OverloadExpr>(TileOp)) {
+    S.Diag(TileOp->getExprLoc(), diag::err_not_function) << TileOp;
+    return ExprError();
+  }
+  if (checkArg(DimX, Context.LongTy))
+    return ExprError();
+  if (checkArg(DimY, Context.LongTy))
+    return ExprError();
+  if (checkArg(DimZ, Context.LongTy))
+    return ExprError();
+
+  // -- * implicit converting * --
+  auto castDim = [&](Expr *Arg) {
+    ExprResult Res;
+    if (isa<DeclRefExpr>(Arg)) {
+      QualType To = Arg->getType();
+      Arg =
+          ImplicitCastExpr::Create(Context, To, CK_LValueToRValue, Arg, nullptr,
+                                   VK_PRValue, CurFPFeatureOverrides());
+    }
+    Res = S.ImpCastExprToType(Arg, Context.LongTy, CK_IntegralCast);
+    return Res;
+  };
+
+  ExprResult TileOpRes = S.UsualUnaryConversions(TileOp);
+  ExprResult DimXRes = castDim(DimX);
+  ExprResult DimYRes = castDim(DimY);
+  ExprResult DimZRes = castDim(DimZ);
+
+  TheCall->setArg(0, TileOpRes.get());
+  TheCall->setArg(1, DimXRes.get());
+  TheCall->setArg(2, DimYRes.get());
+  TheCall->setArg(3, DimZRes.get());
+
+  QualType CalleeType = TileOpRes.get()->getType();
+  if (CalleeType->isPointerType())
+    CalleeType = CalleeType->getPointeeType();
+
+  const FunctionProtoType *FPT = CalleeType->getAs<FunctionProtoType>();
+  if (!FPT) {
+    S.Diag(TileOp->getExprLoc(), diag::err_typecheck_call_not_function);
+    return ExprError();
+  }
+
+  unsigned NumFormalParams = FPT->getNumParams();
+  unsigned NumArgs = TheCall->getNumArgs();
+if (NumArgs - 4 != NumFormalParams) {
+  Diag(TheCall->getBeginLoc(), diag::err_linx_exec_args_mismatch)
+    << (unsigned)(NumArgs - 4) << NumFormalParams;
+  return ExprError();
+}
+  for (unsigned i = 4; i < NumArgs; ++i) {
+    QualType ExpectedTy = FPT->getParamType(i - 4);
+    Expr *Arg = TheCall->getArg(i);
+    ImplicitConversionSequence ICS =
+        TryCopyInitialization(S, Arg, ExpectedTy,
+                              /*SuppressUserConversions=*/false,
+                              /*InOverloadResolution=*/false,
+                              /*AllowObjCWritebackConversion=*/false,
+                              /*AllowExplicit=*/false);
+    if (ICS.isBad()) {
+      S.Diag(Arg->getExprLoc(), diag::err_typecheck_convert_incompatible)
+          << Arg->getType() << ExpectedTy << 1 << 0 << 0;
+      return ExprError();
+    }
+
+    ExprResult Converted = S.PerformImplicitConversion(
+        Arg, ExpectedTy, ICS, Sema::AA_Assigning, Sema::CCK_ImplicitConversion);
+    TheCall->setArg(i, Converted.get());
+  }
+
+  return CallResult;
+}
+
+ExprResult Sema::SemaBuiltinBLKVGetTilePtr(CallExpr *TheCall,
+                                           ExprResult CallResult) {
+  if (checkArgCount(*this, TheCall, 1))
+    return ExprError();
+
+  Expr *Arg = TheCall->getArg(0);
+  if (!Arg->getType()->isExtVectorType()) {
+    Diag(Arg->getBeginLoc(), diag::err_builtin_invalid_arg_type)
+        << 1 << 1 << Arg->getType();
+    return ExprError();
+  }
+
+  const ExtVectorType *VecTy =
+      cast<ExtVectorType>(Arg->getType().getCanonicalType());
+  QualType ETy = VecTy->getElementType();
+  // add __vbuf__:
+  // __attribute__((address_space(6)))
+  LangAS AS = (LangAS)(unsigned(LangAS::FirstTargetAddressSpace) + 6);
+  QualType AS_Ety = Context.getAddrSpaceQualType(ETy, AS);
+  QualType RTy = Context.getPointerType(AS_Ety);
+  TheCall->setType(RTy);
+  return CallResult;
 }
 
 ExprResult Sema::SemaBuiltinMatrixColumnMajorLoad(CallExpr *TheCall,

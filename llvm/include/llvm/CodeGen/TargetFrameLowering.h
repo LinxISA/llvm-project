@@ -374,6 +374,17 @@ public:
   processFunctionBeforeFrameIndicesReplaced(MachineFunction &MF,
                                             RegScavenger *RS = nullptr) const {}
 
+  /// processFunctionAfterFrameIndicesReplaced - This method is called
+  /// immediately after MO_FrameIndex operands are eliminated. This method is
+  /// optional.
+  virtual void
+  processFunctionAfterFrameIndicesReplaced(MachineFunction &MF,
+                                           RegScavenger *RS = nullptr) const {}
+
+  virtual void calculateSaveRestoreBlocks(
+      MachineFunction &MF, SmallVector<MachineBasicBlock *, 4> &SaveBlocks,
+      SmallVector<MachineBasicBlock *, 4> &RestoreBlocks) const {}
+
   virtual unsigned getWinEHParentFrameOffset(const MachineFunction &MF) const {
     report_fatal_error("WinEH not implemented for this target");
   }

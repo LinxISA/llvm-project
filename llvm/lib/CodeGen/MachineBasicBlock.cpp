@@ -28,6 +28,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/ModuleSlotTracker.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/Debug.h"
@@ -77,6 +78,13 @@ MCSymbol *MachineBasicBlock::getSymbol() const {
       CachedMCSymbol = Ctx.getOrCreateSymbol(MF->getName() + Suffix);
     } else {
       const StringRef Prefix = Ctx.getAsmInfo()->getPrivateLabelPrefix();
+      if (MF->getSubtarget().getTargetTriple().isLinx()) {
+        CachedMCSymbol = Ctx.getOrCreateSymbol(Twine(Prefix) + "_" +
+                                               MF->getName() + "_" + "BB" +
+                                               Twine(MF->getFunctionNumber()) +
+                                               "_" + Twine(getNumber()));
+        return CachedMCSymbol;
+      }
       CachedMCSymbol = Ctx.getOrCreateSymbol(Twine(Prefix) + "BB" +
                                              Twine(MF->getFunctionNumber()) +
                                              "_" + Twine(getNumber()));
@@ -94,6 +102,12 @@ MCSymbol *MachineBasicBlock::getEHCatchretSymbol() const {
     CachedEHCatchretMCSymbol = MF->getContext().getOrCreateSymbol(SymbolName);
   }
   return CachedEHCatchretMCSymbol;
+}
+
+/// Set the MCSymbol for this basic block.
+void MachineBasicBlock::setSymbol(MCSymbol *TargetSymbol) const {
+  assert(!CachedMCSymbol && "This MBB has already had a Symbol!");
+  CachedMCSymbol = TargetSymbol;
 }
 
 MCSymbol *MachineBasicBlock::getEndSymbol() const {
@@ -356,6 +370,11 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
 
   printName(OS, PrintNameIr | PrintNameAttributes, &MST);
   OS << ":\n";
+
+  // Print MBBGroup ID
+  if (MBBGroupID != -1) {
+    OS << "; MBBGroup ID: " << MBBGroupID << "\n";
+  }
 
   const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
   const MachineRegisterInfo &MRI = MF->getRegInfo();
@@ -992,6 +1011,7 @@ MachineBasicBlock *MachineBasicBlock::splitAt(MachineInstr &MI,
   }
 
   MachineBasicBlock *SplitBB = MF->CreateMachineBasicBlock(getBasicBlock());
+  SplitBB->setMBBGroupID(MBBGroupID);
 
   MF->insert(++MachineFunction::iterator(this), SplitBB);
   SplitBB->splice(SplitBB->begin(), this, SplitPoint, end());
@@ -1019,6 +1039,10 @@ MachineBasicBlock *MachineBasicBlock::SplitCriticalEdge(
   DebugLoc DL;  // FIXME: this is nowhere
 
   MachineBasicBlock *NMBB = MF->CreateMachineBasicBlock();
+  // When split at MBBGroup Exit, the split Block should not belong to same MBBGroup.
+  // Cause this scenario will make MBBGroup to multi-exits.
+  if (MBBGroupID == Succ->getMBBGroupID())
+    NMBB->setMBBGroupID(MBBGroupID);
   MF->insert(std::next(MachineFunction::iterator(this)), NMBB);
   LLVM_DEBUG(dbgs() << "Splitting critical edge: " << printMBBReference(*this)
                     << " -- " << printMBBReference(*NMBB) << " -- "

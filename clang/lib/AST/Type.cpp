@@ -2152,8 +2152,7 @@ bool Type::isRealType() const {
 bool Type::isArithmeticType() const {
   if (const auto *BT = dyn_cast<BuiltinType>(CanonicalType))
     return BT->getKind() >= BuiltinType::Bool &&
-           BT->getKind() <= BuiltinType::Ibm128 &&
-           BT->getKind() != BuiltinType::BFloat16;
+           BT->getKind() <= BuiltinType::Ibm128;
   if (const auto *ET = dyn_cast<EnumType>(CanonicalType))
     // GCC allows forward declaration of enum types (forbid by C99 6.7.2.3p2).
     // If a body isn't seen by the time we get here, return false.
@@ -3181,7 +3180,8 @@ StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   case CC_X86VectorCall: return "vectorcall";
   case CC_Win64: return "ms_abi";
   case CC_X86_64SysV: return "sysv_abi";
-  case CC_X86RegCall : return "regcall";
+  case CC_X86RegCall:
+    return "regcall";
   case CC_AAPCS: return "aapcs";
   case CC_AAPCS_VFP: return "aapcs-vfp";
   case CC_AArch64VectorCall: return "aarch64_vector_pcs";

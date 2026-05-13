@@ -874,6 +874,24 @@ static void setBranchWeights(Instruction *I, uint32_t TrueWeight,
   I->setMetadata(LLVMContext::MD_prof, N);
 }
 
+static void setBranchHint(SwitchInst *NewSI, Instruction *PTI,
+                          Instruction *TI) {
+  BasicBlock *BB = PTI->getParent();
+  if (PTI->getMetadata("linx_branch_hint") ||
+      TI->getMetadata("linx_branch_hint")) {
+    NewSI->setMetadata("linx_branch_hint",
+                       llvm::MDNode::get(BB->getContext(), None));
+  }
+}
+
+static void setBranchHint(BranchInst *PBI, BranchInst *BI) {
+  BasicBlock *BB = PBI->getParent();
+  if (BI->getMetadata("linx_branch_hint")) {
+    PBI->setMetadata("linx_branch_hint",
+                     llvm::MDNode::get(BB->getContext(), None));
+  }
+}
+
 /// If TI is known to be a terminator instruction and its block is known to
 /// only have a single predecessor block, check to see if that predecessor is
 /// also a value comparison with the same value, and if that comparison
@@ -1337,6 +1355,7 @@ bool SimplifyCFGOpt::PerformValueComparisonIntoPredecessorFolding(
     SmallVector<uint32_t, 8> MDWeights(Weights.begin(), Weights.end());
 
     setBranchWeights(NewSI, MDWeights);
+    setBranchHint(NewSI, TI, PTI);
   }
 
   EraseTerminatorAndDCECond(PTI);
@@ -3490,6 +3509,7 @@ static bool performBranchToCommonDestFolding(BranchInst *BI, BranchInst *PBI,
 
     SmallVector<uint32_t, 8> MDWeights(NewWeights.begin(), NewWeights.end());
     setBranchWeights(PBI, MDWeights[0], MDWeights[1]);
+    setBranchHint(PBI, BI);
 
     // TODO: If BB is reachable from all paths through PredBlock, then we
     // could replace PBI's branch probabilities with BI's.
@@ -4199,6 +4219,7 @@ static bool SimplifyCondBranchToCondBranch(BranchInst *PBI, BranchInst *BI,
     FitWeights(NewWeights);
 
     setBranchWeights(PBI, NewWeights[0], NewWeights[1]);
+    setBranchHint(PBI, BI);
   }
 
   // OtherDest may have phi nodes.  If so, add an entry from PBI's
