@@ -864,6 +864,10 @@ void MachineCopyPropagation::propagateDefs(MachineInstr &MI) {
   if (!Tracker.hasAnyCopies())
     return;
 
+  // if it is not safe to change MI's def, just return
+  if (!TII->allowPropagateDef(MI))
+    return;
+
   for (unsigned OpIdx = 0, OpEnd = MI.getNumOperands(); OpIdx != OpEnd;
        ++OpIdx) {
     MachineOperand &MODef = MI.getOperand(OpIdx);

@@ -53,6 +53,9 @@ void DAGTypeLegalizer::SoftenFloatResult(SDNode *N, unsigned ResNo) {
              dbgs() << "\n");
   SDValue R = SDValue();
 
+  if (CustomLowerNode(N, N->getValueType(ResNo), true))
+    return;
+
   switch (N->getOpcode()) {
   default:
 #ifndef NDEBUG

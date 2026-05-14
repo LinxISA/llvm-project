@@ -471,6 +471,11 @@ Retry:
     HandlePragmaMSVtorDisp();
     return StmtEmpty();
 
+  case tok::annot_pragma_linx:
+    ProhibitAttributes(CXX11Attrs);
+    ProhibitAttributes(GNUAttrs);
+    return ParsePragmaLinx(Stmts, StmtCtx, TrailingElseLoc, CXX11Attrs);
+
   case tok::annot_pragma_loop_hint:
     ProhibitAttributes(CXX11Attrs);
     ProhibitAttributes(GNUAttrs);
@@ -2368,6 +2373,34 @@ StmtResult Parser::ParseReturnStatement() {
   if (IsCoreturn)
     return Actions.ActOnCoreturnStmt(getCurScope(), ReturnLoc, R.get());
   return Actions.ActOnReturnStmt(ReturnLoc, R.get(), getCurScope());
+}
+
+StmtResult Parser::ParsePragmaLinx(StmtVector &Stmts,
+                                   ParsedStmtContext StmtCtx,
+                                   SourceLocation *TrailingElseLoc,
+                                   ParsedAttributes &Attrs) {
+  // Create temporary attribute list.
+  ParsedAttributes TempAttrs(AttrFactory);
+
+  while (Tok.is(tok::annot_pragma_linx)) {
+    LinxHint Hint;
+    if (!HandlePragmaLinx(Hint))
+      continue;
+
+    ArgsUnion ArgHints[] = {Hint.PragmaNameLoc, Hint.OptionLoc, Hint.StateLoc};
+    TempAttrs.addNew(Hint.PragmaNameLoc->Ident, Hint.Range, nullptr,
+                     Hint.PragmaNameLoc->Loc, ArgHints, 4,
+                     ParsedAttr::AS_Pragma);
+  }
+
+  // Get the next statement.
+  MaybeParseCXX11Attributes(Attrs);
+  ParsedAttributes EmptyDeclSpecAttrs(AttrFactory);
+  StmtResult S = ParseStatementOrDeclarationAfterAttributes(
+      Stmts, StmtCtx, TrailingElseLoc, Attrs, EmptyDeclSpecAttrs);
+
+  Attrs.takeAllFrom(TempAttrs);
+  return S;
 }
 
 StmtResult Parser::ParsePragmaLoopHint(StmtVector &Stmts,

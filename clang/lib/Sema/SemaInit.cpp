@@ -5451,8 +5451,10 @@ static bool isLibstdcxxPointerReturnFalseHack(Sema &S,
          S.getSourceManager().isInSystemHeader(Init->getExprLoc());
 }
 
+namespace{
 /// The non-zero enum values here are indexes into diagnostic alternatives.
 enum InvalidICRKind { IIK_okay, IIK_nonlocal, IIK_nonscalar };
+}
 
 /// Determines whether this expression is an acceptable ICR source.
 static InvalidICRKind isInvalidICRSource(ASTContext &C, Expr *e,
@@ -7527,6 +7529,7 @@ static void visitLocalsRetainedByInitializer(IndirectLocalPath &Path,
   }
 }
 
+namespace{
 /// Whether a path to an object supports lifetime extension.
 enum PathLifetimeKind {
   /// Lifetime-extend along this path.
@@ -7539,6 +7542,7 @@ enum PathLifetimeKind {
   /// Do not lifetime extend along this path.
   NoExtend
 };
+}
 
 /// Determine whether this is an indirect path to a temporary that we are
 /// supposed to lifetime-extend along.
@@ -8495,11 +8499,11 @@ ExprResult InitializationSequence::Perform(Sema &S,
         }
       }
 
-      Sema::CheckedConversionKind CCK
-        = Kind.isCStyleCast()? Sema::CCK_CStyleCast
-        : Kind.isFunctionalCast()? Sema::CCK_FunctionalCast
-        : Kind.isExplicitCast()? Sema::CCK_OtherCast
-        : Sema::CCK_ImplicitConversion;
+      Sema::CheckedConversionKind CCK =
+          Kind.isCStyleCast()       ? Sema::CCK_CStyleCast
+          : Kind.isFunctionalCast() ? Sema::CCK_FunctionalCast
+          : Kind.isExplicitCast()   ? Sema::CCK_OtherCast
+                                    : Sema::CCK_ImplicitConversion;
       ExprResult CurInitExprRes =
         S.PerformImplicitConversion(CurInit.get(), Step->Type, *Step->ICS,
                                     getAssignmentAction(Entity), CCK);

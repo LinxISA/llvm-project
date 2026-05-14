@@ -1286,6 +1286,12 @@ template <class ELFT> Triple::ArchType ELFObjectFile<ELFT>::getArch() const {
     return IsLittleEndian ? Triple::ppcle : Triple::ppc;
   case ELF::EM_PPC64:
     return IsLittleEndian ? Triple::ppc64le : Triple::ppc64;
+  case ELF::EM_LinxV4:
+    // TODO: Maybe we should define e_ident for LinxV4 ELF Header.
+    return IsLittleEndian ? Triple::linx64v4 : Triple::linx64v4be;
+  case ELF::EM_LinxV5:
+    // TODO: Maybe we should define e_ident for LinxV4 ELF Header.
+    return IsLittleEndian ? Triple::linx64v5 : Triple::linx64v5be;
   case ELF::EM_RISCV:
     switch (EF.getHeader().e_ident[ELF::EI_CLASS]) {
     case ELF::ELFCLASS32:

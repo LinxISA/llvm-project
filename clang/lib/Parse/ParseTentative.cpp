@@ -1365,6 +1365,8 @@ Parser::isCXXDeclarationSpecifier(Parser::TPResult BracedCastResult,
   case tok::kw___thread:
   case tok::kw_thread_local:
   case tok::kw__Thread_local:
+  case tok::kw___linda_thread:
+  case tok::kw___linda_shared:
     // function-specifier
   case tok::kw_inline:
   case tok::kw_virtual:

@@ -234,6 +234,7 @@ class CodeGenFunction : public CodeGenTypeCache {
 
   friend class CGCXXABI;
 public:
+  unsigned LinxHyperRegionIndex;
   /// A jump destination is an abstract label, branching to which may
   /// require a jump out through normal cleanups.
   struct JumpDest {
@@ -3222,6 +3223,9 @@ public:
   /// \return True if the statement was handled.
   bool EmitSimpleStmt(const Stmt *S, ArrayRef<const Attr *> Attrs);
 
+  Address EmitLinxCompoundStmt(const CompoundStmt &S, ArrayRef<const Attr *> Attrs);
+  Address EmitLinxHyperRegionStmt(const CompoundStmt &S);
+
   Address EmitCompoundStmt(const CompoundStmt &S, bool GetLast = false,
                            AggValueSlot AVS = AggValueSlot::ignored());
   Address EmitCompoundStmtWithoutScope(const CompoundStmt &S,
@@ -4252,6 +4256,21 @@ public:
   llvm::Value *EmitHexagonBuiltinExpr(unsigned BuiltinID, const CallExpr *E);
   llvm::Value *EmitRISCVBuiltinExpr(unsigned BuiltinID, const CallExpr *E,
                                     ReturnValueSlot ReturnValue);
+  llvm::Value *EmitLinxV5GetSysReg(const CallExpr *E, llvm::Intrinsic::ID ID);
+  llvm::Value *EmitLinxV5BLK(const CallExpr *E, llvm::Intrinsic::ID ID,
+                             unsigned TileNum);
+  llvm::Value *EmitLinxV5BLKMX(const CallExpr *E, llvm::Intrinsic::ID ID,
+                               unsigned TileNum);
+  llvm::Value *EmitLinxV5TLoad(const CallExpr *E);
+  llvm::Value *EmitLinxV5TStore(const CallExpr *E);
+  llvm::Value *EmitLinxV5ACCCVT(const CallExpr *E);
+  llvm::Value *EmitLinxV5FPArith(const CallExpr *E, llvm::Intrinsic::ID ID);
+  llvm::Value *EmitLinxV5TwoSrcFloat(const CallExpr *E, llvm::Intrinsic::ID ID);
+  llvm::Value *EmitLinxV5SHFL(const CallExpr *E, llvm::Intrinsic::ID ID);
+  llvm::Value *EmitLinxV5Reduce(const CallExpr *E, llvm::Intrinsic::ID ID);
+  llvm::Value *EmitLinxV5BuiltinExpr(unsigned BuiltinID, const CallExpr *E,
+                                     ReturnValueSlot ReturnValue);
+
   bool ProcessOrderScopeAMDGCN(llvm::Value *Order, llvm::Value *Scope,
                                llvm::AtomicOrdering &AO,
                                llvm::SyncScope::ID &SSID);

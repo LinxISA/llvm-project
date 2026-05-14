@@ -110,10 +110,12 @@
 #include "llvm/Transforms/Scalar/Reassociate.h"
 #include "llvm/Transforms/Scalar/SCCP.h"
 #include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Scalar/Scalarizer.h"
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Scalar/SpeculativeExecution.h"
 #include "llvm/Transforms/Scalar/TailRecursionElimination.h"
+#include "llvm/Transforms/Scalar/VectorDecompose.h"
 #include "llvm/Transforms/Scalar/WarnMissedTransforms.h"
 #include "llvm/Transforms/Utils/AddDiscriminators.h"
 #include "llvm/Transforms/Utils/AssumeBundleBuilder.h"
@@ -144,6 +146,8 @@ static cl::opt<bool> EnableSyntheticCounts(
     "enable-npm-synthetic-counts", cl::Hidden,
     cl::desc("Run synthetic function entry count generation "
              "pass"));
+
+static cl::opt<bool> EnableScalarizer("enable-scalarizer", cl::Hidden);
 
 /// Flag to enable inline deferral during PGO.
 static cl::opt<bool>
@@ -181,6 +185,18 @@ static cl::opt<bool> EnableNoRerunSimplificationPipeline(
 static cl::opt<bool> EnableMergeFunctions(
     "enable-merge-functions", cl::init(false), cl::Hidden,
     cl::desc("Enable function merging as part of the optimization pipeline"));
+
+static cl::opt<bool> EnableStructAccessOpt("enable-struct-access-opt",
+                                           cl::init(false), cl::Hidden);
+
+static cl::opt<bool> EnableStructAccessPlus("enable-struct-access-plus",
+                                           cl::init(false), cl::Hidden);
+
+static cl::opt<bool> EnableCombineAcrossFunc("enable-combination-across-func",
+                                             cl::init(false), cl::Hidden);
+
+static cl::opt<bool> EnableBrancHint("enable-branch-hint", cl::init(false),
+                                     cl::Hidden);
 
 PipelineTuningOptions::PipelineTuningOptions() {
   LoopInterleaving = true;
@@ -1234,6 +1250,11 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   OptimizePM.addPass(InjectTLIMappings());
 
   addVectorPasses(Level, OptimizePM, /* IsFullLTO */ false);
+  if (EnableScalarizer) {
+    OptimizePM.addPass(ScalarizerPass());
+    OptimizePM.addPass(VectorDecomposePass());
+  }
+  OptimizePM.addPass(SROAPass());
 
   // LoopSink pass sinks instructions hoisted by LICM, which serves as a
   // canonicalization pass that enables other optimizations. As a result,

@@ -31,6 +31,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO.h"
 #include <algorithm>
 #include <cassert>
@@ -41,6 +42,11 @@ using namespace llvm;
 #define DEBUG_TYPE "constmerge"
 
 STATISTIC(NumIdenticalMerged, "Number of identical global constants merged");
+
+// Command line option to disable ConstantMerge. The default is false:
+static cl::opt<bool> DisableConstMerge(
+    "disable-constmerge", cl::init(false), cl::Hidden,
+    cl::desc("Disable ConstantMerge"));
 
 /// Find values that are marked as llvm.used.
 static void FindUsedValues(GlobalVariable *LLVMUsed,
@@ -247,7 +253,7 @@ static bool mergeConstants(Module &M) {
 }
 
 PreservedAnalyses ConstantMergePass::run(Module &M, ModuleAnalysisManager &) {
-  if (!mergeConstants(M))
+  if (DisableConstMerge || !mergeConstants(M))
     return PreservedAnalyses::all();
   return PreservedAnalyses::none();
 }

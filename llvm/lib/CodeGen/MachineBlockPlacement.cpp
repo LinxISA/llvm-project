@@ -147,11 +147,11 @@ static cl::opt<unsigned> JumpInstCost("jump-inst-cost",
                                       cl::desc("Cost of jump instructions."),
                                       cl::init(1), cl::Hidden);
 static cl::opt<bool>
-TailDupPlacement("tail-dup-placement",
-              cl::desc("Perform tail duplication during placement. "
-                       "Creates more fallthrough opportunites in "
-                       "outline branches."),
-              cl::init(true), cl::Hidden);
+    TailDupPlacement("tail-dup-placement",
+                     cl::desc("Perform tail duplication during placement. "
+                              "Creates more fallthrough opportunites in "
+                              "outline branches."),
+                     cl::init(false), cl::Hidden);
 
 static cl::opt<bool>
 BranchFoldPlacement("branch-fold-placement",
@@ -3334,6 +3334,11 @@ bool MachineBlockPlacement::runOnMachineFunction(MachineFunction &MF) {
   // Check for single-block functions and skip them.
   if (std::next(MF.begin()) == MF.end())
     return false;
+
+  // Delete me, if Hyper Block is ready for this pass!
+  for (MachineBasicBlock &MBB : MF)
+    if (MBB.isMBBGroupMember())
+      return false;
 
   F = &MF;
   MBPI = &getAnalysis<MachineBranchProbabilityInfo>();

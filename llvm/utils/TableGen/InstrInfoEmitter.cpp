@@ -78,6 +78,9 @@ private:
   void emitTIIHelperMethods(raw_ostream &OS, StringRef TargetName,
                             bool ExpandDefinition = true);
 
+  /// Generate a map to handle opcode conversion to sw/uw/neg/not extended instrs
+  void emitInstrExtensionMap(raw_ostream &OS, StringRef TargetName);
+
   /// Expand TIIPredicate definitions to functions that accept a const MCInst
   /// reference.
   void emitMCIIHelperMethods(raw_ostream &OS, StringRef TargetName);
@@ -668,6 +671,48 @@ void InstrInfoEmitter::emitLogicalOperandTypeMappings(
   OS << "#endif // GET_INSTRINFO_LOGICAL_OPERAND_TYPE_MAP\n\n";
 }
 
+void InstrInfoEmitter::emitInstrExtensionMap(raw_ostream &OS,
+                                             StringRef TargetName) {
+  if (TargetName != "LinxV4" && TargetName != "LinxV5")
+    return;
+
+  CodeGenTarget &Target = CDP.getTargetInfo();
+  ArrayRef<const CodeGenInstruction*> NumberedInstructions =
+    Target.getInstructionsByEnumValue();
+
+  std::map<std::string, unsigned> InstrIDs;
+  unsigned Num = 0;
+  for (const CodeGenInstruction *Inst : Target.getInstructionsByEnumValue()) {
+    // Keep a map of InstrName to InstrID
+    InstrIDs[std::string(Inst->TheDef->getName())] = Num++;
+  }
+  unsigned MaxNum = Num;
+
+  auto existInstr = [&InstrIDs](std::string &name) -> bool {
+    return InstrIDs.find(name) != InstrIDs.end();
+  };
+
+  OS << "const unsigned " << TargetName << "InstrExtensionMap[" << MaxNum << "][4] = {";
+  for (const CodeGenInstruction *Inst : NumberedInstructions) {
+    // Instr name
+    StringRef Name = Inst->TheDef->getName();
+    std::string NameSW = (Name + Twine("_SW")).str();
+    std::string NameUW = (Name + Twine("_UW")).str();
+    std::string NameNEG = (Name + Twine("_NEG")).str();
+    std::string NameNOT = (Name + Twine("_NOT")).str();
+    // Newline every eight entries.
+    OS << "\n    {";
+    OS << (existInstr(NameSW)  ? InstrIDs[NameSW]  : MaxNum) << "U, "; // SW  extension
+    OS << (existInstr(NameUW)  ? InstrIDs[NameUW]  : MaxNum) << "U, "; // UW  extension
+    OS << (existInstr(NameNEG) ? InstrIDs[NameNEG] : MaxNum) << "U, "; // NEG extension
+    OS << (existInstr(NameNOT) ? InstrIDs[NameNOT] : MaxNum) << "U},"; // NOT extension
+    OS << "    // Inst #" << InstrIDs[Name.str()] << " = " << Inst->TheDef->getName();
+  }
+  OS << "\n};\n\n";
+
+  return;
+}
+
 void InstrInfoEmitter::emitMCIIHelperMethods(raw_ostream &OS,
                                              StringRef TargetName) {
   RecVec TIIPredicates = Records.getAllDerivedDefinitions("TIIPredicate");
@@ -1030,8 +1075,10 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
 
   std::string ClassName = TargetName + "GenInstrInfo";
   OS << "namespace llvm {\n";
-  OS << "struct " << ClassName << " : public TargetInstrInfo {\n"
-     << "  explicit " << ClassName
+  OS << "struct " << ClassName << " : public TargetInstrInfo {\n";
+  if (TargetName == "LinxV4" || TargetName == "LinxV5")
+    emitInstrExtensionMap(OS, TargetName);
+  OS << "  explicit " << ClassName
      << "(int CFSetupOpcode = -1, int CFDestroyOpcode = -1, int CatchRetOpcode = -1, int ReturnOpcode = -1);\n"
      << "  ~" << ClassName << "() override = default;\n";
 

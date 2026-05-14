@@ -732,7 +732,7 @@ public:
   SDValue getExternalSymbol(const char *Sym, EVT VT);
   SDValue getTargetExternalSymbol(const char *Sym, EVT VT,
                                   unsigned TargetFlags = 0);
-  SDValue getMCSymbol(MCSymbol *Sym, EVT VT);
+  SDValue getMCSymbol(MCSymbol *Sym, EVT VT, unsigned TargetFlags = 0);
 
   SDValue getValueType(EVT);
   SDValue getRegister(unsigned Reg, EVT VT);
@@ -2229,7 +2229,7 @@ private:
   StringMap<SDNode*> ExternalSymbols;
 
   std::map<std::pair<std::string, unsigned>, SDNode *> TargetExternalSymbols;
-  DenseMap<MCSymbol *, SDNode *> MCSymbols;
+  DenseMap<std::pair<MCSymbol *, unsigned>, SDNode *> MCSymbols;
 
   FlagInserter *Inserter = nullptr;
 };

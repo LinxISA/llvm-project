@@ -150,6 +150,10 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(StringRef emul) {
           .Case("elf64btsmip", {ELF64BEKind, EM_MIPS})
           .Case("elf64ltsmip", {ELF64LEKind, EM_MIPS})
           .Case("elf64lriscv", {ELF64LEKind, EM_RISCV})
+          .Case("elf64llinxv4", {ELF64LEKind, EM_LinxV4})
+          .Case("elf64blinxv4", {ELF64BEKind, EM_LinxV4})
+          .Case("elf64llinxv5", {ELF64LEKind, EM_LinxV5})
+          .Case("elf64blinxv5", {ELF64BEKind, EM_LinxV5})
           .Case("elf64ppc", {ELF64BEKind, EM_PPC64})
           .Case("elf64lppc", {ELF64LEKind, EM_PPC64})
           .Cases("elf_amd64", "elf_x86_64", {ELF64LEKind, EM_X86_64})
@@ -999,7 +1003,8 @@ static bool getIsRela(opt::InputArgList &args) {
   // Otherwise use the psABI defined relocation entry format.
   uint16_t m = config->emachine;
   return m == EM_AARCH64 || m == EM_AMDGPU || m == EM_HEXAGON || m == EM_PPC ||
-         m == EM_PPC64 || m == EM_RISCV || m == EM_X86_64;
+         m == EM_PPC64 || m == EM_RISCV || m == EM_LinxV4 || m == EM_LinxV5 ||
+         m == EM_X86_64;
 }
 
 static void parseClangOption(StringRef opt, const Twine &msg) {
@@ -1330,15 +1335,12 @@ static void readConfigs(opt::InputArgList &args) {
     parseClangOption(std::string("-") + arg->getValue(), arg->getSpelling());
 
   // GCC collect2 passes -plugin-opt=path/to/lto-wrapper with an absolute or
-  // relative path. Just ignore. If not ended with "lto-wrapper" (or
-  // "lto-wrapper.exe" for GCC cross-compiled for Windows), consider it an
+  // relative path. Just ignore. If not ended with "lto-wrapper", consider it an
   // unsupported LLVMgold.so option and error.
-  for (opt::Arg *arg : args.filtered(OPT_plugin_opt_eq)) {
-    StringRef v(arg->getValue());
-    if (!v.endswith("lto-wrapper") && !v.endswith("lto-wrapper.exe"))
+  for (opt::Arg *arg : args.filtered(OPT_plugin_opt_eq))
+    if (!StringRef(arg->getValue()).endswith("lto-wrapper"))
       error(arg->getSpelling() + ": unknown plugin option '" + arg->getValue() +
             "'");
-  }
 
   config->passPlugins = args::getStrings(args, OPT_load_pass_plugins);
 

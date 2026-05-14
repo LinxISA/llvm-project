@@ -236,7 +236,6 @@ def NonnullGlobalConstantsChecker: Checker<"NonnilStringConstants">,
   HelpText<"Assume that const string-like globals are non-null">,
   Documentation<NotDocumented>,
   Hidden;
-
 } // end "core"
 
 let ParentPackage = CoreAlpha in {

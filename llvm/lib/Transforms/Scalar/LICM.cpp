@@ -101,6 +101,8 @@ STATISTIC(NumMovedCalls, "Number of call insts hoisted or sunk");
 STATISTIC(NumPromoted, "Number of memory locations promoted to registers");
 
 /// Memory promotion is enabled by default.
+static cl::opt<bool> DisableLICM("disable-licm", cl::Hidden, cl::init(false));
+
 static cl::opt<bool>
     DisablePromotion("disable-licm-promotion", cl::Hidden, cl::init(false),
                      cl::desc("Disable memory promotion in LICM pass"));
@@ -388,6 +390,8 @@ bool LoopInvariantCodeMotion::runOnLoop(
     ScalarEvolution *SE, MemorySSA *MSSA, OptimizationRemarkEmitter *ORE,
     bool LoopNestMode) {
   bool Changed = false;
+  if (DisableLICM)
+    return false;
 
   assert(L->isLCSSAForm(*DT) && "Loop is not in LCSSA form.");
   MSSA->ensureOptimizedUses();

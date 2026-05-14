@@ -1,3 +1,8 @@
+include_directories(
+  ${LLVM_BINARY_DIR}/lib/Target/Linx
+  ${LLVM_MAIN_SRC_DIR}/lib/Target/Linx
+  )
+
 add_llvm_component_library(LLVMMCParser
   AsmLexer.cpp
   AsmParser.cpp

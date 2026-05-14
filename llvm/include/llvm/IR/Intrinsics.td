@@ -2031,6 +2031,46 @@ def int_ptrauth_sign_generic : Intrinsic<[llvm_i64_ty],
                                          [llvm_i64_ty, llvm_i64_ty],
                                          [IntrNoMem]>;
 
+def int_blkv_get_tile_ptr : Intrinsic<[llvm_anyptr_ty], [llvm_anyvector_ty], [IntrNoMem]>;
+
+def int_blkv_get_index_x : Intrinsic<[llvm_i16_ty], [], [IntrNoMem]>;
+def int_blkv_get_index_y : Intrinsic<[llvm_i16_ty], [], [IntrNoMem]>;
+def int_blkv_get_index_z : Intrinsic<[llvm_i16_ty], [], [IntrNoMem]>;
+
+//===----------------------------------------------------------------------===//
+// Special Intrinsics for backend internal use only. No frontend
+// should emit calls to these.
+// ===----------------------------------------------------------------------===//
+def int_blkv_if : Intrinsic<[llvm_i1_ty, llvm_anyint_ty],
+  [llvm_i1_ty], [IntrConvergent, IntrWillReturn]
+>;
+
+def int_blkv_flow : Intrinsic<[llvm_i1_ty, llvm_anyint_ty],
+  [llvm_anyint_ty], [IntrConvergent, IntrWillReturn]
+>;
+
+def int_blkv_if_break : Intrinsic<[llvm_anyint_ty],
+  [llvm_i1_ty, LLVMMatchType<0>],
+  [IntrNoMem, IntrConvergent, IntrWillReturn]
+>;
+
+def int_blkv_loop : Intrinsic<[llvm_i1_ty],
+  [llvm_anyint_ty], [IntrConvergent, IntrWillReturn]
+>;
+
+def int_blkv_end_cf : Intrinsic<[], [llvm_anyint_ty],
+  [IntrConvergent, IntrWillReturn]>;
+
+// replace divengent PHI
+def int_blkv_merge_cf : Intrinsic<[llvm_any_ty],
+                                  [LLVMMatchType<0>, LLVMMatchType<0>],
+                                  [IntrConvergent, IntrWillReturn]>;
+
+// Represent unreachable in a divergent region.
+def int_blkv_unreachable : Intrinsic<[], [], [IntrConvergent]>;
+
+def int_blkv_kill : Intrinsic<[], [llvm_i1_ty], []>;
+
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -2050,6 +2090,7 @@ include "llvm/IR/IntrinsicsBPF.td"
 include "llvm/IR/IntrinsicsSystemZ.td"
 include "llvm/IR/IntrinsicsWebAssembly.td"
 include "llvm/IR/IntrinsicsRISCV.td"
+include "llvm/IR/IntrinsicsLinx.td"
 include "llvm/IR/IntrinsicsSPIRV.td"
 include "llvm/IR/IntrinsicsVE.td"
 include "llvm/IR/IntrinsicsDirectX.td"

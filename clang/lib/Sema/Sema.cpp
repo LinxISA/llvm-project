@@ -1264,10 +1264,11 @@ void Sema::ActOnEndOfTranslationUnit() {
   //   translation unit contains a file scope declaration of that
   //   identifier, with the composite type as of the end of the
   //   translation unit, with an initializer equal to 0.
+
   llvm::SmallSet<VarDecl *, 32> Seen;
   for (TentativeDefinitionsType::iterator
-            T = TentativeDefinitions.begin(ExternalSource),
-         TEnd = TentativeDefinitions.end();
+           T = TentativeDefinitions.begin(ExternalSource),
+           TEnd = TentativeDefinitions.end();
        T != TEnd; ++T) {
     VarDecl *VD = (*T)->getActingDefinition();
 
@@ -1277,8 +1278,8 @@ void Sema::ActOnEndOfTranslationUnit() {
     if (!VD || VD->isInvalidDecl() || !Seen.insert(VD).second)
       continue;
 
-    if (const IncompleteArrayType *ArrayT
-        = Context.getAsIncompleteArrayType(VD->getType())) {
+    if (const IncompleteArrayType *ArrayT =
+            Context.getAsIncompleteArrayType(VD->getType())) {
       // Set the length of the array to 1 (C99 6.9.2p5).
       Diag(VD->getLocation(), diag::warn_tentative_incomplete_array);
       llvm::APInt One(Context.getTypeSize(Context.getSizeType()), true);

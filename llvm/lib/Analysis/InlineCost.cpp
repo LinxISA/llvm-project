@@ -52,6 +52,7 @@ STATISTIC(NumCallsAnalyzed, "Number of call sites analyzed");
 
 static cl::opt<int>
     DefaultThreshold("inlinedefault-threshold", cl::Hidden, cl::init(225),
+                     cl::ZeroOrMore,
                      cl::desc("Default amount of inlining to perform"));
 
 // We introduce this option since there is a minor compile-time win by avoiding

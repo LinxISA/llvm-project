@@ -150,6 +150,16 @@ namespace clang {
   };
   } // namespace RISCV
 
+  /// LinxV5 builtins
+  namespace LinxV5 {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsLinxV5.def"
+    LastTSBuiltin
+  };
+  } // namespace LinxV5
+
   /// Flags to identify the types for overloaded Neon builtins.
   ///
   /// These must be kept in sync with the flags in utils/TableGen/NeonEmitter.h.

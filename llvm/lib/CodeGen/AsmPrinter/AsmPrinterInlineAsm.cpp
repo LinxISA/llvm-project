@@ -122,6 +122,7 @@ void AsmPrinter::emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
   if (Dialect == InlineAsm::AD_Intel)
     Parser->getLexer().setLexMasmIntegers(true);
 
+  TAP->startParsingInlineAsm();
   emitInlineAsmStart();
   // Don't implicitly switch to the text section before the asm.
   (void)Parser->Run(/*NoInitialTextSection*/ true,

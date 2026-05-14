@@ -36,6 +36,13 @@ if(CLANG_VENDOR)
     PROPERTIES COMPILE_DEFINITIONS "CLANG_VENDOR=\"${CLANG_VENDOR} \"")
 endif()
 
+set (CUSTOM_DEPENDENCES "")
+set (HiIPU_TARGET_SOURCE "")
+if (LLVM_TARGETS_TO_BUILD MATCHES "HiIPU")
+  set (CUSTOM_DEPENDENCES "CCEIntrinsicEmitter")
+  set (HiIPU_TARGET_SOURCE "Targets/HiIPU.cpp")
+endif()
+
 add_clang_library(clangBasic
   Attributes.cpp
   Builtins.cpp
@@ -83,6 +90,7 @@ add_clang_library(clangBasic
   Targets/Lanai.cpp
   Targets/Le64.cpp
   Targets/M68k.cpp
+  Targets/LinxV5.cpp
   Targets/MSP430.cpp
   Targets/Mips.cpp
   Targets/NVPTX.cpp
@@ -110,7 +118,3 @@ add_clang_library(clangBasic
   omp_gen
   )
 
-target_link_libraries(clangBasic
-  PRIVATE
-  ${LLVM_ATOMIC_LIB}
-)

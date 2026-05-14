@@ -74,6 +74,12 @@ public:
     amdgcn,         // AMDGCN: AMD GCN GPUs
     riscv32,        // RISC-V (32-bit): riscv32
     riscv64,        // RISC-V (64-bit): riscv64
+    linx64,         // LINX (64-bit): linx64
+    linx64be,       // LINX (64-bit): linx64be
+    linx64v4,       // LINX (64-bit): linx64v4
+    linx64v4be,     // LINX (64-bit, big-endian): linx64v4be
+    linx64v5,       // LINX (64-bit): linx64v5
+    linx64v5be,     // LINX (64-bit, big-endian): linx64v5be
     sparc,          // Sparc: sparc
     sparcv9,        // Sparcv9: Sparcv9
     sparcel,        // Sparc: (endianness = little). NB: 'Sparcle' is a CPU variant
@@ -858,6 +864,24 @@ public:
   bool isPPC64() const {
     return getArch() == Triple::ppc64 || getArch() == Triple::ppc64le;
   }
+
+  /// Tests whether the target is LinxV4 64-bit
+  bool isLinxV4() const {
+    return getArch() == Triple::linx64v4 || getArch() == Triple::linx64v4be;
+  }
+
+  /// Tests whether the target is LinxV5 64-bit
+  bool isLinxV5() const {
+    return getArch() == Triple::linx64v5 || getArch() == Triple::linx64v5be;
+  }
+
+  /// Tests whether the target is Linx (only 64-bit now)
+  bool isLinx() const {
+    return getArch() == Triple::linx64 || getArch() == Triple::linx64be;
+  }
+
+/// LinDa means support 6188/6189
+  bool isLinxClass() const { return isLinx() || isLinxV4() || isLinxV5(); }
 
   /// Tests whether the target is RISC-V (32- and 64-bit).
   bool isRISCV() const {

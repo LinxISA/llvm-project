@@ -227,10 +227,6 @@ Bug Fixes
   `Issue 57377 <https://github.com/llvm/llvm-project/issues/57377>`_.
 - Fix a crash when a ``btf_type_tag`` attribute is applied to the pointee of
   a function pointer.
-- Clang 14 predeclared some builtin POSIX library functions in ``gnu2x`` mode,
-  and Clang 15 accidentally stopped predeclaring those functions in that
-  language mode. Clang 16 now predeclares those functions again. This fixes
-  `Issue 56607 <https://github.com/llvm/llvm-project/issues/56607>`_.
 
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -331,7 +327,8 @@ Improvements to Clang's diagnostics
   will switch to disable them in an upcoming release.
 - On AIX, only emit XL compatibility warning when 16 byte aligned structs are
   pass-by-value function arguments.
-
+- Clang's ``-Wswitch-default`` flag now diagnoses whenever a ``switch`` statement
+  does not have a ``default`` label.
 
 Non-comprehensive list of changes in this release
 -------------------------------------------------

@@ -86,6 +86,7 @@ enum DiagnosticKind {
   DK_SrcMgr,
   DK_DontCall,
   DK_MisExpect,
+  DK_BadOptimization,
   DK_FirstPluginKind // Must be last value to work with
                      // getNextAvailablePluginDiagnosticKind
 };
@@ -1003,6 +1004,33 @@ public:
 
   /// \see DiagnosticInfoOptimizationBase::isEnabled.
   bool isEnabled() const override;
+};
+
+/// Diagnostic information for bad optimization.
+class DiagnosticInfoBadOptimization : public DiagnosticInfoWithLocationBase {
+private:
+  const char *PassName;
+  StringRef RemarkName;
+  Instruction *OInstr = nullptr;
+  Instruction *NInstr = nullptr;
+
+public:
+  /// \p PassName is the name of the pass emitting this diagnostic.  \p
+  /// RemarkName is a textual identifier for the remark (single-word,
+  /// camel-case).  \p OInst is the origin Instruction and \p CodeRegion is the
+  /// new Instruction).
+  DiagnosticInfoBadOptimization(const char *PassName, StringRef RemarkName,
+                                Instruction *OI, Instruction *NI);
+
+  void print(DiagnosticPrinter &DP) const override;
+  std::string getMsg() const;
+
+  StringRef getPassName() const { return PassName; }
+  StringRef getRemarkName() const { return RemarkName; }
+
+  static bool classof(const DiagnosticInfo *DI) {
+    return DI->getKind() == DK_BadOptimization;
+  }
 };
 
 /// Diagnostic information for unsupported feature in backend.

@@ -1,0 +1,10 @@
+// LinxV5TileRMode.def
+RMODE(RNONE, 0)
+RMODE(RNE,   1)
+RMODE(RTZ,   2)
+RMODE(RDN,   3)
+RMODE(RUP,   4)
+RMODE(RNA,   5)
+RMODE(RTO,   6)
+RMODE(RHB,   7)
+RMODE(EMPTY_RMode, 8)

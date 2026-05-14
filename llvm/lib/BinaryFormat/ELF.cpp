@@ -193,6 +193,8 @@ uint16_t ELF::convertArchNameToEMachine(StringRef Arch) {
       .Case("csr_kalimba", EM_CSR_KALIMBA)
       .Case("amdgpu", EM_AMDGPU)
       .Case("riscv", EM_RISCV)
+      .Case("linxv4", EM_LinxV4)
+      .Case("linxv5", EM_LinxV5)
       .Case("lanai", EM_LANAI)
       .Case("bpf", EM_BPF)
       .Case("ve", EM_VE)

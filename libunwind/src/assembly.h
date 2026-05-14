@@ -254,6 +254,36 @@ aliasname:                                                                     \
   .csect .text[PR], 2 SEPARATOR                                                \
 .name:
   // clang-format on
+#elif defined(__linx) && !defined(__linx_v4) && !defined(__linx_v5)
+// clang-format off
+#define DEFINE_LIBUNWIND_FUNCTION(name)                                        \
+  .globl SYMBOL_NAME(name) SEPARATOR                                           \
+  HIDDEN_SYMBOL(SYMBOL_NAME(name)) SEPARATOR                                   \
+  SYMBOL_IS_FUNC(SYMBOL_NAME(name)) SEPARATOR                                  \
+  PPC64_OPD1                                                                   \
+  SYMBOL_NAME(name):                                                           \
+  .p2align 3 SEPARATOR                                                         \
+  PPC64_OPD2                                                                   \
+  AARCH64_BTI
+// clang-format on
+#elif defined(__linx_v4)
+// clang-format off
+#define DEFINE_LIBUNWIND_FUNCTION(name)                                        \
+  .globl SYMBOL_NAME(name) SEPARATOR                                           \
+  HIDDEN_SYMBOL(SYMBOL_NAME(name)) SEPARATOR                                   \
+  SYMBOL_IS_FUNC(SYMBOL_NAME(name)) SEPARATOR                                  \
+  .p2align 1 SEPARATOR                                                         \
+  SYMBOL_NAME(name):
+// clang-format on
+#elif defined(__linx_v5)
+// clang-format off
+#define DEFINE_LIBUNWIND_FUNCTION(name)                                        \
+  .globl SYMBOL_NAME(name) SEPARATOR                                           \
+  HIDDEN_SYMBOL(SYMBOL_NAME(name)) SEPARATOR                                   \
+  SYMBOL_IS_FUNC(SYMBOL_NAME(name)) SEPARATOR                                  \
+  .p2align 1 SEPARATOR                                                         \
+  SYMBOL_NAME(name):
+// clang-format on
 #else
 #define DEFINE_LIBUNWIND_FUNCTION(name)                                        \
   .globl SYMBOL_NAME(name) SEPARATOR                                           \

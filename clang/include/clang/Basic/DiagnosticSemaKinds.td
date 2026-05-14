@@ -22,6 +22,8 @@ def warn_variables_not_in_loop_body : Warning<
   "variable%select{s| %1|s %1 and %2|s %1, %2, and %3|s %1, %2, %3, and %4}0 "
   "used in loop condition not modified in loop body">,
   InGroup<ForLoopAnalysis>, DefaultIgnore;
+def warn_redundant_decls : Warning<"redundant declaration of %0">,
+  InGroup<RedundantDecls>, DefaultIgnore;
 def warn_redundant_loop_iteration : Warning<
   "variable %0 is %select{decremented|incremented}1 both in the loop header "
   "and in the loop body">,
@@ -465,6 +467,9 @@ def warn_modifying_shadowing_decl :
   Warning<"modifying constructor parameter %0 that shadows a "
           "field of %1">,
   InGroup<ShadowFieldInConstructorModified>, DefaultIgnore;
+def warn_linx_l2dp_data_placement :
+  Warning<"expected a '__linda_thread' or '__linda_shared' specifier for %0">,
+  InGroup<LindaGlobalVarDecl>, DefaultIgnore;
 
 // C++ decomposition declarations
 def err_decomp_decl_context : Error<
@@ -3018,6 +3023,12 @@ def err_attribute_too_many_arguments : Error<
   "%0 attribute takes no more than %1 argument%s1">;
 def err_attribute_too_few_arguments : Error<
   "%0 attribute takes at least %1 argument%s1">;
+def warn_invalid_optimize_attr_argument : Warning <
+  "bad option '%1' to attribute %0; "
+  "attribute ignored">, InGroup<IgnoredAttributes>;
+def warn_invalid_optimize_attr_type : Warning <
+  "%0 attribute only support string argument; "
+  "attribute ignored">, InGroup<IgnoredAttributes>;
 def err_attribute_invalid_vector_type : Error<"invalid vector element type %0">;
 def err_attribute_invalid_matrix_type : Error<"invalid matrix element type %0">;
 def err_attribute_bad_neon_vector_size : Error<
@@ -8058,7 +8069,7 @@ def err_typecheck_convert_pointer_int : Error<
   "; remove &}3">;
 def ext_typecheck_convert_pointer_int : ExtWarn<
   err_typecheck_convert_pointer_int.Text>,
-  InGroup<IntConversion>, DefaultError;
+  InGroup<IntConversion>;
 def err_typecheck_convert_int_pointer : Error<
   "incompatible integer to pointer conversion "
   "%select{%diff{assigning to $ from $|assigning to different types}0,1"
@@ -8078,7 +8089,7 @@ def err_typecheck_convert_int_pointer : Error<
   "; remove &}3">;
 def ext_typecheck_convert_int_pointer : ExtWarn<
   err_typecheck_convert_int_pointer.Text>,
-  InGroup<IntConversion>, DefaultError;
+  InGroup<IntConversion>;
 def ext_typecheck_convert_pointer_void_func : Extension<
   "%select{%diff{assigning to $ from $|assigning to different types}0,1"
   "|%diff{passing $ to parameter of type $|"
@@ -8584,6 +8595,9 @@ def err_cuda_device_builtin_surftex_ref_decl : Error<
 def note_cuda_device_builtin_surftex_should_be_template_class : Note<
     "%0 needs to be instantiated from a class template with proper "
     "template arguments">;
+
+def err_blkc_wrong_dim_config : Error<
+    "%0 needs to have no more than 3 dimension arguments">;
 
 def err_hip_invalid_args_builtin_mangled_name : Error<
     "invalid argument: symbol must be a device-side function or global variable">;
@@ -9735,6 +9749,8 @@ def warn_missing_case : Warning<"%plural{"
   "3:enumeration values %1, %2, and %3 not handled in switch|"
   ":%0 enumeration values not handled in switch: %1, %2, %3...}0">,
   InGroup<Switch>;
+def warn_switch_default : Warning<"'switch' missing 'default' label">,
+  InGroup<SwitchDefault>, DefaultIgnore;
 
 def warn_unannotated_fallthrough : Warning<
   "unannotated fall-through between switch labels">,
@@ -11650,4 +11666,51 @@ def err_non_designated_init_used : Error<
   "a randomized struct can only be initialized with a designated initializer">;
 def err_cast_from_randomized_struct : Error<
   "casting from randomized structure pointer type %0 to %1">;
+
+// Linx extension
+def err_linx_builtin_requires_imm : Error<
+  "require a immediate number for register id.">;
+def err_typecheck_invalid_noalias_not_pointer : Error<
+  "noalias requires a pointer or reference (%0 is invalid)">;
+def err_attribute_noalias_not_param_var : Error<
+  "noalias declaration of %0 must be a function parameter">;
+def err_shared_conflict_with_thread : Error<
+  "'%0' is conflict with '%1'">;
+def err_invalid_shared : Error<
+  "'%0' is only allowed on variable declarations">;
+def err_shared_non_global : Error<
+  "'%0' variables must have global storage">;
+
+// LinxV5 extension
+def err_linxv5_blk_dim_requires_integer : Error<
+  "linxv5 blk require integer for dimensions.">;
+def err_linxv5_blk_tile_size_requires_imm : Error<
+  "linxv5 blk require immediate for tile type.">;
+
+def err_linxv5_blk_datatype_requires_imm : Error<
+  "linxv5 blk require immediate for datatype.">;
+
+def err_attribute_not_param : Error<
+  "%0 only modifies function parameter">;
+
+def err_attribute_not_function : Error<
+  "%0 only modifies function">;
+
+def err_linx_FPArith_invalid_type : Error<
+    "argument to linxv5 FPArith must be a floating point type, but got %0">;
+
+def err_linx_builtin_type_mismatch : Error<
+  "Linx builtin argument types are inconsistent : arg0:'%0', arg1: '%1'">;
+
+def err_linx_mtc_vec_called_regular : Error<
+  "function '%0' is declared with mtc or vec and cannot be called as a regular function">;
+
+def err_linx_lack_mtc_vec_called_kernel : Error<
+  "The function '%0' lacks __vec__ or __mtc__ keyword modifier.">;
+
+def err_linx_exec_args_mismatch : Error<
+  "execution argument count mismatch: provided %0 but function expects %1">;
+
+def err_not_function : Error<
+  "%0 is not a function">;
 } // end of sema component.

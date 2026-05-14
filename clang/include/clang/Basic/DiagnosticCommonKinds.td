@@ -26,10 +26,47 @@ def warn_stack_exhausted : Warning<
   "stack nearly exhausted; compilation time may suffer, and "
   "crashes due to stack overflow are likely">,
   InGroup<DiagGroup<"stack-exhausted">>, NoSFINAE;
+def warn_duplicated_cond
+    : Warning<"expression is identical to previous condition">,
+      InGroup<DuplicatedCond>,
+      DefaultIgnore;
+def warn_duplicated_cond_2
+    : Warning<"conditions of the inner and outer statements are identical">,
+      InGroup<DuplicatedCond>,
+      DefaultIgnore;
+def warn_duplicated_exp1
+    : Warning<"identical expressions on both sides of bitwise operator">,
+      InGroup<DuplicatedBranches>,
+      DefaultIgnore;
+def warn_duplicated_exp2
+    : Warning<"identical expressions on both sides of logical operator">,
+      InGroup<DuplicatedBranches>,
+      DefaultIgnore;
+def warn_duplicated_exp3
+    : Warning<"comparison of identical expressions always evaluates to equal">,
+      InGroup<DuplicatedBranches>,
+      DefaultIgnore;
+def warn_duplicated_exp4
+    : Warning<"comparison of identical expressions always evaluates to true">,
+      InGroup<DuplicatedBranches>,
+      DefaultIgnore;
+def warn_duplicated_exp5
+    : Warning<"comparison of identical expressions always evaluates to false">,
+      InGroup<DuplicatedBranches>,
+      DefaultIgnore;
+def warn_duplicated_branches : Warning<"true and false branches are identical">,
+                               InGroup<DuplicatedBranches>,
+                               DefaultIgnore;
+def warn_duplicated_branches2 : Warning<"identical expressions on both sides "
+                                        "of ':' in conditional expression">,
+                                InGroup<DuplicatedBranches>,
+                                DefaultIgnore;
+def warn_usr_message : Warning<"%0">;
 
 def note_declared_at : Note<"declared here">;
 def note_previous_definition : Note<"previous definition is here">;
 def note_previous_declaration : Note<"previous declaration is here">;
+def note_redundant_decls_for_include : Note<"In file included from">;
 def note_previous_implicit_declaration : Note<
   "previous implicit declaration is here">;
 def note_previous_use : Note<"previous use is here">;
@@ -78,6 +115,8 @@ def err_param_redefinition : Error<"redefinition of parameter %0">;
 def warn_method_param_redefinition : Warning<"redefinition of method parameter %0">;
 def warn_method_param_declaration : Warning<"redeclaration of method parameter %0">,
   InGroup<DuplicateArgDecl>, DefaultIgnore;
+def warn_old_style_declaration: Warning <"'%0' is not at beginning of declaration">,
+  InGroup<OldStyleDeclaration>, DefaultIgnore;
 def err_invalid_storage_class_in_func_decl : Error<
   "invalid storage class specifier in function declarator">;
 def err_expected_namespace_name : Error<"expected namespace name">;

@@ -240,7 +240,7 @@ PUNCTUATOR(coloncolon,          "::")
 // Objective C support.
 PUNCTUATOR(at,                  "@")
 
-// CUDA support.
+// CUDA/Linx Block-C support.
 PUNCTUATOR(lesslessless,          "<<<")
 PUNCTUATOR(greatergreatergreater, ">>>")
 
@@ -330,6 +330,13 @@ KEYWORD(_Thread_local               , KEYALL)
 KEYWORD(__func__                    , KEYALL)
 KEYWORD(__objc_yes                  , KEYALL)
 KEYWORD(__objc_no                   , KEYALL)
+KEYWORD(__noalias__                 , KEYALL)
+KEYWORD(__linda_thread              , KEYALL)
+KEYWORD(__linda_shared              , KEYALL)
+KEYWORD(__out__                     , KEYALL)
+KEYWORD(__in__                      , KEYALL)
+KEYWORD(__vec__                     , KEYALL)
+KEYWORD(__mtc__                     , KEYALL)
 
 
 // C++ 2.11p1: Keywords.
@@ -902,6 +909,9 @@ PRAGMA_ANNOTATION(pragma_openmp_end)
 // The lexer produces these so that they only take effect when the parser
 // handles #pragma loop ... directives.
 PRAGMA_ANNOTATION(pragma_loop_hint)
+
+// Annotations for LINX pragma directives - #pragma linx ...
+PRAGMA_ANNOTATION(pragma_linx)
 
 PRAGMA_ANNOTATION(pragma_fp)
 

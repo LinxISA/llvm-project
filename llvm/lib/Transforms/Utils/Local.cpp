@@ -31,6 +31,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
@@ -106,6 +107,11 @@ static cl::opt<unsigned> PHICSENumPHISmallSize(
     cl::desc(
         "When the basic block contains not more than this number of PHI nodes, "
         "perform a (faster!) exhaustive search instead of set-driven one."));
+
+static cl::opt<bool> EnableNoreturnfuncElimination(
+    "enable-noreturnfunc-elimination", cl::init(false), cl::Hidden,
+    cl::desc(
+        "Enable unreachable instructions call no return function elimination"));
 
 // Max recursion depth for collectBitParts used when detecting bswap and
 // bitreverse idioms.
@@ -2307,10 +2313,20 @@ static bool markAliveBlocks(Function &F,
           // If we found a call to a no-return function, insert an unreachable
           // instruction after it.  Make sure there isn't *already* one there
           // though.
-          if (!isa<UnreachableInst>(CI->getNextNode())) {
+          if (EnableNoreturnfuncElimination &&
+              !isa<UnreachableInst>(CI->getNextNode())) {
             // Don't insert a call to llvm.trap right before the unreachable.
             changeToUnreachable(CI->getNextNode(), false, DTU);
             Changed = true;
+            // [BiSheng CPU] emit remark if add -Rpass=local
+            OptimizationRemark R =
+                OptimizationRemark(DEBUG_TYPE, "local", CI)
+                << "The code block following this instruction will be "
+                << "considered unreachable, which may be unexpected. "
+                << "Please comfirm it.";
+            Function *CalledFunction = CI->getCalledFunction();
+            OptimizationRemarkEmitter ORE(CalledFunction);
+            ORE.emit(R);
           }
           break;
         }

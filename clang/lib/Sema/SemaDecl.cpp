@@ -1580,9 +1580,190 @@ Scope *Sema::getScopeForDeclContext(Scope *S, DeclContext *DC) {
   return nullptr;
 }
 
-static bool isOutOfScopePreviousDeclaration(NamedDecl *,
-                                            DeclContext*,
-                                            ASTContext&);
+static bool IsNameLocationvalid(Decl *RedundantDecl, Decl *D) {
+  if (!RedundantDecl->getLocation().isValid() || !D->getLocation().isValid())
+    return false;
+
+  if (D->getLocation() == RedundantDecl->getLocation())
+    return false;
+  return true;
+}
+
+static bool IsDeclKindDiff(Decl *RedundantDecl, Decl *D) {
+  if (D->getKind() != RedundantDecl->getKind())
+    return false;
+  return true;
+}
+
+static bool checkDeclRes(const LookupResult &R) {
+  if (R.getResultKind() != LookupResult::Found || !R.getFoundDecl())
+    return false;
+  return true;
+}
+
+// FIXME: This needs to be refactored; some other isInMainFile users want
+// these semantics.
+static bool isMainFileLoc(const Sema &S, SourceLocation Loc) {
+  if (S.TUKind != TU_Complete)
+    return false;
+  return S.SourceMgr.isInMainFile(Loc);
+}
+
+namespace {
+const clang::NamespaceDecl *getNamespaceContext(const clang::Decl *D) {
+  const clang::DeclContext *DC = D->getDeclContext();
+  while (DC && !llvm::isa<clang::NamespaceDecl>(DC)) {
+    DC = DC->getParent();
+  }
+  return llvm::dyn_cast_or_null<clang::NamespaceDecl>(DC);
+}
+
+bool isInSameFunction(const Decl *D1, const Decl *D2) {
+  const DeclContext *FD1 = D1->getLexicalDeclContext();
+  const DeclContext *FD2 = D2->getLexicalDeclContext();
+  if (!FD1 && !FD2)
+    return true;
+  return FD1 && FD2 && FD1 == FD2;
+}
+
+// Determines whether two declarations are in the same namespace.
+bool isInSameNamespace(const clang::Decl *D1, const clang::Decl *D2) {
+  const clang::NamespaceDecl *NS1 = getNamespaceContext(D1);
+  const clang::NamespaceDecl *NS2 = getNamespaceContext(D2);
+  // If neither has a namespace context, they are considered to be in the global
+  // namespace.
+  if ((!NS1 && !NS2)) {
+    return true;
+  }
+  if ((!NS1 && NS2) || (NS1 && !NS2))
+    return false;
+  // return result of comparing namespace
+  return NS1->getNameAsString() == NS2->getNameAsString();
+}
+
+bool IsAliasWeakDeclImplicit(const clang::Decl *FD, const Decl *D) {
+  // [BiSheng] if D is alias, don't warn for redundant
+  if (D->getAttr<AliasAttr>())
+    return true;
+  if (!FD->hasAttr<AliasAttr>() || !FD->getAttr<WeakAttr>()) {
+    return false;
+  }
+  for (auto *Attr : FD->attrs()) {
+    if (Attr->isImplicit()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isExternCDecl(const Decl *D) {
+  const DeclContext *DC = D->getDeclContext();
+
+  while (DC) {
+    if (const auto *LSD = dyn_cast<LinkageSpecDecl>(DC)) {
+      if (LSD->getLanguage() == LinkageSpecDecl::lang_c) {
+        return true;
+      }
+    }
+    DC = DC->getParent();
+  }
+  return false;
+}
+} // namespace
+
+bool Sema::checkForFriendFunc(const NamedDecl *D1, const Decl *D2) {
+  if (D1->isInIdentifierNamespace(Decl::IDNS_OrdinaryFriend) &&
+      D2->isInIdentifierNamespace(Decl::IDNS_OrdinaryFriend)) {
+    Diag(D1->getLocation(), diag::warn_redundant_decls) << D1->getDeclName();
+    Diag(D2->getLocation(), diag::note_previous_declaration);
+    return true;
+  } else if (D1->isInIdentifierNamespace(Decl::IDNS_OrdinaryFriend) !=
+             D2->isInIdentifierNamespace(Decl::IDNS_OrdinaryFriend)) {
+    return true;
+  }
+  return false;
+}
+
+void Sema::DiagnoseRedundantDecls(NamedDecl *D) {
+  if (!D)
+    return;
+  auto *Prev = D->getPreviousDecl();
+  if (!Prev)
+    return;
+  if (Diags.isIgnored(diag::warn_redundant_decls, D->getLocation()))
+    return;
+
+  // check kind of Decl, location, and exclude implicit weak symbolic
+  // declarations
+  if (!IsDeclKindDiff(Prev, D) || !IsNameLocationvalid(Prev, D) ||
+      IsAliasWeakDeclImplicit(Prev, D))
+    return;
+
+  // check for cpp
+  if (getLangOpts().CPlusPlus) {
+    // checkfor namespace, Scope, exclude two extern symbols in same file
+    if (!isInSameNamespace(D, Prev))
+      return;
+    if ((!isExternCDecl(D) || !isExternCDecl(Prev)) &&
+        this->SourceMgr.isWrittenInSameFile(D->getLocation(),
+                                            Prev->getLocation()) &&
+        !isInSameFunction(D, Prev))
+      return;
+    // check for frined function
+    if (checkForFriendFunc(D, Prev))
+      return;
+
+    // Align with gcc, exclude the extern symbol and other symbol the
+    // declaration in same file without warning
+    if (((!isExternCDecl(D) && isExternCDecl(Prev)) ||
+         (isExternCDecl(D) && !isExternCDecl(Prev))) &&
+        this->SourceMgr.isWrittenInSameFile(D->getLocation(),
+                                            Prev->getLocation())) {
+      return;
+    }
+  } else if (!this->SourceMgr.isWrittenInSameFile(D->getLocation(),
+                                                  Prev->getLocation())) {
+    // for c, output information for include
+    Diag(D->getLocation(), diag::warn_redundant_decls) << D->getDeclName();
+    SourceManager &SM = this->SourceMgr;
+    SourceLocation IncludeLoc =
+        SM.getIncludeLoc(SM.getFileID(Prev->getLocation()));
+    Diag(IncludeLoc, diag::note_redundant_decls_for_include);
+    Diag(Prev->getLocation(), diag::note_previous_declaration);
+    return;
+  }
+  Diag(D->getLocation(), diag::warn_redundant_decls) << D->getDeclName();
+  Diag(Prev->getLocation(), diag::note_previous_declaration);
+
+  return;
+}
+
+void Sema::RedundantAlaisValueDecls(NamedDecl *D, const LookupResult &R) {
+  if (!D || !checkDeclRes(R))
+    return;
+
+  // Return if warning is ignored.
+  if (Diags.isIgnored(diag::warn_redundant_decls, D->getLocation()))
+    return;
+
+  NamedDecl *RedundantDecl = R.getFoundDecl();
+  if (!IsDeclKindDiff(RedundantDecl, D) ||
+      !IsNameLocationvalid(RedundantDecl, D))
+    return;
+
+  if (!isMainFileLoc(*this, RedundantDecl->getLocation()))
+    return;
+  if (!this->SourceMgr.isWrittenInSameFile(D->getLocation(),
+                                           RedundantDecl->getLocation()))
+    return;
+  // Emit warning and note.
+  Diag(D->getLocation(), diag::warn_redundant_decls) << D->getDeclName();
+  Diag(RedundantDecl->getLocation(), diag::note_previous_declaration);
+  return;
+}
+
+static bool isOutOfScopePreviousDeclaration(NamedDecl *, DeclContext *,
+                                            ASTContext &);
 
 /// Filters out lookup results that don't fall within the given scope
 /// as determined by isDeclInScope.
@@ -1842,14 +2023,6 @@ bool Sema::mightHaveNonExternalLinkage(const DeclaratorDecl *D) {
   }
 
   return !D->isExternallyVisible();
-}
-
-// FIXME: This needs to be refactored; some other isInMainFile users want
-// these semantics.
-static bool isMainFileLoc(const Sema &S, SourceLocation Loc) {
-  if (S.TUKind != TU_Complete)
-    return false;
-  return S.SourceMgr.isInMainFile(Loc);
 }
 
 bool Sema::ShouldWarnIfUnusedFileScopedDecl(const DeclaratorDecl *D) const {
@@ -7721,6 +7894,26 @@ NamedDecl *Sema::ActOnVariableDeclarator(
     if (const auto *TT = R->getAs<TypedefType>())
       copyAttrFromTypedefToDecl<AllocSizeAttr>(*this, NewVD, TT);
 
+  DeclSpec::LTSCS LTSCSpec = D.getDeclSpec().getLINDAThreadStorageClassSpec();
+  if (Context.getTargetInfo().getTriple().isLinxClass()) {
+    CheckLinxL2DPGlobalDecl(NewVD, D);
+    // 1. add tls model to linda_thread variables.
+    // 2. add tls model to global vars without linda_thread/linda_shared
+    // specifier if option enabled.
+    if (LTSCSpec == LTSCS___linda_thread ||
+        (getLangOpts().LINDAGlobalVarAsTLS && LTSCSpec == LTSCS_unspecified &&
+         NewVD->hasGlobalStorage())) {
+      NewVD->setTSCSpec(DeclSpec::TSCS___thread);
+      NewVD->addAttr(
+          TLSModelAttr::CreateImplicit(Context, "local-exec", SourceLocation(),
+                                       AttributeCommonInfo::Syntax::AS_GNU));
+    }
+  } else if (LTSCSpec != LTSCS_unspecified) {
+    Diag(D.getDeclSpec().getLINDAThreadStorageClassSpecLoc(),
+         diag::err_type_unsupported)
+        << DeclSpec::getSpecifierName(LTSCSpec);
+  }
+
   if (getLangOpts().CUDA || getLangOpts().OpenMPIsDevice ||
       getLangOpts().SYCLIsDevice) {
     if (EmitTLSUnsupportedError &&
@@ -7824,13 +8017,13 @@ NamedDecl *Sema::ActOnVariableDeclarator(
   // declaration has linkage).
   FilterLookupForScope(Previous, OriginalDC, S, shouldConsiderLinkage(NewVD),
                        D.getCXXScopeSpec().isNotEmpty() ||
-                       IsMemberSpecialization ||
-                       IsVariableTemplateSpecialization);
+                           IsMemberSpecialization ||
+                           IsVariableTemplateSpecialization);
 
   // Check whether the previous declaration is in the same block scope. This
   // affects whether we merge types with it, per C++11 [dcl.array]p3.
-  if (getLangOpts().CPlusPlus &&
-      NewVD->isLocalVarDecl() && NewVD->hasExternalStorage())
+  if (getLangOpts().CPlusPlus && NewVD->isLocalVarDecl() &&
+      NewVD->hasExternalStorage())
     NewVD->setPreviousDeclInSameBlockScope(
         Previous.isSingleResult() && !Previous.isShadowed() &&
         isDeclInScope(Previous.getFoundDecl(), OriginalDC, S, false));
@@ -7949,6 +8142,18 @@ NamedDecl *Sema::ActOnVariableDeclarator(
 
   if (IsMemberSpecialization && !NewVD->isInvalidDecl())
     CompleteMemberSpecialization(NewVD, Previous);
+
+  if (!getLangOpts().CPlusPlus) {
+    if (!NewVD->getAttr<AliasAttr>()) {
+      if ((!NewVD->isThisDeclarationADefinition()) ||
+          (NewVD->getStorageClass() == clang::SC_Static)) {
+        DiagnoseRedundantDecls(NewVD);
+      }
+    } else {
+      // check for val which has AliasAttr
+      RedundantAlaisValueDecls(NewVD, Previous);
+    }
+  }
 
   return NewVD;
 }
@@ -9834,19 +10039,19 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   // Filter out previous declarations that don't match the scope.
   FilterLookupForScope(Previous, OriginalDC, S, shouldConsiderLinkage(NewFD),
                        D.getCXXScopeSpec().isNotEmpty() ||
-                       isMemberSpecialization ||
-                       isFunctionTemplateSpecialization);
+                           isMemberSpecialization ||
+                           isFunctionTemplateSpecialization);
 
   // Handle GNU asm-label extension (encoded as an attribute).
-  if (Expr *E = (Expr*) D.getAsmLabel()) {
+  if (Expr *E = (Expr *)D.getAsmLabel()) {
     // The parser guarantees this is a string.
     StringLiteral *SE = cast<StringLiteral>(E);
     NewFD->addAttr(AsmLabelAttr::Create(Context, SE->getString(),
                                         /*IsLiteralLabel=*/true,
                                         SE->getStrTokenLoc(0)));
   } else if (!ExtnameUndeclaredIdentifiers.empty()) {
-    llvm::DenseMap<IdentifierInfo*,AsmLabelAttr*>::iterator I =
-      ExtnameUndeclaredIdentifiers.find(NewFD->getIdentifier());
+    llvm::DenseMap<IdentifierInfo *, AsmLabelAttr *>::iterator I =
+        ExtnameUndeclaredIdentifiers.find(NewFD->getIdentifier());
     if (I != ExtnameUndeclaredIdentifiers.end()) {
       if (isDeclExternC(NewFD)) {
         NewFD->addAttr(I->second);
@@ -10511,6 +10716,8 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
       break;
     }
 
+  if (!D.isFunctionDefinition())
+    DiagnoseRedundantDecls(NewFD);
   return NewFD;
 }
 
@@ -13312,9 +13519,15 @@ void Sema::ActOnUninitializedDecl(Decl *RealDecl) {
         }
       }
 
+      // When EmitVarDeclsInorder is specified, we should check the tentative
+      // definitions before they are tried to be emited.
+      if (LangOpts.EmitVarDeclsInorder)
+        CheckCompleteVariableDeclaration(Var);
+
       // Record the tentative definition; we're done.
       if (!Var->isInvalidDecl())
         TentativeDefinitions.push_back(Var);
+
       return;
     }
 

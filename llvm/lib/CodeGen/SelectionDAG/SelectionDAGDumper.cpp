@@ -668,6 +668,9 @@ void SDNode::print_details(raw_ostream &OS, const SelectionDAG *G) const {
     OS << "<" << TI->getIndex() << '+' << TI->getOffset() << ">";
     if (unsigned TF = TI->getTargetFlags())
       OS << " [TF=" << TF << ']';
+  } else if (const MCSymbolSDNode *Sym = dyn_cast<MCSymbolSDNode>(this)) {
+    if (unsigned TF = Sym->getTargetFlags())
+      OS << " [TF=" << TF << ']';
   } else if (const BasicBlockSDNode *BBDN = dyn_cast<BasicBlockSDNode>(this)) {
     OS << "<";
     const Value *LBB = (const Value*)BBDN->getBasicBlock()->getBasicBlock();
@@ -949,6 +952,8 @@ LLVM_DUMP_METHOD void SelectionDAG::dump() const {
 #endif
 
 void SDNode::printr(raw_ostream &OS, const SelectionDAG *G) const {
+  if (isDivergent())
+    OS << "divergent ";
   OS << PrintNodeId(*this) << ": ";
   print_types(OS, G);
   OS << " = " << getOperationName(G);

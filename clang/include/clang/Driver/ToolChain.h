@@ -449,6 +449,8 @@ public:
 
   /// GetDefaultRuntimeLibType - Get the default runtime library variant to use.
   virtual RuntimeLibType GetDefaultRuntimeLibType() const {
+    if (Triple.isLinx() && Triple.isMusl())
+      return ToolChain::RLT_CompilerRT;
     return ToolChain::RLT_Libgcc;
   }
 
@@ -532,10 +534,13 @@ public:
 
   /// Add an additional -fdebug-prefix-map entry.
   virtual std::string GetGlobalDebugPathRemapping() const { return {}; }
-  
+
+  // For BlockISA is doing Link Relaxation and not able to use
+  // .uleb128 label1 - label2. We change the default dwarf version
+  // to dwarf 4
   // Return the DWARF version to emit, in the absence of arguments
   // to the contrary.
-  virtual unsigned GetDefaultDwarfVersion() const { return 5; }
+  virtual unsigned GetDefaultDwarfVersion() const { return 4; }
 
   // Some toolchains may have different restrictions on the DWARF version and
   // may need to adjust it. E.g. NVPTX may need to enforce DWARF2 even when host
@@ -704,6 +709,11 @@ public:
   /// Add arguments to use MCU GCC toolchain includes.
   virtual void AddIAMCUIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                    llvm::opt::ArgStringList &CC1Args) const;
+
+  virtual void
+  AddTargetPreprocessingOptions(const JobAction &JA,
+                                const llvm::opt::ArgList &DriverArgs,
+                                llvm::opt::ArgStringList &CC1Args) const {}
 
   /// On Windows, returns the MSVC compatibility version.
   virtual VersionTuple computeMSVCVersion(const Driver *D,

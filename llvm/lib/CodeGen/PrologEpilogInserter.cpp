@@ -263,6 +263,8 @@ bool PEI::runOnMachineFunction(MachineFunction &MF) {
   //
   replaceFrameIndices(MF);
 
+  TFI->processFunctionAfterFrameIndicesReplaced(MF, RS);
+
   // If register scavenging is needed, as we've enabled doing it as a
   // post-pass, scavenge the virtual registers that frame index elimination
   // inserted.
@@ -360,6 +362,7 @@ void PEI::calculateCallFrameInfo(MachineFunction &MF) {
 /// callee-saved registers, and placing prolog and epilog code.
 void PEI::calculateSaveRestoreBlocks(MachineFunction &MF) {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
 
   // Even when we do not change any CSR, we still want to insert the
   // prologue and epilogue of the function.
@@ -386,6 +389,8 @@ void PEI::calculateSaveRestoreBlocks(MachineFunction &MF) {
     if (MBB.isReturnBlock())
       RestoreBlocks.push_back(&MBB);
   }
+
+  TFI->calculateSaveRestoreBlocks(MF, SaveBlocks, RestoreBlocks);
 }
 
 static void assignCalleeSavedSpillSlots(MachineFunction &F,
@@ -1237,13 +1242,7 @@ void PEI::insertZeroCallUsedRegs(MachineFunction &MF) {
         if (!MO.isReg())
           continue;
 
-        MCRegister Reg = MO.getReg();
-
-        // This picks up sibling registers (e.q. %al -> %ah).
-        for (MCRegUnitIterator Unit(Reg, &TRI); Unit.isValid(); ++Unit)
-          RegsToZero.reset(*Unit);
-
-        for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(Reg))
+        for (MCPhysReg SReg : TRI.sub_and_superregs_inclusive(MO.getReg()))
           RegsToZero.reset(SReg);
       }
     }

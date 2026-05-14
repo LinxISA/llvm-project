@@ -32,6 +32,8 @@
 #include "ToolChains/Hurd.h"
 #include "ToolChains/Lanai.h"
 #include "ToolChains/Linux.h"
+#include "ToolChains/LinxV5Linux.h"
+#include "ToolChains/LinxV5Toolchain.h"
 #include "ToolChains/MSP430.h"
 #include "ToolChains/MSVC.h"
 #include "ToolChains/MinGW.h"
@@ -476,6 +478,12 @@ DerivedArgList *Driver::TranslateInputArgs(const InputArgList &Args) const {
     DAL->append(A);
   }
 
+  llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
+  if (Target.isLinx() || Target.isLinxV4() || Target.isLinxV5()) {
+    // TODO: remove this if dynamic link for Linx supported some day.
+    DAL->AddFlagArg(nullptr, Opts.getOption(options::OPT_static));
+  }
+
   // Enforce -static if -miamcu is present.
   if (Args.hasFlag(options::OPT_miamcu, options::OPT_mno_iamcu, false))
     DAL->AddFlagArg(nullptr, Opts.getOption(options::OPT_static));
@@ -660,6 +668,13 @@ static llvm::Triple computeTargetTriple(const Driver &D,
       Target.setArch(llvm::Triple::riscv64);
   }
 
+  if (A && Target.isLinx()) {
+    if (Target.isLittleEndian()) {
+      Target.setArch(llvm::Triple::linx64);
+    } else {
+      Target.setArch(llvm::Triple::linx64be);
+    }
+  }
   return Target;
 }
 
@@ -1189,6 +1204,14 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
   if (Arg *WD = Args.getLastArg(options::OPT_working_directory))
     if (VFS->setCurrentWorkingDirectory(WD->getValue()))
       Diag(diag::err_drv_unable_to_set_working_directory) << WD->getValue();
+
+  // Check for missing include directories.
+  if (!Diags.isIgnored(diag::warn_missing_include_dirs, SourceLocation())) {
+    for (auto IncludeDir : Args.getAllArgValues(options::OPT_I_Group)) {
+      if (!VFS->exists(IncludeDir))
+        Diag(diag::warn_missing_include_dirs) << IncludeDir;
+    }
+  }
 
   // FIXME: This stuff needs to go into the Compilation, not the driver.
   bool CCCPrintPhases;
@@ -5999,7 +6022,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
                                                               Args);
       else if (Target.getArch() == llvm::Triple::ve)
         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);
-
+      else if (Target.isLinxV5())
+        TC = std::make_unique<toolchains::LinxV5Linux>(*this, Target, Args);
       else
         TC = std::make_unique<toolchains::Linux>(*this, Target, Args);
       break;
@@ -6104,6 +6128,10 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
               std::make_unique<toolchains::RISCVToolChain>(*this, Target, Args);
         else
           TC = std::make_unique<toolchains::BareMetal>(*this, Target, Args);
+        break;
+      case llvm::Triple::linx64v5:
+      case llvm::Triple::linx64v5be:
+        TC = std::make_unique<toolchains::LinxV5ToolChain>(*this, Target, Args);
         break;
       case llvm::Triple::ve:
         TC = std::make_unique<toolchains::VEToolChain>(*this, Target, Args);

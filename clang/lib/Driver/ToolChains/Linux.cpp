@@ -224,6 +224,7 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   const bool IsHexagon = Arch == llvm::Triple::hexagon;
   const bool IsRISCV = Triple.isRISCV();
   const bool IsCSKY = Triple.isCSKY();
+  const bool IsLinx = Triple.isLinx();
 
   if (IsCSKY)
     SysRoot = SysRoot + SelectedMultilib.osSuffix();
@@ -263,6 +264,14 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
   // possible permutations of these directories, and seeing which ones it added
   // to the link paths.
   path_list &Paths = getFilePaths();
+
+  if (IsLinx) {
+    SysRoot = D.InstalledDir + "/../sysroot";
+    ExtraOpts.push_back("--sysroot=" + SysRoot);
+    addPathIfExists(
+        D, concat(D.InstalledDir, "/../lib64/gcc/linx64-linux-gnu/11.0.0"),
+        Paths);
+  }
 
   const std::string OSLibDir = std::string(getOSLibDir(Triple, Args));
   const std::string MultiarchTriple = getMultiarchTriple(D, Triple, SysRoot);
@@ -319,7 +328,7 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
 }
 
 ToolChain::RuntimeLibType Linux::GetDefaultRuntimeLibType() const {
-  if (getTriple().isAndroid())
+  if (getTriple().isAndroid()|| (getTriple().isLinx() && getTriple().isMusl()))
     return ToolChain::RLT_CompilerRT;
   return Generic_ELF::GetDefaultRuntimeLibType();
 }
@@ -331,7 +340,7 @@ unsigned Linux::GetDefaultDwarfVersion() const {
 }
 
 ToolChain::CXXStdlibType Linux::GetDefaultCXXStdlibType() const {
-  if (getTriple().isAndroid())
+  if (getTriple().isAndroid() || (getTriple().isLinx() && getTriple().isMusl()))
     return ToolChain::CST_Libcxx;
   return ToolChain::CST_Libstdcxx;
 }
@@ -359,6 +368,27 @@ std::string Linux::computeSysRoot() const {
     std::string AndroidSysRootPath = (ClangDir + "/../sysroot").str();
     if (getVFS().exists(AndroidSysRootPath))
       return AndroidSysRootPath;
+  }
+
+  if (getTriple().isLinx()) {
+    const StringRef ClangDir = getDriver().getInstalledDir();
+    std::string LinxSysRootPath = (ClangDir + "/../sysroot").str();
+    if (getVFS().exists(LinxSysRootPath))
+      return LinxSysRootPath;
+  }
+
+  if (getTriple().isLinxV4()) {
+    const StringRef ClangDir = getDriver().getInstalledDir();
+    std::string LinxV4SysRootPath = (ClangDir + "/../sysroot").str();
+    if (getVFS().exists(LinxV4SysRootPath))
+      return LinxV4SysRootPath;
+  }
+
+  if (getTriple().isLinxV5()) {
+    const StringRef ClangDir = getDriver().getInstalledDir();
+    std::string LinxV5SysRootPath = (ClangDir + "/../sysroot").str();
+    if (getVFS().exists(LinxV5SysRootPath))
+      return LinxV5SysRootPath;
   }
 
   if (getTriple().isCSKY()) {

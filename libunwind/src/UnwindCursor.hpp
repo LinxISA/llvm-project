@@ -1080,6 +1080,18 @@ private:
   }
 #endif
 
+#if defined(_LIBUNWIND_TARGET_LINX)
+  int stepWithCompactEncoding(Registers_linx &) { return UNW_EINVAL; }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINXV4)
+  int stepWithCompactEncoding(Registers_linxv4 &) { return UNW_EINVAL; }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINXV5)
+  int stepWithCompactEncoding(Registers_linxv5 &) { return UNW_EINVAL; }
+#endif
+
   bool compactSaysUseDwarf(uint32_t *offset=NULL) const {
     R dummy;
     return compactSaysUseDwarf(dummy, offset);
@@ -1154,6 +1166,22 @@ private:
 
 #if defined (_LIBUNWIND_TARGET_RISCV)
   bool compactSaysUseDwarf(Registers_riscv &, uint32_t *) const {
+    return true;
+  }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINX)
+  bool compactSaysUseDwarf(Registers_linx &, uint32_t *) const { return true; }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINXV4)
+  bool compactSaysUseDwarf(Registers_linxv4 &, uint32_t *) const {
+    return true;
+  }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINXV5)
+  bool compactSaysUseDwarf(Registers_linxv5 &, uint32_t *) const {
     return true;
   }
 #endif
@@ -1238,6 +1266,22 @@ private:
 
 #if defined (_LIBUNWIND_TARGET_RISCV)
   compact_unwind_encoding_t dwarfEncoding(Registers_riscv &) const {
+    return 0;
+  }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINX)
+  compact_unwind_encoding_t dwarfEncoding(Registers_linx &) const { return 0; }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINXV4)
+  compact_unwind_encoding_t dwarfEncoding(Registers_linxv4 &) const {
+    return 0;
+  }
+#endif
+
+#if defined(_LIBUNWIND_TARGET_LINXV5)
+  compact_unwind_encoding_t dwarfEncoding(Registers_linxv5 &) const {
     return 0;
   }
 #endif

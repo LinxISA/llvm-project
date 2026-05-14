@@ -675,7 +675,7 @@ bool MachineLICMBase::isTriviallyReMaterializable(
       return false;
   }
 
-  return true;
+  return TII->isHoistRemat(MI);
 }
 
 void MachineLICMBase::EnterScope(MachineBasicBlock *MBB) {

@@ -151,6 +151,10 @@ cl::opt<bool> EnableFunctionSpecialization(
     "enable-function-specialization", cl::init(false), cl::Hidden,
     cl::desc("Enable Function Specialization pass"));
 
+cl::opt<bool> EnableIPSCCP(
+    "enable-ipsccp", cl::init(true), cl::Hidden,
+    cl::desc("Enable Interprocedural Sparse Conditional Constant Propagation"));
+
 cl::opt<AttributorRunOption> AttributorRun(
     "attributor-enable", cl::Hidden, cl::init(AttributorRunOption::NONE),
     cl::desc("Enable the attributor inter-procedural deduction pass."),
@@ -626,7 +630,8 @@ void PassManagerBuilder::populateModulePassManager(
   if (OptLevel > 2 && EnableFunctionSpecialization)
     MPM.add(createFunctionSpecializationPass());
 
-  MPM.add(createIPSCCPPass());          // IP SCCP
+  if (EnableIPSCCP)
+    MPM.add(createIPSCCPPass());          // IP SCCP
   MPM.add(createCalledValuePropagationPass());
 
   MPM.add(createGlobalOptimizerPass()); // Optimize out global vars

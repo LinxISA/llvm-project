@@ -320,6 +320,8 @@ enum {
   EM_VE = 251,            // NEC SX-Aurora VE
   EM_CSKY = 252,          // C-SKY 32-bit processor
   EM_LOONGARCH = 258,     // LoongArch
+  EM_LinxV4 = 260,        // LinxV4
+  EM_LinxV5 = 261,        // LinxV5
 };
 
 // Object file classes.
@@ -673,6 +675,11 @@ enum : unsigned {
 // ELF Relocation types for RISC-V
 enum {
 #include "ELFRelocs/RISCV.def"
+};
+
+// ELF Relocation types for LinxV4
+enum {
+#include "ELFRelocs/LinxV5.def"
 };
 
 enum {

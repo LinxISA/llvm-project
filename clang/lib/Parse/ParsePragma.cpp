@@ -233,6 +233,12 @@ private:
   Sema &Actions;
 };
 
+struct PragmaLinxHandler : public PragmaHandler {
+  PragmaLinxHandler() : PragmaHandler("linx") {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
+                    Token &Tok) override;
+};
+
 struct PragmaLoopHintHandler : public PragmaHandler {
   PragmaLoopHintHandler() : PragmaHandler("loop") {}
   void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
@@ -479,6 +485,9 @@ void Parser::initializePragmaHandlers() {
   PP.AddPragmaHandler(UnrollHintHandler.get());
   PP.AddPragmaHandler("GCC", UnrollHintHandler.get());
 
+  LinxHandler = std::make_unique<PragmaLinxHandler>();
+  PP.AddPragmaHandler(LinxHandler.get());
+
   NoUnrollHintHandler = std::make_unique<PragmaUnrollHintHandler>("nounroll");
   PP.AddPragmaHandler(NoUnrollHintHandler.get());
   PP.AddPragmaHandler("GCC", NoUnrollHintHandler.get());
@@ -610,6 +619,9 @@ void Parser::resetPragmaHandlers() {
   PP.RemovePragmaHandler(UnrollHintHandler.get());
   PP.RemovePragmaHandler("GCC", UnrollHintHandler.get());
   UnrollHintHandler.reset();
+
+  PP.RemovePragmaHandler(LinxHandler.get());
+  LinxHandler.reset();
 
   PP.RemovePragmaHandler(NoUnrollHintHandler.get());
   PP.RemovePragmaHandler("GCC", NoUnrollHintHandler.get());
@@ -1232,6 +1244,73 @@ bool Parser::HandlePragmaMSAllocText(StringRef PragmaName,
 
   Actions.ActOnPragmaMSAllocText(FirstTok.getLocation(), Section, Functions);
   return true;
+}
+
+namespace {
+struct PragmaLinxInfo {
+  Token PragmaName;
+  Token Option;
+};
+} // end anonymous namespace
+
+bool Parser::HandlePragmaLinx(LinxHint &Hint) {
+  assert(Tok.is(tok::annot_pragma_linx));
+  PragmaLinxInfo *Info =
+      static_cast<PragmaLinxInfo *>(Tok.getAnnotationValue());
+
+  IdentifierInfo *PragmaNameInfo = Info->PragmaName.getIdentifierInfo();
+  Hint.PragmaNameLoc = IdentifierLoc::create(
+      Actions.Context, Info->PragmaName.getLocation(), PragmaNameInfo);
+
+  IdentifierInfo *OptionInfo = Info->Option.getIdentifierInfo();
+  Hint.OptionLoc = IdentifierLoc::create(
+      Actions.Context, Info->Option.getLocation(), OptionInfo);
+
+  if (!OptionInfo->isStr("block"))
+    llvm::report_fatal_error("Error: Undefined option parameters for linx");
+
+  ConsumeAnyToken(); // Consume the constant expression eof terminator.
+
+  Hint.Range = SourceRange(Info->PragmaName.getLocation(),
+                           Info->Option.getLocation());
+
+  return true;
+}
+
+/// Handle linx pragma
+///
+/// The syntax is:
+/// \code
+/// #pargma linx block { }
+/// \endcode
+void PragmaLinxHandler::HandlePragma(Preprocessor &PP,
+                                     PragmaIntroducer Introducer,
+                                     Token &Tok) {
+  Token PragmaName = Tok;
+  assert(PragmaName.getIdentifierInfo()->getName() == "linx"
+         && "Incoming token after pargma must be linx");
+  PP.Lex(Tok);
+
+  Token Option = Tok;
+  IdentifierInfo *OptionInfo = Tok.getIdentifierInfo();
+  bool OptionValid = llvm::StringSwitch<bool>(OptionInfo->getName())
+                           .Case("block", true)
+                           .Default(false);
+  if (!OptionValid)
+    llvm::report_fatal_error("Error: option not recognized for pragma linx");
+  PP.Lex(Tok);
+  auto *Info = new (PP.getPreprocessorAllocator()) PragmaLinxInfo;
+  Info->PragmaName = PragmaName;
+  Info->Option = Option;
+
+  auto TokenArray = std::make_unique<Token[]>(1);
+  TokenArray[0].startToken();
+  TokenArray[0].setKind(tok::annot_pragma_linx);
+  TokenArray[0].setLocation(Introducer.Loc);
+  TokenArray[0].setAnnotationEndLoc(PragmaName.getLocation());
+  TokenArray[0].setAnnotationValue(static_cast<void *>(Info));
+  PP.EnterTokenStream(std::move(TokenArray), 1,
+                      /*DisableMacroExpansion=*/false, /*IsReinject=*/false);
 }
 
 namespace {

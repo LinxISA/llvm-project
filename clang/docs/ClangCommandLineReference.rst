@@ -1741,6 +1741,10 @@ Emit all declarations, even if unused
 
 When to emit DWARF unwind (EH frame) info. <arg> must be 'always', 'no-compact-unwind' or 'default'.
 
+.. option:: -femit-var-decls-inorder
+
+Emit toplevel variables declarations in order
+
 .. option:: -femulated-tls, -fno-emulated-tls
 
 Use emutls functions to access thread\_local variables

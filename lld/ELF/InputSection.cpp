@@ -564,6 +564,51 @@ static Relocation *getRISCVPCRelHi20(const Symbol *sym, uint64_t addend) {
   return nullptr;
 }
 
+// For R_LinxV4_TPC_INDIRECT (R_LinxV4_TPCREL_LO12), the symbol actually
+// points the corresponding R_LinxV4_TPCREL_HI20/R_LinxV4_TPCREL_HI10
+// relocation, and the target VA is calculated using PCREL_HI20's symbol.
+//
+// This function returns the R_LinxV4_TPCREL_HI20/R_LinxV4_TPCREL_HI10
+// relocation from R_LinxV4_TPCREL_LO12's symbol and addend.
+static Relocation *getLinxTPCRelHi20(const Symbol *sym, uint64_t addend) {
+  const Defined *d = cast<Defined>(sym);
+  if (!d->section) {
+    errorOrWarn("R_LinxV4_TPCREL_LO12 relocation points to an absolute symbol: " +
+                sym->getName());
+    return nullptr;
+  }
+  InputSection *isec = cast<InputSection>(d->section);
+
+  if (addend != 0)
+    warn("non-zero addend in R_LinxV4_TPCREL_LO12 relocation to " +
+         isec->getObjMsg(d->value) + " is ignored");
+
+  // Relocations are sorted by offset, so we can use std::equal_range to do
+  // binary search.
+  Relocation r;
+  r.offset = d->value;
+  auto range =
+      std::equal_range(isec->relocations.begin(), isec->relocations.end(), r,
+                       [](const Relocation &lhs, const Relocation &rhs) {
+                         return lhs.offset < rhs.offset;
+                       });
+
+  for (auto it = range.first; it != range.second; ++it)
+    if (it->type == R_LinxV5_TPCREL_HI20 ||
+        it->type == R_LinxV5_TPCREL_HI32)
+      return &*it;
+
+  errorOrWarn(
+      "R_LinxV4_TPCREL_LO12/R_LinxV5_TPCREL_LO12 relocation points to " +
+      isec->getObjMsg(d->value) +
+      " without an associated "
+      "R_LinxV4_TPCREL_HI20/R_LinxV4_TPCREL_HI10/R_LinxV4_SIMT_TPCREL_HI20/"
+      "R_LinxV4_TPREL_HI20/R_LinxV4_SIMT_TPCREL_HI20/R_LinxV5_TPCREL_HI20/"
+      "R_LinxV5_TPCREL_HI32 "
+      "relocation");
+  return nullptr;
+}
+
 // A TLS symbol's virtual address is relative to the TLS segment. Add a
 // target-specific adjustment to produce a thread-pointer-relative offset.
 static int64_t getTlsTpOffset(const Symbol &s) {
@@ -598,7 +643,10 @@ static int64_t getTlsTpOffset(const Symbol &s) {
     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1)) - 0x7000;
   case EM_RISCV:
     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
-
+  case EM_LinxV4:
+    return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
+  case EM_LinxV5:
+    return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
     // Variant 2.
   case EM_HEXAGON:
   case EM_SPARCV9:
@@ -620,6 +668,7 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
   case R_RELAX_TLS_LD_TO_LE_ABS:
   case R_RELAX_GOT_PC_NOPIC:
   case R_RISCV_ADD:
+  case R_LinxV4_ADD:
     return sym.getVA(a);
   case R_ADDEND:
     return a;
@@ -698,6 +747,12 @@ uint64_t InputSectionBase::getRelocTargetVA(const InputFile *file, RelType type,
   }
   case R_RISCV_PC_INDIRECT: {
     if (const Relocation *hiRel = getRISCVPCRelHi20(&sym, a))
+      return getRelocTargetVA(file, hiRel->type, hiRel->addend, sym.getVA(),
+                              *hiRel->sym, hiRel->expr);
+    return 0;
+  }
+  case R_LinxV4_TPC_INDIRECT: {
+    if (const Relocation *hiRel = getLinxTPCRelHi20(&sym, a))
       return getRelocTargetVA(file, hiRel->type, hiRel->addend, sym.getVA(),
                               *hiRel->sym, hiRel->expr);
     return 0;
@@ -902,7 +957,7 @@ void InputSection::relocateNonAlloc(uint8_t *buf, ArrayRef<RelTy> rels) {
     // R_ABS/R_DTPREL and some other relocations can be used from non-SHF_ALLOC
     // sections.
     if (expr == R_ABS || expr == R_DTPREL || expr == R_GOTPLTREL ||
-        expr == R_RISCV_ADD) {
+        expr == R_RISCV_ADD || expr == R_LinxV4_ADD) {
       target.relocateNoSym(bufLoc, type, SignExtend64<bits>(sym.getVA(addend)));
       continue;
     }

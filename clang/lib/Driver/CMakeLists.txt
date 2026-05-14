@@ -12,6 +12,19 @@ if(WIN32)
   set(system_libs version)
 endif()
 
+if (LINX_BUILD_NEWLIB)
+  if("${LINX_BUILD_NEWLIB}" STREQUAL "llvm")
+    message(STATUS "LINX build newlib by llvm")
+    add_compile_definitions(LINX_BUILD_LLVM_NEWLIB)
+  elseif("${LINX_BUILD_NEWLIB}" STREQUAL "gcc")
+     message(STATUS "LINX build newlib by gcc")
+  else()
+    message(FATAL_ERROR "Specify a right way to build newlib, such as llvm, gcc.")
+  endif()
+else()
+  message(STATUS "LINX compile newlib by gcc")
+endif()
+
 add_clang_library(clangDriver
   Action.cpp
   Compilation.cpp
@@ -29,6 +42,7 @@ add_clang_library(clangDriver
   ToolChains/Arch/ARM.cpp
   ToolChains/Arch/CSKY.cpp
   ToolChains/Arch/M68k.cpp
+  ToolChains/Arch/LinxV5.cpp
   ToolChains/Arch/Mips.cpp
   ToolChains/Arch/PPC.cpp
   ToolChains/Arch/RISCV.cpp
@@ -63,6 +77,8 @@ add_clang_library(clangDriver
   ToolChains/HLSL.cpp
   ToolChains/Hurd.cpp
   ToolChains/Linux.cpp
+  ToolChains/LinxV5Linux.cpp
+  ToolChains/LinxV5Toolchain.cpp
   ToolChains/MipsLinux.cpp
   ToolChains/MinGW.cpp
   ToolChains/Minix.cpp

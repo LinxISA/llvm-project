@@ -1099,7 +1099,8 @@ bool SelectionDAG::RemoveNodeFromCSEMaps(SDNode *N) {
   }
   case ISD::MCSymbol: {
     auto *MCSN = cast<MCSymbolSDNode>(N);
-    Erased = MCSymbols.erase(MCSN->getMCSymbol());
+    Erased = MCSymbols.erase(
+        std::make_pair(MCSN->getMCSymbol(), MCSN->getTargetFlags()));
     break;
   }
   case ISD::VALUETYPE: {
@@ -1817,11 +1818,11 @@ SDValue SelectionDAG::getExternalSymbol(const char *Sym, EVT VT) {
   return SDValue(N, 0);
 }
 
-SDValue SelectionDAG::getMCSymbol(MCSymbol *Sym, EVT VT) {
-  SDNode *&N = MCSymbols[Sym];
+SDValue SelectionDAG::getMCSymbol(MCSymbol *Sym, EVT VT, unsigned TargetFlags) {
+  SDNode *&N = MCSymbols[std::make_pair(Sym, TargetFlags)];
   if (N)
     return SDValue(N, 0);
-  N = newSDNode<MCSymbolSDNode>(Sym, VT);
+  N = newSDNode<MCSymbolSDNode>(Sym, VT, TargetFlags);
   InsertNode(N);
   return SDValue(N, 0);
 }

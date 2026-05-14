@@ -2239,12 +2239,15 @@ class MCSymbolSDNode : public SDNode {
   friend class SelectionDAG;
 
   MCSymbol *Symbol;
+  unsigned TargetFlags;
 
-  MCSymbolSDNode(MCSymbol *Symbol, EVT VT)
-      : SDNode(ISD::MCSymbol, 0, DebugLoc(), getSDVTList(VT)), Symbol(Symbol) {}
+  MCSymbolSDNode(MCSymbol *Symbol, EVT VT, unsigned TF)
+      : SDNode(ISD::MCSymbol, 0, DebugLoc(), getSDVTList(VT)), Symbol(Symbol),
+        TargetFlags(TF) {}
 
 public:
   MCSymbol *getMCSymbol() const { return Symbol; }
+  unsigned getTargetFlags() const { return TargetFlags; }
 
   static bool classof(const SDNode *N) {
     return N->getOpcode() == ISD::MCSymbol;

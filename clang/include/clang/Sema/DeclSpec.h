@@ -249,6 +249,11 @@ public:
   static const TSCS TSCS_thread_local = clang::TSCS_thread_local;
   static const TSCS TSCS__Thread_local = clang::TSCS__Thread_local;
 
+  typedef LINDAThreadDataStorageClassSpecifier LTSCS;
+  static const LTSCS LTSCS_unspecified = clang::LTSCS_unspecified;
+  static const LTSCS LTSCS___linda_thread = clang::LTSCS___linda_thread;
+  static const LTSCS LTSCS___linda_shared = clang::LTSCS___linda_shared;
+
   enum TSC {
     TSC_unspecified,
     TSC_imaginary,
@@ -327,6 +332,7 @@ private:
   // storage-class-specifier
   /*SCS*/unsigned StorageClassSpec : 3;
   /*TSCS*/unsigned ThreadStorageClassSpec : 2;
+  /*LTSCS*/ unsigned LINDAThreadStorageClassSpec : 2;
   unsigned SCS_extern_in_linkage_spec : 1;
 
   // type-specifier
@@ -378,6 +384,7 @@ private:
   SourceRange Range;
 
   SourceLocation StorageClassSpecLoc, ThreadStorageClassSpecLoc;
+  SourceLocation LINDAThreadStorageClassSpecLoc;
   SourceRange TSWRange;
   SourceLocation TSCLoc, TSSLoc, TSTLoc, AltiVecLoc, TSSatLoc;
   /// TSTNameLoc - If TypeSpecType is any of class, enum, struct, union,
@@ -422,6 +429,7 @@ public:
   DeclSpec(AttributeFactory &attrFactory)
       : StorageClassSpec(SCS_unspecified),
         ThreadStorageClassSpec(TSCS_unspecified),
+        LINDAThreadStorageClassSpec(LTSCS_unspecified),
         SCS_extern_in_linkage_spec(false),
         TypeSpecWidth(static_cast<unsigned>(TypeSpecifierWidth::Unspecified)),
         TypeSpecComplex(TSC_unspecified),
@@ -441,6 +449,9 @@ public:
   TSCS getThreadStorageClassSpec() const {
     return (TSCS)ThreadStorageClassSpec;
   }
+  LTSCS getLINDAThreadStorageClassSpec() const {
+    return (LTSCS)LINDAThreadStorageClassSpec;
+  }
   bool isExternInLinkageSpec() const { return SCS_extern_in_linkage_spec; }
   void setExternInLinkageSpec(bool Value) {
     SCS_extern_in_linkage_spec = Value;
@@ -450,13 +461,18 @@ public:
   SourceLocation getThreadStorageClassSpecLoc() const {
     return ThreadStorageClassSpecLoc;
   }
+  SourceLocation getLINDAThreadStorageClassSpecLoc() const {
+    return LINDAThreadStorageClassSpecLoc;
+  }
 
   void ClearStorageClassSpecs() {
     StorageClassSpec           = DeclSpec::SCS_unspecified;
     ThreadStorageClassSpec     = DeclSpec::TSCS_unspecified;
+    LINDAThreadStorageClassSpec = DeclSpec::LTSCS_unspecified;
     SCS_extern_in_linkage_spec = false;
     StorageClassSpecLoc        = SourceLocation();
     ThreadStorageClassSpecLoc  = SourceLocation();
+    LINDAThreadStorageClassSpecLoc = SourceLocation();
   }
 
   void ClearTypeSpecType() {
@@ -540,6 +556,7 @@ public:
   static const char *getSpecifierName(TypeSpecifierWidth W);
   static const char *getSpecifierName(DeclSpec::SCS S);
   static const char *getSpecifierName(DeclSpec::TSCS S);
+  static const char *getSpecifierName(DeclSpec::LTSCS S);
   static const char *getSpecifierName(ConstexprSpecKind C);
 
   // type-qualifiers
@@ -654,6 +671,8 @@ public:
                            const PrintingPolicy &Policy);
   bool SetStorageClassSpecThread(TSCS TSC, SourceLocation Loc,
                                  const char *&PrevSpec, unsigned &DiagID);
+  bool SetStorageClassSpecLINDAThread(LTSCS LTSC, SourceLocation Loc,
+                                      const char *&PrevSpec, unsigned &DiagID);
   bool SetTypeSpecWidth(TypeSpecifierWidth W, SourceLocation Loc,
                         const char *&PrevSpec, unsigned &DiagID,
                         const PrintingPolicy &Policy);

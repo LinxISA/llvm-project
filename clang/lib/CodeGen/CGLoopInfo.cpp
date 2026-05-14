@@ -789,6 +789,13 @@ void LoopInfoStack::push(BasicBlock *Header, clang::ASTContext &Ctx,
 
   setMustProgress(MustProgress);
 
+  // Attributes from __attribute__((optimize(...)))
+  Function *Fn = Header->getParent();
+  if (Fn->hasFnAttribute("OPT-tree-vectorize"))
+    setVectorizeEnable(true);
+  if (Fn->hasFnAttribute("OPT-unroll-loops"))
+    setUnrollState(LoopAttributes::Enable);
+
   if (CGOpts.OptimizationLevel > 0)
     // Disable unrolling for the loop, if unrolling is disabled (via
     // -fno-unroll-loops) and no pragmas override the decision.

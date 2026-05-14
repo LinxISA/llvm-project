@@ -100,6 +100,8 @@ protected:
 };
 
 struct RISCVRelaxAux;
+struct LinxV4RelaxAux;
+struct LinxV5RelaxAux;
 
 // This corresponds to a section of an input file.
 class InputSectionBase : public SectionBase {
@@ -136,7 +138,7 @@ public:
   // Used by --optimize-bb-jumps and RISC-V linker relaxation temporarily to
   // indicate the number of bytes which is not counted in the size. This should
   // be reset to zero after uses.
-  uint16_t bytesDropped = 0;
+  uint32_t bytesDropped = 0;
 
   // Whether the section needs to be padded with a NOP filler due to
   // deleteFallThruJmpInsn.
@@ -214,6 +216,14 @@ public:
     // Auxiliary information for RISC-V linker relaxation. RISC-V does not use
     // jumpInstrMod.
     RISCVRelaxAux *relaxAux;
+
+    // Auxiliary information for LinxV4 linker relaxation. LinxV4 does not use
+    // jumpInstrMod and relaxAux.
+    LinxV4RelaxAux *relaxAuxLinxV4;
+
+    // Auxiliary information for LinxV5 linker relaxation. LinxV4 does not use
+    // jumpInstrMod and relaxAux.
+    LinxV5RelaxAux *relaxAuxLinxV5;
   };
 
   // A function compiled with -fsplit-stack calling a function
@@ -392,7 +402,7 @@ private:
   template <class ELFT> void copyShtGroup(uint8_t *buf);
 };
 
-static_assert(sizeof(InputSection) <= 160, "InputSection is too big");
+static_assert(sizeof(InputSection) <= 168, "InputSection is too big");
 
 inline bool isDebugSection(const InputSectionBase &sec) {
   return (sec.flags & llvm::ELF::SHF_ALLOC) == 0 &&

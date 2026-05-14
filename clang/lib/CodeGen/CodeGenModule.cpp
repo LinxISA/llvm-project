@@ -729,7 +729,22 @@ void CodeGenModule::Release() {
     getModule().addModuleFlag(llvm::Module::Error, "min_enum_size", EnumWidth);
   }
 
-  if (Arch == llvm::Triple::riscv32 || Arch == llvm::Triple::riscv64) {
+  if (Arch == llvm::Triple::riscv32 || Arch == llvm::Triple::riscv64 ||
+      Arch == llvm::Triple::linx64 || Arch == llvm::Triple::linx64be) {
+    StringRef ABIStr = Target.getABI();
+    llvm::LLVMContext &Ctx = TheModule.getContext();
+    getModule().addModuleFlag(llvm::Module::Error, "target-abi",
+                              llvm::MDString::get(Ctx, ABIStr));
+  }
+
+  if (Arch == llvm::Triple::linx64v4 || Arch == llvm::Triple::linx64v4be) {
+    StringRef ABIStr = Target.getABI();
+    llvm::LLVMContext &Ctx = TheModule.getContext();
+    getModule().addModuleFlag(llvm::Module::Error, "target-abi",
+                              llvm::MDString::get(Ctx, ABIStr));
+  }
+
+  if (Arch == llvm::Triple::linx64v5 || Arch == llvm::Triple::linx64v5be) {
     StringRef ABIStr = Target.getABI();
     llvm::LLVMContext &Ctx = TheModule.getContext();
     getModule().addModuleFlag(llvm::Module::Error, "target-abi",
@@ -970,6 +985,18 @@ void CodeGenModule::EmitBackendOptionsMetadata(
     break;
   case llvm::Triple::riscv32:
   case llvm::Triple::riscv64:
+  case llvm::Triple::linx64:
+  case llvm::Triple::linx64be:
+    getModule().addModuleFlag(llvm::Module::Error, "SmallDataLimit",
+                              CodeGenOpts.SmallDataLimit);
+    break;
+  case llvm::Triple::linx64v4:
+  case llvm::Triple::linx64v4be:
+    getModule().addModuleFlag(llvm::Module::Error, "SmallDataLimit",
+                              CodeGenOpts.SmallDataLimit);
+    break;
+  case llvm::Triple::linx64v5:
+  case llvm::Triple::linx64v5be:
     getModule().addModuleFlag(llvm::Module::Error, "SmallDataLimit",
                               CodeGenOpts.SmallDataLimit);
     break;
@@ -1972,6 +1999,8 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   // We can't add optnone in the following cases, it won't pass the verifier.
   ShouldAddOptNone &= !D->hasAttr<MinSizeAttr>();
   ShouldAddOptNone &= !D->hasAttr<AlwaysInlineAttr>();
+
+  ShouldAddOptNone = ShouldAddOptNone || F->hasFnAttribute("OPT-O0");
 
   // Add optnone, but do so only if the function isn't always_inline.
   if ((ShouldAddOptNone || D->hasAttr<OptimizeNoneAttr>()) &&
@@ -3244,6 +3273,17 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
       if (Context.getInlineVariableDefinitionKind(VD) ==
           ASTContext::InlineVariableDefinitionKind::Strong)
         GetAddrOfGlobalVar(VD);
+
+      // When EmitVarDeclsInorder is specified, try to emit TentativeDefinition
+      // Decls to output the variables in the same order that they appear in the
+      // input file.
+      if (LangOpts.EmitVarDeclsInorder) {
+        if (VD->isThisDeclarationADefinition() ==
+            VarDecl::TentativeDefinition) {
+          EmitDeclarationInOrder(VD);
+          return;
+        }
+      }
       return;
     }
   }
@@ -4244,23 +4284,57 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
 
   auto DAddrSpace = GetGlobalVarAddressSpace(D);
 
-  auto *GV = new llvm::GlobalVariable(
-      getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
-      MangledName, nullptr, llvm::GlobalVariable::NotThreadLocal,
-      getContext().getTargetAddressSpace(DAddrSpace));
+  llvm::GlobalVariable *GV = nullptr;
+  // When EmitVarDeclsInorder is specified, we replace old with new for the
+  // GlobalVariable with diffrent initializer, but keep the old order in
+  // GlobalVariable list to output the variables in the same order as they
+  // appear in the input file.
+  if (LangOpts.EmitVarDeclsInorder) {
+    if (Entry) {
+      llvm::GlobalVariable *OldGV =
+          cast<llvm::GlobalVariable>(Entry->stripPointerCasts());
 
-  // If we already created a global with the same mangled name (but different
-  // type) before, take its name and remove it from its parent.
-  if (Entry) {
-    GV->takeName(Entry);
+      GV = new llvm::GlobalVariable(
+          getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+          MangledName,
+          /*InsertBefore*/ OldGV, llvm::GlobalVariable::NotThreadLocal,
+          getContext().getTargetAddressSpace(DAddrSpace));
 
-    if (!Entry->use_empty()) {
-      llvm::Constant *NewPtrForOldDecl =
-          llvm::ConstantExpr::getBitCast(GV, Entry->getType());
-      Entry->replaceAllUsesWith(NewPtrForOldDecl);
+      GV->takeName(Entry);
+      if (!Entry->use_empty()) {
+        llvm::Constant *NewPtrForOldDecl =
+            llvm::ConstantExpr::getBitCast(GV, Entry->getType());
+        // Replace all uses of the old global with the new global
+        Entry->replaceAllUsesWith(NewPtrForOldDecl);
+      }
+
+      // Erase the old global, since it is no longer used.
+      Entry->eraseFromParent();
+    } else {
+      GV = new llvm::GlobalVariable(
+          getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+          MangledName, nullptr, llvm::GlobalVariable::NotThreadLocal,
+          getContext().getTargetAddressSpace(DAddrSpace));
     }
+  } else {
+    GV = new llvm::GlobalVariable(
+        getModule(), Ty, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+        MangledName, nullptr, llvm::GlobalVariable::NotThreadLocal,
+        getContext().getTargetAddressSpace(DAddrSpace));
 
-    Entry->eraseFromParent();
+    // If we already created a global with the same mangled name (but different
+    // type) before, take its name and remove it from its parent.
+    if (Entry) {
+      GV->takeName(Entry);
+
+      if (!Entry->use_empty()) {
+        llvm::Constant *NewPtrForOldDecl =
+            llvm::ConstantExpr::getBitCast(GV, Entry->getType());
+        Entry->replaceAllUsesWith(NewPtrForOldDecl);
+      }
+
+      Entry->eraseFromParent();
+    }
   }
 
   // This is the first use or definition of a mangled name.  If there is a
@@ -4505,6 +4579,29 @@ void CodeGenModule::EmitTentativeDefinition(const VarDecl *D) {
   EmitGlobalVarDefinition(D);
 }
 
+void CodeGenModule::EmitDeclarationInOrder(const VarDecl *D) {
+  assert(!D->getInit() && "Cannot emit definite definitions here!");
+
+  StringRef MangledName = getMangledName(D);
+  llvm::GlobalValue *GV = GetGlobalValue(MangledName);
+
+  // We already have a definition, not declaration, with the same mangled name.
+  // Emitting of declaration is not required (and actually overwrites emitted
+  // definition).
+  if (GV && !GV->isDeclaration() && !GV->isCreatedByIncompleteArrayType())
+      return;
+
+  // If we have not seen a reference to this variable yet, place it into the
+  // deferred declarations table to be emitted if needed later.
+  if (!MustBeEmitted(D) && !GV) {
+      DeferredDecls[MangledName] = D;
+      return;
+  }
+
+  // The tentative definition is the only definition.
+  EmitGlobalVarDefinition(D);
+}
+
 void CodeGenModule::EmitExternalDeclaration(const VarDecl *D) {
   EmitExternalVarDeclaration(D);
 }
@@ -4714,7 +4811,19 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
     // never attempt to emit a tentative definition if a real one
     // exists. A use may still exists, however, so we still may need
     // to do a RAUW.
-    assert(!ASTTy->isIncompleteType() && "Unexpected incomplete type");
+
+    // When EmitVarDeclsInorder is specified, try to emit tentative definition
+    // for the first time appeared in the input file, in order to output the
+    // variables in the same order that they appear in the input file.
+    // But incomplete records are not allowed in EmitTentativeDefinition.
+    if (!LangOpts.EmitVarDeclsInorder)
+      assert(!ASTTy->isIncompleteType() && "Unexpected incomplete type");
+    else if (ASTTy->isRecordType() && ASTTy->isIncompleteType()) {
+      Diags.Report(D->getLocation(), diag::err_incomplete_inorder_conflict)
+          << D->getType();
+      return;
+    }
+
     Init = EmitNullConstant(D->getType());
   } else {
     initializedGlobalDecl = GlobalDecl(D);
@@ -4761,6 +4870,17 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
 
   // Entry is now either a Function or GlobalVariable.
   auto *GV = dyn_cast<llvm::GlobalVariable>(Entry);
+  if (GV && LangOpts.EmitVarDeclsInorder) {
+    // This happens if incomplete types output first,
+    // int x[];
+    // int x[10];
+    // int x[10] = {1, 2, 3};
+    // we need to allow the follow up complete types or real definitions to
+    // update the exist entry node. Here e set the flag for this creation scene
+    GV->setIncompleteArrayCreateType(false);
+    if (ASTTy->isIncompleteType())
+      GV->setIncompleteArrayCreateType(true);
+  }
 
   // We have a definition after a declaration with the wrong type.
   // We must make a new GlobalVariable* and update everything that used OldGV

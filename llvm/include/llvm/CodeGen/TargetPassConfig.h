@@ -379,6 +379,10 @@ protected:
   /// immediately before register allocation.
   virtual void addPreRegAlloc() { }
 
+  /// This method may be implemented by targets that want to run passes
+  /// immediately before register allocation.
+  virtual void addRightBeforeRegAlloc() {}
+
   /// createTargetRegisterAllocator - Create the register allocator pass for
   /// this target at the current optimization level.
   virtual FunctionPass *createTargetRegisterAllocator(bool Optimized);

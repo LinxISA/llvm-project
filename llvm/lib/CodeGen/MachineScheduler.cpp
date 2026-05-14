@@ -99,7 +99,6 @@ cl::opt<bool> PrintDAGs("misched-print-dags", cl::Hidden,
 const bool ViewMISchedDAGs = false;
 const bool PrintDAGs = false;
 #endif // NDEBUG
-
 } // end namespace llvm
 
 #ifndef NDEBUG

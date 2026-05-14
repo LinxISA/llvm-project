@@ -2631,13 +2631,20 @@ void DecoderEmitter::run(raw_ostream &o) {
         MaxInstLen = std::max(MaxInstLen, Len);
         InstrLen[i] = Len;
       }
-      std::string DecoderNamespace =
-          std::string(EncodingDef->getValueAsString("DecoderNamespace"));
-      if (!NumberedEncodings[i].HwModeName.empty())
-        DecoderNamespace +=
-            std::string("_") + NumberedEncodings[i].HwModeName.str();
-      OpcMap[std::make_pair(DecoderNamespace, Size)].emplace_back(
-          i, IndexOfInstruction.find(Def)->second);
+
+      auto DecoderNamespaces =
+          EncodingDef->getValueAsListOfStrings("DecoderNamespaces");
+      if (DecoderNamespaces.empty())
+        DecoderNamespaces.push_back(
+            EncodingDef->getValueAsString("DecoderNamespace"));
+      for (auto NS : DecoderNamespaces) {
+        std::string DecoderNamespace = std::string(NS);
+        if (!NumberedEncodings[i].HwModeName.empty())
+          DecoderNamespace +=
+              std::string("_") + NumberedEncodings[i].HwModeName.str();
+        OpcMap[std::make_pair(DecoderNamespace, Size)].emplace_back(
+            i, IndexOfInstruction.find(Def)->second);
+      }
     } else {
       NumEncodingsOmitted++;
     }

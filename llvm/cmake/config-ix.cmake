@@ -71,7 +71,7 @@ if(APPLE)
   CHECK_C_SOURCE_COMPILES("
      static const char *__crashreporter_info__ = 0;
      asm(\".desc ___crashreporter_info__, 0x10\");
-     int main(void) { return 0; }"
+     int main() { return 0; }"
     HAVE_CRASHREPORTER_INFO)
 endif()
 
@@ -496,6 +496,12 @@ elseif (LLVM_NATIVE_ARCH MATCHES "riscv32")
   set(LLVM_NATIVE_ARCH RISCV)
 elseif (LLVM_NATIVE_ARCH MATCHES "riscv64")
   set(LLVM_NATIVE_ARCH RISCV)
+elseif (LLVM_NATIVE_ARCH MATCHES "linx64")
+  set(LLVM_NATIVE_ARCH LINX)
+elseif (LLVM_NATIVE_ARCH MATCHES "linx64v4")
+  set(LLVM_NATIVE_ARCH LinxV4)
+elseif (LLVM_NATIVE_ARCH MATCHES "linx64v5")
+  set(LLVM_NATIVE_ARCH LinxV5)
 elseif (LLVM_NATIVE_ARCH STREQUAL "m68k")
   set(LLVM_NATIVE_ARCH M68k)
 else ()

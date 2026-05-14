@@ -306,7 +306,10 @@ namespace {
       if (Diags.hasErrorOccurred())
         return;
 
-      Builder->EmitTentativeDefinition(D);
+      if (Ctx->getLangOpts().EmitVarDeclsInorder)
+        Builder->EmitDeclarationInOrder(D);
+      else
+        Builder->EmitTentativeDefinition(D);
     }
 
     void CompleteExternalDeclaration(VarDecl *D) override {
