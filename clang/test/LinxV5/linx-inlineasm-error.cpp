@@ -1,4 +1,4 @@
-// RUN: not %clang++ --target=linx64v5 -O2 -mlxbc -mllvm -enable-all-vector-as-tilereg=true -S -o - %s 2>&1 | FileCheck %s --dump-input always -vv
+// RUN: not %clang++ --target=linx64 -O2 -mlxbc -mllvm -enable-all-vector-as-tilereg=true -S -o - %s 2>&1 | FileCheck %s --dump-input always -vv
 
 typedef double tile tile_size(512);
 extern void __mtc__ copyin(tile __out__ out, double *p);

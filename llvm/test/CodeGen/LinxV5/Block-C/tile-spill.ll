@@ -1,10 +1,10 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64v5 -O2 -stop-after=prologepilog | FileCheck %s --dump-input always -vv --check-prefixes=CHECK-STACK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64 -O2 -stop-after=prologepilog | FileCheck %s --dump-input always -vv --check-prefixes=CHECK-STACK
 
 ; ModuleID = 'test.cpp'
 source_filename = "test.cpp"
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 ; CHECK-LABEL: _Z11tile_callerPdS_S_:
 ; CHECK: lui	18, 	->t

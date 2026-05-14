@@ -1,5 +1,5 @@
 
-; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 ; CHECK: TLOAD.NORM	<LB0: 128, LB1: 1, LB2: 128, S64, Zero>	[a1,zero], 	->t<1KB>
 define dso_local void @_Z4testPfRu11matrix_typeILm1ELm256EfE(ptr  %p, ptr %TO) local_unnamed_addr {

@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 2>&1 | FileCheck %s --check-prefixes=ASM
+; RUN: llc < %s --march=linx64 -O2 2>&1 | FileCheck %s --check-prefixes=ASM
 
 ; ASM-LABEL: sdiv64:
 ; ASM: l.div ri1.sd, ri2.sd, ->t.d

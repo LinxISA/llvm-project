@@ -284,9 +284,9 @@ static const char *getLDMOption(const llvm::Triple &T, const ArgList &Args) {
   case llvm::Triple::linx64v4be:
     return "elf64blinxv4";
   case llvm::Triple::linx64v5:
-    return "elf64llinxv5";
+    return "elf64llinx";
   case llvm::Triple::linx64v5be:
-    return "elf64blinxv5";
+    return "elf64blinx";
   case llvm::Triple::sparc:
   case llvm::Triple::sparcel:
     return "elf32_sparc";
@@ -2364,12 +2364,12 @@ void Generic_GCC::GCCInstallationDetector::AddDefaultGCCPrefixes(
       "linx64v4be-unknown-linux-gnu", "linx64v4be-linux-gnu"};
 
   static const char *const Linx64V5LibDirs[] = {"/lib64", "/lib"};
-  static const char *const Linx64V5Triples[] = {"linx64v5-unknown-linux-gnu",
-                                                "linx64v5-linux-gnu"};
+  static const char *const Linx64V5Triples[] = {"linx64-unknown-linux-gnu",
+                                                "linx64-linux-gnu"};
 
   static const char *const Linx64V5BELibDirs[] = {"/lib64", "/lib"};
   static const char *const Linx64V5BETriples[] = {
-      "linx64v5be-unknown-linux-gnu", "linx64v5be-linux-gnu"};
+      "linx64be-unknown-linux-gnu", "linx64be-linux-gnu"};
 
   static const char *const SPARCv8LibDirs[] = {"/lib32", "/lib"};
   static const char *const SPARCv8Triples[] = {"sparc-linux-gnu",

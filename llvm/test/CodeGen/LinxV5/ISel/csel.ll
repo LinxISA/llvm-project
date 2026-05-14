@@ -1,5 +1,5 @@
-; RUN: llc < %s --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv  --check-prefixes=DAG
-; RUN: llc < %s --march=linx64v5 -linxv5-enable-csel=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAGNOCSEL
+; RUN: llc < %s --march=linx64 -O2 | FileCheck %s --dump-input always -vv  --check-prefixes=DAG
+; RUN: llc < %s --march=linx64 -linxv5-enable-csel=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAGNOCSEL
 
 ; CHECK-LABEL: csel:
 ; TODO: remove this bic

@@ -1,4 +1,4 @@
-// RUN: %clang --target=linx64v5 -O2 -mlxbc -S -o - %s
+// RUN: %clang --target=linx64 -O2 -mlxbc -S -o - %s
 
 // clang-format off
 int corrects() {

@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 ; CHECK: andi:
 ; CHECK: bic a0, 5, 59, ->a0

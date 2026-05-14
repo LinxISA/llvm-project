@@ -1,4 +1,4 @@
-// RUN: %clang++ --target=linx64v5 -O2 -mlxbc -emit-llvm -S -o - %s \
+// RUN: %clang++ --target=linx64 -O2 -mlxbc -emit-llvm -S -o - %s \
 // RUN:   | FileCheck %s --dump-input always -vv
 
 typedef __fp8_e5m2 te5m2 tile_size(1024);

@@ -670,9 +670,9 @@ static llvm::Triple computeTargetTriple(const Driver &D,
 
   if (A && Target.isLinx()) {
     if (Target.isLittleEndian()) {
-      Target.setArch(llvm::Triple::linx64);
+      Target.setArch(llvm::Triple::linx64v5);
     } else {
-      Target.setArch(llvm::Triple::linx64be);
+      Target.setArch(llvm::Triple::linx64v5be);
     }
   }
   return Target;

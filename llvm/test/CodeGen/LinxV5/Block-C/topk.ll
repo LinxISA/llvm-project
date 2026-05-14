@@ -1,7 +1,7 @@
 ; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 %class.Tensor = type { [256 x float] }
 

@@ -1,4 +1,4 @@
-; RUN: llc < %s -linxv5-enable-compress-inst=false --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAG,CHECK
+; RUN: llc < %s -linxv5-enable-compress-inst=false --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAG,CHECK
 
 ; CHECK: i8sexti16:
 ; DAG: bxs a1, 0, 8, ->t

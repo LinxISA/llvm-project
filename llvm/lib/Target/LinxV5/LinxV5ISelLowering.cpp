@@ -281,6 +281,7 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::JumpTable, XLenVT, Custom);
 
   setOperationAction(ISD::GlobalTLSAddress, XLenVT, Custom);
+  setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Custom);
 
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
   setOperationAction(ISD::DEBUGTRAP, MVT::Other, Legal);
@@ -776,6 +777,8 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
     return lowerJumpTable(Op, DAG);
   case ISD::GlobalTLSAddress:
     return lowerGlobalTLSAddress(Op, DAG);
+  case ISD::ATOMIC_FENCE:
+    return Op.getOperand(0);
   case ISD::SELECT:
     return lowerSELECT(Op, DAG);
   case ISD::VASTART:
@@ -3310,6 +3313,12 @@ LinxV5TargetLowering::LowerCall(CallLoweringInfo &CLI,
   MVT XLenVT = Subtarget.getXLenVT();
 
   MachineFunction &MF = DAG.getMachineFunction();
+
+  // Keep tail transfer semantics explicit in this bring-up lane. The AVS
+  // call/ret contract expects ordinary calls to preserve the normal
+  // FENTRY/FRET.STK path and reserves tail-transfer lowering for musttail.
+  if (!CLI.CB || !CLI.CB->isMustTailCall())
+    IsTailCall = false;
 
   // Analyze the operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;

@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64v5 -linxv5-enable-clock-hand-opt=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64 -linxv5-enable-clock-hand-opt=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 ; CHECK-LABEL: _Z3fooPdS_:
 ; CHECK: BSTART.CUBE      MAMULB, FP64

@@ -1,5 +1,5 @@
 // clang-format off
-// RUN: not %clang++ --target=linx64v5 -std=c++20 -O2 -mlxbc -S %s 2>&1 | FileCheck %s --check-prefix=CHECK-ERRORS
+// RUN: not %clang++ --target=linx64 -std=c++20 -O2 -mlxbc -S %s 2>&1 | FileCheck %s --check-prefix=CHECK-ERRORS
 
 typedef double tile_t tile_size(1024);
 class tile {

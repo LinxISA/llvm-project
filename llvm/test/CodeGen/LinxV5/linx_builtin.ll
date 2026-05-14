@@ -1,7 +1,7 @@
-; RUN: clang %s --target=linx64v5 -S -O2 -mllvm -linxv5-enable-legacy-isel=true  -mllvm -stop-after=finalize-isel -o - | FileCheck %s --check-prefixes=CHECK,VBX
-; RUN: clang %s --target=linx64v5 -S -O2 -mllvm -linxv5-enable-legacy-isel=false -mllvm -stop-after=finalize-isel -o - | FileCheck %s --check-prefixes=CHECK,DAG
+; RUN: clang %s --target=linx64 -S -O2 -mllvm -linxv5-enable-legacy-isel=true  -mllvm -stop-after=finalize-isel -o - | FileCheck %s --check-prefixes=CHECK,VBX
+; RUN: clang %s --target=linx64 -S -O2 -mllvm -linxv5-enable-legacy-isel=false -mllvm -stop-after=finalize-isel -o - | FileCheck %s --check-prefixes=CHECK,DAG
 
-target triple = "linx64v5"
+target triple = "linx64"
 
 ; CHECK-LABEL: name: builtin_test1
 ; VBX: VBXSYSGET 16

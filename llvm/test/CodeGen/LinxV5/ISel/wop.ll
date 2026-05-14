@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAG,CHECK
+; RUN: llc < %s --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAG,CHECK
 
 ; CHECK-LABEL: wop1:
 ; CHECK:      addw a0, a1, ->t

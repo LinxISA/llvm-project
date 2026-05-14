@@ -1,4 +1,4 @@
-# RUN: llvm-mc -filetype=obj -triple=linx64v5-linux-musl -mattr=+relax %s -o %t.o
+# RUN: llvm-mc -filetype=obj -triple=linx64-linux-musl -mattr=+relax %s -o %t.o
 # RUN: ld.lld -Ttext=0x0 -Tdata=0x1ff000 %t.o -o %t
 # RUN: llvm-objdump -d %t | FileCheck %s
 

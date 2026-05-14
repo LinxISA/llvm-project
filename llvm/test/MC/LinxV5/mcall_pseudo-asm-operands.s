@@ -1,4 +1,4 @@
-// RUN: llvm-mc %s -arch=linx64v5 -linxv5-enable-dim-opt=true| FileCheck %s --dump-input always -vv
+// RUN: llvm-mc %s -arch=linx64 -linxv5-enable-dim-opt=true| FileCheck %s --dump-input always -vv
 
 // CHECK: BSTART.MPAR      VS16
 // CHECK: B.IOTI  [t#1, u#2], last  ->t<64KB>

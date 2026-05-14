@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 
 ; CHECK: VPAR  copyin,   <M: 4, N: 4, K: 1, MR>   [a0],        ->t<512B>

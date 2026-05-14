@@ -1,4 +1,4 @@
-; RUN: timeout 1m llc < %s --march=linx64v5
+; RUN: timeout 1m llc < %s --march=linx64
 
 define dso_local void @yield() {
 entry:

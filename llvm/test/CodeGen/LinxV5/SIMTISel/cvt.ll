@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 2>&1 | FileCheck %s --check-prefixes=ASM
+; RUN: llc < %s --march=linx64 -O2 2>&1 | FileCheck %s --check-prefixes=ASM
 
 ; ASM-LABEL: u64tof64:
 ; ASM: l.icvtf.u642fp64 ri1.ud,  ->t.d

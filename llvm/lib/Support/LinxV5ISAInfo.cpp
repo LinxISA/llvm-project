@@ -109,11 +109,11 @@ LinxV5ISAInfo::parseArchString(StringRef Arch, bool EnableExperimentalExtension,
                              "string must be lowercase");
   }
 
-  // ISA string must begin with linx64
-  // TODO: Add extension here if we need.
-  if (!Arch.startswith("linx64v5")) {
+  // Canonical LinxISA triples use the linx64 prefix. Keep linx64v5 accepted as
+  // a backward-compatible alias while this backend still uses LinxV5 internals.
+  if (!(Arch.startswith("linx64") || Arch.startswith("linx64v5"))) {
     return createStringError(errc::invalid_argument,
-                             "string must begin with linx64v5");
+                             "string must begin with linx64");
   }
 
   unsigned XLen = 64;

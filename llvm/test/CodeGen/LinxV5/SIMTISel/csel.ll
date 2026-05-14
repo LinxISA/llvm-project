@@ -1,7 +1,7 @@
-; RUN: llc < %s --march=linx64v5 -stop-after=finalize-isel -linxv5-enable-simt-clock-hand=true -O2 2>&1 | FileCheck %s --check-prefixes=MIR
-; RUN: llc < %s --march=linx64v5 -linxv5-enable-simt-clock-hand=true -O2 2>&1 | FileCheck %s --check-prefixes=ASM
+; RUN: llc < %s --march=linx64 -stop-after=finalize-isel -linxv5-enable-simt-clock-hand=true -O2 2>&1 | FileCheck %s --check-prefixes=MIR
+; RUN: llc < %s --march=linx64 -linxv5-enable-simt-clock-hand=true -O2 2>&1 | FileCheck %s --check-prefixes=ASM
 
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 ; MIR: name: csel64
 ; MIR: SIMT_CSEL 0, killed [[REG1:%[0-9]+]], 4, [[REG2:%[0-9]+]], 4, [[REG3:%[0-9]+]], 4, 0

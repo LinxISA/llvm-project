@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -linxv5-enable-legacy-isel=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK,DAG
+; RUN: llc < %s --march=linx64 -linxv5-enable-legacy-isel=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK,DAG
 
 declare double @llvm.fabs.f64(double) nounwind readnone
 

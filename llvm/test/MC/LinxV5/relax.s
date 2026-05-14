@@ -1,4 +1,4 @@
-// RUN: clang %s --target=linx64v5 -O2 -c -o %s.o
+// RUN: clang %s --target=linx64 -O2 -c -o %s.o
 // RUN: ld.lld  %s.o -o %s.bin
 // RUN: llvm-objdump -d %s.bin | FileCheck %s --dump-input always -vv
 // RUN: rm %s.o %s.bin

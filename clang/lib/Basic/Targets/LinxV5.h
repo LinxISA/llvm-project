@@ -127,7 +127,7 @@ public:
     return true;
   }
 
-  const char *getBFloat16Mangling() const { return "u6__bf16"; }
+  const char *getBFloat16Mangling() const override { return "u6__bf16"; }
 };
 } // namespace targets
 } // namespace clang

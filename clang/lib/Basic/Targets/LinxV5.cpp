@@ -60,6 +60,8 @@ void LinxV5TargetInfo::getTargetDefines(const LangOptions &Opts,
   if (getTriple().getArch() == llvm::Triple::linx64v5be)
     Builder.defineMacro("__linxv5_be");
   Builder.defineMacro("__linx");
+  Builder.defineMacro("__linxisa__");
+  Builder.defineMacro("__linx64__");
   Builder.defineMacro("__linxv5");
   Builder.defineMacro("__linx_v5");
   Builder.defineMacro("__linx_xlen", "64");
@@ -104,6 +106,7 @@ ArrayRef<Builtin::Info> LinxV5TargetInfo::getTargetBuiltins() const {
 /// Return true if has this feature, need to sync with handleTargetFeatures.
 bool LinxV5TargetInfo::hasFeature(StringRef Feature) const {
   return llvm::StringSwitch<bool>(Feature)
+      .Case("linx64", true)
       .Case("linx64v5", true)
       .Case("m", HasM)
       .Default(false);

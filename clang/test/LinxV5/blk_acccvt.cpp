@@ -1,5 +1,5 @@
 // clang-format off
-// RUN: %clang++ --target=linx64v5 -O2 -mlxbc -emit-llvm -S -o - %s | FileCheck %s --dump-input always -vv
+// RUN: %clang++ --target=linx64 -O2 -mlxbc -emit-llvm -S -o - %s | FileCheck %s --dump-input always -vv
 
 using tile = float tile_size(256);
 

@@ -1,4 +1,4 @@
-// RUN: %clang++ --target=linx64v5 -O2 -mlxbc -fenable-matrix \
+// RUN: %clang++ --target=linx64 -O2 -mlxbc -fenable-matrix \
 // RUN:   -S -emit-llvm -o - %s | FileCheck %s --dump-input always -vv
 
 typedef double tile  tile_size(1024);

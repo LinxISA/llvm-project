@@ -80,9 +80,11 @@ StringRef linxv5::getLinxV5ABI(const ArgList &Args,
     consumeError(ParseResult.takeError());
   else
     return (*ParseResult)->computeDefaultABI();
+
+  return "";
 }
 
 StringRef linxv5::getLinxV5Arch(const llvm::opt::ArgList &Args,
                                 const llvm::Triple &Triple) {
-  return "linx64v5";
+  return "linx64";
 }

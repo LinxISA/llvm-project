@@ -1,4 +1,4 @@
-// RUN: clang %s --target=linx64v5 -S -emit-llvm -O2 -mllvm -enable-struct-access-opt=true -o - | FileCheck %s --check-prefixes=CHECK
+// RUN: clang %s --target=linx64 -S -emit-llvm -O2 -mllvm -enable-struct-access-opt=true -o - | FileCheck %s --check-prefixes=CHECK
 
 typedef struct {
   int a;

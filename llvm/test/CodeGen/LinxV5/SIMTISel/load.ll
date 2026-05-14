@@ -1,6 +1,6 @@
-; RUN: llc < %s --march=linx64v5 -stop-after=finalize-isel -O2 2>&1 | FileCheck %s --check-prefixes=MIR
-; RUN: llc < %s --march=linx64v5 -O2 2>&1 | FileCheck %s --check-prefixes=ASM
-target triple = "linx64v5-unknown-linux-musl"
+; RUN: llc < %s --march=linx64 -stop-after=finalize-isel -O2 2>&1 | FileCheck %s --check-prefixes=MIR
+; RUN: llc < %s --march=linx64 -O2 2>&1 | FileCheck %s --check-prefixes=ASM
+target triple = "linx64-unknown-linux-musl"
 
 ; ASM: loadi64:
 ; ASM: v.ld.local [ri0.sd, zero.sd], ->vt.d

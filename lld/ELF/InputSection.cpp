@@ -645,7 +645,7 @@ static int64_t getTlsTpOffset(const Symbol &s) {
     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
   case EM_LinxV4:
     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
-  case EM_LinxV5:
+  case EM_LINXISA:
     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
     // Variant 2.
   case EM_HEXAGON:

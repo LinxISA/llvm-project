@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 ; CHECK: MCALL.PAR       copyin, <M: 1, N: 1, K: 1>      [a0],   ->t<512KB>
 ; CHECK: MCALL.PAR       copyin, <M: 1, N: 1, K: 1>      [a1],   ->t<512KB>

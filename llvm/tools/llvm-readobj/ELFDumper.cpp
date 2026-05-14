@@ -1206,7 +1206,7 @@ const EnumEntry<unsigned> ElfMachineType[] = {
   ENUM_ENT(EM_VE,            "NEC SX-Aurora Vector Engine"),
   ENUM_ENT(EM_LOONGARCH,     "LoongArch"),
   ENUM_ENT(EM_LinxV4,        "Linx"),
-  ENUM_ENT(EM_LinxV5,        "LinxV5"),
+  ENUM_ENT(EM_LINXISA,       "LinxISA"),
 };
 
 const EnumEntry<unsigned> ElfSymbolBindings[] = {

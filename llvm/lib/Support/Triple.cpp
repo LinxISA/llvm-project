@@ -68,8 +68,8 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
   case linx64be:       return "linx64be";
   case linx64v4:       return "linx64v4";
   case linx64v4be:     return "linx64v4be";
-  case linx64v5:       return "linx64v5";
-  case linx64v5be:     return "linx64v5be";
+  case linx64v5:       return "linx64";
+  case linx64v5be:     return "linx64be";
   case shave:          return "shave";
   case sparc:          return "sparc";
   case sparcel:        return "sparcel";
@@ -178,7 +178,7 @@ StringRef Triple::getArchTypePrefix(ArchType Kind) {
   case linx64v4:    return "linxv4";
 
   case linx64v5be:
-  case linx64v5:    return "linxv5";
+  case linx64v5:    return "linx";
 
   case ve:          return "ve";
   case csky:        return "csky";
@@ -348,8 +348,8 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
     .Case("amdgcn", amdgcn)
     .Case("riscv32", riscv32)
     .Case("riscv64", riscv64)
-    .Case("linx64", linx64)
-    .Case("linx64be", linx64be)
+    .Case("linx64", linx64v5)
+    .Case("linx64be", linx64v5be)
     .Case("linx64v4", linx64v4)
     .Case("linx64v4be", linx64v4be)
     .Case("linx64v5", linx64v5)
@@ -498,8 +498,8 @@ static Triple::ArchType parseArch(StringRef ArchName) {
     .Case("amdgcn", Triple::amdgcn)
     .Case("riscv32", Triple::riscv32)
     .Case("riscv64", Triple::riscv64)
-    .Case("linx64", Triple::linx64)
-    .Case("linx64be", Triple::linx64be)
+    .Case("linx64", Triple::linx64v5)
+    .Case("linx64be", Triple::linx64v5be)
     .Case("linx64v4", Triple::linx64v4)
     .Case("linx64v4be", Triple::linx64v4be)
     .Case("linx64v5", Triple::linx64v5)

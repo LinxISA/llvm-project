@@ -1,4 +1,4 @@
-// RUN: llvm-mc %s --triple=linx64v5 --show-encoding -linxv5-enable-compress-inst=false| FileCheck %s --dump-input always -vv
+// RUN: llvm-mc %s --triple=linx64 --show-encoding -linxv5-enable-compress-inst=false| FileCheck %s --dump-input always -vv
 
 // imm <Size>
 // CHECK: BSTART.CUBE      TMATMUL, FP32

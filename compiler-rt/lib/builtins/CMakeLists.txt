@@ -679,6 +679,7 @@ set(riscv64_SOURCES
 
 set(linx64_SOURCES
   linx64/check_addr.c
+  linx64v5/tnop.S
   ${GENERIC_SOURCES}
   ${GENERIC_TF_SOURCES}
 )

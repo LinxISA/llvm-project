@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -march=linx64v5 -O3 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -march=linx64 -O3 | FileCheck %s --dump-input always -vv
 
 ; CHECK: MPAR	copyin,	<M: 1, N: 1, K: 1, MR>	[a0,a3], 	->t<2KB>
 ; CHECK:MPAR	copyin,	<M: 1, N: 1, K: 1, MR>	[a1,a3], 	->t<2KB>

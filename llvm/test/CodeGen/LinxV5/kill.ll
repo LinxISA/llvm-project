@@ -1,5 +1,5 @@
-; RUN: llc < %s -linxv5-kill-insert=callsite -linxv5-kill-exclude-csr=false -linxv5-kill-exclude-argreg=false -march=linx64v5be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK1
-; RUN: llc < %s -linxv5-kill-insert=callsite -linxv5-kill-exclude-csr=true -linxv5-kill-exclude-argreg=true -march=linx64v5be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK2
+; RUN: llc < %s -linxv5-kill-insert=callsite -linxv5-kill-exclude-csr=false -linxv5-kill-exclude-argreg=false -march=linx64be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK1
+; RUN: llc < %s -linxv5-kill-insert=callsite -linxv5-kill-exclude-csr=true -linxv5-kill-exclude-argreg=true -march=linx64be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK2
 
 ; CHECK1: kill [a2, a3, a4, a5, a6, a7, x0, x1, x2, x3]
 ; CHECK2: kill [x0, x1, x2, x3]

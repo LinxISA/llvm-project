@@ -1486,6 +1486,7 @@ class Tile_DataType_NoMode<bits<5> Opcode, string HeadType, dag ins>
 
 def BSTART_TMA : Tile_DataType_NoMode<0b00010, ".TMA", (ins BstartDataType:$DataType, TileOPTMA:$TileOP)>;
 def BSTART_CUBE: Tile_DataType_NoMode<0b00110, ".CUBE", (ins BstartDataType:$DataType, TileOPCUBE:$TileOP)>;
+def BSTART_FIXP: Tile_DataType_NoMode<0b00111, ".FIXP", (ins BstartDataType:$DataType, TileOPCUBE:$TileOP)>;
 def BSTART_TEPL_NoMode: Tile_DataType_TEPL<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP)>;
 //def BSTART_TEPL: Tile_DataType<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP, TEPLMode:$Mode)>;
 

@@ -2219,9 +2219,12 @@ static void SetLinxV5SmallDataLimit(const ToolChain &TC, const ArgList &Args,
   // Default small data limitation is eight.
   const char *SmallDataLimit = "8";
   // Get small data limitation.
-  if (const auto A = Args.getLastArg(options::OPT_shared, options::OPT_fpic,
-                                     options::OPT_fPIC)) {
-    D.Diag(diag::err_drv_unsupported_opt) << A->getOption().getName();
+  if (Args.getLastArg(options::OPT_shared, options::OPT_fpic,
+                      options::OPT_fPIC)) {
+    SmallDataLimit = "0";
+    if (Args.hasArg(options::OPT_G)) {
+      D.Diag(diag::warn_drv_unsupported_sdata);
+    }
   } else if (Args.getLastArgValue(options::OPT_mcmodel_EQ)
                  .equals_insensitive("large") &&
              Triple.isLinxV5()) {
@@ -5740,36 +5743,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // When building with ccache, it will pass -D options to clang even on
   // preprocessed inputs and configure concludes that -fPIC is not supported.
   Args.ClaimAllArgs(options::OPT_D);
-
-  // Linx Toolchain only supports -O2 and -O3, compatible with -O4
-  // Other optimization levels are untested, report error
-  // If user don't give optimization level, default is O2
-  // Options.td O_Group includes: O0, O4, Ofast, O(others)
-  if (Triple.isLinx() || Triple.isLinxV4()) {
-    if (const Arg *A = Args.getLastArg(options::OPT_O_Group)) {
-      if (A->getOption().matches(options::OPT_O0) ||
-          A->getOption().matches(options::OPT_Ofast)) {
-        D.Diag(diag::err_drv_unsupported_option_argument)
-            << "Optimization Level" << A->getOption().getName();
-      } else if (A->getOption().matches(options::OPT_O4)) {
-        // Let Clang handle it.
-      } else {
-        assert(A->getOption().matches(options::OPT_O) &&
-               "Unrecognized -O flag");
-        StringRef OptLevel(A->getValue());
-        if (OptLevel != "2" && OptLevel != "3") {
-          D.Diag(diag::err_drv_unsupported_option_argument)
-              << "Optimization Level"
-              << (A->getOption().getName().str() + OptLevel.str());
-        }
-      }
-    } else {
-      // When there is no optimization level,
-      // adding "-O2" to the tail of argument list by default
-      D.Diag(diag::warn_default_is_O2);
-      CmdArgs.push_back("-O2");
-    }
-  }
 
   // Manually translate -O4 to -O3; let clang reject others.
   if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {

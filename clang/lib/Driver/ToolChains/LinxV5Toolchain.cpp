@@ -103,7 +103,7 @@ void LinxV5ToolChain::addClangTargetOptions(
     CC1Args.push_back("-mllvm");
     CC1Args.push_back("-vectorize-slp=false");
   }
-  if (!DriverArgs.hasArg(options::OPT_O)) {
+  if (!DriverArgs.hasArg(options::OPT_O_Group)) {
     CC1Args.push_back("-O2");
   }
 }
@@ -130,7 +130,7 @@ void LinxV5ToolChain::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
   if (!DriverArgs.hasArg(options::OPT_nostdlibinc)) {
     std::string HeaderPath = D.InstalledDir + "/../";
     addSystemInclude(DriverArgs, CC1Args,
-                     HeaderPath + "linx64v5-unknown-elf/include");
+                     HeaderPath + "linx64-unknown-elf/include");
   }
 }
 
@@ -193,9 +193,9 @@ void LinxV5::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   CmdArgs.push_back("-m");
-  CmdArgs.push_back(IsBigEndian ? "elf64blinxv5" : "elf64llinxv5");
+  CmdArgs.push_back(IsBigEndian ? "elf64blinx" : "elf64llinx");
 
-  const char *NameStr = Args.MakeArgString("linx64v5");
+  const char *NameStr = Args.MakeArgString("linx64");
   std::string CPUName(NameStr);
   std::string Linker =
       D.InstalledDir + "/ld.lld";
@@ -205,11 +205,11 @@ void LinxV5::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (WantCRTs) {
     CmdArgs.push_back(Args.MakeArgString(
-        D.InstalledDir + "/../linx64v5-unknown-elf/lib/crt0.o"));
+        D.InstalledDir + "/../linx64-unknown-elf/lib/crt0.o"));
   }
 
   CmdArgs.push_back(Args.MakeArgString("-L" + D.InstalledDir +
-                                       "/../linx64v5-unknown-elf/lib"));
+                                       "/../linx64-unknown-elf/lib"));
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);
   ToolChain.AddFilePathLibArgs(Args, CmdArgs);
@@ -229,7 +229,7 @@ void LinxV5::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     CmdArgs.push_back("-lc");
 
     CmdArgs.push_back("-lgloss");
-    CmdArgs.push_back("-lclang_rt.builtins-linx64v5");
+    CmdArgs.push_back("-lclang_rt.builtins-linx64");
 
     CmdArgs.push_back("--end-group");
   }

@@ -1,6 +1,6 @@
-; RUN: clang %s --target=linx64v5 -S -O2 -mllvm -stop-after=prologepilog -fstack-protector-strong -mllvm -linxv5-enable-stack-guard-with-cwr=true -o - | FileCheck %s --check-prefixes=CHECK
+; RUN: clang %s --target=linx64 -S -O2 -mllvm -stop-after=prologepilog -fstack-protector-strong -mllvm -linxv5-enable-stack-guard-with-cwr=true -o - | FileCheck %s --check-prefixes=CHECK
 
-target triple = "linx64v5"
+target triple = "linx64"
 
 ; CHECK-LABEL: name: stack_check1
 ; CHECK: SSR_GET 2080

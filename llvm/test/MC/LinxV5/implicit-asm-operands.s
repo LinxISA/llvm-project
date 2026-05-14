@@ -1,4 +1,4 @@
-// RUN: llvm-mc %s --triple=linx64v5 --show-encoding | FileCheck %s --dump-input always -vv
+// RUN: llvm-mc %s --triple=linx64 --show-encoding | FileCheck %s --dump-input always -vv
 
 // CHECK: setret .LA, ->ra
 // CHECK: encoding: [0x07,0x05,0bAAAA0000,A]
