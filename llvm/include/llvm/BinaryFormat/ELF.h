@@ -320,8 +320,9 @@ enum {
   EM_VE = 251,            // NEC SX-Aurora VE
   EM_CSKY = 252,          // C-SKY 32-bit processor
   EM_LOONGARCH = 258,     // LoongArch
+  EM_LINXISA = 233,       // LinxISA
   EM_LinxV4 = 260,        // LinxV4
-  EM_LinxV5 = 261,        // LinxV5
+  EM_LinxV5 = EM_LINXISA, // Backward-compat alias for the canonical LinxISA e_machine
 };
 
 // Object file classes.

@@ -1,6 +1,6 @@
-; RUN: llc < %s --march=linx64v5 -stop-after=finalize-isel -enable-all-vector-as-tilereg=true -O2 2>&1 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s --march=linx64 -stop-after=finalize-isel -enable-all-vector-as-tilereg=true -O2 2>&1 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 ; CHECK: test
 ; CHECK: simtcgv = COPY $simt_tc

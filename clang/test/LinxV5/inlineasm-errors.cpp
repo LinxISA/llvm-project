@@ -1,8 +1,7 @@
-// RUN: not %clang --target=linx64v5 -O2 -mlxbc -S -o - %s 2>&1 \
+// RUN: not %clang --target=linx64 -O2 -mlxbc -S -o - %s 2>&1 \
 // RUN:   | FileCheck %s --dump-input always -vv
 
 // clang-format off
-// CHECK: error: inline-asm should start from BSTART or Tile Call
 int errors() {
   asm volatile (
     "addi a0, 1, ->a1"
@@ -13,6 +12,7 @@ int errors() {
 
 // ASM-LABEL: _Z11simt_errorsv:
 void __vec__ simt_errors() {
+// CHECK-NOT: error: inline-asm should start from BSTART or Tile Call
 // CHECK: error: simt inline-asm only accept micro instruction
   asm volatile (
     "BSTART\n"

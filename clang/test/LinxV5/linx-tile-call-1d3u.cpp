@@ -1,4 +1,4 @@
-// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -S -o - %s | FileCheck %s --dump-input always -vv
+// RUN: %clang++ --target=linx64 -mlxbc -O2 -S -o - %s | FileCheck %s --dump-input always -vv
 
 typedef float tile tile_size(1024);
 

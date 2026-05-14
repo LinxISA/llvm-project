@@ -1,7 +1,7 @@
-// RUN: not %clang++ -std=c++20 -O3 -mlxbc -S --target=linx64v5 %s -DTEST=1 -emit-llvm 2>&1 | FileCheck %s --check-prefix=ERR1
+// RUN: not %clang++ -std=c++20 -O3 -mlxbc -S --target=linx64 %s -DTEST=1 -emit-llvm 2>&1 | FileCheck %s --check-prefix=ERR1
 // ERR1: error: function 'copyin' is declared with mtc or vec and cannot be called as a regular function
 
-// RUN: not %clang++ -std=c++20 -O3 -mlxbc -S --target=linx64v5 %s -DTEST=2 -emit-llvm 2>&1 | FileCheck %s --check-prefix=ERR2
+// RUN: not %clang++ -std=c++20 -O3 -mlxbc -S --target=linx64 %s -DTEST=2 -emit-llvm 2>&1 | FileCheck %s --check-prefix=ERR2
 // ERR2: error: The function 'copyin' lacks __vec__ or __mtc__ keyword modifier.
 
 typedef double tile tile_size(1024);

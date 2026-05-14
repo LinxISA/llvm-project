@@ -21,9 +21,9 @@ Target &llvm::getTheLinx64V5beTarget() {
 }
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5TargetInfo() {
-  RegisterTarget<Triple::linx64v5> V4(getTheLinx64V5Target(), "linx64v5",
-                                      "64-bit Linx v0.50", "LinxV5");
-  RegisterTarget<Triple::linx64v5be> BE(getTheLinx64V5beTarget(), "linx64v5be",
-                                        "64-bit Linx v0.50 (big endian)",
+  RegisterTarget<Triple::linx64v5> V4(getTheLinx64V5Target(), "linx64",
+                                      "64-bit LinxISA", "LinxV5");
+  RegisterTarget<Triple::linx64v5be> BE(getTheLinx64V5beTarget(), "linx64be",
+                                        "64-bit LinxISA (big endian)",
                                         "LinxV5");
 }

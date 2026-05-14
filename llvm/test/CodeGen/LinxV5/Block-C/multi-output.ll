@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64 -O2 | FileCheck %s --dump-input always -vv
 
 ; CHECK-LABEL: vfoo:
 ; CHECK:      v.ld.local [ta, zero.sd], ->vt.d

@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAG,CHECK
+; RUN: llc < %s --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=DAG,CHECK
 
 ; CHECK: cmp_eq:
 ; CHECK: cmp.eq a0, a1, ->a0

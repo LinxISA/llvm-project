@@ -1,5 +1,5 @@
-; RUN: llc < %s --march=linx64v5 -O2 -stop-after=finalize-isel 2>&1 | FileCheck %s --check-prefix=MIR
-; RUN: llc < %s --march=linx64v5 -O2 2>&1 | FileCheck %s --check-prefix=ASM
+; RUN: llc < %s --march=linx64 -O2 -stop-after=finalize-isel 2>&1 | FileCheck %s --check-prefix=MIR
+; RUN: llc < %s --march=linx64 -O2 2>&1 | FileCheck %s --check-prefix=ASM
 
 ; MIR-NOT: load (s64) from constant-pool
 ; ASM-NOT: l.ldi.u [t#1.sd

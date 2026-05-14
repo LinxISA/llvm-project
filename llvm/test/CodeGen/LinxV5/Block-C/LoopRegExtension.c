@@ -1,5 +1,5 @@
-// RUN: clang++ %s --target=linx64v5 -S -mllvm -linxv5-enable-Reg-Extension-Opt=true -mlxbc -O2 -o  - | FileCheck %s --check-prefixes=CHECK-OPEN
-// RUN: clang++ %s --target=linx64v5 -S -mllvm -linxv5-enable-Reg-Extension-Opt=false -mlxbc -O2 -o  - | FileCheck %s --check-prefixes=CHECK-CLOSE
+// RUN: clang++ %s --target=linx64 -S -mllvm -linxv5-enable-Reg-Extension-Opt=true -mlxbc -O2 -o  - | FileCheck %s --check-prefixes=CHECK-OPEN
+// RUN: clang++ %s --target=linx64 -S -mllvm -linxv5-enable-Reg-Extension-Opt=false -mlxbc -O2 -o  - | FileCheck %s --check-prefixes=CHECK-CLOSE
 
 // CHECK-OPEN: _Z6vshiftDv1024_f:
 // CHECK-OPEN: lui     260096,         ->t

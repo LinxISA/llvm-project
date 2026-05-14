@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 ; CHECK-LABEL: foo
 ; CHECK: TLOAD.ND2NZ <LB0: 16, LB1: 16, LB2: 1, FP32, Null> [a0,a3], ->t<1KB>

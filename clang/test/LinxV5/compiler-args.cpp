@@ -1,6 +1,6 @@
-// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -### %s 2>&1 \
+// RUN: %clang++ --target=linx64 -mlxbc -O2 -### %s 2>&1 \
 // RUN:   | FileCheck %s --dump-input always -vv
-// RUN: %clang++ --target=linx64v5-linux-musl -mlxbc -O2 -### %s 2>&1 \
+// RUN: %clang++ --target=linx64-linux-musl -mlxbc -O2 -### %s 2>&1 \
 // RUN:   | FileCheck %s --dump-input always -vv
 
 // CHECK-DAG: "-fenable-matrix"

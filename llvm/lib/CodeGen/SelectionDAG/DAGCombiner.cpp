@@ -8184,8 +8184,11 @@ SDValue DAGCombiner::MatchLoadCombine(SDNode *N) {
     assert(L->hasNUsesOfValue(1, 0) && L->isSimple() &&
            !L->isIndexed() &&
            "Must be enforced by calculateByteProvider");
-    if (!L->getOffset().isUndef())
+    if (!L->getOffset().isUndef()) {
+#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
       L->dump(&DAG);
+#endif
+    }
     assert(L->getOffset().isUndef() && "Unindexed load must have undef offset");
 
     // All loads must share the same chain

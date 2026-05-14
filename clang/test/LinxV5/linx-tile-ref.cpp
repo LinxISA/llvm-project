@@ -1,4 +1,4 @@
-// RUN: %clang++ --target=linx64v5 -std=c++20 -mlxbc -O2 -emit-llvm -S -o - %s | FileCheck %s --dump-input always -vv
+// RUN: %clang++ --target=linx64 -std=c++20 -mlxbc -O2 -emit-llvm -S -o - %s | FileCheck %s --dump-input always -vv
 
 typedef double tile tile_size(1024);
 

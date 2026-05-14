@@ -1,4 +1,4 @@
-// RUN: %clang++ --target=linx64v5 -mlxbc -O2 \
+// RUN: %clang++ --target=linx64 -mlxbc -O2 \
 // RUN:   -emit-llvm -S -o - %s | FileCheck %s
 
 using ftile_type = float tile_size(1024);

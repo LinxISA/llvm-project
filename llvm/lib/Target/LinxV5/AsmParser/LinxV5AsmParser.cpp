@@ -3572,7 +3572,10 @@ bool LinxV5AsmParser::maybeValidateInlineAsm(MCInst &Inst, SMLoc IDLoc) {
     else if (LinxV5II::isBSTART(TSFlags) || LinxV5II::isHeaderOnly(TSFlags))
       IAVS = IA_BLOCK;
     else
-      return Error(IDLoc, "inline-asm should start from BSTART or Tile Call.");
+      // AVS and bring-up tests still rely on single-instruction scalar inline
+      // asm without explicit block headers. Keep the stricter tile/SIMT
+      // validation, but stop rejecting ordinary scalar statement asm here.
+      IAVS = IA_UNSAFE;
   } else if (IAVS == IA_TILE) {
     if (!LinxV5II::isBlockModifier(TSFlags))
       return Error(IDLoc, "tile inline-asm only accept block-modifiers.");

@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64v5 -O2 | FileCheck %s
+; RUN: llc < %s -enable-all-vector-as-tilereg=true --march=linx64 -O2 | FileCheck %s
 
 ; Test blkv_rdor builtin intrinsic and code generation for i64
 ; C++ source code:

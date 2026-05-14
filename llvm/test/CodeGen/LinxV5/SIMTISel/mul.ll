@@ -1,5 +1,5 @@
-; RUN: llc < %s  --march=linx64v5 -stop-after=finalize-isel -O2 2>&1 | FileCheck %s --check-prefixes=simt
-target triple = "linx64v5-unknown-linux-musl"
+; RUN: llc < %s  --march=linx64 -stop-after=finalize-isel -O2 2>&1 | FileCheck %s --check-prefixes=simt
+target triple = "linx64-unknown-linux-musl"
 
 ; simt: name: mul64
 ; simt: SIMT_MUL_SCAR 0, [[REG1:%[0-9]+]], 4, [[REG2:%[0-9]+]], 4

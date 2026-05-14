@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=linx64v5 -O2 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s -march=linx64 -O2 | FileCheck %s --dump-input always -vv
 
 ; COMMENT: int32 space:
 ; COMMENT: addi/subi presents [0xfffffffffffff001, 0xfff]. Test

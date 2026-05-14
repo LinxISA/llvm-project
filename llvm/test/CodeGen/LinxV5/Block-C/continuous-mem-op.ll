@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 -enable-all-vector-as-tilereg=true 2>&1 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s --march=linx64 -O2 -enable-all-vector-as-tilereg=true 2>&1 | FileCheck %s --dump-input always -vv
 
 define void @vfoo(<1024 x float> %in, <1024 x i8> %in1) #0 {
   %i = tail call i16 @llvm.blkv.get.index.x()

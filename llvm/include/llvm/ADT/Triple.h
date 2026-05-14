@@ -877,7 +877,8 @@ public:
 
   /// Tests whether the target is Linx (only 64-bit now)
   bool isLinx() const {
-    return getArch() == Triple::linx64 || getArch() == Triple::linx64be;
+    return getArch() == Triple::linx64 || getArch() == Triple::linx64be ||
+           getArch() == Triple::linx64v5 || getArch() == Triple::linx64v5be;
   }
 
 /// LinDa means support 6188/6189

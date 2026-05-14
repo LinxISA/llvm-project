@@ -1,6 +1,6 @@
-; RUN: llc < %s --march=linx64v5 -linxv5-enable-HL-Inst-Opt=false -O2 2>&1 | FileCheck %s --check-prefixes=ASM
-; RUN: llc < %s --march=linx64v5 -linxv5-enable-HL-Inst-Opt=true -O2 2>&1 | FileCheck %s --check-prefixes=ASMOPT
-target triple = "linx64v5-unknown-linux-musl"
+; RUN: llc < %s --march=linx64 -linxv5-enable-HL-Inst-Opt=false -O2 2>&1 | FileCheck %s --check-prefixes=ASM
+; RUN: llc < %s --march=linx64 -linxv5-enable-HL-Inst-Opt=true -O2 2>&1 | FileCheck %s --check-prefixes=ASMOPT
+target triple = "linx64-unknown-linux-musl"
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
 
 ; lui + l.addi -> l.addli

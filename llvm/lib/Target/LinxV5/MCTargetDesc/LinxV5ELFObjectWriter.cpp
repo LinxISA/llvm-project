@@ -38,7 +38,7 @@ protected:
 } // namespace
 
 LinxV5ELFObjectWriter::LinxV5ELFObjectWriter(uint8_t OSABI, bool Is64Bit)
-    : MCELFObjectTargetWriter(Is64Bit, OSABI, ELF::EM_LinxV5,
+    : MCELFObjectTargetWriter(Is64Bit, OSABI, ELF::EM_LINXISA,
                               /*HasRelocationAddend*/ true) {}
 
 LinxV5ELFObjectWriter::~LinxV5ELFObjectWriter() = default;

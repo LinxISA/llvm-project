@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=linx64v5 -O2 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s -march=linx64 -O2 | FileCheck %s --dump-input always -vv
 
 define i64 @f1(i64 %a) {
 ; CHECK-LABEL: f1:

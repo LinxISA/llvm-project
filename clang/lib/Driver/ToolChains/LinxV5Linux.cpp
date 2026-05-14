@@ -62,7 +62,7 @@ void LinxV5Linux::addClangTargetOptions(
     CC1Args.push_back("-mllvm");
     CC1Args.push_back("-vectorize-slp=false");
   }
-  if (!DriverArgs.hasArg(options::OPT_O)) {
+  if (!DriverArgs.hasArg(options::OPT_O_Group)) {
     CC1Args.push_back("-O2");
   }
 }

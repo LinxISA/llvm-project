@@ -1,4 +1,4 @@
-// RUN: clang %s --target=linx64v5-unknown-linux-musl -S -O2 -mllvm -linxv5-disable-proepi-memblock=true
+// RUN: clang %s --target=linx64-unknown-linux-musl -S -O2 -mllvm -linxv5-disable-proepi-memblock=true
 
 double a[8];
 b, c, h, i, j, k, m, n, r, t, w, v;

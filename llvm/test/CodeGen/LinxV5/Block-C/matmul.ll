@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -stop-after=finalize-isel --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -stop-after=finalize-isel --march=linx64 -O2 | FileCheck %s --dump-input always -vv
 
 ; should not be %x:tile_src = COPY %y
 ; CHECK: tile_abs = COPY

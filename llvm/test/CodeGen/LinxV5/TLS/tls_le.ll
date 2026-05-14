@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=linx64v5 -O2 2>&1 | FileCheck %s --dump-input always -vv 
+; RUN: llc < %s -march=linx64 -O2 2>&1 | FileCheck %s --dump-input always -vv 
 
 @a = external hidden thread_local global i32, align 4
 define dso_local i32* @getaddr() nounwind {

@@ -152,8 +152,10 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(StringRef emul) {
           .Case("elf64lriscv", {ELF64LEKind, EM_RISCV})
           .Case("elf64llinxv4", {ELF64LEKind, EM_LinxV4})
           .Case("elf64blinxv4", {ELF64BEKind, EM_LinxV4})
-          .Case("elf64llinxv5", {ELF64LEKind, EM_LinxV5})
-          .Case("elf64blinxv5", {ELF64BEKind, EM_LinxV5})
+          .Case("elf64llinx", {ELF64LEKind, EM_LINXISA})
+          .Case("elf64blinx", {ELF64BEKind, EM_LINXISA})
+          .Case("elf64llinxv5", {ELF64LEKind, EM_LINXISA})
+          .Case("elf64blinxv5", {ELF64BEKind, EM_LINXISA})
           .Case("elf64ppc", {ELF64BEKind, EM_PPC64})
           .Case("elf64lppc", {ELF64LEKind, EM_PPC64})
           .Cases("elf_amd64", "elf_x86_64", {ELF64LEKind, EM_X86_64})
@@ -1003,7 +1005,7 @@ static bool getIsRela(opt::InputArgList &args) {
   // Otherwise use the psABI defined relocation entry format.
   uint16_t m = config->emachine;
   return m == EM_AARCH64 || m == EM_AMDGPU || m == EM_HEXAGON || m == EM_PPC ||
-         m == EM_PPC64 || m == EM_RISCV || m == EM_LinxV4 || m == EM_LinxV5 ||
+         m == EM_PPC64 || m == EM_RISCV || m == EM_LinxV4 || m == EM_LINXISA ||
          m == EM_X86_64;
 }
 

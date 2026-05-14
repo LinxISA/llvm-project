@@ -865,7 +865,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_REL>::enumeration(
   case ELF::EM_RISCV:
 #include "llvm/BinaryFormat/ELFRelocs/RISCV.def"
     break;
-  case ELF::EM_LinxV5:
+  case ELF::EM_LINXISA:
 #include "llvm/BinaryFormat/ELFRelocs/LinxV5.def"
     break;
   case ELF::EM_LANAI:

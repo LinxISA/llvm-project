@@ -1,6 +1,6 @@
-; RUN: llc < %s --march=linx64v5 -stop-after=finalize-isel -O2 2>&1 | FileCheck %s --check-prefixes=simt
+; RUN: llc < %s --march=linx64 -stop-after=finalize-isel -O2 2>&1 | FileCheck %s --check-prefixes=simt
 
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 ; simt: name: feq64
 ; simt: SIMT_FEQ 0, [[REG1:%[0-9]+]], 0, [[REG2:%[0-9]+]], 0

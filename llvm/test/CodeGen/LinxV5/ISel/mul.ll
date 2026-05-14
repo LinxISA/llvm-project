@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s --march=linx64 -O2 | FileCheck %s --dump-input always -vv
 
 ; CHECK: mul:
 ; CHECK: mul a0, a1, ->a0

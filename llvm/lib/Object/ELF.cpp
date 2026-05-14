@@ -115,7 +115,7 @@ StringRef llvm::object::getELFRelocationTypeName(uint32_t Machine,
       break;
     }
     break;
-  case ELF::EM_LinxV5:
+  case ELF::EM_LINXISA:
     switch (Type) {
 #include "llvm/BinaryFormat/ELFRelocs/LinxV5.def"
     default:

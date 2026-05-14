@@ -1,4 +1,4 @@
-// RUN: llvm-mc %s --triple=linx64v5 --show-encoding | FileCheck %s --dump-input always -vv
+// RUN: llvm-mc %s --triple=linx64 --show-encoding | FileCheck %s --dump-input always -vv
 
 // CHECK: BSTART.TMA      TLOAD, FP32
 // CHECK: B.ATTR   ZZ2ZN

@@ -1,4 +1,4 @@
-; RUN: llc < %s --march=linx64v5 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK,DAG
+; RUN: llc < %s --march=linx64 -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK,DAG
 
 ; CHECK-LABEL: foeq.fd:
 ; DAG: feq.fd a0, a1, ->a0

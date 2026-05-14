@@ -54,7 +54,7 @@
 ; ModuleID = '../src/linx-llvm/llvm/test/CodeGen/LinxV5/Block-C/simt_spill_reload.cpp'
 source_filename = "../src/linx-llvm/llvm/test/CodeGen/LinxV5/Block-C/simt_spill_reload.cpp"
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 ; CHECK: addi	zero, 2568, ->t
 ; CHECK-NEXT: v.sw.u.local    vn#1.reuse.uw, [to1, lc0<<2, t#1.ud]

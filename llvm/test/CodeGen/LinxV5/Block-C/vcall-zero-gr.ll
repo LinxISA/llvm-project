@@ -1,4 +1,4 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -march=linx64v5 -O3 | FileCheck %s --dump-input always -vv
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -march=linx64 -O3 | FileCheck %s --dump-input always -vv
 
 ; CHECK: VPAR vfoo, <M: 1, N: 1, K: 1, MR>  [a1], ->t<4KB>
 define void @foo(ptr noundef %p) {

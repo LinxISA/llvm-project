@@ -1,4 +1,4 @@
-// RUN: llvm-mc %s --triple=linx64v5 --show-encoding | FileCheck %s --dump-input always -vv
+// RUN: llvm-mc %s --triple=linx64 --show-encoding | FileCheck %s --dump-input always -vv
 
 // CHECK: hl.sb.pr a0, [a1, t#3.uw], ->u
 // CHECK: hl.sb.po a0, [a1, t#3.uw], ->u

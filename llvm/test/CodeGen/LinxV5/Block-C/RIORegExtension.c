@@ -1,5 +1,5 @@
-// RUN: clang++ %s --target=linx64v5 -S -mllvm -linxv5-enable-Reg-Extension-Opt=true -mlxbc -O2 -o  - | FileCheck %s --dump-input always -vv --check-prefixes=CHECK-OPEN
-// RUN: clang++ %s --target=linx64v5 -S -mllvm -linxv5-enable-Reg-Extension-Opt=false -mlxbc -O2 -o  - | FileCheck %s --dump-input always -vv --check-prefixes=CHECK-CLOSE
+// RUN: clang++ %s --target=linx64 -S -mllvm -linxv5-enable-Reg-Extension-Opt=true -mlxbc -O2 -o  - | FileCheck %s --dump-input always -vv --check-prefixes=CHECK-OPEN
+// RUN: clang++ %s --target=linx64 -S -mllvm -linxv5-enable-Reg-Extension-Opt=false -mlxbc -O2 -o  - | FileCheck %s --dump-input always -vv --check-prefixes=CHECK-CLOSE
 
 // CHECK-OPEN-LABEL: _Z4vaddDv1024_fss:
 // CHECK-OPEN: l.add   ri1.sh, ri0.sh,         ->t.d

@@ -1,4 +1,4 @@
-// RUN: clang++ %s --target=linx64v5 -S -mlxbc -O2 -o  - | FileCheck %s --check-prefixes=CHECK
+// RUN: clang++ %s --target=linx64 -S -mlxbc -O2 -o  - | FileCheck %s --check-prefixes=CHECK
 
 // CHECK-LABEL: _Z6vshiftDv1024_f:
 // CHECK: mul

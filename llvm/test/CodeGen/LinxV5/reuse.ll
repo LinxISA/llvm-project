@@ -1,5 +1,5 @@
-; RUN: llc < %s -linxv5-reuse-mark=true -enable-all-vector-as-tilereg=true -march=linx64v5be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
-; RUN: llc < %s -linxv5-reuse-mark=false -enable-all-vector-as-tilereg=true -march=linx64v5be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK1
+; RUN: llc < %s -linxv5-reuse-mark=true -enable-all-vector-as-tilereg=true -march=linx64be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -linxv5-reuse-mark=false -enable-all-vector-as-tilereg=true -march=linx64be -O3 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK1
 
 
 ; CHECK:VPAR copyin, <M: 4, N: 4, K: 1, MR> [a0], ->t<512B>

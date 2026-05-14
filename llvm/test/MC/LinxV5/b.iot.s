@@ -1,4 +1,4 @@
-// RUN: llvm-mc -triple=linx64v5 -filetype=obj %s -o %t
+// RUN: llvm-mc -triple=linx64 -filetype=obj %s -o %t
 // RUN: llvm-objdump -d %t | FileCheck %s --dump-input always -vv
 
 // CHECK: B.IOTI [], last ->t<512B>

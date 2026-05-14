@@ -1,9 +1,9 @@
-; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64v5 -linxv5-enable-clock-hand-opt=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -enable-all-vector-as-tilereg=true -mcpu=janus --march=linx64 -linxv5-enable-clock-hand-opt=false -O2 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
 
 ; ModuleID = 'test.cpp'
 source_filename = "test.cpp"
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
-target triple = "linx64v5-unknown-linux-musl"
+target triple = "linx64-unknown-linux-musl"
 
 ; CHECK-LABEL: _Z11tile_callerPdS_S_:
 ; CHECK: TCOPY t#8, ->t<8KB>
