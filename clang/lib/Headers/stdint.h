@@ -326,6 +326,31 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define UINT64_C(v) __UINT64_C(v)
 #endif /* __int_least64_t */
 
+#ifndef __INT8_C
+#define __INT8_C(v) v
+#endif
+#ifndef __UINT8_C
+#define __UINT8_C(v) v
+#endif
+#ifndef __INT16_C
+#define __INT16_C(v) v
+#endif
+#ifndef __UINT16_C
+#define __UINT16_C(v) v ## U
+#endif
+#ifndef __INT32_C
+#define __INT32_C(v) v
+#endif
+#ifndef __UINT32_C
+#define __UINT32_C(v) v ## U
+#endif
+#ifndef __INT64_C
+#define __INT64_C(v) v ## LL
+#endif
+#ifndef __UINT64_C
+#define __UINT64_C(v) v ## ULL
+#endif
+
 
 #ifdef __INT56_TYPE__
 #define INT56_C(v) __INT56_C(v)

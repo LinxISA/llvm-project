@@ -765,8 +765,7 @@ static const Relocation *findLinxPCRelHiByOffset(const InputSection *isec,
 
 static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
                                                  uint64_t loOffset,
-                                                 const Symbol *sym,
-                                                 int64_t addend) {
+                                                 const Symbol *sym) {
   auto *isec = dyn_cast_or_null<InputSection>(sec);
   if (!isec)
     return nullptr;
@@ -776,12 +775,17 @@ static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
       [](const Relocation &lhs, uint64_t rhs) { return lhs.offset < rhs; });
   while (it != isec->relocs().begin()) {
     --it;
-    if (it->sym == sym && it->addend == addend && isLinxPCRelHi(it->type))
+    if (it->sym == sym && isLinxPCRelHi(it->type))
       return &*it;
   }
   return nullptr;
 }
 
+// Most R_LINX_LO12 relocations point at a local anchor symbol whose value
+// matches the paired R_LINX_PCREL_HI20 relocation offset. Some startup objects
+// instead target the final symbol directly (for example _DYNAMIC in static
+// PIE), so the linker has to recover the HI relocation by symbol and then use
+// the HI relocation's place when reconstructing the PC-relative target.
 static const Relocation *getLinxPCRelHi20(Ctx &ctx,
                                           const InputSectionBase *loSec,
                                           const Relocation &loReloc) {
@@ -821,7 +825,7 @@ static const Relocation *getLinxPCRelHi20(Ctx &ctx,
   }
 
   if (const Relocation *hiRel =
-          findLinxPCRelHiBySymbol(loSec, loReloc.offset, sym, addend))
+          findLinxPCRelHiBySymbol(loSec, loReloc.offset, sym))
     return hiRel;
 
   Err(ctx) << loSec->getLocation(loReloc.offset)
@@ -1011,7 +1015,7 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
   }
   case RE_LINX_PC_INDIRECT: {
     if (const Relocation *hiRel = getLinxPCRelHi20(ctx, this, r))
-      return getRelocTargetVA(ctx, *hiRel, r.sym->getVA(ctx));
+      return getRelocTargetVA(ctx, *hiRel, getVA(hiRel->offset));
     return 0;
   }
   case RE_LOONGARCH_PC_INDIRECT: {
