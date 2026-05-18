@@ -173,6 +173,7 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
     llvm::Function *F = CGM.getIntrinsic(llvm::Intrinsic::linx_vblock_launch);
     llvm::Value *Z = Builder.getInt64(0);
     return Builder.CreateCall(F, {VKind, Body, Dim0, Dim1, Dim2, Attr,
+                                  Z, Z, Z, Z, Z, Z,
                                   Z, Z, Z, Z, Z, Z});
   }
   case LinxISA::BI__builtin_linx_vpar_tadd: {

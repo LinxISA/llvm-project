@@ -117,6 +117,32 @@ exit3:
   ret void
 }
 
+define void @vector_dynamic_recurrence_store(ptr nocapture readonly %a,
+                                             ptr nocapture readonly %b,
+                                             ptr nocapture writeonly %out,
+                                             i64 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %inc, %loop ]
+  %carry = phi float [ 0.000000e+00, %entry ], [ %next, %loop ]
+  %ap = getelementptr inbounds float, ptr %a, i64 %i
+  %av = load float, ptr %ap, align 4
+  %bp = getelementptr inbounds float, ptr %b, i64 %i
+  %bv = load float, ptr %bp, align 4
+  %mul = fmul float %av, %bv
+  %next = fadd float %carry, %mul
+  %op = getelementptr inbounds float, ptr %out, i64 %i
+  store float %next, ptr %op, align 4
+  %inc = add nuw nsw i64 %i, 1
+  %done = icmp ult i64 %inc, %n
+  br i1 %done, label %loop, label %exit
+
+exit:
+  ret void
+}
+
 ; REMARK: "function":"vector_shift_half_index"
 ; REMARK: "status":"reject"
 ; REMARK: "reason":"non_float_store_value"
@@ -136,6 +162,10 @@ exit3:
 ; REMARK: "layout_kind":"scalar-replay"
 ; REMARK: "cf_strategy":"straight-line-single-block"
 ; REMARK: "function":"vector_stride_inc"
+; REMARK: "status":"lowered"
+; REMARK: "layout_kind":"scalar-replay"
+; REMARK: "cf_strategy":"straight-line-single-block"
+; REMARK: "function":"vector_dynamic_recurrence_store"
 ; REMARK: "status":"lowered"
 ; REMARK: "layout_kind":"scalar-replay"
 ; REMARK: "cf_strategy":"straight-line-single-block"
@@ -177,3 +207,13 @@ exit3:
 ; ASM: B.DIM{{[[:space:]]+}}a3,{{[[:space:]]+}}0,{{[[:space:]]+}}->lb1
 ; ASM: v.mul
 ; ASM: v.sw.brg
+
+; ASM-LABEL: vector_dynamic_recurrence_store:
+; ASM: BSTART.MSEQ
+; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb0}}
+; ASM: B.DIM
+; ASM: v.fmul
+; ASM: v.fadd
+; ASM: v.sw.brg
+; ASM-NOT: v.lw.local
+; ASM-NOT: v.sw.local
