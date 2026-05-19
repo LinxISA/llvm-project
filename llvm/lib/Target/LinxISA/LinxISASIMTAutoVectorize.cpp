@@ -2625,9 +2625,6 @@ public:
 	              return false;
 	            }
 	            Plan.SlotBind = *Bind;
-              if (HasBoundedGroupedScratch)
-                Plan.LocalWordBase =
-                    reserveLocalWords((LaneCount * GroupCount) + 1u);
 	            RecurrencePlanByPhi[Plan.Phi] = RI;
 	            RecurrencePlansByUpdate[Plan.Update].push_back(RI);
 	          }
@@ -3765,6 +3762,12 @@ public:
 
         auto emitLoadFromInvariantBindInto = [&](unsigned BaseRi,
                                                  StringRef Dst) -> bool {
+          if (LaneCount == 1u) {
+            OS << "  v.lw.brg [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
+               << ", " << formatAddrExpr("zero<<2") << "], ->"
+               << formatAssignedWordDest(Dst) << "\n";
+            return true;
+          }
           auto Neg = emitNegLc0();
           if (!Neg)
             return false;
@@ -3786,6 +3789,13 @@ public:
 
 	        auto emitStoreToInvariantBind = [&](StringRef Src, unsigned BaseRi,
 	                                            bool IsFloat = false) {
+          if (LaneCount == 1u) {
+            OS << "  v.sw.brg "
+               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
+               << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
+               << formatAddrExpr("zero<<2") << "]\n";
+            return true;
+          }
 	          auto Neg = emitNegLc0();
 	          if (!Neg)
 	            return false;
