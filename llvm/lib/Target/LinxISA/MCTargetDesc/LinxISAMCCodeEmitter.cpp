@@ -168,7 +168,8 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     } else if (Name == "simm17" && Mnemonic.ends_with(".PCR")) {
       // 32-bit PC-relative loads (LB/LH/LW/LD/...).
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_PCR17_LOAD);
-    } else if (Name == "simm25" && Mnemonic == "B.TEXT") {
+    } else if (Name == "simm25" &&
+               (Mnemonic == "B.TEXT" || Mnemonic.starts_with("BSTART"))) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B25_PCREL);
     } else if (Name == "simm" && Mnemonic.ends_with(".PCR")) {
       // Stores use a split simm field in the 32-bit form; HL.*.PCR uses a 29-bit
