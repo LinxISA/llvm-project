@@ -145,7 +145,7 @@ exit:
 
 ; REMARK: "function":"vector_shift_half_index"
 ; REMARK: "status":"reject"
-; REMARK: "reason":"non_float_store_value"
+; REMARK: "reason":"unsupported_value_expr:add"
 ; REMARK: "layout_kind":"scalar-replay"
 ; REMARK: "cf_strategy":"straight-line-single-block"
 ; REMARK: "function":"vector_min_select_store"
@@ -212,8 +212,10 @@ exit:
 ; ASM: BSTART.MSEQ
 ; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb0}}
 ; ASM: B.DIM
-; ASM: v.fmul
-; ASM: v.fadd
-; ASM: v.sw.brg
+; ASM: v.fmul {{.*}}, ->[[MUL:vt#[0-9]+]]
+; ASM: v.lw.brg [ri{{[0-9]+}}, lc0<<2, zero<<2], ->[[CARRY:vt#[0-9]+]]
+; ASM: v.fadd [[CARRY]], [[MUL]], ->[[NEXT:vt#[0-9]+]]
+; ASM: v.sw.brg [[NEXT]], [ri{{[0-9]+}}, lc0<<2, {{.*}}]
+; ASM: v.sw.brg [[NEXT]], [ri{{[0-9]+}}, lc0<<2, zero<<2]
 ; ASM-NOT: v.lw.local
 ; ASM-NOT: v.sw.local

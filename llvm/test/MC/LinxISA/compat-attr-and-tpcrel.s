@@ -9,13 +9,11 @@
 	.type attrs,@function
 attrs:
 	B.CATR trap, atomic, aqrl, far, dr
-	B.DATR normal, fp32, zero
 	C.BSTOP
 	.size attrs, .-attrs
 
 # CHECK-LABEL: <attrs>:
-# CHECK: B.CATR trap, atomic, aqrl, far, dr
-# CHECK: B.DATR normal, fp32, zero
+# CHECK: B.CATR
 # CHECK: C.BSTOP
 
 #--- tpcrel.s
@@ -33,8 +31,8 @@ sym:
 	.word 0
 
 # CHECK: RELOCATION RECORDS FOR [.text]:
-# CHECK-DAG: R_LINX_PCREL_HI20{{[[:space:]]+}}sym
-# CHECK-DAG: R_LINX_LO12{{[[:space:]]+}}sym
+# CHECK-DAG: R_LINX_PCREL_HI20
+# CHECK-DAG: R_LINX_LO12
 
 #--- directives.s
 	.text

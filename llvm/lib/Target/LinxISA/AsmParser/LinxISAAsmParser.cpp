@@ -1156,9 +1156,15 @@ public:
 
 class LinxISAAsmParser : public MCTargetAsmParser {
 public:
-  LinxISAAsmParser(const MCSubtargetInfo &STI, MCAsmParser & /*Parser*/,
+  LinxISAAsmParser(const MCSubtargetInfo &STI, MCAsmParser &Parser,
                    const MCInstrInfo &MII, const MCTargetOptions &Options)
-      : MCTargetAsmParser(Options, STI, MII) {}
+      : MCTargetAsmParser(Options, STI, MII) {
+    MCAsmParserExtension::Initialize(Parser);
+    Parser.addAliasForDirective(".half", ".2byte");
+    Parser.addAliasForDirective(".hword", ".2byte");
+    Parser.addAliasForDirective(".word", ".4byte");
+    Parser.addAliasForDirective(".dword", ".8byte");
+  }
 
   void Initialize(MCAsmParser &Parser) override {
     MCTargetAsmParser::Initialize(Parser);
@@ -1323,6 +1329,19 @@ bool LinxISAAsmParser::parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
 }
 
 ParseStatus LinxISAAsmParser::parseDirective(AsmToken DirectiveID) {
+  StringRef IDVal = DirectiveID.getString();
+  if (IDVal == ".option") {
+    MCAsmParser &Parser = getParser();
+    AsmToken Tok = Parser.getTok();
+    if (parseToken(AsmToken::Identifier, "expected identifier"))
+      return ParseStatus::Failure;
+    StringRef Option = Tok.getIdentifier();
+    if (Option == "push" || Option == "pop" || Option == "norelax") {
+      if (Parser.parseEOL())
+        return ParseStatus::Failure;
+      return ParseStatus::Success;
+    }
+  }
   return ParseStatus::NoMatch;
 }
 
@@ -3495,6 +3514,26 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                     AsmFmt.starts_with_insensitive("v.psel"))
                        ? 1
                        : 0);
+      continue;
+    }
+
+    if (FN == "aq") {
+      emitFieldImm(static_cast<int64_t>(PI.AtomicAq & 1u));
+      continue;
+    }
+
+    if (FN == "rl") {
+      emitFieldImm(static_cast<int64_t>(PI.AtomicRl & 1u));
+      continue;
+    }
+
+    if (FN == "far") {
+      emitFieldImm(static_cast<int64_t>(PI.AtomicFar & 1u));
+      continue;
+    }
+
+    if (FN == "rd") {
+      emitFieldImm(static_cast<int64_t>(PI.AtomicRd & 1u));
       continue;
     }
 
