@@ -13,6 +13,9 @@ LinxISAMCAsmInfo::LinxISAMCAsmInfo(const Triple &TT, bool Is64Bit) {
   // Use "# " so tokens like `t#1` remain lexable (the lexer treats a single
   // '#' comment string as starting a comment anywhere in the line).
   CommentString = "# ";
+  Data16bitsDirective = "\t.half\t";
+  Data32bitsDirective = "\t.word\t";
+  Data64bitsDirective = "\t.dword\t";
 
   // TODO: fill in ELF/ABI details once the LinxISA ABI is defined.
 }

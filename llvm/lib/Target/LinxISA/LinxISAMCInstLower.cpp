@@ -491,8 +491,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::B_IOTI_G1: {
     StringRef AsmFmt =
         (Opc == LinxISA::B_IOTI_G0)
-            ? "B.IOTI [SrcTile0<.reuse>, SrcTile1<.reuse>],  group=0, ->DstTile<Size>"
-            : "B.IOTI [SrcTile0<.reuse>, SrcTile1<.reuse>],  group=1, ->DstTile<Size>";
+            ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>"
+            : "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>";
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
     OutMI.addOperand(MCOperand::createImm(I(1))); // S0R

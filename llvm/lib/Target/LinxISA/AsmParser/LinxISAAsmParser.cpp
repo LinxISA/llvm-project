@@ -610,6 +610,32 @@ static std::optional<unsigned> parseBrType(StringRef Tok) {
       .Default(std::nullopt);
 }
 
+static std::optional<unsigned> parseFenceImmKeyword(StringRef Tok) {
+  std::string Up = toUpperStr(Tok.trim());
+  unsigned Mask = 0;
+
+  for (char C : Up) {
+    switch (C) {
+    case 'I':
+      Mask |= 0x8u;
+      break;
+    case 'O':
+      Mask |= 0x4u;
+      break;
+    case 'R':
+      Mask |= 0x2u;
+      break;
+    case 'W':
+      Mask |= 0x1u;
+      break;
+    default:
+      return std::nullopt;
+    }
+  }
+
+  return Mask;
+}
+
 static std::optional<std::string> getLegacyAliasDiag(StringRef Mnemonic) {
   const std::string Up = toUpperStr(Mnemonic);
   const StringRef Key(Up);
@@ -1140,6 +1166,10 @@ public:
     getLexer().setAllowHashInIdentifier(true);
   }
 
+  bool parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) override;
+
+  ParseStatus parseDirective(AsmToken DirectiveID) override;
+
   bool parseRegister(MCRegister &Reg, SMLoc &StartLoc,
                      SMLoc &EndLoc) override;
 
@@ -1197,6 +1227,8 @@ static const StringMap<SmallVector<unsigned, 4>> &getMnemonicMap() {
         addKey("BSTART", i);
       if (M.starts_with("C.BSTART.STD"))
         addKey("C.BSTART", i);
+      if (M == "B.CATR")
+        addKey("B.ATTR", i);
     }
   }
 
@@ -1238,9 +1270,60 @@ bool LinxISAAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
 bool LinxISAAsmParser::parseImmOperand(const MCExpr *&OutExpr, SMLoc &Start,
                                        SMLoc &End) {
   Start = getTok().getLoc();
+  if (getTok().is(AsmToken::Percent)) {
+    Lex();
+    if (!getTok().is(AsmToken::Identifier))
+      return Error(getTok().getLoc(), "expected relocation name after '%'");
+
+    StringRef Reloc = getTok().getString();
+    const bool IsTPCRel =
+        Reloc.equals_insensitive("tpcrel_hi") ||
+        Reloc.equals_insensitive("tpcrel_lo");
+    if (!IsTPCRel)
+      return Error(getTok().getLoc(), "unsupported '%' relocation syntax");
+    Lex();
+
+    if (parseToken(AsmToken::LParen, "expected '(' after relocation name"))
+      return true;
+    if (getParser().parseExpression(OutExpr, End))
+      return true;
+    if (parseToken(AsmToken::RParen, "expected ')' after relocation expression"))
+      return true;
+    return false;
+  }
   if (getParser().parseExpression(OutExpr, End))
     return true;
   return false;
+}
+
+bool LinxISAAsmParser::parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
+  if (getTok().is(AsmToken::Percent)) {
+    Lex();
+    if (!getTok().is(AsmToken::Identifier))
+      return Error(getTok().getLoc(), "expected relocation name after '%'");
+
+    StringRef Reloc = getTok().getString();
+    const bool IsTPCRel =
+        Reloc.equals_insensitive("tpcrel_hi") ||
+        Reloc.equals_insensitive("tpcrel_lo");
+    if (!IsTPCRel)
+      return Error(getTok().getLoc(), "unsupported '%' relocation syntax");
+    Lex();
+
+    if (parseToken(AsmToken::LParen, "expected '(' after relocation name"))
+      return true;
+    if (getParser().parseExpression(Res, EndLoc))
+      return true;
+    if (parseToken(AsmToken::RParen, "expected ')' after relocation expression"))
+      return true;
+    return false;
+  }
+
+  return MCTargetAsmParser::parsePrimaryExpr(Res, EndLoc);
+}
+
+ParseStatus LinxISAAsmParser::parseDirective(AsmToken DirectiveID) {
+  return ParseStatus::NoMatch;
 }
 
 bool LinxISAAsmParser::parseRegOperand(ParsedReg &Out) {
@@ -2681,18 +2764,52 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  if (AsmFmt.starts_with("B.ATTR")) {
+  if (AsmFmt.starts_with("B.ATTR") || AsmFmt.starts_with("B.CATR") ||
+      AsmFmt.starts_with("B.DATR")) {
     if (!require(!PI.Mem && PI.Regs.empty() && PI.ArrowDests.empty() &&
-                     !PI.SetRetTarget && PI.Imms.empty(),
+                     !PI.SetRetTarget,
                  "unexpected operands for B.ATTR"))
       return false;
 
     StringMap<StringRef> Attrs;
-    for (const ParsedKeyword &KW : PI.Keywords) {
-      StringRef Text(KW.TextUpper);
+    auto recordAttrToken = [&](StringRef RawText) {
+      StringRef Text = RawText;
+      if (Text.starts_with("."))
+        Text = Text.drop_front();
       auto Parts = Text.split('=');
-      if (!Parts.second.empty())
+      if (!Parts.second.empty()) {
         Attrs[Parts.first] = Parts.second;
+        return;
+      }
+      if (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
+          Text.equals_insensitive("AQRL")) {
+        Attrs["ORDER"] = Text;
+        return;
+      }
+      if (Text.equals_insensitive("ATOMIC") || Text.equals_insensitive("TRAP") ||
+          Text.equals_insensitive("DR") || Text.equals_insensitive("T")) {
+        Attrs[Text] = "ON";
+        return;
+      }
+      if (Text.equals_insensitive("NORMAL") || Text.equals_insensitive("CANON")) {
+        Attrs["LAYOUT"] = Text;
+        return;
+      }
+      if (parseDataTypeKeyword(Text)) {
+        Attrs["DTYPE"] = Text;
+        return;
+      }
+      if (parsePadValueKeyword(Text)) {
+        Attrs["PAD"] = Text;
+        return;
+      }
+    };
+    for (const ParsedKeyword &KW : PI.Keywords) {
+      recordAttrToken(KW.TextUpper);
+    }
+    for (const ParsedImm &Imm : PI.Imms) {
+      if (const auto *S = dyn_cast<MCSymbolRefExpr>(Imm.Expr))
+        recordAttrToken(toUpperStr(S->getSymbol().getName()));
     }
 
     auto onBit = [&](StringRef Key) -> unsigned {
@@ -2735,9 +2852,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
 
     for (unsigned i = 0; i < Form.field_count; ++i) {
       StringRef FN(linxisa_fields[Form.field_start + i].name);
-      if (FN == "C")
+      if (FN == "C" || FN == "trap")
         emitFieldImm(onBit("TRAP"));
-      else if (FN == "DR")
+      else if (FN == "DR" || FN == "dr")
         emitFieldImm(onBit("DR"));
       else if (FN == "DataLayout")
         emitFieldImm(Layout);
@@ -2749,12 +2866,14 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         emitFieldImm(onBit("T"));
       else if (FN == "aq")
         emitFieldImm(Aq);
-      else if (FN == "atom")
+      else if (FN == "atom" || FN == "atomic")
         emitFieldImm(onBit("ATOMIC"));
       else if (FN == "far")
         emitFieldImm(onBit("FAR"));
       else if (FN == "rl")
         emitFieldImm(Rl);
+      else if (FN == "reserve")
+        emitFieldImm(0);
       else
         return require(false, ("unsupported B.ATTR field: " + FN).str());
     }
@@ -3444,8 +3563,17 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(E != nullptr, ("missing " + FN + " immediate").str()))
         return false;
       int64_t V = 0;
-      if (!require(isConstExpr(E, V), (FN + " must be a constant for now").str()))
-        return false;
+      if (!isConstExpr(E, V)) {
+        if (const auto *S = dyn_cast<MCSymbolRefExpr>(E)) {
+          auto FenceMask = parseFenceImmKeyword(S->getSymbol().getName());
+          if (FenceMask) {
+            emitFieldImm(*FenceMask);
+            continue;
+          }
+        }
+        if (!require(false, (FN + " must be a constant for now").str()))
+          return false;
+      }
       emitFieldImm(V);
       continue;
     }

@@ -2258,6 +2258,11 @@ public:
         RemarkForceScalarLane = ForceScalarLane;
         RemarkLaneCount = LaneCount;
         RemarkGroupCount = GroupCount;
+        // Local scratch slots keyed by lc1 are only safe when the replay/group
+        // extent is statically bounded. Dynamic scalar-replay still uses lc1
+        // for addressing, so route those cases through invariant slots instead
+        // of allocating undersized TS-backed scratch.
+        const bool HasBoundedGroupedScratch = UseGroupedDims && HasConstTripCount;
         if (NeedsExecMaskSaveRestore) {
           RemarkCFStrategy = "exec-mask-save-restore-required";
         } else if (NeedsActiveReplay) {
@@ -2495,7 +2500,7 @@ public:
             Plan.Phi = Phi;
             Plan.Slot = Slot;
             Plan.SlotBind = *Bind;
-            if (UseGroupedDims && !NeedsActiveReplay)
+            if (HasBoundedGroupedScratch && !NeedsActiveReplay)
               Plan.LocalWordBase = reserveLocalWords(LaneCount * GroupCount);
             ExitPhiPlans.push_back(std::move(Plan));
 
@@ -2620,7 +2625,7 @@ public:
 	              return false;
 	            }
 	            Plan.SlotBind = *Bind;
-              if (UseGroupedDims)
+              if (HasBoundedGroupedScratch)
                 Plan.LocalWordBase =
                     reserveLocalWords((LaneCount * GroupCount) + 1u);
 	            RecurrencePlanByPhi[Plan.Phi] = RI;
@@ -6575,7 +6580,7 @@ public:
               return false;
             }
             Plan.SlotBind = *Bind;
-            if (UseGroupedDims)
+            if (HasBoundedGroupedScratch)
               Plan.LocalWordBase = reserveLocalWords(LaneCount * GroupCount);
 
             auto InitTok = emitValue(Plan.InitValue);
