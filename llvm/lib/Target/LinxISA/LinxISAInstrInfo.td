@@ -403,6 +403,8 @@ def : Pat<(sra i32:$a, i32:$b), (SRAWrr $a, $b)>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 2 in
 def CBSTART_STD : LinxISAInst<(outs), (ins i64imm:$brtype), "", []>;
+let hasSideEffects = 1, isBarrier = 1, Size = 2 in
+def CBSTART_FP  : LinxISAInst<(outs), (ins i64imm:$brtype), "", []>;
 
 // 32-bit block start forms used by the BlockISA control-flow model.
 //
@@ -415,6 +417,9 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   def BSTART_STD_IND   : LinxISAInst<(outs), (ins), "", []>;
   def BSTART_STD_ICALL : LinxISAInst<(outs), (ins), "", []>;
   def BSTART_STD_RET   : LinxISAInst<(outs), (ins), "", []>;
+  def BSTART_FP_DIRECT : LinxISAInst<(outs), (ins BrTarget:$dst), "", []>;
+  def BSTART_FP_COND   : LinxISAInst<(outs), (ins BrTarget:$dst), "", []>;
+  def BSTART_FP_CALL   : LinxISAInst<(outs), (ins CallTarget:$dst), "", []>;
 }
 
 let hasSideEffects = 1, isBarrier = 1, isTerminator = 1, Size = 4 in

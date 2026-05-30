@@ -369,6 +369,7 @@ static unsigned tileRegIdFromReg(const TargetRegisterInfo &TRI, Register Reg) {
 static bool isMarkerInstr(const MachineInstr &MI) {
   switch (MI.getOpcode()) {
   case LinxISA::CBSTART_STD:
+  case LinxISA::CBSTART_FP:
   case LinxISA::BSTART_STD_FALL:
   case LinxISA::BSTART_STD_DIRECT:
   case LinxISA::BSTART_STD_COND:
@@ -376,6 +377,9 @@ static bool isMarkerInstr(const MachineInstr &MI) {
   case LinxISA::BSTART_STD_IND:
   case LinxISA::BSTART_STD_ICALL:
   case LinxISA::BSTART_STD_RET:
+  case LinxISA::BSTART_FP_DIRECT:
+  case LinxISA::BSTART_FP_COND:
+  case LinxISA::BSTART_FP_CALL:
   case LinxISA::BSTART_TMA:
   case LinxISA::BSTART_CUBE:
   case LinxISA::BSTART_TEPL:
@@ -388,6 +392,58 @@ static bool isMarkerInstr(const MachineInstr &MI) {
   default:
     return false;
   }
+}
+
+static bool isScalarBStartOpcode(unsigned Opc) {
+  switch (Opc) {
+  case LinxISA::CBSTART_STD:
+  case LinxISA::CBSTART_FP:
+  case LinxISA::BSTART_STD_FALL:
+  case LinxISA::BSTART_STD_DIRECT:
+  case LinxISA::BSTART_STD_COND:
+  case LinxISA::BSTART_STD_CALL:
+  case LinxISA::BSTART_STD_IND:
+  case LinxISA::BSTART_STD_ICALL:
+  case LinxISA::BSTART_STD_RET:
+  case LinxISA::BSTART_FP_DIRECT:
+  case LinxISA::BSTART_FP_COND:
+  case LinxISA::BSTART_FP_CALL:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isScalarFPOpcode(unsigned Opc) {
+  switch (Opc) {
+  case LinxISA::FADDrr:
+  case LinxISA::FSUBrr:
+  case LinxISA::FMULrr:
+  case LinxISA::FDIVrr:
+  case LinxISA::FABSrr:
+  case LinxISA::FEQrr:
+  case LinxISA::FLTrr:
+  case LinxISA::FGErr:
+  case LinxISA::FCVT:
+  case LinxISA::FCVTZ:
+  case LinxISA::SCVTF:
+  case LinxISA::UCVTF:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool blockNeedsFPHeader(const MachineBasicBlock &MBB) {
+  for (const MachineInstr &MI : MBB) {
+    if (MI.isDebugInstr() || MI.isCFIInstruction() || MI.isPHI())
+      continue;
+    if (isMarkerInstr(MI))
+      continue;
+    if (isScalarFPOpcode(MI.getOpcode()))
+      return true;
+  }
+  return false;
 }
 
 static bool isSimtBodyHeaderOpcode(unsigned Opc) {
@@ -950,25 +1006,72 @@ public:
     auto assignVecPipeDstCode = [&](StringRef DstPart, unsigned ParsedCode,
                                     VecPipeCursorState &PipeState)
         -> unsigned {
-      auto nextCode = [&](unsigned Class, unsigned &NextIndex) {
-        return (Class << 5) | (NextIndex++ & 0x1fu);
+      auto applyDstWidthSuffix = [&](StringRef Tok, unsigned Code) -> unsigned {
+        StringRef Trimmed = Tok.trim();
+        size_t Dot = Trimmed.rfind('.');
+        if (Dot == StringRef::npos)
+          return Code;
+        StringRef Suffix = Trimmed.drop_front(Dot + 1).trim();
+        unsigned Width = 0;
+        if (Suffix.equals_insensitive("d")) {
+          Width = 0u;
+        } else if (Suffix.equals_insensitive("w")) {
+          Width = 1u;
+        } else if (Suffix.equals_insensitive("h")) {
+          Width = 2u;
+        } else if (Suffix.equals_insensitive("b")) {
+          Width = 3u;
+        } else {
+          return Code;
+        }
+        Code &= ~(0x3u << 7);
+        Code |= (Width & 0x3u) << 7;
+        return Code;
       };
-      if (auto HeadClass = getHeadQueueClass(DstPart)) {
-        switch (*HeadClass) {
+
+      auto nextCode = [&](unsigned Class, unsigned &NextIndex) {
+        unsigned Code = 0;
+        switch (Class) {
         case 4:
-          return nextCode(*HeadClass, PipeState.NextVt);
+          Code = 0u; // DST_FVEC_VT
+          break;
         case 5:
-          return nextCode(*HeadClass, PipeState.NextVu);
+          Code = 1u; // DST_FVEC_VU
+          break;
         case 6:
-          return nextCode(*HeadClass, PipeState.NextVm);
+          Code = 2u; // DST_FVEC_VM
+          break;
         case 7:
-          return nextCode(*HeadClass, PipeState.NextVn);
+          Code = 3u; // DST_FVEC_VN
+          break;
         default:
           llvm_unreachable("unexpected vector head queue class");
         }
+        ++NextIndex;
+        return Code;
+      };
+      if (auto HeadClass = getHeadQueueClass(DstPart)) {
+        unsigned Code = 0;
+        switch (*HeadClass) {
+        case 4:
+          Code = nextCode(*HeadClass, PipeState.NextVt);
+          break;
+        case 5:
+          Code = nextCode(*HeadClass, PipeState.NextVu);
+          break;
+        case 6:
+          Code = nextCode(*HeadClass, PipeState.NextVm);
+          break;
+        case 7:
+          Code = nextCode(*HeadClass, PipeState.NextVn);
+          break;
+        default:
+          llvm_unreachable("unexpected vector head queue class");
+        }
+        return applyDstWidthSuffix(DstPart, Code);
       }
       noteExplicitVecPipeDest(DstPart, PipeState);
-      return ParsedCode;
+      return applyDstWidthSuffix(DstPart, ParsedCode);
     };
 
     auto emitVectorBodyLine =
@@ -1963,14 +2066,7 @@ public:
           ++It;
           continue;
         }
-        if (It->getOpcode() == LinxISA::CBSTART_STD ||
-            It->getOpcode() == LinxISA::BSTART_STD_FALL ||
-            It->getOpcode() == LinxISA::BSTART_STD_DIRECT ||
-            It->getOpcode() == LinxISA::BSTART_STD_COND ||
-            It->getOpcode() == LinxISA::BSTART_STD_CALL ||
-            It->getOpcode() == LinxISA::BSTART_STD_IND ||
-            It->getOpcode() == LinxISA::BSTART_STD_ICALL ||
-            It->getOpcode() == LinxISA::BSTART_STD_RET) {
+        if (isScalarBStartOpcode(It->getOpcode())) {
           It = MBB.erase(It);
           Changed = true;
           continue;
@@ -3136,33 +3232,18 @@ public:
       // Tile blocks (TAU) have their own BSTART.TMA/BSTART.CUBE headers and
       // must not be wrapped by standard BSTART.STD or have T/U-hand queue
       // remapping applied.
-      auto isStdBStartOpcode = [&](unsigned Opc) -> bool {
-        switch (Opc) {
-        case LinxISA::CBSTART_STD:
-        case LinxISA::BSTART_STD_FALL:
-        case LinxISA::BSTART_STD_DIRECT:
-        case LinxISA::BSTART_STD_COND:
-        case LinxISA::BSTART_STD_CALL:
-        case LinxISA::BSTART_STD_IND:
-        case LinxISA::BSTART_STD_ICALL:
-        case LinxISA::BSTART_STD_RET:
-          return true;
-        default:
-          return false;
-        }
-      };
-
       bool IsTileBlock = false;
       for (MachineInstr &MI : MBB) {
         if (MI.isDebugInstr() || MI.isCFIInstruction() || MI.isPHI())
           continue;
         // Be robust if the pass runs twice: skip any stale standard markers
         // and detect the tile header that follows.
-        if (isStdBStartOpcode(MI.getOpcode()))
+        if (isScalarBStartOpcode(MI.getOpcode()))
           continue;
         IsTileBlock = isTileBlockStartInstr(MI);
         break;
       }
+      const bool UseFPHeader = !IsTileBlock && blockNeedsFPHeader(MBB);
 
 			      auto isPhysRegLiveOutOfBlock = [&](Register Reg) -> bool {
 		        // Physical register live-in sets only track "use before def" within a
@@ -5368,7 +5449,7 @@ public:
         auto It = MBB.begin();
         while (It != MBB.end() && It->isPHI())
           ++It;
-        while (It != MBB.end() && isStdBStartOpcode(It->getOpcode())) {
+        while (It != MBB.end() && isScalarBStartOpcode(It->getOpcode())) {
           It = MBB.erase(It);
           Changed = true;
         }
@@ -5380,14 +5461,7 @@ public:
 
       // Remove any existing start marker (in case the pass runs twice).
       if (InsertBStart != MBB.end() &&
-          (InsertBStart->getOpcode() == LinxISA::CBSTART_STD ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_FALL ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_DIRECT ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_COND ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_CALL ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_IND ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_ICALL ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_RET)) {
+          isScalarBStartOpcode(InsertBStart->getOpcode())) {
         InsertBStart = MBB.erase(InsertBStart);
         Changed = true;
       }
@@ -5398,14 +5472,16 @@ public:
       case ExitKind::Fall:
         // Prefer the compressed BrType marker: C.BSTART (FALL).
         BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::CBSTART_STD))
+                           TII.get(UseFPHeader ? LinxISA::CBSTART_FP
+                                               : LinxISA::CBSTART_STD))
                        .addImm(1) // BrType = FALL
                        .getInstr();
         break;
       case ExitKind::Direct:
         if (CallTargetOp) {
           BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                             TII.get(LinxISA::BSTART_STD_DIRECT))
+                             TII.get(UseFPHeader ? LinxISA::BSTART_FP_DIRECT
+                                                 : LinxISA::BSTART_STD_DIRECT))
                          .add(*CallTargetOp)
                          .getInstr();
         } else {
@@ -5413,7 +5489,8 @@ public:
             report_fatal_error("Linx: missing direct branch target");
           TargetBB->setLabelMustBeEmitted();
           BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                             TII.get(LinxISA::BSTART_STD_DIRECT))
+                             TII.get(UseFPHeader ? LinxISA::BSTART_FP_DIRECT
+                                                 : LinxISA::BSTART_STD_DIRECT))
                          .addMBB(TargetBB)
                          .getInstr();
         }
@@ -5422,7 +5499,8 @@ public:
         if (TargetBB)
           TargetBB->setLabelMustBeEmitted();
         BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::BSTART_STD_COND))
+                           TII.get(UseFPHeader ? LinxISA::BSTART_FP_COND
+                                               : LinxISA::BSTART_STD_COND))
                        .addMBB(TargetBB)
                        .getInstr();
         break;
@@ -5430,7 +5508,8 @@ public:
 	        if (!CallTargetOp)
 	          report_fatal_error("Linx: missing call target operand");
 	        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-	                           TII.get(LinxISA::BSTART_STD_CALL))
+	                           TII.get(UseFPHeader ? LinxISA::BSTART_FP_CALL
+	                                               : LinxISA::BSTART_STD_CALL))
 	                       .add(*CallTargetOp)
 	                       .getInstr();
 	        // Set return target for the call (ra = PC + imm20<<1). The ISA
@@ -5448,21 +5527,24 @@ public:
       case ExitKind::Ret:
         // Prefer the compressed BrType marker: C.BSTART (RET).
         BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::CBSTART_STD))
+                           TII.get(UseFPHeader ? LinxISA::CBSTART_FP
+                                               : LinxISA::CBSTART_STD))
                        .addImm(7) // BrType = RET
                        .getInstr();
         break;
       case ExitKind::Ind:
         // Prefer the compressed BrType marker: C.BSTART (IND).
         BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::CBSTART_STD))
+                           TII.get(UseFPHeader ? LinxISA::CBSTART_FP
+                                               : LinxISA::CBSTART_STD))
                        .addImm(5) // BrType = IND
                        .getInstr();
         break;
 	      case ExitKind::ICall:
 	        // Prefer the compressed BrType marker: C.BSTART (ICALL).
 	        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-	                           TII.get(LinxISA::CBSTART_STD))
+	                           TII.get(UseFPHeader ? LinxISA::CBSTART_FP
+	                                               : LinxISA::CBSTART_STD))
 	                       .addImm(6) // BrType = ICALL
 	                       .getInstr();
 	        // Indirect calls behave like CALL blocks but select the callee via
@@ -5593,10 +5675,11 @@ public:
         auto markerHasImplicitAbiUses = [&](const MachineInstr &MI) -> bool {
           const unsigned Opc = MI.getOpcode();
           if (Opc == LinxISA::BSTART_STD_CALL || Opc == LinxISA::BSTART_STD_ICALL ||
-              Opc == LinxISA::BSTART_STD_RET) {
+              Opc == LinxISA::BSTART_STD_RET || Opc == LinxISA::BSTART_FP_CALL) {
             return true;
           }
-          if (Opc == LinxISA::CBSTART_STD && MI.getNumOperands() >= 1 &&
+          if ((Opc == LinxISA::CBSTART_STD || Opc == LinxISA::CBSTART_FP) &&
+              MI.getNumOperands() >= 1 &&
               MI.getOperand(0).isImm()) {
             const int64_t BrType = MI.getOperand(0).getImm() & 0x7;
             return BrType == 4 /*CALL*/ || BrType == 6 /*ICALL*/ ||

@@ -587,6 +587,8 @@ static const char *ssrIdSymbol(uint64_t Id) {
     return "EBARG_EXTCTX_PTR_ACRn";
   case 0xf50:
     return "EBARG_EXTCTX_META_ACRn";
+  case 0xf51:
+    return "EBARG_TPLFLAGS_ACRn";
   default:
     return nullptr;
   }
