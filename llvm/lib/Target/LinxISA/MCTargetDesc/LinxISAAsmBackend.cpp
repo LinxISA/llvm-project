@@ -397,6 +397,23 @@ public:
         return;
       }
     }
+    if (Mnemonic == "BSTART.FP") {
+      if (AsmFmt.contains(" DIRECT")) {
+        Inst.setOpcode(findSpecOpcodeByAsmFmt("HL.BSTART.FP DIRECT, <label>",
+                                              /*LengthBits=*/48));
+        return;
+      }
+      if (AsmFmt.contains(" COND")) {
+        Inst.setOpcode(findSpecOpcodeByAsmFmt("HL.BSTART.FP COND, <label>",
+                                              /*LengthBits=*/48));
+        return;
+      }
+      if (AsmFmt.contains(" CALL")) {
+        Inst.setOpcode(findSpecOpcodeByAsmFmt("HL.BSTART.FP CALL, <label>",
+                                              /*LengthBits=*/48));
+        return;
+      }
+    }
 
     // *.PCR -> HL.*.PCR
     if (!Mnemonic.starts_with("HL.") && Mnemonic.ends_with(".PCR")) {

@@ -2403,8 +2403,13 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         if (!require(HasArrow || AllowsExplicitHiddenMemDst,
                      "expected '->' destination for RegDst"))
           return false;
-        if (!require(!PI.ArrowDests.empty(), "expected destination after '->'"))
-          return false;
+        if (PI.ArrowDests.empty()) {
+          if (!require(AllowsExplicitHiddenMemDst,
+                       "expected destination after '->'"))
+            return false;
+          emitFieldImm(0);
+          continue;
+        }
         if (!require(PI.ArrowDests[0].Code < (1u << Field.bit_width),
                      "destination register does not fit field width"))
           return false;

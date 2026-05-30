@@ -728,6 +728,12 @@ public:
   StringRef getPassName() const override { return "Linx SIMT AutoVectorize"; }
 
   bool runOnFunction(Function &F) override {
+    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    return runImpl(F, LI, SE);
+  }
+
+  static bool runImpl(Function &F, LoopInfo &LI, ScalarEvolution &SE) {
     if (!LinxSIMTAutoVec || F.isDeclaration())
       return false;
     if (isTsvcAuxHelperName(F.getName()))
@@ -735,7 +741,6 @@ public:
 
     bool Changed = false;
 
-    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     Module *M = F.getParent();
     if (!M)
       return false;
@@ -761,8 +766,6 @@ public:
                  layoutPolicyName(LinxSIMTAutoVecLayout), "none", "none");
       return Changed;
     }
-
-    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
     bool FunctionLowered = F.hasFnAttribute("linx-vblock-body-asm");
     for (Loop *L : Loops) {
@@ -807,9 +810,6 @@ public:
         SelectedMode = "mseq";
         break;
       case SIMTAutoVecMode::MParSafe:
-        // MPAR is selected either by explicit loop-parallel metadata (pragma
-        // style hints) or by conservative structural inference for store-free
-        // loop bodies.
         if (!HasCalls && !HasInnerCF && HasParallelHint) {
           SelectedMode = "mpar";
         } else {
@@ -820,8 +820,6 @@ public:
         }
         break;
       case SIMTAutoVecMode::Auto:
-        // Auto mode must stay correctness-first and deterministic:
-        // prefer MSEQ unless we can prove the loop body is independent.
         SelectedMode = (!HasExtraPhi && !HasCalls && !HasInnerCF && !HasStore)
                            ? "mpar"
                            : "mseq";
@@ -838,8 +836,6 @@ public:
           return false;
         }
         if (HasLinxTileIntrinsicCalls) {
-          // Tile/CUBE/TEPL semantics are explicitly modeled by Linx intrinsics;
-          // do not remap those loops through generic SIMT autovec.
           reject("linx_tile_intrinsic_loop");
           return false;
         }
@@ -865,8 +861,6 @@ public:
           if (ExitBlocks.size() == 1) {
             Exit = ExitBlocks[0];
           } else {
-            // Find a common post-exit merge by following unconditional
-            // successor chains from each exit block (limited depth).
             auto collectChain = [&](BasicBlock *B) {
               SmallVector<BasicBlock *, 8> Chain;
               BasicBlock *Cur = B;
@@ -2780,7 +2774,7 @@ public:
 
 	        unsigned NextVecReg = 0;
 	        auto allocVec = [&]() -> std::optional<std::string> {
-	          static constexpr unsigned kMaxIndex = 31;
+	          static constexpr unsigned kMaxIndex = 8;
 	          static constexpr unsigned kNumClasses = 4;
 	          if (NextVecReg >= (kMaxIndex * kNumClasses))
 	            return std::nullopt;
@@ -6896,6 +6890,7 @@ char LinxISASIMTAutoVectorize::ID = 0;
 INITIALIZE_PASS_BEGIN(LinxISASIMTAutoVectorize, "linx-simt-autovec-pass",
                       "Linx SIMT AutoVectorize", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_END(LinxISASIMTAutoVectorize, "linx-simt-autovec-pass",
                     "Linx SIMT AutoVectorize", false, false)
 
@@ -6915,16 +6910,13 @@ FunctionPass *llvm::createLinxISASIMTAutoVectorizePass() {
 
 PreservedAnalyses llvm::LinxISASIMTAutoVectorizePass::run(
     Function &F, FunctionAnalysisManager &AM) {
-  (void)AM;
   if (!linxSIMTAutoVectorizeEnabled() || F.isDeclaration() ||
       isTsvcAuxHelperName(F.getName()) || !F.getParent()) {
     return PreservedAnalyses::all();
   }
 
-  legacy::FunctionPassManager FPM(F.getParent());
-  FPM.add(createLinxISASIMTAutoVectorizePass());
-  FPM.doInitialization();
-  bool Changed = FPM.run(F);
-  FPM.doFinalization();
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  bool Changed = LinxISASIMTAutoVectorize::runImpl(F, LI, SE);
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

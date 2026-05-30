@@ -78,7 +78,8 @@ void LinxISAAsmPrinter::emitInstruction(const MachineInstr *MI) {
   }
 
   bool Emitted = false;
-  if (MI->getOpcode() == LinxISA::BSTART_STD_CALL &&
+  if ((MI->getOpcode() == LinxISA::BSTART_STD_CALL ||
+       MI->getOpcode() == LinxISA::BSTART_FP_CALL) &&
       OutStreamer->hasRawTextSupport()) {
     MachineBasicBlock *MBB = const_cast<MachineBasicBlock *>(MI->getParent());
     if (MBB) {
@@ -95,7 +96,9 @@ void LinxISAAsmPrinter::emitInstruction(const MachineInstr *MI) {
 
         SmallString<128> Line;
         raw_svector_ostream OS(Line);
-        OS << "BSTART\tCALL, ";
+        OS << (MI->getOpcode() == LinxISA::BSTART_FP_CALL
+                   ? "BSTART.FP\tCALL, "
+                   : "BSTART\tCALL, ");
 
         if (BStartInst.getNumOperands() >= 1) {
           const MCOperand &TargetOp = BStartInst.getOperand(0);

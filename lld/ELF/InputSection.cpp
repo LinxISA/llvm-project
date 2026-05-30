@@ -803,24 +803,28 @@ static const Relocation *getLinxPCRelHi20(Ctx &ctx,
           hiSec = eh->getParent();
       }
       if (!hiSec) {
-        Err(ctx) << loSec->getLocation(loReloc.offset)
-                 << ": R_LINX_LO12 relocation "
-                    "points to unsupported anchor section '"
-                 << d->section->name << "' for symbol '" << sym->getName()
-                 << "'";
-        return nullptr;
+        /*
+         * Final kernel/static links can point the LO12 relocation at a symbol
+         * that already lives in an output/synthetic section (for example
+         * .init.data, __param, or linker-defined text/data boundaries). Those
+         * symbols still commonly have a matching HI20 relocation by symbol in
+         * the same input section, so do not reject them here just because they
+         * are no longer modeled as an InputSection.
+         */
+        hiSec = nullptr;
       }
-
-      anchor = sym->getName().empty() ? "offset 0x" + utohexstr(d->value)
-                                      : toStr(ctx, *sym) + "+0x" +
-                                            utohexstr(d->value);
-      if (addend != 0)
-        Warn(ctx) << loSec->getLocation(loReloc.offset)
-                  << ": non-zero addend in "
-                     "R_LINX_LO12 relocation to "
-                  << anchor << " is ignored";
-      if (const Relocation *hiRel = findLinxPCRelHiByOffset(hiSec, d->value))
-        return hiRel;
+      if (hiSec) {
+        anchor = sym->getName().empty() ? "offset 0x" + utohexstr(d->value)
+                                        : toStr(ctx, *sym) + "+0x" +
+                                              utohexstr(d->value);
+        if (addend != 0)
+          Warn(ctx) << loSec->getLocation(loReloc.offset)
+                    << ": non-zero addend in "
+                       "R_LINX_LO12 relocation to "
+                    << anchor << " is ignored";
+        if (const Relocation *hiRel = findLinxPCRelHiByOffset(hiSec, d->value))
+          return hiRel;
+      }
     }
   }
 
@@ -1015,7 +1019,10 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
   }
   case RE_LINX_PC_INDIRECT: {
     if (const Relocation *hiRel = getLinxPCRelHi20(ctx, this, r))
-      return getRelocTargetVA(ctx, *hiRel, getVA(hiRel->offset));
+      // For Linx ADDTPC+ADDI/ADDIW materialization, the HI20 relocation only
+      // establishes the page-relative anchor. The paired LO12 relocation must
+      // receive the final symbol VA's low 12 bits, not the HI20 page delta.
+      return r.sym->getVA(ctx, a);
     return 0;
   }
   case RE_LOONGARCH_PC_INDIRECT: {

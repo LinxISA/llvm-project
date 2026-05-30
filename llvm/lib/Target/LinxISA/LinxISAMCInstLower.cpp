@@ -308,6 +308,12 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(I(0))); // BrType
     return;
   }
+  case LinxISA::CBSTART_FP: {
+    // Compressed block start marker: `C.BSTART.FP BrType`.
+    OutMI.setOpcode(getSpecOpcode("C.BSTART.FP", /*LengthBits=*/16, /*Fields=*/1));
+    OutMI.addOperand(MCOperand::createImm(I(0))); // BrType
+    return;
+  }
 
   case LinxISA::BSTART_STD_FALL: {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD FALL<, fixup_label>", /*LengthBits=*/32));
@@ -327,8 +333,23 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
+  case LinxISA::BSTART_FP_DIRECT: {
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.FP DIRECT, <label>", /*LengthBits=*/32));
+    OutMI.addOperand(lowerBranchTarget(0));
+    return;
+  }
+  case LinxISA::BSTART_FP_COND: {
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.FP COND, <label>", /*LengthBits=*/32));
+    OutMI.addOperand(lowerBranchTarget(0));
+    return;
+  }
   case LinxISA::BSTART_STD_CALL: {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD CALL, <label>", /*LengthBits=*/32));
+    OutMI.addOperand(lowerBranchTarget(0));
+    return;
+  }
+  case LinxISA::BSTART_FP_CALL: {
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.FP CALL, <label>", /*LengthBits=*/32));
     OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
