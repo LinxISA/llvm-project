@@ -269,9 +269,10 @@ public:
         (AsmFmt.contains(" DIRECT") || AsmFmt.contains(" COND")))
       return true;
 
-    if (Mnemonic == "BSTART.STD" &&
-        (AsmFmt.contains(" DIRECT") || AsmFmt.contains(" COND") ||
-         AsmFmt.contains(" CALL")))
+    if (Mnemonic.starts_with("BSTART.") &&
+        (AsmFmt == "BSTART.STD" || AsmFmt.contains(" DIRECT") ||
+         AsmFmt.contains(" COND") || AsmFmt.contains(" CALL") ||
+         AsmFmt.contains("FALL<, fixup_label>")))
       return true;
 
     if (!Mnemonic.starts_with("HL.") && Mnemonic.ends_with(".PCR"))
@@ -381,6 +382,16 @@ public:
       }
     }
     if (Mnemonic == "BSTART.STD") {
+      if (AsmFmt == "BSTART.STD") {
+        Inst.setOpcode(findSpecOpcodeByAsmFmt(
+            "HL.BSTART.STD FALL<, fixup_label>", /*LengthBits=*/48));
+        return;
+      }
+      if (AsmFmt.contains("FALL<, fixup_label>")) {
+        Inst.setOpcode(findSpecOpcodeByAsmFmt(
+            "HL.BSTART.STD FALL<, fixup_label>", /*LengthBits=*/48));
+        return;
+      }
       if (AsmFmt.contains(" DIRECT")) {
         Inst.setOpcode(findSpecOpcodeByAsmFmt("HL.BSTART.STD DIRECT, <label>",
                                               /*LengthBits=*/48));
@@ -396,6 +407,16 @@ public:
                                               /*LengthBits=*/48));
         return;
       }
+    }
+    if (Mnemonic == "BSTART.FP" && AsmFmt.contains("FALL<, fixup_label>")) {
+      Inst.setOpcode(findSpecOpcodeByAsmFmt(
+          "HL.BSTART.FP FALL<, fixup_label>", /*LengthBits=*/48));
+      return;
+    }
+    if (Mnemonic == "BSTART.SYS" && AsmFmt.contains("FALL<, fixup_label>")) {
+      Inst.setOpcode(findSpecOpcodeByAsmFmt(
+          "HL.BSTART.SYS FALL<, fixup_label>", /*LengthBits=*/48));
+      return;
     }
 
     // *.PCR -> HL.*.PCR
