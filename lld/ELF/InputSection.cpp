@@ -765,7 +765,8 @@ static const Relocation *findLinxPCRelHiByOffset(const InputSection *isec,
 
 static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
                                                  uint64_t loOffset,
-                                                 const Symbol *sym) {
+                                                 const Symbol *sym,
+                                                 int64_t addend) {
   auto *isec = dyn_cast_or_null<InputSection>(sec);
   if (!isec)
     return nullptr;
@@ -773,25 +774,48 @@ static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
   auto it = llvm::lower_bound(
       isec->relocs(), loOffset,
       [](const Relocation &lhs, uint64_t rhs) { return lhs.offset < rhs; });
+
+  const Relocation *before = nullptr;
   while (it != isec->relocs().begin()) {
     --it;
-    if (it->sym == sym && isLinxPCRelHi(it->type))
-      return &*it;
+    if (it->sym == sym && it->addend == addend && isLinxPCRelHi(it->type)) {
+      before = &*it;
+      break;
+    }
   }
-  return nullptr;
+
+  const Relocation *after = nullptr;
+  it = llvm::lower_bound(
+      isec->relocs(), loOffset,
+      [](const Relocation &lhs, uint64_t rhs) { return lhs.offset < rhs; });
+  for (; it != isec->relocs().end(); ++it) {
+    if (it->sym == sym && it->addend == addend && isLinxPCRelHi(it->type)) {
+      after = &*it;
+      break;
+    }
+  }
+
+  if (!before)
+    return after;
+  if (!after)
+    return before;
+  return loOffset - before->offset <= after->offset - loOffset ? before : after;
 }
 
 // Most R_LINX_LO12 relocations point at a local anchor symbol whose value
 // matches the paired R_LINX_PCREL_HI20 relocation offset. Some startup objects
 // instead target the final symbol directly (for example _DYNAMIC in static
-// PIE), so the linker has to recover the HI relocation by symbol and then use
-// the HI relocation's place when reconstructing the PC-relative target.
+// PIE). Linx block layout can also place the HI in a later predecessor block,
+// so the linker has to recover the HI relocation by exact symbol/addend in
+// either direction before reconstructing the PC-relative target.
 static const Relocation *getLinxPCRelHi20(Ctx &ctx,
                                           const InputSectionBase *loSec,
                                           const Relocation &loReloc) {
   int64_t addend = loReloc.addend;
   Symbol *sym = loReloc.sym;
   std::string anchor = toStr(ctx, *sym);
+  bool unsupportedDefinedAnchor = false;
+  StringRef unsupportedSectionName;
 
   if (const auto *d = dyn_cast<Defined>(sym)) {
     if (d->section) {
@@ -803,30 +827,35 @@ static const Relocation *getLinxPCRelHi20(Ctx &ctx,
           hiSec = eh->getParent();
       }
       if (!hiSec) {
-        Err(ctx) << loSec->getLocation(loReloc.offset)
-                 << ": R_LINX_LO12 relocation "
-                    "points to unsupported anchor section '"
-                 << d->section->name << "' for symbol '" << sym->getName()
-                 << "'";
-        return nullptr;
+        unsupportedDefinedAnchor = true;
+        unsupportedSectionName = d->section->name;
+      } else {
+        anchor = sym->getName().empty() ? "offset 0x" + utohexstr(d->value)
+                                        : toStr(ctx, *sym) + "+0x" +
+                                              utohexstr(d->value);
+        if (const Relocation *hiRel = findLinxPCRelHiByOffset(hiSec, d->value)) {
+          if (addend != 0)
+            Warn(ctx) << loSec->getLocation(loReloc.offset)
+                      << ": non-zero addend in "
+                         "R_LINX_LO12 relocation to "
+                      << anchor << " is ignored";
+          return hiRel;
+        }
       }
-
-      anchor = sym->getName().empty() ? "offset 0x" + utohexstr(d->value)
-                                      : toStr(ctx, *sym) + "+0x" +
-                                            utohexstr(d->value);
-      if (addend != 0)
-        Warn(ctx) << loSec->getLocation(loReloc.offset)
-                  << ": non-zero addend in "
-                     "R_LINX_LO12 relocation to "
-                  << anchor << " is ignored";
-      if (const Relocation *hiRel = findLinxPCRelHiByOffset(hiSec, d->value))
-        return hiRel;
     }
   }
 
   if (const Relocation *hiRel =
-          findLinxPCRelHiBySymbol(loSec, loReloc.offset, sym))
+          findLinxPCRelHiBySymbol(loSec, loReloc.offset, sym, addend))
     return hiRel;
+
+  if (unsupportedDefinedAnchor) {
+    Err(ctx) << loSec->getLocation(loReloc.offset)
+             << ": R_LINX_LO12 relocation points to unsupported anchor section '"
+             << unsupportedSectionName << "' for symbol '" << sym->getName()
+             << "'";
+    return nullptr;
+  }
 
   Err(ctx) << loSec->getLocation(loReloc.offset)
            << ": R_LINX_LO12 relocation points to " << anchor
@@ -1014,8 +1043,13 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
     return 0;
   }
   case RE_LINX_PC_INDIRECT: {
-    if (const Relocation *hiRel = getLinxPCRelHi20(ctx, this, r))
-      return getRelocTargetVA(ctx, *hiRel, getVA(hiRel->offset));
+    if (const Relocation *hiRel = getLinxPCRelHi20(ctx, this, r)) {
+      uint64_t p = getVA(hiRel->offset);
+      uint64_t val = hiRel->sym->isUndefWeak()
+                         ? p + hiRel->addend
+                         : hiRel->sym->getVA(ctx, hiRel->addend);
+      return val;
+    }
     return 0;
   }
   case RE_LOONGARCH_PC_INDIRECT: {
