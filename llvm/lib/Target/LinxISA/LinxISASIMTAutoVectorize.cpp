@@ -727,15 +727,13 @@ public:
 
   StringRef getPassName() const override { return "Linx SIMT AutoVectorize"; }
 
-  bool runOnFunction(Function &F) override {
+  static bool runWithAnalyses(Function &F, LoopInfo &LI, ScalarEvolution &SE) {
     if (!LinxSIMTAutoVec || F.isDeclaration())
       return false;
     if (isTsvcAuxHelperName(F.getName()))
       return false;
 
     bool Changed = false;
-
-    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
     Module *M = F.getParent();
     if (!M)
       return false;
@@ -761,8 +759,6 @@ public:
                  layoutPolicyName(LinxSIMTAutoVecLayout), "none", "none");
       return Changed;
     }
-
-    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
     bool FunctionLowered = F.hasFnAttribute("linx-vblock-body-asm");
     for (Loop *L : Loops) {
@@ -6883,6 +6879,12 @@ public:
     return Changed;
   }
 
+  bool runOnFunction(Function &F) override {
+    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+    return runWithAnalyses(F, LI, SE);
+  }
+
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<LoopInfoWrapperPass>();
     AU.addRequired<ScalarEvolutionWrapperPass>();
@@ -6915,16 +6917,13 @@ FunctionPass *llvm::createLinxISASIMTAutoVectorizePass() {
 
 PreservedAnalyses llvm::LinxISASIMTAutoVectorizePass::run(
     Function &F, FunctionAnalysisManager &AM) {
-  (void)AM;
   if (!linxSIMTAutoVectorizeEnabled() || F.isDeclaration() ||
       isTsvcAuxHelperName(F.getName()) || !F.getParent()) {
     return PreservedAnalyses::all();
   }
 
-  legacy::FunctionPassManager FPM(F.getParent());
-  FPM.add(createLinxISASIMTAutoVectorizePass());
-  FPM.doInitialization();
-  bool Changed = FPM.run(F);
-  FPM.doFinalization();
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  bool Changed = LinxISASIMTAutoVectorize::runWithAnalyses(F, LI, SE);
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
