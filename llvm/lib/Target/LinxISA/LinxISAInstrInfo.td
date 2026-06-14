@@ -590,6 +590,10 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
 	                             "# PSEUDO_V_FABS", []>;
 	  def PSEUDO_V_FSQRT : Pseudo<(outs), (ins i64imm:$dst, i64imm:$srcL),
 	                              "# PSEUDO_V_FSQRT", []>;
+	  def PSEUDO_V_ICVTF : Pseudo<(outs),
+	                              (ins i64imm:$dst, i64imm:$srcL,
+	                                   i64imm:$dstType, i64imm:$srcType),
+	                              "# PSEUDO_V_ICVTF", []>;
 
   def PSEUDO_V_CMP_EQ : Pseudo<(outs), (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR),
                                "# PSEUDO_V_CMP_EQ", []>;

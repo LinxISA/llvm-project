@@ -2116,27 +2116,55 @@ public:
           return 0;
         };
 
+        auto isCanonicalUnitStrideIV = [&](Value *V) -> bool {
+          V = stripIntCasts(V);
+          const SCEV *S = SE.getSCEVAtScope(V, L);
+          const auto *AR = dyn_cast<SCEVAddRecExpr>(S);
+          if (!AR || AR->getLoop() != L || !AR->isAffine())
+            return false;
+          const auto *StartC = dyn_cast<SCEVConstant>(AR->getStart());
+          const auto *StepC =
+              dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+          if (!StartC || !StepC)
+            return false;
+          if (!StartC->getAPInt().isZero())
+            return false;
+          return StepC->getAPInt().getSExtValue() == 1;
+        };
+
+        auto matchesMaskedShiftedIV = [&](Value *V, uint64_t ShiftImm) -> bool {
+          V = stripIntCasts(V);
+          if (auto *BO = dyn_cast_or_null<BinaryOperator>(V)) {
+            if (BO->getOpcode() == Instruction::And) {
+              ConstantInt *MaskC = dyn_cast<ConstantInt>(BO->getOperand(0));
+              Value *Other = BO->getOperand(1);
+              if (!MaskC) {
+                MaskC = dyn_cast<ConstantInt>(BO->getOperand(1));
+                Other = BO->getOperand(0);
+              }
+              if (!MaskC)
+                return false;
+              const uint64_t Mask = MaskC->getZExtValue();
+              if (Mask != 0xffffffffffffffffULL && Mask != 0xffffffffULL &&
+                  Mask != 0x7fffffffULL)
+                return false;
+              V = stripIntCasts(Other);
+            }
+          }
+
+          auto *BO = dyn_cast_or_null<BinaryOperator>(V);
+          if (!BO || BO->getOpcode() != Instruction::LShr)
+            return false;
+          auto *Sh = dyn_cast<ConstantInt>(BO->getOperand(1));
+          if (!Sh || Sh->getZExtValue() != ShiftImm)
+            return false;
+          return isCanonicalUnitStrideIV(BO->getOperand(0));
+        };
+
         auto hasIVShiftByConst = [&](uint64_t ShiftImm) -> bool {
           for (BasicBlock *BB : L->blocks()) {
             for (Instruction &I : *BB) {
-              auto *BO = dyn_cast<BinaryOperator>(&I);
-              if (!BO || BO->getOpcode() != Instruction::LShr)
-                continue;
-              auto *Sh = dyn_cast<ConstantInt>(BO->getOperand(1));
-              if (!Sh || Sh->getZExtValue() != ShiftImm)
-                continue;
-              const SCEV *XS = SE.getSCEVAtScope(BO->getOperand(0), L);
-              const auto *AR = dyn_cast<SCEVAddRecExpr>(XS);
-              if (!AR || AR->getLoop() != L || !AR->isAffine())
-                continue;
-              const auto *StartC = dyn_cast<SCEVConstant>(AR->getStart());
-              const auto *StepC =
-                  dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
-              if (!StartC || !StepC)
-                continue;
-              if (!StartC->getAPInt().isZero())
-                continue;
-              if (StepC->getAPInt().getSExtValue() != 1)
+              if (!matchesMaskedShiftedIV(&I, ShiftImm))
                 continue;
               return true;
             }
@@ -2190,6 +2218,72 @@ public:
                                             : "grouped-single-group";
         };
 
+        auto isShiftFriendlyGroupedPtr = [&](Value *Ptr, uint64_t ElemBytes,
+                                             uint64_t CandidateLaneCount) {
+          if (!Ptr || CandidateLaneCount <= 1 ||
+              !isPowerOf2_64(CandidateLaneCount))
+            return false;
+          Ptr = Ptr->stripPointerCasts();
+          auto *GEP = dyn_cast<GEPOperator>(Ptr);
+          if (!GEP)
+            return false;
+
+          Value *Index = nullptr;
+          const unsigned NumIdx = GEP->getNumIndices();
+          if (NumIdx == 1) {
+            Index = GEP->getOperand(1);
+          } else if (NumIdx == 2) {
+            auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
+            if (!Z || !Z->isZero())
+              return false;
+            Index = GEP->getOperand(2);
+          } else {
+            return false;
+          }
+
+          Type *ElemTy = GEP->getResultElementType();
+          if (!ElemTy)
+            return false;
+          const DataLayout &DL = F.getParent()->getDataLayout();
+          if (DL.getTypeStoreSize(ElemTy) != ElemBytes)
+            return false;
+          if (!L->isLoopInvariant(GEP->getPointerOperand()->stripPointerCasts()))
+            return false;
+
+          const uint64_t ShiftImm = Log2_64(CandidateLaneCount);
+          return matchesMaskedShiftedIV(Index, ShiftImm);
+        };
+
+        auto memorySupportsGroupedLaneCount = [&](uint64_t CandidateLaneCount) {
+          if (MemoryIsUnitStride)
+            return true;
+          if (CandidateLaneCount <= 1 || !isPowerOf2_64(CandidateLaneCount))
+            return false;
+
+          for (StoreInst *SI : Stores) {
+            const uint64_t ElemBytes =
+                getSIMTMemElemBytes(SI->getValueOperand()->getType());
+            if (isUnitStridePtr(SI->getPointerOperand(), ElemBytes))
+              continue;
+            if (isShiftFriendlyGroupedPtr(SI->getPointerOperand(), ElemBytes,
+                                         CandidateLaneCount))
+              continue;
+            return false;
+          }
+
+          for (LoadInst *LI : Loads) {
+            const uint64_t ElemBytes = getSIMTMemElemBytes(LI->getType());
+            if (isUnitStridePtr(LI->getPointerOperand(), ElemBytes))
+              continue;
+            if (isShiftFriendlyGroupedPtr(LI->getPointerOperand(), ElemBytes,
+                                         CandidateLaneCount))
+              continue;
+            return false;
+          }
+
+          return true;
+        };
+
         auto canUseGroupedLaneCount = [&](uint64_t CandidateLaneCount) {
           if (!HasConstTripCount || ConstTripCount == 0 || CandidateLaneCount <= 1)
             return false;
@@ -2198,7 +2292,7 @@ public:
           if ((ConstTripCount % CandidateLaneCount) != 0)
             return false;
           if (!Stores.empty() || !Loads.empty())
-            return MemoryIsUnitStride;
+            return memorySupportsGroupedLaneCount(CandidateLaneCount);
           return true;
         };
 
@@ -2355,7 +2449,7 @@ public:
             ActiveSlotPerLane ? (LaneCount * GroupCount) : 1u;
         std::optional<unsigned> ActiveSlotBind;
         std::optional<uint64_t> ActiveSlotLocalWordBase;
-        if (ActiveSlotPerLane)
+        if (NeedsActiveReplay)
           ActiveSlotLocalWordBase = reserveLocalWords(ActiveSlotElems);
         if (NeedsActiveReplay) {
           if (!ActiveSlotLocalWordBase) {
@@ -2594,8 +2688,13 @@ public:
                 reject("invalid_recurrence_slot_type");
                 return false;
               }
+              const uint64_t RecurrenceSlotElems =
+                  (LaneCount > 1) ? LaneCount
+                                  : ((GroupCount != 0) ? (1u + GroupCount) : 1u);
 	            Plan.Slot =
-	                EB.CreateAlloca(Plan.SlotTy, nullptr, "linx.simt.rec");
+	                EB.CreateAlloca(Plan.SlotTy,
+                                    ConstantInt::get(I32Ty, RecurrenceSlotElems),
+                                    "linx.simt.rec");
               Value *InitStored = Plan.InitValue;
               if (!InitStored) {
                 reject("invalid_recurrence_init");
@@ -2620,9 +2719,9 @@ public:
 	              reject("recurrence_bind_exhausted");
 	              return false;
 	            }
-	            Plan.SlotBind = *Bind;
-	            RecurrencePlanByPhi[Plan.Phi] = RI;
-	            RecurrencePlansByUpdate[Plan.Update].push_back(RI);
+		            Plan.SlotBind = *Bind;
+		            RecurrencePlanByPhi[Plan.Phi] = RI;
+		            RecurrencePlansByUpdate[Plan.Update].push_back(RI);
 	          }
 	        }
 
@@ -3797,10 +3896,10 @@ public:
 	            return false;
 	          OS << "  v.sw.brg "
 	             << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-	             << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
-	             << formatShiftedAddr(*Neg, 2) << "]\n";
-	          return true;
-	        };
+		             << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
+		             << formatShiftedAddr(*Neg, 2) << "]\n";
+		          return true;
+		        };
 
         auto emitLoadFromLocalWordBaseInto = [&](uint64_t WordBase,
                                                  StringRef Dst) -> bool {
@@ -4215,11 +4314,11 @@ public:
 	            auto RecIt = RecurrencePlanByPhi.find(PN);
 	            if (RecIt != RecurrencePlanByPhi.end()) {
                 const unsigned RecIdx = RecIt->second;
-	              const RecurrencePlan &Plan = RecurrencePlans[RecIdx];
+		              const RecurrencePlan &Plan = RecurrencePlans[RecIdx];
                 if (!Plan.LocalWordBase) {
-	                auto Dst = emitLoadFromInvariantBind(Plan.SlotBind);
-	                if (!Dst)
-	                  return std::nullopt;
+		                auto Dst = emitLoadFromInvariantBind(Plan.SlotBind);
+		                if (!Dst)
+		                  return std::nullopt;
 	                ValOp[V] = *Dst;
 	                return *Dst;
                 }
@@ -4751,6 +4850,33 @@ public:
 	              if (Cast->getType() != Type::getFloatTy(Ctx))
 	                return std::nullopt;
 	              Value *Src = Cast->getOperand(0);
+                if (UseGroupedDims && LaneCount > 1 &&
+                    (Cast->getOpcode() == Instruction::SIToFP ||
+                     Cast->getOpcode() == Instruction::UIToFP)) {
+                  if (!Src->getType()->isIntegerTy() ||
+                      Src->getType()->getScalarSizeInBits() > 32) {
+                    return std::nullopt;
+                  }
+                  if (Cast->getOpcode() == Instruction::UIToFP) {
+                    const SCEV *SrcS = SE.getSCEVAtScope(Src, L);
+                    if (!SE.isKnownNonNegative(SrcS)) {
+                      return std::nullopt;
+                    }
+                  }
+                  auto IntTok = emitValue(Src);
+                  if (!IntTok)
+                    return std::nullopt;
+                  auto Dst = allocVec();
+                  if (!Dst)
+                    return std::nullopt;
+                  // The vector convert surface only exposes signed integer
+                  // lanes. Reuse it for unsigned casts when SCEV proves the
+                  // source non-negative, which holds for TSVC induction paths.
+                  OS << "  v.icvtf.sw2fs " << formatIntSrc(*IntTok) << ", ->"
+                     << formatWordDest(*Dst) << "\n";
+                  ValOp[V] = *Dst;
+                  return *Dst;
+                }
 	              if (!L->isLoopInvariant(Src)) {
 	                // Support affine int induction to float in scalar-lane replay
 	                // mode by synthesizing a float induction slot.
@@ -6472,9 +6598,9 @@ public:
             }
 	            if (!emitStoreToInvariantBind(*UpdateVal, Plan.SlotBind,
 	                                          /*IsFloat=*/true)) {
-              reject("recurrence_store_emit_failed");
-              return false;
-            }
+	              reject("recurrence_store_emit_failed");
+	              return false;
+	            }
             continue;
           }
           if (Plan.LocalWordBase &&
@@ -6484,11 +6610,11 @@ public:
             reject("recurrence_store_emit_failed");
             return false;
           }
-	          if (!emitStoreToInvariantBind(It->second, Plan.SlotBind,
+		          if (!emitStoreToInvariantBind(It->second, Plan.SlotBind,
 	                                        /*IsFloat=*/true)) {
-            reject("recurrence_store_emit_failed");
-            return false;
-          }
+	            reject("recurrence_store_emit_failed");
+	            return false;
+	          }
         }
 
         for (unsigned FI = 0; FI < F32InductionPlans.size(); ++FI) {
