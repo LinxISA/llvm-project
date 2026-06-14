@@ -938,6 +938,30 @@ public:
             for (Instruction &I : *BB) {
               if (isa<PHINode>(I) || I.isTerminator())
                 continue;
+
+              bool AllowPureExitChainValue = isSafeToSpeculativelyExecute(&I);
+              if (AllowPureExitChainValue) {
+                for (User *U : I.users()) {
+                  auto *UI = dyn_cast<Instruction>(U);
+                  if (!UI) {
+                    AllowPureExitChainValue = false;
+                    break;
+                  }
+                  if (UI->getParent() == BB)
+                    continue;
+                  if (ExitChainBlocks.contains(UI->getParent()))
+                    continue;
+                  auto *PN = dyn_cast<PHINode>(UI);
+                  if (PN && PN->getParent() == Exit)
+                    continue;
+                  AllowPureExitChainValue = false;
+                  break;
+                }
+              }
+
+              if (AllowPureExitChainValue)
+                continue;
+
               reject("unsupported_exit_side_effects");
               return false;
             }
