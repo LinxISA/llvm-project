@@ -270,8 +270,8 @@ LinxISATargetLowering::LinxISATargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SINT_TO_FP, MVT::i64, Custom);
   setOperationAction(ISD::UINT_TO_FP, MVT::i64, Custom);
 
-  setOperationAction(ISD::FP_ROUND, MVT::f32, Expand);
-  setOperationAction(ISD::FP_EXTEND, MVT::f64, Expand);
+  setOperationAction(ISD::FP_ROUND, MVT::f32, Custom);
+  setOperationAction(ISD::FP_EXTEND, MVT::f64, Custom);
   setOperationAction(ISD::FMA, MVT::f32, Expand);
   setOperationAction(ISD::FMA, MVT::f64, Expand);
 
