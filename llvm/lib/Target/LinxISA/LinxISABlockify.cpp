@@ -1224,6 +1224,61 @@ public:
 	        return;
 	      }
 
+      if (Head.starts_with_insensitive("v.icvtf.")) {
+        auto parseVecIntSrcType = [&](StringRef Suffix)
+            -> std::optional<unsigned> {
+          if (Suffix.equals_insensitive("sd"))
+            return 0u;
+          if (Suffix.equals_insensitive("sw"))
+            return 1u;
+          if (Suffix.equals_insensitive("sh"))
+            return 2u;
+          if (Suffix.equals_insensitive("sb"))
+            return 3u;
+          return std::nullopt;
+        };
+        auto parseVecFpDstType = [&](StringRef Suffix)
+            -> std::optional<unsigned> {
+          if (Suffix.equals_insensitive("fd"))
+            return 0u;
+          if (Suffix.equals_insensitive("fs"))
+            return 1u;
+          if (Suffix.equals_insensitive("fh"))
+            return 2u;
+          if (Suffix.equals_insensitive("fb"))
+            return 3u;
+          return std::nullopt;
+        };
+
+        StringRef Suffix = Head.drop_front(strlen("v.icvtf."));
+        size_t Sep = Suffix.find('2');
+        if (Sep == StringRef::npos)
+          fail("expected v.icvtf.<srcT>2<dstT>");
+        auto SrcType = parseVecIntSrcType(Suffix.take_front(Sep));
+        auto DstType = parseVecFpDstType(Suffix.drop_front(Sep + 1));
+        if (!SrcType || !DstType)
+          fail("unsupported v.icvtf type suffix");
+
+        StringRef SrcPart;
+        ParsedVReg Dst;
+        if (!parseArrow(Rest, SrcPart, Dst))
+          fail("expected '->Dst' in v.icvtf");
+        SmallVector<StringRef, 2> Ops;
+        splitCSV(SrcPart, Ops);
+        if (Ops.size() != 1)
+          fail("expected one source operand for v.icvtf");
+        auto SrcL = parseVecRegToken(Ops[0]);
+        if (!SrcL)
+          fail("failed to parse source operand for v.icvtf");
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(),
+                TII.get(LinxISA::PSEUDO_V_ICVTF))
+            .addImm(Dst.Code)
+            .addImm(SrcL->Code)
+            .addImm(*DstType)
+            .addImm(*SrcType);
+        return;
+      }
+
 	      if (Head.starts_with_insensitive("v.cmp.")) {
 	        StringRef SrcPart;
 	        unsigned DstCode = 0;

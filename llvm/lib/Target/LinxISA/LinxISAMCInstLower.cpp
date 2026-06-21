@@ -562,6 +562,15 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
         {{"RegDst", I(0)}, {"SrcL", I(1)}});
     return;
   }
+  case LinxISA::PSEUDO_V_ICVTF: {
+    emitNamedImmFields(
+        getSpecOpcode("V.ICVTF", /*LengthBits=*/64, /*Fields=*/4),
+        {{"DstType", I(2)},
+         {"RegDst", I(0)},
+         {"SrcL", I(1)},
+         {"SrcType", I(3)}});
+    return;
+  }
   case LinxISA::PSEUDO_V_CMP_EQ: {
     emitNamedImmFields(
         getSpecOpcode("V.CMP.EQ", /*LengthBits=*/64, /*Fields=*/3),

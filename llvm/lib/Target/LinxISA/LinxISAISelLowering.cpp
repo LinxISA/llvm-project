@@ -97,6 +97,20 @@ LinxISATargetLowering::LinxISATargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SUB, MVT::linxtile, Legal);
   setOperationAction(ISD::ADD, MVT::v1024i32, Legal);
   setOperationAction(ISD::SUB, MVT::v1024i32, Legal);
+  setOperationAction(ISD::AND, MVT::v1024i32, Expand);
+  setOperationAction(ISD::OR, MVT::v1024i32, Expand);
+  setOperationAction(ISD::XOR, MVT::v1024i32, Expand);
+  setOperationAction(ISD::SHL, MVT::v1024i32, Expand);
+  setOperationAction(ISD::SRL, MVT::v1024i32, Expand);
+  setOperationAction(ISD::SRA, MVT::v1024i32, Expand);
+  setOperationAction(ISD::BUILD_VECTOR, MVT::v1024i32, Expand);
+  setOperationAction(ISD::SCALAR_TO_VECTOR, MVT::v1024i32, Expand);
+  setOperationAction(ISD::INSERT_VECTOR_ELT, MVT::v1024i32, Expand);
+  setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v1024i32, Expand);
+  setOperationAction(ISD::VECTOR_SHUFFLE, MVT::v1024i32, Expand);
+  setOperationAction(ISD::CONCAT_VECTORS, MVT::v1024i32, Expand);
+  setOperationAction(ISD::INSERT_SUBVECTOR, MVT::v1024i32, Expand);
+  setOperationAction(ISD::EXTRACT_SUBVECTOR, MVT::v1024i32, Expand);
 
   computeRegisterProperties(STI.getRegisterInfo());
   setStackPointerRegisterToSaveRestore(LinxISA::R1);
@@ -256,8 +270,8 @@ LinxISATargetLowering::LinxISATargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::SINT_TO_FP, MVT::i64, Custom);
   setOperationAction(ISD::UINT_TO_FP, MVT::i64, Custom);
 
-  setOperationAction(ISD::FP_ROUND, MVT::f32, Expand);
-  setOperationAction(ISD::FP_EXTEND, MVT::f64, Expand);
+  setOperationAction(ISD::FP_ROUND, MVT::f32, Custom);
+  setOperationAction(ISD::FP_EXTEND, MVT::f64, Custom);
   setOperationAction(ISD::FMA, MVT::f32, Expand);
   setOperationAction(ISD::FMA, MVT::f64, Expand);
 

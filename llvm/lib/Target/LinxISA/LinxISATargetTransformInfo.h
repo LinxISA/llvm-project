@@ -29,6 +29,8 @@ class LinxISATTIImpl final : public BasicTTIImplBase<LinxISATTIImpl> {
 
   friend BaseT;
 
+  enum LinxRegisterClass { GPRRC, VRRC };
+
   const LinxISASubtarget *ST;
   const LinxISATargetLowering *TLI;
 
@@ -44,6 +46,23 @@ public:
                                TTI::UnrollingPreferences &UP,
                                OptimizationRemarkEmitter *ORE) const override;
 
+  unsigned getNumberOfRegisters(unsigned ClassID) const override {
+    if (ClassID == VRRC)
+      return 0;
+    return 32;
+  }
+
+  unsigned getRegisterClassForType(bool Vector,
+                                   Type *Ty = nullptr) const override {
+    return Vector ? VRRC : GPRRC;
+  }
+
+  const char *getRegisterClassName(unsigned ClassID) const override {
+    if (ClassID == VRRC)
+      return "LinxVRRC";
+    return "LinxGPRRC";
+  }
+
   // Linx bring-up: avoid generic vectorization creating very wide fixed-width
   // vectors that the scalar pipeline does not lower. Tile blocks are expressed
   // via target-extension tile intrinsics and custom lowering.
@@ -56,6 +75,12 @@ public:
       return TypeSize::getFixed(0);
     }
     llvm_unreachable("Unknown register kind");
+  }
+
+  unsigned getMaximumVF(unsigned ElemWidth, unsigned Opcode) const override {
+    (void)ElemWidth;
+    (void)Opcode;
+    return 1;
   }
 
   bool supportsScalableVectors() const override { return false; }
