@@ -395,6 +395,8 @@ bool LinxV5ExpandPseudo::expandMI(MachineBasicBlock &MBB,
     return expandPseudoCopy(MBB, MBBI, LinxV5::LinxV5PseudoCopyFromP);
   case LinxV5::LinxV5PseudoCopy2P:
     return expandPseudoCopy(MBB, MBBI, LinxV5::LinxV5PseudoCopy2P);
+  case LinxV5::LinxV5PseudoCopy2PTerm:
+    return expandPseudoCopy(MBB, MBBI, LinxV5::LinxV5PseudoCopy2PTerm);
   case LinxV5::LinxV5ImplicitDef:
   case LinxV5::LinxV5ImplicitSDef:
     return expandImplicitDef(MBB, MBBI);
@@ -461,7 +463,8 @@ bool LinxV5ExpandPseudo::expandPseudoCopy(MachineBasicBlock &MBB,
   switch(Opc) {
     default:
       break;
-    case LinxV5::LinxV5PseudoCopy2P: {
+    case LinxV5::LinxV5PseudoCopy2P:
+    case LinxV5::LinxV5PseudoCopy2PTerm: {
       BuildMI(MBB, MBBI, MBBI->getDebugLoc(),
           TII->get(LinxV5::SIMT_ADDI_SCAR))
       .addReg(LinxV5::SIMT_P, RegState::Define)

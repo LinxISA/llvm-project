@@ -51,6 +51,7 @@ class VirtRegAuxInfo;
 class LLVM_LIBRARY_VISIBILITY InsertPointAnalysis {
 private:
   const LiveIntervals &LIS;
+  const TargetInstrInfo &TII;
 
   /// Last legal insert point in each basic block in the current function.
   /// The first entry is the first terminator, the second entry is the
@@ -62,7 +63,8 @@ private:
                                    const MachineBasicBlock &MBB);
 
 public:
-  InsertPointAnalysis(const LiveIntervals &lis, unsigned BBNum);
+  InsertPointAnalysis(const LiveIntervals &lis, const TargetInstrInfo &tii,
+                     unsigned BBNum);
 
   /// Return the base index of the last valid insert point for \pCurLI in \pMBB.
   SlotIndex getLastInsertPoint(const LiveInterval &CurLI,
@@ -80,15 +82,7 @@ public:
                                                      MachineBasicBlock &MBB);
 
   /// Return the base index of the first insert point in \pMBB.
-  SlotIndex getFirstInsertPoint(MachineBasicBlock &MBB) {
-    SlotIndex Res = LIS.getMBBStartIdx(&MBB);
-    if (!MBB.empty()) {
-      MachineBasicBlock::iterator MII = MBB.SkipPHIsLabelsAndDebug(MBB.begin());
-      if (MII != MBB.end())
-        Res = LIS.getInstructionIndex(*MII);
-    }
-    return Res;
-  }
+  SlotIndex getFirstInsertPoint(MachineBasicBlock &MBB);
 
 };
 

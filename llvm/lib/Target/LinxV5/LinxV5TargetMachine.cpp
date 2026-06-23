@@ -57,6 +57,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5AnnotateControlFlowPass(*PR);
   initializeLinxV5RebindGetTilePTRPass(*PR);
   initializeLinxV5ConstantRegOptPass(*PR);
+  initializeLinxV5SIMTSpillFixupPass(*PR);
 }
 
 static StringRef computeDataLayout(const Triple &TT) {
@@ -257,6 +258,7 @@ bool LinxV5PassConfig::addPreISel() {
 }
 
 void LinxV5PassConfig::addPostRewrite() {
+  addPass(createLinxV5SIMTSpillFixupPass());
   addPass(createLinxV5StackSizeFixupPass());
   addPass(createLinxV5TileFixupPass());
 }

@@ -1509,6 +1509,10 @@ public:
                                     const MachineBasicBlock *MBB,
                                     const MachineFunction &MF) const;
 
+  /// Return the first legal place to insert split / spill code in a block.
+  virtual MachineBasicBlock::iterator
+  getFirstInsertionPoint(MachineBasicBlock &MBB) const;
+
   /// Measure the specified inline asm to determine an approximation of its
   /// length.
   virtual unsigned getInlineAsmLength(

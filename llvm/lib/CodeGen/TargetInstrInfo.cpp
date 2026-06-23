@@ -1039,6 +1039,11 @@ bool TargetInstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   return MI.modifiesRegister(TLI.getStackPointerRegisterToSaveRestore(), TRI);
 }
 
+MachineBasicBlock::iterator
+TargetInstrInfo::getFirstInsertionPoint(MachineBasicBlock &MBB) const {
+  return MBB.SkipPHIsLabelsAndDebug(MBB.begin());
+}
+
 // Provide a global flag for disabling the PreRA hazard recognizer that targets
 // may choose to honor.
 bool TargetInstrInfo::usePreRAHazardRecognizer() const {

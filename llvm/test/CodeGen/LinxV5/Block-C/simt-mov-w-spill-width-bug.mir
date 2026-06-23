@@ -1,0 +1,63 @@
+# RUN: llc -verify-machineinstrs=false -o - %s | FileCheck %s --check-prefix=ASM
+
+--- |
+  target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
+  target triple = "linx64v5-unknown-linux-musl"
+
+  define dso_local void @test() #0 {
+    ret void
+  }
+
+  attributes #0 = { nounwind "target-features"="+simt,+relax" }
+...
+---
+name:            test
+alignment:       2
+tracksRegLiveness: true
+legalized:       true
+regBankSelected: true
+selected:        true
+failedISel:      false
+liveins:         []
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap: false
+  hasPatchPoint: false
+  stackSize: 1024
+  offsetAdjustment: 0
+  maxAlignment: 8
+  adjustsStack: false
+  hasCalls: false
+  stackProtector: ''
+  functionContext: ''
+  maxCallFrameSize: 0
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart: false
+  hasMustTailInVarArgFunc: false
+  hasTailCall: false
+  localFrameSize: 0
+  savePoint: ''
+  restorePoint: ''
+fixedStack: []
+stack:
+  - { id: 0, type: spill-slot, offset: -512, size: 512, alignment: 8, stack-id: default, callee-saved-register: '', callee-saved-restored: true, debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+  - { id: 1, type: spill-slot, offset: -1024, size: 512, alignment: 8, stack-id: default, callee-saved-register: '', callee-saved-restored: true, debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body:             |
+  bb.0:
+    ; 这里人为构造一条 W 宽 reload，再经过 SIMT_MOV 保持为 W 宽。
+    ; 这里故意让源 slot 还是旧的 512B，所以最开始的 reload 仍会按 D 宽取。
+    ; 关键是经过 SIMT_MOV .w 之后，spill 会把目标 FI 修成 W 宽，
+    ; 因而最终必须落成 SWI，而不是错误的 SDI。
+    ;
+    ; ASM-LABEL: test:
+    ; ASM: v.ldi.u.local
+    ; ASM: v.mov
+    ; ASM: v.swi.u.local
+    ; ASM-NOT: v.sdi.u.local
+    %0:simtcgvl = PseudoVecReload 0, %stack.0, 0, implicit $simt_p :: (load (s512) from %stack.0)
+    %1:simtcgvl = SIMT_MOV 1, %0, 1, implicit $simt_p
+    PseudoVecSpill %1, 0, %stack.1, 0, implicit $simt_p :: (store (s512) into %stack.1)
+    PseudoRET
+...

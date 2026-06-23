@@ -23,7 +23,9 @@
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "LinxV5GenRegisterInfo.inc"
@@ -32,6 +34,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "linx-register-info"
 
+static cl::opt<bool> EnableSIMTSpillSaveRestoreP(
+    "linxv5-simt-spill-save-restore-p", cl::Hidden,
+    cl::desc("Wrap SIMT spill/reload with save/full-mask/restore of SIMT_P"),
+    cl::init(false));
+
 static_assert(LinxV5::R23 == LinxV5::R0 + 23, "Register list not consecutive");
 static_assert(LinxV5::T4 == LinxV5::T1 + 3, "Register list not consecutive");
 static_assert(LinxV5::U4 == LinxV5::U1 + 3, "Register list not consecutive");
@@ -39,6 +46,8 @@ static_assert(LinxV5::TOS4 == LinxV5::TOS1 + 3,
               "Register list not consecutive");
 static_assert(LinxV5::UOS4 == LinxV5::UOS1 + 3,
               "Register list not consecutive");
+
+static Register getSIMTSpillMaskScratchReg() { return LinxV5::T4; }
 
 Register LinxV5::getSPReg() { return LinxV5::R1; }
 Register LinxV5::getRAReg() { return LinxV5::R10; }
@@ -465,9 +474,47 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     unsigned RegSizeInBytes = MI.getOperand(1).getImm();
     bool IsVec = RegSizeInBytes != 0;
     if (!IsVec) RegSizeInBytes = LinxV5::SIMTRegSize::SIMT_REG_SIZE_D;
+    errs() << "[expand-" << (IsSpill ? "spill" : "reload") << "] MF="
+           << MBB.getParent()->getName()
+           << " BB=" << MBB.getNumber()
+           << " FI=" << FI
+           << " Reg=" << printReg(Reg, this)
+           << " WidthOp=" << MI.getOperand(1).getImm()
+           << " IsVec=" << IsVec
+           << " Offset=" << Offset << "\n";
+
+    auto buildSaveRestoreMask = [&](bool Enable) {
+      if (!Enable)
+        return;
+
+      Register SavedP = getSIMTSpillMaskScratchReg();
+      BuildMI(MBB, II, DL, TII->get(LinxV5::LinxV5PseudoCopyFromP), SavedP);
+      BuildMI(MBB, II, DL, TII->get(LinxV5::SIMT_ORI_SCAR), LinxV5::SIMT_P)
+          .addImm(LinxV5Op::SIMT_INT_DST_REG_TYPE_D)
+          .addReg(LinxV5::R0)
+          .addImm(LinxV5Op::SIMT_INT_SRC_REG_TYPE_UD)
+          .addImm(-1);
+    };
+
+    auto buildRestoreMask = [&](bool Enable) {
+      if (!Enable)
+        return;
+
+      BuildMI(MBB, II, DL, TII->get(LinxV5::LinxV5PseudoCopy2P))
+          .addReg(getSIMTSpillMaskScratchReg());
+    };
+
+    bool WrapWithFullMask =
+        EnableSIMTSpillSaveRestoreP &&
+        MBB.getParent()->getSubtarget<LinxV5Subtarget>().isSIMT();
+    buildSaveRestoreMask(WrapWithFullMask);
     if (isInt<12>(Offset)) {
       // addi with small imm
       unsigned Opcode = getTargetOpcode(MI, false, IsVec);
+      errs() << "[expand-" << (IsSpill ? "spill" : "reload") << "-opc] MF="
+             << MBB.getParent()->getName()
+             << " FI=" << FI
+             << " Opcode=" << TII->getName(Opcode) << "\n";
       BuildMI(MBB, II, DL, TII->get(Opcode))
         .addReg(Reg, IsSpill ? 0 : RegState::Define)
         .addImm(LinxV5::getSIMTSrcTypeFromSize(RegSizeInBytes))
@@ -479,6 +526,10 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       Register Scratch = MRI.createVirtualRegister(&LinxV5::LTRRegClass);
       TII->movImm(MBB, II, DL, Scratch, Offset);
       unsigned Opcode = getTargetOpcode(MI, true, IsVec);
+      errs() << "[expand-" << (IsSpill ? "spill" : "reload") << "-opc] MF="
+             << MBB.getParent()->getName()
+             << " FI=" << FI
+             << " Opcode=" << TII->getName(Opcode) << "\n";
       MachineInstrBuilder MIB =
           BuildMI(MBB, II, DL, TII->get(Opcode))
               .addReg(Reg, IsSpill ? 0 : RegState::Define)
@@ -491,6 +542,7 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
                   LinxV5::SIMTRegSize::SIMT_REG_SIZE_D))
               .addImm(0); // Shamt
     }
+    buildRestoreMask(WrapWithFullMask);
     MI.eraseFromParent();
     return;
   }
@@ -583,10 +635,13 @@ Register LinxV5RegisterInfo::getFrameRegister(const MachineFunction &MF) const {
 }
 
 bool LinxV5RegisterInfo::isUniformReg(const MachineRegisterInfo &MRI,
-                                      Register Reg, bool Continuous) const {
+                                      Register Reg,
+                                      bool TreatLC12AsUniform) const {
 
-  if (Continuous && (Reg == LinxV5::SIMT_LC1 || Reg == LinxV5::SIMT_LC2))
-    return true;
+  // LC1/LC2 may feed continuous-address formation as x-uniform values. In DR
+  // mode they are lane-dependent and must not select scalar l.* instructions.
+  if (Reg == LinxV5::SIMT_LC1 || Reg == LinxV5::SIMT_LC2)
+    return TreatLC12AsUniform;
 
   const TargetRegisterClass *RC;
   if (Reg.isVirtual())

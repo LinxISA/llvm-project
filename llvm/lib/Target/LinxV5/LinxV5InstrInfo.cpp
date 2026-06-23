@@ -463,7 +463,27 @@ bool LinxV5InstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   if (LinxV5::isTileOp(MI))
     return true;
 
+  if (MF.getSubtarget<LinxV5Subtarget>().isSIMT() &&
+      MI.modifiesRegister(LinxV5::SIMT_P, STI.getRegisterInfo()))
+    return true;
+
   return false;
+}
+
+MachineBasicBlock::iterator
+LinxV5InstrInfo::getFirstInsertionPoint(MachineBasicBlock &MBB) const {
+  MachineBasicBlock::iterator I = TargetInstrInfo::getFirstInsertionPoint(MBB);
+  if (!MBB.getParent()->getSubtarget<LinxV5Subtarget>().isSIMT())
+    return I;
+
+  while (I != MBB.end()) {
+    unsigned Opc = I->getOpcode();
+    if (Opc != LinxV5::LinxV5PseudoCopy2P &&
+        Opc != LinxV5::LinxV5PseudoCopy2PTerm)
+      break;
+    ++I;
+  }
+  return I;
 }
 
 unsigned LinxV5InstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
@@ -597,10 +617,10 @@ void LinxV5InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   bool IsSIMT = MF->getSubtarget<LinxV5Subtarget>().isSIMT();
   if (IsSIMT) {
     BuildMI(MBB, I, DL, get(LinxV5::PseudoVecSpill))
-      .addReg(SrcReg, getKillRegState(IsKill))
-      .addImm(0)  // RegSizeInBytes, 0 for scalar
-      .addFrameIndex(FI)
-      .addMemOperand(MMO);
+        .addReg(SrcReg, getKillRegState(IsKill))
+        .addImm(0) // RegSizeInBytes, 0 for scalar
+        .addFrameIndex(FI)
+        .addMemOperand(MMO);
     return;
   }
 

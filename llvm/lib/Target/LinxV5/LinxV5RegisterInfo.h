@@ -65,7 +65,7 @@ struct LinxV5RegisterInfo : public LinxV5GenRegisterInfo {
                                const MachineRegisterInfo *MRI) const override;
 
   bool isUniformReg(const MachineRegisterInfo &MRI, Register Reg,
-                    bool Continuous) const;
+                    bool TreatLC12AsUniform) const;
 };
 
 namespace LinxV5 {

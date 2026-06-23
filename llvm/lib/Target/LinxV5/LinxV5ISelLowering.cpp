@@ -371,6 +371,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::MERGE_PREDICATION)
     MAKE_CASE(LinxV5ISD::CopyP)
     MAKE_CASE(LinxV5ISD::Copy2P)
+    MAKE_CASE(LinxV5ISD::Copy2PTerm)
     MAKE_CASE(LinxV5ISD::MERGE_CF)
     MAKE_CASE(LinxV5ISD::IMPLICIT_DEF)
   }
@@ -514,6 +515,7 @@ bool LinxV5TargetLowering::isSDNodeAlwaysUniform(const SDNode *N) const {
     switch(IntID) {
     case Intrinsic::blkv_if:
     case Intrinsic::blkv_flow:
+    case Intrinsic::blkv_if_break:
     case Intrinsic::blkv_loop:
     case Intrinsic::blkv_end_cf:
     case Intrinsic::linx_blkv_rdmax:
@@ -528,7 +530,6 @@ bool LinxV5TargetLowering::isSDNodeAlwaysUniform(const SDNode *N) const {
     ConstantSDNode *CN = cast<ConstantSDNode>(N->getOperand(0));
     Intrinsic::ID IntID = static_cast<Intrinsic::ID>(CN->getZExtValue());
     switch (IntID) {
-    case Intrinsic::blkv_if_break:
     case Intrinsic::blkv_get_tile_ptr:
       return true;
     }
@@ -536,6 +537,7 @@ bool LinxV5TargetLowering::isSDNodeAlwaysUniform(const SDNode *N) const {
   }
   case LinxV5ISD::MERGE_PREDICATION:
   case LinxV5ISD::Copy2P:
+  case LinxV5ISD::Copy2PTerm:
   case LinxV5ISD::CopyP:
   case LinxV5ISD::IMPLICIT_DEF:
   case LinxV5ISD::RDADD:
@@ -579,19 +581,20 @@ bool LinxV5TargetLowering::isSDNodeSourceOfDivergenceImpl(
     const MachineRegisterInfo &MRI = FLI->MF->getRegInfo();
     const LinxV5RegisterInfo *TRI = Subtarget.getRegisterInfo();
     Register Reg = R->getReg();
+    bool TreatLC12AsUniform = XDivergence || Subtarget.enableContinuousMemOpt();
 
     // LiveIns of block C function must be uniform
     if (MRI.isLiveIn(Reg))
       return false;
 
     if (Reg.isPhysical())
-      return !TRI->isUniformReg(MRI, Reg, XDivergence);
+      return !TRI->isUniformReg(MRI, Reg, TreatLC12AsUniform);
 
     if (const Value *V = FLI->getValueFromVirtualReg(R->getReg()))
       return KDA->isDivergent(V);
 
     // assert(Reg == FLI->DemoteRegister || isCopyFromRegOfInlineAsm(N));
-    return !TRI->isUniformReg(MRI, Reg, XDivergence);
+    return !TRI->isUniformReg(MRI, Reg, TreatLC12AsUniform);
   }
   case ISD::LOAD: {
     return true;
@@ -896,6 +899,25 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerReduce(LinxV5ISD::RDOR, DL, Op.getOperand(0), Op, DAG);
     case Intrinsic::blkv_merge_cf:
       return lowerMergeCF(DL, Op, DAG);
+    case Intrinsic::blkv_if_break: {
+      SDValue Chain = Op.getOperand(0);
+      SDValue ExitCond = DAG.getZExtOrTrunc(Op.getOperand(2), DL, MVT::i64);
+      SDValue Broken = DAG.getZExtOrTrunc(Op.getOperand(3), DL, MVT::i64);
+      SDValue OldMask = DAG.getNode(LinxV5ISD::CopyP, DL,
+                                    DAG.getVTList(MVT::i64, MVT::Other),
+                                    Chain);
+      SDValue MergedExit =
+          DAG.getNode(LinxV5ISD::MERGE_PREDICATION, DL, MVT::Other,
+                      OldMask.getValue(1), ExitCond);
+      SDValue NewMask = DAG.getNode(LinxV5ISD::CopyP, DL,
+                                    DAG.getVTList(MVT::i64, MVT::Other),
+                                    MergedExit);
+      SDValue NextExit = DAG.getNode(ISD::OR, DL, MVT::i64, NewMask, Broken);
+      SDValue RestoreMask =
+          DAG.getNode(LinxV5ISD::Copy2P, DL, MVT::Other, NewMask.getValue(1),
+                      OldMask);
+      return DAG.getMergeValues({NextExit, RestoreMask}, DL);
+    }
     }
     return SDValue();
   }
@@ -923,24 +945,6 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
     case Intrinsic::blkv_get_index_z:
       return DAG.getCopyFromReg(DAG.getEntryNode(), DL, LinxV5::SIMT_LC2,
                                 MVT::i16);
-    case Intrinsic::blkv_if_break:
-      SDValue ExitCond = DAG.getZExtOrTrunc(Op->getOperand(1), DL, MVT::i64);
-      SDValue OldMask = DAG.getNode(LinxV5ISD::CopyP, DL,
-                                    DAG.getVTList(MVT::i64, MVT::Other),
-                                    DAG.getEntryNode());
-      // TODO: since we can only reduce exitcond to P, the MERGE_PREDICATION is necessary
-      SDValue MergedExit =
-          DAG.getNode(LinxV5ISD::MERGE_PREDICATION, DL, MVT::Other,
-                      DAG.getEntryNode(), ExitCond);
-      SDValue NewMask = DAG.getNode(LinxV5ISD::CopyP, DL, DAG.getVTList(MVT::i64, MVT::Other), MergedExit);
-      SDValue NextExit =
-          DAG.getNode(ISD::OR, DL, MVT::i64, NewMask, Op->getOperand(2));
-      SDValue RestoreMask =
-          DAG.getNode(LinxV5ISD::Copy2P, DL,
-                      MVT::Other,
-                      NewMask.getValue(1),
-                      OldMask);
-      return NextExit;
     }
   }
   case ISD::INTRINSIC_VOID: {
@@ -1043,12 +1047,12 @@ SDValue LinxV5TargetLowering::lowerMergeCF(SDLoc &DL, SDValue Op,
     SDValue RHSPromote = DAG.getSExtOrTrunc(RHS, DL, MVT::i8);
     SDValue Merge = DAG.getNode(LinxV5ISD::MERGE_CF, DL,
                          DAG.getVTList(MVT::i8, MVT::Other),
-                         Chain, RHSPromote, LHSPromote);
+                         Chain, LHSPromote, RHSPromote);
     Result = DAG.getSExtOrTrunc(Merge, DL, MVT::i1);
   } else {
     Result = DAG.getNode(LinxV5ISD::MERGE_CF, DL,
                           DAG.getVTList(Op.getValueType(), MVT::Other),
-                          Chain, RHS, LHS);
+                          Chain, LHS, RHS);
   }
 
   return Result;
@@ -1413,7 +1417,7 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =
-        DAG.getNode(LinxV5ISD::Copy2P, DL, MVT::Other, OldMask.getValue(1),
+        DAG.getNode(LinxV5ISD::Copy2PTerm, DL, MVT::Other, OldMask.getValue(1),
                      OldMask);
     return RestoreMask;
   } else {
@@ -2066,7 +2070,7 @@ void LinxV5TargetLowering::ReplaceNodeResults(SDNode *N,
                                     DAG.getVTList(MVT::i64, MVT::Other), Chain);
       SDValue NewMask = DAG.getNode(ISD::XOR, DL, MVT::i64, CurMask, OldMask);
       SDValue SetMask =
-          DAG.getNode(LinxV5ISD::Copy2P, DL,
+          DAG.getNode(LinxV5ISD::Copy2PTerm, DL,
                       MVT::Other,
                       CurMask.getValue(1),
                       NewMask);
@@ -2088,7 +2092,7 @@ void LinxV5TargetLowering::ReplaceNodeResults(SDNode *N,
                                     DAG.getVTList(MVT::i64, MVT::Other), Chain);
       SDValue NewMask = DAG.getNode(ISD::AND, DL, MVT::i64, NotBroken, OldMask);
       SDValue WriteMask =
-          DAG.getNode(LinxV5ISD::Copy2P, DL,
+          DAG.getNode(LinxV5ISD::Copy2PTerm, DL,
                       MVT::Other,
                       OldMask.getValue(1),
                       NewMask);
@@ -2101,10 +2105,50 @@ void LinxV5TargetLowering::ReplaceNodeResults(SDNode *N,
       return;
     }
     case Intrinsic::blkv_merge_cf: {
-      SDValue merge = lowerMergeCF(DL, SDValue(N, 0), DAG);
       SDValue Chain = N->getOperand(0);
+      SDValue LHS = N->getOperand(2);
+      SDValue RHS = N->getOperand(3);
+      if (LHS.getValueType() == MVT::i1) {
+        // For i1, lowerMergeCF promotes operands to i8, creates MERGE_CF{i8,
+        // Other}, then truncates back to i1. The truncation node only produces
+        // {i1} — it has no chain output. The original code pushed
+        // merge.getValue(1) on the truncation node, which asserts because
+        // truncation only has result #0. Fix: extract the chain from the
+        // MERGE_CF{i8} node directly, not from the truncation node.
+        SDValue LHSPromote = DAG.getSExtOrTrunc(LHS, DL, MVT::i8);
+        SDValue RHSPromote = DAG.getSExtOrTrunc(RHS, DL, MVT::i8);
+        SDValue Merge = DAG.getNode(LinxV5ISD::MERGE_CF, DL,
+                             DAG.getVTList(MVT::i8, MVT::Other),
+                             Chain, LHSPromote, RHSPromote);
+        SDValue Result = DAG.getSExtOrTrunc(Merge.getValue(0), DL, MVT::i1);
+        Results.push_back(Result);              // i1 truncated result
+        Results.push_back(Merge.getValue(1));   // chain from MERGE_CF node
+        return;
+      }
+      SDValue merge = lowerMergeCF(DL, SDValue(N, 0), DAG);
       Results.push_back(merge.getValue(0));
-      Results.push_back(Chain);
+      Results.push_back(merge.getValue(1));
+      return;
+    }
+    case Intrinsic::blkv_if_break: {
+      SDValue Chain = N->getOperand(0);
+      SDValue OldMask = DAG.getNode(LinxV5ISD::CopyP, DL,
+                                    DAG.getVTList(MVT::i64, MVT::Other),
+                                    Chain);
+      SDValue ExitCond = DAG.getZExtOrTrunc(N->getOperand(2), DL, MVT::i64);
+      SDValue Broken = DAG.getZExtOrTrunc(N->getOperand(3), DL, MVT::i64);
+      SDValue MergedExit =
+          DAG.getNode(LinxV5ISD::MERGE_PREDICATION, DL, MVT::Other,
+                      OldMask.getValue(1), ExitCond);
+      SDValue NewMask = DAG.getNode(LinxV5ISD::CopyP, DL,
+                                    DAG.getVTList(MVT::i64, MVT::Other),
+                                    MergedExit);
+      SDValue NextExit = DAG.getNode(ISD::OR, DL, MVT::i64, NewMask, Broken);
+      SDValue RestoreMask =
+          DAG.getNode(LinxV5ISD::Copy2P, DL, MVT::Other,
+                      NewMask.getValue(1), OldMask);
+      Results.push_back(NextExit);
+      Results.push_back(RestoreMask);
       return;
     }
     }
@@ -2117,26 +2161,6 @@ void LinxV5TargetLowering::ReplaceNodeResults(SDNode *N,
     switch (IntID) {
     default:
       report_fatal_error("unimplemented Intrinsic operand");
-    case Intrinsic::blkv_if_break: {
-      SDValue OldMask = DAG.getNode(LinxV5ISD::CopyP, DL,
-                                    DAG.getVTList(MVT::i64, MVT::Other),
-                                    DAG.getEntryNode());
-      SDValue ExitCond = DAG.getZExtOrTrunc(N->getOperand(0), DL, MVT::i64);
-      // TODO: since we can only reduce exitcond to P, the MERGE_PREDICATION is necessary
-      SDValue MergedExit =
-          DAG.getNode(LinxV5ISD::MERGE_PREDICATION, DL, MVT::Other,
-                      DAG.getEntryNode(), ExitCond);
-      SDValue NewMask = DAG.getNode(LinxV5ISD::CopyP, DL, DAG.getVTList(MVT::i64, MVT::Other), MergedExit);
-      SDValue NextExit =
-          DAG.getNode(ISD::OR, DL, MVT::i64, NewMask, N->getOperand(2));
-      SDValue RestoreMask =
-          DAG.getNode(LinxV5ISD::Copy2P, DL,
-                      MVT::Other,
-                      NewMask.getValue(1),
-                      OldMask);
-      Results.push_back(NextExit);
-      return;
-    }
     }
   }
   case ISD::SETCC: {
@@ -2570,6 +2594,78 @@ static MachineBasicBlock *emitLowerMergePred(MachineInstr &MI,
   return BB;
 }
 
+static bool isMergeCFPseudo(const MachineInstr &MI) {
+  return MI.getOpcode() == LinxV5::LinxV5PseudoMergeCF;
+}
+
+static bool isCopy2P(const MachineInstr &MI) {
+  return MI.getOpcode() == LinxV5::LinxV5PseudoCopy2P ||
+         MI.getOpcode() == LinxV5::LinxV5PseudoCopy2PTerm;
+}
+
+static void expandMergeCFPseudo(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator InsertPt,
+                                MachineInstr &MI, Register SavedP,
+                                const TargetInstrInfo &TII) {
+  BuildMI(MBB, InsertPt, MI.getDebugLoc(), TII.get(LinxV5::SIMT_PSEL),
+          MI.getOperand(0).getReg())
+      .add(MI.getOperand(1))
+      .addReg(SavedP)
+      .addImm(LinxV5Op::SIMT_INT_SRC_REG_TYPE_SD)
+      .add(MI.getOperand(2))
+      .add(MI.getOperand(3))
+      .add(MI.getOperand(4))
+      .add(MI.getOperand(5))
+      .add(MI.getOperand(6));
+}
+
+static MachineBasicBlock *emitLowerMergeCF(MachineInstr &MI,
+                                           MachineBasicBlock *BB) {
+  MachineFunction *MF = BB->getParent();
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  const auto *TII = MF->getSubtarget().getInstrInfo();
+
+  SmallVector<MachineInstr *, 4> Merges;
+  auto RestoreIt = BB->end();
+  auto It = MachineBasicBlock::iterator(MI);
+  auto End = BB->end();
+  for (; It != End; ++It) {
+    if (It->isDebugInstr())
+      continue;
+    if (isMergeCFPseudo(*It)) {
+      Merges.push_back(&*It);
+      continue;
+    }
+    if (isCopy2P(*It)) {
+      RestoreIt = It;
+      break;
+    }
+    if (It->modifiesRegister(LinxV5::SIMT_P,
+                             MF->getSubtarget<LinxV5Subtarget>()
+                                 .getRegisterInfo()))
+      break;
+  }
+
+  Register SavedP = MRI.createVirtualRegister(&LinxV5::SIMTCGSRegClass);
+  BuildMI(*BB, MI.getIterator(), MI.getDebugLoc(),
+          TII->get(LinxV5::LinxV5PseudoCopyFromP), SavedP);
+
+  if (RestoreIt != BB->end())
+    BB->splice(MI.getIterator(), BB, RestoreIt);
+
+  for (MachineInstr *Merge : Merges) {
+    expandMergeCFPseudo(*BB, Merge->getIterator(), *Merge, SavedP, *TII);
+    Merge->eraseFromParent();
+  }
+
+  if (Merges.empty()) {
+    expandMergeCFPseudo(*BB, MI.getIterator(), MI, SavedP, *TII);
+    MI.eraseFromParent();
+  }
+
+  return BB;
+}
+
 
 static MachineBasicBlock *
 emitLoweredReduce(MachineInstr &MI, MachineBasicBlock *BB, unsigned Opc) {
@@ -2593,6 +2689,8 @@ LinxV5TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
     return emitLoweredLoopSet(MI, BB);
   case LinxV5::LinxV5PseudoMergePred:
     return emitLowerMergePred(MI, BB);
+  case LinxV5::LinxV5PseudoMergeCF:
+    return emitLowerMergeCF(MI, BB);
   default:; // fall-thru
   }
 

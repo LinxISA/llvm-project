@@ -1,0 +1,38 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-simt-spill-fixup -verify-machineinstrs=false -o - %s | FileCheck %s
+
+--- |
+  define dso_local void @spill_across_read() #0 {
+    ret void
+  }
+
+  attributes #0 = { nounwind "target-features"="+simt,+relax" }
+...
+---
+name:            spill_across_read
+alignment:       2
+tracksRegLiveness: true
+legalized:       true
+regBankSelected: true
+selected:        true
+failedISel:      false
+frameInfo:
+  stackSize:       8
+  adjustsStack:    false
+  hasCalls:        false
+stack:
+  - { id: 0, type: spill-slot, offset: -8, size: 8, alignment: 8, stack-id: default, callee-saved-register: '', callee-saved-restored: true, debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body:             |
+  bb.0:
+    ; CHECK-LABEL: name: spill_across_read
+    ; CHECK: bb.0:
+    ; CHECK-NEXT: %0:simtcgs = COPY $simt_ta
+    ; CHECK-NEXT: PseudoVecSpill %0
+    ; CHECK-NEXT: LinxV5PseudoCopy2P %0
+    ; CHECK-NEXT: %1:simtcgs = COPY %0
+    ; CHECK-NEXT: PseudoRET
+    %0:simtcgs = COPY $simt_ta
+    LinxV5PseudoCopy2P %0, implicit-def $simt_p, implicit $simt_p
+    %1:simtcgs = COPY %0
+    PseudoVecSpill %0, 0, %stack.0, 0, implicit $simt_p :: (store (s8) into %stack.0)
+    PseudoRET
+...

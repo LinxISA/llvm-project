@@ -56,8 +56,9 @@ STATISTIC(NumRemats,   "Number of rematerialized defs for splitting");
 //===----------------------------------------------------------------------===//
 
 InsertPointAnalysis::InsertPointAnalysis(const LiveIntervals &lis,
+                                         const TargetInstrInfo &tii,
                                          unsigned BBNum)
-    : LIS(lis), LastInsertPoint(BBNum) {}
+    : LIS(lis), TII(tii), LastInsertPoint(BBNum) {}
 
 SlotIndex
 InsertPointAnalysis::computeLastInsertPoint(const LiveInterval &CurLI,
@@ -136,6 +137,16 @@ InsertPointAnalysis::computeLastInsertPoint(const LiveInterval &CurLI,
   return LIP.second;
 }
 
+SlotIndex InsertPointAnalysis::getFirstInsertPoint(MachineBasicBlock &MBB) {
+  SlotIndex Res = LIS.getMBBStartIdx(&MBB);
+  if (!MBB.empty()) {
+    MachineBasicBlock::iterator MII = TII.getFirstInsertionPoint(MBB);
+    if (MII != MBB.end())
+      Res = LIS.getInstructionIndex(*MII);
+  }
+  return Res;
+}
+
 MachineBasicBlock::iterator
 InsertPointAnalysis::getLastInsertPointIter(const LiveInterval &CurLI,
                                             MachineBasicBlock &MBB) {
@@ -152,7 +163,8 @@ InsertPointAnalysis::getLastInsertPointIter(const LiveInterval &CurLI,
 SplitAnalysis::SplitAnalysis(const VirtRegMap &vrm, const LiveIntervals &lis,
                              const MachineLoopInfo &mli)
     : MF(vrm.getMachineFunction()), VRM(vrm), LIS(lis), Loops(mli),
-      TII(*MF.getSubtarget().getInstrInfo()), IPA(lis, MF.getNumBlockIDs()) {}
+      TII(*MF.getSubtarget().getInstrInfo()),
+      IPA(lis, TII, MF.getNumBlockIDs()) {}
 
 void SplitAnalysis::clear() {
   UseSlots.clear();
@@ -797,7 +809,7 @@ SlotIndex SplitEditor::leaveIntvAtTop(MachineBasicBlock &MBB) {
   }
 
   VNInfo *VNI = defFromParent(0, ParentVNI, Start, MBB,
-                              MBB.SkipPHIsLabelsAndDebug(MBB.begin()));
+                              TII.getFirstInsertionPoint(MBB));
   RegAssign.insert(Start, VNI->def, OpenIdx);
   LLVM_DEBUG(dump());
   return VNI->def;

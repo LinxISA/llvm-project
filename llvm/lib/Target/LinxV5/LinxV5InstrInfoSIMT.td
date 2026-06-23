@@ -1035,6 +1035,9 @@ def LinxV5PseudoCopyFromP : Pseudo<(outs SIMTDstScalarReg:$Dst), (ins ), []>;
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [SIMT_P], Uses = [SIMT_P] in
 def LinxV5PseudoCopy2P : Pseudo<(outs), (ins SIMTSrcScalarReg:$SrcL), []>;
 
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [SIMT_P], Uses = [SIMT_P], isTerminator = 1 in
+def LinxV5PseudoCopy2PTerm : Pseudo<(outs), (ins SIMTSrcScalarReg:$SrcL), []>;
+
 let mayLoad = 0, mayStore = 0, Uses = [SIMT_P] in
 def LinxV5ImplicitDef : Pseudo<(outs SIMTDstVecReg:$Dst), (ins SIMTDstRegType:$DstType), []>;
 let mayLoad = 0, mayStore = 0, Uses = [SIMT_P] in
@@ -1050,6 +1053,7 @@ let Predicates = [isSIMT] in {
   def : Pat<(linxv5_merge_pred i64:$Src), (LinxV5PseudoMergePred i64:$Src)>;
   def : Pat<(i64 (linxv5_copy_p)), (i64 (LinxV5PseudoCopyFromP))>;
   def : Pat<(linxv5_copy2_p i64:$SrcL), (LinxV5PseudoCopy2P i64:$SrcL)>;
+  def : Pat<(linxv5_copy2_p_term i64:$SrcL), (LinxV5PseudoCopy2PTerm i64:$SrcL)>;
   def : Pat<(i64 (Divergent<linxv5_implicit_def>)), (LinxV5ImplicitDef (i8 SIMT_DstReg_D.Value))>;
   def : Pat<(i32 (Divergent<linxv5_implicit_def>)), (LinxV5ImplicitDef (i8 SIMT_DstReg_W.Value))>;
   def : Pat<(i16 (Divergent<linxv5_implicit_def>)), (LinxV5ImplicitDef (i8 SIMT_DstReg_H.Value))>;
@@ -2308,19 +2312,27 @@ def SIMT_PSEL: V5Inst_SIMT_A_C<0b001, 0b000, 0b111, 0b011, (outs SIMTDstVecReg:$
   let AsmString = "v.psel\t$SrcP$SrcPType, $SrcL$SrcLType, $SrcR$SrcRType$SIMTRegOp, $Dst$DstType";
 }
 
-multiclass SIMT_PSelect_Pat<ValueType Type, int DstType, int RType, V5Inst_SIMT Inst> {
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0,
+    usesCustomInserter = 1, Uses = [SIMT_P] in
+def LinxV5PseudoMergeCF : Pseudo<(outs SIMTDstVecReg:$Dst),
+      (ins SIMTDstRegType:$DstType,
+           SIMTSrcVecReg:$SrcL, SIMTIntSrcRegType:$SrcLType,
+           SIMTSrcVecReg:$SrcR, SIMTIntSrcRegType:$SrcRType,
+           SIMTRegOpAU:$SIMTRegOp), []>;
+
+multiclass SIMT_PSelect_Pat<ValueType Type, int DstType, int RType> {
   def : Pat<(Type (linxv5_merge_cf Type:$SrcL, Type:$SrcR)),
-            (Inst DstType, (i64 SIMT_P), (i8 SIMT_Int_SrcReg_SD.Value), Type:$SrcL, RType, Type:$SrcR, RType, 0)>;
+            (LinxV5PseudoMergeCF DstType, Type:$SrcL, RType, Type:$SrcR, RType, 0)>;
 }
 let Predicates = [isSIMT] in {
-  defm : SIMT_PSelect_Pat<i64,  SIMT_DstReg_D.Value, SIMT_Int_SrcReg_SD.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<i32,  SIMT_DstReg_W.Value, SIMT_Int_SrcReg_SW.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<i16,  SIMT_DstReg_H.Value, SIMT_Int_SrcReg_SH.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<i8,   SIMT_DstReg_B.Value, SIMT_Int_SrcReg_SB.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<f64,  SIMT_DstReg_D.Value, SIMT_Int_SrcReg_SD.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<f32,  SIMT_DstReg_W.Value, SIMT_Int_SrcReg_SW.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<f16,  SIMT_DstReg_H.Value, SIMT_Int_SrcReg_SH.Value, SIMT_PSEL>;
-  defm : SIMT_PSelect_Pat<bf16, SIMT_DstReg_H.Value, SIMT_Int_SrcReg_SH.Value, SIMT_PSEL>;
+  defm : SIMT_PSelect_Pat<i64,  SIMT_DstReg_D.Value, SIMT_Int_SrcReg_SD.Value>;
+  defm : SIMT_PSelect_Pat<i32,  SIMT_DstReg_W.Value, SIMT_Int_SrcReg_SW.Value>;
+  defm : SIMT_PSelect_Pat<i16,  SIMT_DstReg_H.Value, SIMT_Int_SrcReg_SH.Value>;
+  defm : SIMT_PSelect_Pat<i8,   SIMT_DstReg_B.Value, SIMT_Int_SrcReg_SB.Value>;
+  defm : SIMT_PSelect_Pat<f64,  SIMT_DstReg_D.Value, SIMT_Int_SrcReg_SD.Value>;
+  defm : SIMT_PSelect_Pat<f32,  SIMT_DstReg_W.Value, SIMT_Int_SrcReg_SW.Value>;
+  defm : SIMT_PSelect_Pat<f16,  SIMT_DstReg_H.Value, SIMT_Int_SrcReg_SH.Value>;
+  defm : SIMT_PSelect_Pat<bf16, SIMT_DstReg_H.Value, SIMT_Int_SrcReg_SH.Value>;
 }
 
 multiclass SIMT_Select_Pat<ValueType Type, int DstType, int RType, V5Inst_SIMT Inst> {

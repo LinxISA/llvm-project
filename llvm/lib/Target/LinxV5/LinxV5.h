@@ -77,6 +77,9 @@ void initializeLinxV5ClockhandsPostAllocPass(PassRegistry &);
 FunctionPass *createLinxV5TileFixupPass();
 void initializeLinxV5TileFixupPass(PassRegistry &);
 
+FunctionPass *createLinxV5SIMTSpillFixupPass();
+void initializeLinxV5SIMTSpillFixupPass(PassRegistry &);
+
 FunctionPass *createLinxV5StackSizeFixupPass();
 void initializeLinxV5StackSizeFixupPass(PassRegistry &);
 

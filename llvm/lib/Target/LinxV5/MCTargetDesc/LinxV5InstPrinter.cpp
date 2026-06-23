@@ -820,6 +820,12 @@ void LinxV5InstPrinter::printTileOPTMA(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPTMA::MSCATTER:
     O << "MSCATTER";
     break;
+  case LinxV5Op::TileOPTMA::MGATHER_MASK:
+    O << "MGATHER.MASK";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_MASK:
+    O << "MSCATTER.MASK";
+    break;
   default:
     O << Imm;
     break;

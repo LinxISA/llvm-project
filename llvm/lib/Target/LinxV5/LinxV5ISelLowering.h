@@ -91,6 +91,7 @@ enum NodeType : unsigned {
   MERGE_PREDICATION,
   CopyP,
   Copy2P,
+  Copy2PTerm,
   MERGE_CF,
   IMPLICIT_DEF,
 };

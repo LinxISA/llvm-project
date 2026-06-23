@@ -15,6 +15,7 @@
 #include "LinxV5.h"
 #include "LinxV5InstrInfo.h"
 #include "LinxV5TargetMachine.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -191,6 +192,21 @@ static bool isScalarReg(const TargetRegisterClass *RC) {
 static bool isRC(Register Reg, const TargetRegisterClass *RC,
                  const MachineRegisterInfo *MRI) {
   return Reg.isVirtual() ? MRI->getRegClass(Reg) == RC : RC->contains(Reg);
+}
+
+static DenseSet<Register>
+collectSuccessorLiveInsForRC(MachineBasicBlock &MBB,
+                             const TargetRegisterClass *RC,
+                             const MachineRegisterInfo *MRI) {
+  DenseSet<Register> LiveIns;
+  for (MachineBasicBlock *Succ : MBB.successors()) {
+    for (const auto &LiveIn : Succ->liveins()) {
+      Register Reg = LiveIn.PhysReg;
+      if (isRC(Reg, RC, MRI))
+        LiveIns.insert(Reg);
+    }
+  }
+  return LiveIns;
 }
 
 static void initSlot(TRCopyRange *Slot) {
@@ -1050,6 +1066,9 @@ LinxV5TRegToOffsetOpt::getLiveoutLimits(MachineBasicBlock &MBB,
   SmallVector<LinxRegOp> Res;
   if (MBB.succ_empty())
     return Res;
+  DenseSet<Register> SuccLiveIns = collectSuccessorLiveInsForRC(MBB, RC, MRI);
+  if (SuccLiveIns.empty())
+    return Res;
   if (GlobalSyncupMap.count(&MBB) == 0)
     return Res;
   SmallVector<MachineBasicBlock *> needSyncToMBBs;
@@ -1074,6 +1093,7 @@ LinxV5TRegToOffsetOpt::getLiveoutLimits(MachineBasicBlock &MBB,
                         });
   unsigned MaxSize = GlobalSlotsInfo[MaxSizeMBB][RC].LiveOuts.size();
   Res.assign(MaxSize, LinxRegOp());
+  bool HasLiveoutLimit = false;
   for (unsigned i = 0; i != MaxSize; ++i) {
     for (MachineBasicBlock *needSyncToMBB : needSyncToMBBs) {
       SmallVector<LinxRegOp> CurLiveouts(
@@ -1084,13 +1104,18 @@ LinxV5TRegToOffsetOpt::getLiveoutLimits(MachineBasicBlock &MBB,
       LinxRegOp ResRegOp = Res[MaxSize - 1 - i];
       if (CurRegOp.Reg == LinxV5::NoRegister)
         continue;
+      if (!SuccLiveIns.count(CurRegOp.Reg))
+        continue;
       if (ResRegOp.Reg == LinxV5::NoRegister)
         Res[MaxSize - 1 - i] = CurRegOp;
       else
         assert(ResRegOp == CurRegOp && "Liveouts sync-up error!");
+      HasLiveoutLimit = true;
     }
   }
 
+  if (!HasLiveoutLimit)
+    return SmallVector<LinxRegOp>();
   return Res;
 }
 

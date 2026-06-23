@@ -339,6 +339,8 @@ enum TileOPTMA {
   TMOV = 2,
   MGATHER = 4,
   MSCATTER = 5,
+  MGATHER_MASK = 6,
+  MSCATTER_MASK = 7,
   EMPTY_TileOPTMA
 };
 

@@ -41,6 +41,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5ClockhandsColoring.cpp
   LinxV5EmitHeader.cpp
   LinxV5TileFixup.cpp
+  LinxV5SIMTSpillFixup.cpp
   LinxV5StackSizeFixup.cpp
   LinxV5RegReuseMarker.cpp
   LinxV5AnnotateControlFlow.cpp

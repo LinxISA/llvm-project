@@ -2539,6 +2539,7 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
   unsigned TileOP;
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
+  bool ConsumedCompoundName = false;
   if (getLexer().getTok().is(AsmToken::EndOfStatement))
     return MatchOperand_Success;
 
@@ -2555,23 +2556,38 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
       getLexer().getKind() != AsmToken::Identifier)
     return MatchOperand_NoMatch;
 
-  StringRef Identifier = getLexer().getTok().getIdentifier();
-  TileOP = StringSwitch<unsigned>(Identifier.lower())
+  std::string Identifier = getLexer().getTok().getIdentifier().lower();
+  SmallVector<AsmToken, 2> PeekToks;
+  if (getLexer().peekTokens(PeekToks) == 2 && PeekToks[0].is(AsmToken::Dot) &&
+      (PeekToks[1].is(AsmToken::Identifier) ||
+       PeekToks[1].is(AsmToken::String))) {
+    Identifier += ".";
+    Identifier += PeekToks[1].getString().lower();
+    getParser().Lex(); // Eat base identifier token.
+    getParser().Lex(); // Eat '.'.
+    getParser().Lex(); // Eat suffix identifier token.
+    ConsumedCompoundName = true;
+  }
+
+  TileOP = StringSwitch<unsigned>(Identifier)
                .Case("tmov", TileOPTMA::TMOV)
                .Case("tload", TileOPTMA::TLOAD)
                .Case("tstore", TileOPTMA::TSTORE)
                .Case("mgather", TileOPTMA::MGATHER)
                .Case("mscatter", TileOPTMA::MSCATTER)
+               .Case("mgather.mask", TileOPTMA::MGATHER_MASK)
+               .Case("mscatter.mask", TileOPTMA::MSCATTER_MASK)
                .Default(TileOPTMA::EMPTY_TileOPTMA);
 
   if (TileOP == TileOPTMA::EMPTY_TileOPTMA) {
-    std::string OpName = Identifier.str();
+    std::string OpName = Identifier;
     std::string ErrorMsg = "TileOP '" + OpName + "' Not supported yet, please use numeric codes for entry.";
     Error(getLexer().getLoc(), ErrorMsg);
     return MatchOperand_ParseFail;
   }
 
-  getParser().Lex(); // Eat identifier token.
+  if (!ConsumedCompoundName)
+    getParser().Lex(); // Eat identifier token.
   const MCExpr *Res = MCConstantExpr::create(TileOP, getContext());
   Operands.push_back(LinxV5Operand::createImm(Res, S, E));
 

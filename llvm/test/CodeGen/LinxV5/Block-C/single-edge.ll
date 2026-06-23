@@ -1,5 +1,6 @@
 
 ; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true -print-after=linx-annotate-control-flow 2>&1 | FileCheck %s --dump-input always -vv --check-prefixes=CHECK
+; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true -stop-after=virtregrewriter -o - | FileCheck %s --check-prefix=VRR
 ; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true 2>&1 | FileCheck %s --dump-input always -vv --check-prefixes=ASM
 
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
@@ -27,7 +28,14 @@ target triple = "linx64v5-unknown-linux-musl"
 ; CHECK: if.end:
 ; CHECK: %merge = call float @llvm.blkv.merge.cf.f32
 ; CHECK: call void @llvm.blkv.end.cf.i64
-; ASM: v.psel  p, vn#1.sw, t#3.sw,     ->vt.w
+; VRR-LABEL: name: _Z14known_to_fail2u11matrix_typeILm16ELm16EfES_S_i
+; VRR-LABEL: bb.1.if.then:
+; VRR: %[[THEN:[0-9]+]]:simtcgvl = SIMT_Continuous_LW
+; VRR-LABEL: bb.2.if.end:
+; VRR: %[[SAVED:[0-9]+]]:simtcgs = LinxV5PseudoCopyFromP
+; VRR-NEXT: LinxV5PseudoCopy2PTerm
+; VRR-NEXT: {{%[0-9]+}}:simtcgvl = SIMT_PSEL {{.*}} %[[SAVED]], 4, %[[THEN]], 5, {{%[0-9]+}}, 5
+; ASM: v.psel{{.*}}vn#1.sw, t#{{[0-9]+}}.sw, {{.*}}->vt.w
 ; Function Attrs: mustprogress nofree noinline nosync nounwind willreturn
 define dso_local void @_Z14known_to_fail2u11matrix_typeILm16ELm16EfES_S_i(<256 x float> noundef %TA, <256 x float> noundef %TB, <256 x float> __out__ noundef %TC, i32 noundef signext %num) local_unnamed_addr #0 {
 entry:

@@ -32,6 +32,8 @@ public:
   bool isSchedulingBoundary(const MachineInstr &MI,
                             const MachineBasicBlock *MBB,
                             const MachineFunction &MF) const override;
+  MachineBasicBlock::iterator
+  getFirstInsertionPoint(MachineBasicBlock &MBB) const override;
 
   unsigned isLoadFromStackSlot(const MachineInstr &MI,
                                int &FrameIndex) const override;

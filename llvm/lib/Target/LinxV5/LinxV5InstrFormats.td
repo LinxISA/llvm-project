@@ -129,6 +129,7 @@ def SDT_LinxV5CopyP : SDTypeProfile<1, 0, []>;
 def SDT_LinxV5Copy2P : SDTypeProfile<0, 1, []>;
 def linxv5_copy_p: SDNode<"LinxV5ISD::CopyP", SDT_LinxV5CopyP, [SDNPHasChain]>;
 def linxv5_copy2_p: SDNode<"LinxV5ISD::Copy2P", SDT_LinxV5Copy2P, [SDNPHasChain]>;
+def linxv5_copy2_p_term: SDNode<"LinxV5ISD::Copy2PTerm", SDT_LinxV5Copy2P, [SDNPHasChain]>;
 
 def SDT_LinxV5MergeCF : SDTypeProfile<1, 2, []>;
 def linxv5_merge_cf: SDNode<"LinxV5ISD::MERGE_CF", SDT_LinxV5MergeCF, [SDNPHasChain]>;

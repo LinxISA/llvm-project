@@ -391,6 +391,13 @@ std::pair<PHINode *, PHINode *> LinxV5AnnotateControlFlow::splitPhiNode(llvm::PH
   else
     PHISecond->addIncoming(OriginPHI->getIncomingValue(1), OriginPHI->getIncomingBlock(0));
   PHISecond->addIncoming(OriginPHI->getIncomingValue(1), OriginPHI->getIncomingBlock(1));
+
+  bool FirstPredDominates =
+      DT->dominates(OriginPHI->getIncomingBlock(0), InsertBB);
+  bool SecondPredDominates =
+      DT->dominates(OriginPHI->getIncomingBlock(1), InsertBB);
+  if (FirstPredDominates && !SecondPredDominates)
+    return {PHISecond, PHIFirst};
   return {PHIFirst, PHISecond};
 }
 
