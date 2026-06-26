@@ -20,7 +20,8 @@
 ;     PSEL merges divergent values at convergence point
 
 ; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true -stop-after=linx-annotate-control-flow -o - 2>&1 | FileCheck %s --check-prefix=ANN
-; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true -stop-after=virtregrewriter -o - | FileCheck %s --check-prefix=VRR
+; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true -stop-after=virtregrewriter -o - 2>/dev/null | FileCheck %s --check-prefix=VRR
+; RUN: llc < %s -O2 -enable-all-vector-as-tilereg=true -o - 2>/dev/null | FileCheck %s --check-prefix=ASM
 
 target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
 target triple = "linx64v5-unknown-linux-musl"
@@ -159,7 +160,23 @@ for.end:
   ret void
 }
 
+; ASM checks verify the full assembly emission completes without the
+; VecReg→ScalarReg copy crash that previously occurred when blkv_merge_cf.i1's
+; i8 PSEL result was treated as uniform.
+
+; ASM-LABEL: simt_break:
+; ASM: v.psel
+; ASM: v.andi {{.*}} 1
+; ASM: v.cmp.nei {{.*}} ->p
+; ASM: L.BSTOP
+
+; ASM-LABEL: simt_continue:
+; ASM: v.cmp.nei {{.*}} ->p
+; ASM: v.psel
+; ASM: L.BSTOP
+
 attributes #0 = { argmemonly mustprogress nofree noinline nounwind "__mtc__" "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+relax" }
+
 
 !llvm.module.flags = !{!0, !1, !2, !3}
 !llvm.ident = !{!5}

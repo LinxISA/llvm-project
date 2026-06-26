@@ -613,6 +613,15 @@ bool LinxV5TargetLowering::isSDNodeSourceOfDivergenceImpl(
     }
     return false;
   }
+  case LinxV5ISD::MERGE_CF:
+    // MERGE_CF lowers to SIMT_PSEL, which selects SrcL for mask-active lanes and
+    // SrcR for inactive lanes. The result is divergent per-lane even when both
+    // operands are uniform (e.g., the i1 merge_cf used to compute a loop exit
+    // condition in blkv_if_break). Without this, an any_extend of the i8 PSEL
+    // result would match UniformUnaryOp and emit a scalar SIMT_ICVT_*_SCAR,
+    // creating an invalid VecReg→ScalarReg copy. Marking MERGE_CF as a source
+    // of divergence forces the vector (divergent) ICVT path.
+    return true;
   default:
     return false;
   }
