@@ -11705,6 +11705,10 @@ def err_linx_builtin_type_mismatch : Error<
 def err_linx_mtc_vec_called_regular : Error<
   "function '%0' is declared with mtc or vec and cannot be called as a regular function">;
 
+def err_linx_simt_disabled : Error<
+  "Linx SIMT execution model is disabled by '-mlinx-single-layer'; "
+  "the '%0' attribute is not allowed in single-layer (scalar-only) architecture">;
+
 def err_linx_lack_mtc_vec_called_kernel : Error<
   "The function '%0' lacks __vec__ or __mtc__ keyword modifier.">;
 

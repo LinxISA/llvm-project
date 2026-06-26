@@ -2248,6 +2248,7 @@ void Clang::AddLinxV5TargetArgs(const ArgList &Args,
 
   SetLinxV5SmallDataLimit(getToolChain(), Args, CmdArgs);
   Args.AddLastArg(CmdArgs, options::OPT_mlinda_global_var_as_thread_local);
+  Args.AddLastArg(CmdArgs, options::OPT_mlinx_single_layer);
 }
 
 void Clang::AddSparcTargetArgs(const ArgList &Args,

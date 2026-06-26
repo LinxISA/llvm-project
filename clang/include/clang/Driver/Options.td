@@ -3520,6 +3520,11 @@ def mlxbc : Flag<["-"], "mlxbc">, Group<m_linx_Features_Group>,
   HelpText<"enable cuda stype calling like `foo<<<dimx, dimy, dimz>>>(args)' in c/c++ language">,
   MarshallingInfoFlag<LangOpts<"LinxBlockC">>;
 
+def mlinx_single_layer : Flag<["-"], "mlinx-single-layer">, Group<m_linx_Features_Group>,
+  Flags<[CC1Option]>,
+  HelpText<"Enable Linx single-layer (scalar-only) architecture: reject __mtc__/__vec__ function attributes.">,
+  MarshallingInfoFlag<LangOpts<"LinxSingleLayer">>;
+
 def munaligned_access : Flag<["-"], "munaligned-access">, Group<m_arm_Features_Group>,
   HelpText<"Allow memory accesses to be unaligned (AArch32/AArch64 only)">;
 def mno_unaligned_access : Flag<["-"], "mno-unaligned-access">, Group<m_arm_Features_Group>,
