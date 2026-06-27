@@ -2487,7 +2487,7 @@ class SIMT_CVT_Base<RegisterOperand DstRegType, RegisterOperand SrcRegType, bits
 
   let SrcD = 0;
   let SrcDType = 0;
-  let SrcR = 0;
+  let SrcR = 0b1011111;
   let SrcRType = 0;
   let Inst{63-59} = TileDstType;
   let Inst{58-57} = RMode{1-0};
