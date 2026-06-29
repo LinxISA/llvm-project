@@ -272,6 +272,10 @@ LinxISATargetLowering::LinxISATargetLowering(const TargetMachine &TM,
 
   setOperationAction(ISD::FP_ROUND, MVT::f32, Custom);
   setOperationAction(ISD::FP_EXTEND, MVT::f64, Custom);
+  // Constant-pool combine may narrow an exactly representable f64 literal to
+  // an f32 extload. A Linx f32 load preserves raw low bits, so require an
+  // explicit FCVT.fs2fd instead of selecting the load as an f64 value.
+  setLoadExtAction(ISD::EXTLOAD, MVT::f64, MVT::f32, Expand);
   setOperationAction(ISD::FMA, MVT::f32, Expand);
   setOperationAction(ISD::FMA, MVT::f64, Expand);
 
