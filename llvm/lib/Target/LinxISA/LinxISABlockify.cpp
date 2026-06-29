@@ -3292,7 +3292,7 @@ public:
 	          if (&MI == IgnoreMI)
 	            continue;
 	          for (const MachineOperand &MO : MI.operands()) {
-	            if (!MO.isReg() || MO.isImplicit() || MO.isDef())
+	            if (!MO.isReg() || MO.isDef())
 	              continue;
 	            if (MO.getReg() != Reg)
 	              continue;
@@ -4626,10 +4626,35 @@ public:
 	        }
 		      }
 
-		      // Peephole after BlockISA exit lowering (but before inserting block
-		      // markers and T/U remapping): fold a word zero-extend shift-pair
-		      // feeding a compare against zero into a SrcR `.uw` conversion
-		      // modifier. The ISA only supports conversions on the right operand,
+	      auto isAbiTransferReg = [&](Register Reg) -> bool {
+	        switch (Reg) {
+	        case LinxISA::R2:
+	        case LinxISA::R3:
+	        case LinxISA::R4:
+	        case LinxISA::R5:
+	        case LinxISA::R6:
+	        case LinxISA::R7:
+	        case LinxISA::R8:
+	        case LinxISA::R9:
+	          return true;
+	        default:
+	          return false;
+	        }
+	      };
+
+	      const bool ExitMayUseAbiRegs =
+	          Kind == ExitKind::Call || Kind == ExitKind::ICall ||
+	          Kind == ExitKind::Ret ||
+	          ((Kind == ExitKind::Direct || Kind == ExitKind::Ind) && CallTargetOp);
+
+	      auto isImplicitAbiUseAtExit = [&](Register Reg) -> bool {
+	        return ExitMayUseAbiRegs && isAbiTransferReg(Reg);
+	      };
+
+	      // Peephole after BlockISA exit lowering (but before inserting block
+	      // markers and T/U remapping): fold a word zero-extend shift-pair
+	      // feeding a compare against zero into a SrcR `.uw` conversion
+	      // modifier. The ISA only supports conversions on the right operand,
 		      // so we flip operands when needed:
 		      //
 		      //   tmp1 = sll x, 32
@@ -5200,7 +5225,8 @@ public:
 	          }
 
 	          // The shifted temporary must be single-use.
-	          if (!hasSingleNonDbgUseInMBB(ShDst, &ShrMI, &ShiftMI)) {
+	          if (isImplicitAbiUseAtExit(ShDst) ||
+	              !hasSingleNonDbgUseInMBB(ShDst, &ShrMI, &ShiftMI)) {
 	            ++It;
 	            continue;
 	          }
@@ -5422,7 +5448,8 @@ public:
 
         // Ignore ShiftMI itself: register allocation may legally coalesce
         // `tmp` with `x`, yielding an in-place shift (e.g. `r3 = slli r3, k`).
-        if (!hasSingleNonDbgUseInMBB(ShDst, &BinMI, &ShiftMI)) {
+	        if (isImplicitAbiUseAtExit(ShDst) ||
+	            !hasSingleNonDbgUseInMBB(ShDst, &BinMI, &ShiftMI)) {
           ++It;
           continue;
         }

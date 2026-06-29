@@ -1,0 +1,45 @@
+# RUN: llc -mtriple=linx64 -run-pass=linx-blockify -o - %s | FileCheck %s
+
+# A call pseudo models ABI argument registers as implicit uses. The shifted
+# value in $r4 is both an explicit ADD operand and the call's third argument;
+# blockify must not fold the shift into ADDrr_SH and erase the $r4 definition.
+
+# CHECK-LABEL: name: call_implicit_shift_use
+# CHECK: BSTART_STD_CALL &sink
+# CHECK: $r4 = SLLIri killed $r2, 3
+# CHECK: $r2 = ADDrr $r3, $r4
+
+--- |
+  target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
+  target triple = "linx64-unknown-unknown-elf"
+
+  declare void @sink(ptr, ptr, i32, i64)
+
+  define void @call_implicit_shift_use() {
+  entry:
+    ret void
+  }
+...
+---
+name:            call_implicit_shift_use
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+frameInfo:
+  stackSize:       0
+  maxAlignment:    1
+  hasCalls:        true
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $r1
+
+    $r3 = LDI $r1, 10
+    $r2 = LDI $r1, 9
+    $r4 = SLLIri killed $r2, 3
+    $r2 = ADDrr $r3, $r4
+    $r5 = ADDIri $r0, 7
+    PSEUDO_CALL &sink, csr_linx, implicit-def dead $r10, implicit $r1, implicit $r2, implicit $r3, implicit $r4, implicit $r5, implicit-def $r1
+...
