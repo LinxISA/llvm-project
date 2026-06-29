@@ -217,7 +217,8 @@ void LinxISAFrameLowering::emitEpilogue(MachineFunction &MF,
   for (MachineInstr &MI : llvm::reverse(MBB)) {
     if (MI.isDebugInstr() || MI.isCFIInstruction())
       continue;
-    if (MI.getOpcode() == LinxISA::PSEUDO_TAILCALL) {
+    if (MI.getOpcode() == LinxISA::PSEUDO_TAILCALL ||
+        MI.getOpcode() == LinxISA::PSEUDO_TAILICALL) {
       TailCallMI = &MI;
       break;
     }
@@ -234,7 +235,7 @@ void LinxISAFrameLowering::emitEpilogue(MachineFunction &MF,
       if (It->getOpcode() == LinxISA::PSEUDO_RET)
         continue;
       report_fatal_error(
-          "Linx: musttail block contains non-return instructions after PSEUDO_CALL");
+          "Linx: musttail block contains non-return instructions after tail call");
     }
 
     MachineBasicBlock *FExitBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());

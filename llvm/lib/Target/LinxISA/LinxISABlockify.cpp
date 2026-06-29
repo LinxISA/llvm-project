@@ -1818,7 +1818,8 @@ public:
       for (MachineInstr &MI : *MBB) {
         if (MI.isDebugInstr())
           continue;
-        if (MI.getOpcode() != LinxISA::PSEUDO_CALL)
+        if (MI.getOpcode() != LinxISA::PSEUDO_CALL &&
+            MI.getOpcode() != LinxISA::PSEUDO_ICALL)
           continue;
 
         auto Next = std::next(MI.getIterator());
@@ -3731,6 +3732,14 @@ public:
 	          Changed = true;
 	          break;
 	        }
+        case LinxISA::PSEUDO_TAILICALL: {
+          CallTargetOp = Last->getOperand(0);
+          Kind = ExitKind::Ind;
+          ICallSetcTgtReg = CallTargetOp->getReg();
+          Last->eraseFromParent();
+          Changed = true;
+          break;
+        }
 		        case LinxISA::PSEUDO_CALL: {
 		          CallTargetOp = Last->getOperand(0);
 		          if (CallTargetOp->isReg()) {
@@ -3747,6 +3756,20 @@ public:
            * A true noreturn callee should never consume the return target, but a
            * concrete marker keeps the header encoding and emulator checks valid.
           */
+          if (!MBB.succ_empty())
+            ReturnBB = *MBB.succ_begin();
+          if (ReturnBB && DecoupledBodyBBs.contains(ReturnBB))
+            ReturnBB = nullptr;
+          if (!ReturnBB)
+            ReturnBB = &MBB;
+          Last->eraseFromParent();
+          Changed = true;
+          break;
+        }
+        case LinxISA::PSEUDO_ICALL: {
+          CallTargetOp = Last->getOperand(0);
+          Kind = ExitKind::ICall;
+          ICallSetcTgtReg = CallTargetOp->getReg();
           if (!MBB.succ_empty())
             ReturnBB = *MBB.succ_begin();
           if (ReturnBB && DecoupledBodyBBs.contains(ReturnBB))

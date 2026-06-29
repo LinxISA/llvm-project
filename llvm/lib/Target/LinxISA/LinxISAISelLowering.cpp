@@ -1733,6 +1733,7 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   // Direct calls: GlobalAddress/ExternalSymbol to target variants.
   const TargetMachine &TM = getTargetMachine();
+  bool IsIndirectCall = false;
   if (auto *G = dyn_cast<GlobalAddressSDNode>(Callee)) {
     const GlobalValue *GV = G->getGlobal();
     const unsigned Flags = !TM.shouldAssumeDSOLocal(GV) ? LinxII::MO_PLT : 0;
@@ -1743,6 +1744,7 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
     // Indirect call: Callee is a value (register) computed by the program.
     // The BlockISA lowering pass will translate this into an ICALL block using
     // SETC.TGT to select the target.
+    IsIndirectCall = true;
     if (Callee.getValueType() != PtrVT) {
       Callee = DAG.getNode(ISD::ZERO_EXTEND, DL, PtrVT, Callee);
     }
@@ -1764,7 +1766,9 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
   if (UseTailCall)
     DAG.getMachineFunction().getFrameInfo().setHasTailCall();
   const unsigned CallOpc =
-      UseTailCall ? LinxISA::PSEUDO_TAILCALL : LinxISA::PSEUDO_CALL;
+      UseTailCall
+          ? (IsIndirectCall ? LinxISA::PSEUDO_TAILICALL : LinxISA::PSEUDO_TAILCALL)
+          : (IsIndirectCall ? LinxISA::PSEUDO_ICALL : LinxISA::PSEUDO_CALL);
   MachineSDNode *Call = DAG.getMachineNode(CallOpc, DL, NodeTys, Ops);
   Chain = SDValue(Call, 0);
   InGlue = SDValue(Call, 1);

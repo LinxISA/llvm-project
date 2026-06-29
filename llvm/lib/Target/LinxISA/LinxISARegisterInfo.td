@@ -90,6 +90,12 @@ def TILE31 : LinxISAReg<31, "tile31">;
 def GPR_Arch : RegisterClass<"Linx", [i64, i32, f64, f32], 64,
     (sequence "R%i", 0, 23)>;
 
+// Indirect call targets must not occupy ABI argument registers. CALL/ICALL
+// block headers consume a0-a7 implicitly for arguments, so placing the callee
+// in a0 can overwrite argument 0 at the transfer boundary.
+def GPR_CallTarget : RegisterClass<"Linx", [i64, i32], 64,
+    (sequence "R%i", 20, 23)>;
+
 // GPR: Full GPR class including T/U queue read-only references.
 // The T/U queue registers can be used as source operands to read from the queue.
 def GPR : RegisterClass<"Linx", [i64, i32, f64, f32], 64,
