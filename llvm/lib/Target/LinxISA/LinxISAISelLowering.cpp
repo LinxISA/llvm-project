@@ -1676,11 +1676,15 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
                  *DAG.getContext());
   const bool Is64 = DAG.getDataLayout().getPointerSizeInBits() == 64;
   CCInfo.AnalyzeCallOperands(CLI.Outs, Is64 ? CC_Linx64 : CC_Linx32);
+  MachineFunction &MF = DAG.getMachineFunction();
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  EVT PtrVT = getPointerTy(DAG.getDataLayout());
 
   unsigned NumBytes = CCInfo.getStackSize();
   // Keep the stack aligned at call boundaries.
   NumBytes = alignTo(NumBytes, 16u);
   const bool UseTailCall = CLI.IsTailCall;
+  SmallVector<SDValue, 8> ByValArgs;
   if (UseTailCall) {
     if (NumBytes != 0) {
       report_fatal_error("Linx: musttail with stack arguments is not supported");
@@ -1688,20 +1692,47 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
     if (IsVarArg) {
       report_fatal_error("Linx: musttail varargs calls are not supported");
     }
+    for (const ISD::OutputArg &Out : CLI.Outs) {
+      if (Out.Flags.isByVal())
+        report_fatal_error("Linx: musttail with byval arguments is not supported");
+    }
   } else {
+    // A byval operand is a pointer to caller storage; copy it before passing
+    // the callee's aggregate pointer so callee-local mutations cannot alias it.
+    for (unsigned i = 0, e = CLI.Outs.size(); i != e; ++i) {
+      ISD::ArgFlagsTy Flags = CLI.Outs[i].Flags;
+      if (!Flags.isByVal())
+        continue;
+
+      unsigned Size = Flags.getByValSize();
+      Align Alignment = Flags.getNonZeroByValAlign();
+      int FI = MFI.CreateStackObject(Size, Alignment, /*isSS=*/false);
+      SDValue FIPtr = DAG.getFrameIndex(FI, PtrVT);
+      SDValue SizeNode = DAG.getConstant(Size, DL, PtrVT);
+
+      Chain = DAG.getMemcpy(Chain, DL, FIPtr, CLI.OutVals[i], SizeNode,
+                            Alignment, /*IsVolatile=*/false,
+                            /*AlwaysInline=*/false, /*CI=*/nullptr,
+                            std::nullopt, MachinePointerInfo(),
+                            MachinePointerInfo());
+      ByValArgs.push_back(FIPtr);
+    }
+
     Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
   }
 
   SmallVector<std::pair<unsigned, SDValue>, 8> RegsToPass;
   SmallVector<SDValue, 16> MemOpChains;
   SDValue StackPtr;
-  EVT PtrVT = getPointerTy(DAG.getDataLayout());
 
-  for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i) {
+  for (unsigned i = 0, j = 0, e = ArgLocs.size(); i != e; ++i) {
     const CCValAssign &VA = ArgLocs[i];
     SDValue Arg = CLI.OutVals[i];
+    ISD::ArgFlagsTy Flags = CLI.Outs[i].Flags;
 
     Arg = convertValVTToLocVT(Arg, VA.getLocVT(), VA.getLocInfo(), DL, DAG);
+    if (Flags.isByVal())
+      Arg = ByValArgs[j++];
 
     if (VA.isRegLoc()) {
       RegsToPass.push_back({VA.getLocReg(), Arg});
