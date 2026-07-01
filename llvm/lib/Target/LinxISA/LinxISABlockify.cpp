@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -322,6 +323,18 @@ static bool isMarkerInstr(const MachineInstr &MI) {
   default:
     return false;
   }
+}
+
+static bool inlineAsmHasExplicitBlockBoundary(const MachineInstr &MI) {
+  if (!MI.isInlineAsm() ||
+      MI.getNumOperands() <= InlineAsm::MIOp_AsmString ||
+      !MI.getOperand(InlineAsm::MIOp_AsmString).isSymbol())
+    return false;
+
+  StringRef Asm(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName());
+  return Asm.contains_insensitive("bstop") ||
+         Asm.contains_insensitive("bstart") ||
+         Asm.contains_insensitive("acrc");
 }
 
 static bool isSimtBodyHeaderOpcode(unsigned Opc) {
@@ -1744,6 +1757,37 @@ public:
       MBB.addSuccessor(TailBB);
       return TailBB;
     };
+
+    // Inline asm used for low-level syscall/runtime bring-up can carry explicit
+    // BlockISA boundaries (ACRC/C.BSTOP/C.BSTART). Keep those snippets from
+    // being absorbed into a later CALL/ICALL block whose header is inserted at
+    // the start of the MachineBasicBlock.
+    SmallVector<MachineBasicBlock *, 32> InlineAsmBoundarySplitWorklist;
+    InlineAsmBoundarySplitWorklist.reserve(MF.size());
+    for (MachineBasicBlock &MBB : MF)
+      InlineAsmBoundarySplitWorklist.push_back(&MBB);
+
+    while (!InlineAsmBoundarySplitWorklist.empty()) {
+      MachineBasicBlock *MBB = InlineAsmBoundarySplitWorklist.pop_back_val();
+      for (MachineInstr &MI : *MBB) {
+        if (MI.isDebugInstr() || MI.isCFIInstruction())
+          continue;
+        if (!inlineAsmHasExplicitBlockBoundary(MI))
+          continue;
+
+        auto Next = std::next(MI.getIterator());
+        while (Next != MBB->end() &&
+               (Next->isDebugInstr() || Next->isCFIInstruction()))
+          ++Next;
+        if (Next == MBB->end())
+          break;
+
+        MachineBasicBlock *ContBB = splitAfterInstr(*MBB, MI);
+        InlineAsmBoundarySplitWorklist.push_back(ContBB);
+        Changed = true;
+        break;
+      }
+    }
 
     // Ensure call-transfer pseudos end a block. This matches BlockISA: call
     // headers are block exits, and musttail transfer pseudos are terminators.
