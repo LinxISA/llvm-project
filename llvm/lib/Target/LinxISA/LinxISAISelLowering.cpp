@@ -737,9 +737,9 @@ SDValue LinxISATargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const 
   SDValue TrueVal = Op.getOperand(1);
   SDValue FalseVal = Op.getOperand(2);
 
-  // Lower to the ISA conditional select:
-  //   rd = csel pred, true, false
-  // with pred as a 0/1 integer value.
+  // Lower to the ISA conditional select. CSEL itself selects SrcL when the
+  // predicate is nonzero; MC lowering maps this machine node's true/false
+  // operands onto SrcL/SrcR.
   const EVT PredVT = (VT.getScalarSizeInBits() == 32) ? MVT::i32 : MVT::i64;
   SDValue Pred = Cond;
   if (Pred.getValueType() != PredVT) {

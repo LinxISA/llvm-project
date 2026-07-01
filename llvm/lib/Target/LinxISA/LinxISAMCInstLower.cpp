@@ -2500,14 +2500,14 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::CSELrrr: {
     // `CSEL SrcP, SrcL, SrcR<.neg>, ->{t, u, Rd}`
-    // LinxISA csel semantics: if pred != 0, use SrcR (true case), else SrcL (false)
+    // LinxISA csel semantics: if pred != 0, use SrcL (true case), else SrcR (false)
     // LLVM CSELrrr operands: (rd, pred, src_true, src_false)
-    // Map: SrcL = false case, SrcR = true case, SrcP = predicate
+    // Map: SrcL = true case, SrcR = false case, SrcP = predicate
     OutMI.setOpcode(getSpecOpcode("CSEL", /*LengthBits=*/32, /*Fields=*/5));
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
-    OutMI.addOperand(MCOperand::createImm(R(3))); // SrcL = false case
+    OutMI.addOperand(MCOperand::createImm(R(2))); // SrcL = true case
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcP = predicate
-    OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR = true case
+    OutMI.addOperand(MCOperand::createImm(R(3))); // SrcR = false case
     OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
     return;
   }
