@@ -17,11 +17,16 @@ entry:
 }
 
 ; CHECK-LABEL: fixp_tinsert:
+; CHECK: BSTART.TLOAD
+; CHECK: B.OTA{{[[:space:]]+}}->t#1<31>, last, 0
+; CHECK: BSTART.TLOAD
+; CHECK: B.OTA{{[[:space:]]+}}->t#2<31>, last, 0
 ; CHECK: BSTART.TINSERT
 ; CHECK: B.META
-; CHECK: B.ITP
-; CHECK: B.OTA
+; CHECK: B.ITP{{[[:space:]]+}}[t#1, t#2], 0
+; CHECK: B.OTA{{[[:space:]]+}}->t#1<31>, last, 0
 ; CHECK: BSTART.TSTORE
+; CHECK: B.ITP{{[[:space:]]+}}[t#1, TZERO], last, 0
 
 define void @fixp_tinsert_const_meta(ptr %base, ptr %src, ptr %dst) {
 entry:
@@ -33,11 +38,16 @@ entry:
 }
 
 ; CHECK-LABEL: fixp_tinsert_const_meta:
+; CHECK: BSTART.TLOAD
+; CHECK: B.OTA{{[[:space:]]+}}->t#1<31>, last, 0
+; CHECK: BSTART.TLOAD
+; CHECK: B.OTA{{[[:space:]]+}}->t#2<31>, last, 0
 ; CHECK: BSTART.TINSERT
 ; CHECK: B.META
-; CHECK: B.ITP
-; CHECK: B.OTA
+; CHECK: B.ITP{{[[:space:]]+}}[t#1, t#2], 0
+; CHECK: B.OTA{{[[:space:]]+}}->t#1<31>, last, 0
 ; CHECK: BSTART.TSTORE
+; CHECK: B.ITP{{[[:space:]]+}}[t#1, TZERO], last, 0
 
 define void @fixp_ttrans(ptr %src, ptr %tmp, ptr %dst) {
 entry:
@@ -49,7 +59,12 @@ entry:
 }
 
 ; CHECK-LABEL: fixp_ttrans:
+; CHECK: BSTART.TLOAD
+; CHECK: B.OTA{{[[:space:]]+}}->t#1<31>, last, 0
+; CHECK: BSTART.TLOAD
+; CHECK: B.OTA{{[[:space:]]+}}->t#2<31>, last, 0
 ; CHECK: BSTART.TTRANS
-; CHECK: B.ITP
-; CHECK: B.OTA
+; CHECK: B.ITP{{[[:space:]]+}}[t#1, t#2], 0
+; CHECK: B.OTA{{[[:space:]]+}}->t#1<31>, last, 0
 ; CHECK: BSTART.TSTORE
+; CHECK: B.ITP{{[[:space:]]+}}[t#1, TZERO], last, 0
