@@ -170,6 +170,10 @@ static StringRef cubeAliasMnemonic(unsigned Func) {
     return "BSTART.TGEMV";
   case 1:
     return "BSTART.TMATMUL";
+  case 2:
+    return "BSTART.TMATMUL.ACC";
+  case 8:
+    return "BSTART.ACCCVT";
   default:
     return StringRef();
   }

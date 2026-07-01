@@ -313,11 +313,14 @@ static std::optional<unsigned> parseCubeFunctionKeyword(StringRef Name) {
       .Case("TGEMV.MX.ACC", 0u)
       .Case("TGEMV.MX.BIAS", 0u)
       .Case("TMATMUL", 1u)
-      .Case("TMATMUL.ACC", 1u)
+      .Case("MAMULB", 1u)
+      .Case("TMATMUL.ACC", 2u)
+      .Case("MAMULB.ACC", 2u)
       .Case("TMATMUL.BIAS", 1u)
       .Case("TMATMUL.MX", 1u)
-      .Case("TMATMUL.MX.ACC", 1u)
+      .Case("TMATMUL.MX.ACC", 2u)
       .Case("TMATMUL.MX.BIAS", 1u)
+      .Case("ACCCVT", 8u)
       .Default(std::nullopt);
 }
 
@@ -462,11 +465,12 @@ static std::optional<TileBlockAlias> parseTileBlockAliasMnemonic(StringRef Name)
       .Case("BSTART.TGEMV.MX.ACC", TileBlockAlias{"BSTART.CUBE", 0u})
       .Case("BSTART.TGEMV.MX.BIAS", TileBlockAlias{"BSTART.CUBE", 0u})
       .Case("BSTART.TMATMUL", TileBlockAlias{"BSTART.CUBE", 1u})
-      .Case("BSTART.TMATMUL.ACC", TileBlockAlias{"BSTART.CUBE", 1u})
+      .Case("BSTART.TMATMUL.ACC", TileBlockAlias{"BSTART.CUBE", 2u})
       .Case("BSTART.TMATMUL.BIAS", TileBlockAlias{"BSTART.CUBE", 1u})
       .Case("BSTART.TMATMUL.MX", TileBlockAlias{"BSTART.CUBE", 1u})
-      .Case("BSTART.TMATMUL.MX.ACC", TileBlockAlias{"BSTART.CUBE", 1u})
+      .Case("BSTART.TMATMUL.MX.ACC", TileBlockAlias{"BSTART.CUBE", 2u})
       .Case("BSTART.TMATMUL.MX.BIAS", TileBlockAlias{"BSTART.CUBE", 1u})
+      .Case("BSTART.ACCCVT", TileBlockAlias{"BSTART.CUBE", 8u})
       .Case("BSTART.TDEQUANT", TileBlockAlias{"BSTART.FIXP", 0u})
       .Case("BSTART.TEXTRACT", TileBlockAlias{"BSTART.FIXP", 1u})
       .Case("BSTART.TEXTRACT_FP", TileBlockAlias{"BSTART.FIXP", 1u})
@@ -3333,7 +3337,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     } else if (IsBStartCUBE) {
       if (!require(FuncVal.has_value(),
                    "Function must be a constant or one of "
-                   "{TGEMV,TMATMUL,TGEMV.MX,TMATMUL.MX}"))
+                   "{TGEMV,TMATMUL,MAMULB,TMATMUL.ACC,MAMULB.ACC,"
+                   "TGEMV.MX,TMATMUL.MX}"))
         return false;
     } else if (IsBStartFIXP) {
       if (!require(FuncVal.has_value(),

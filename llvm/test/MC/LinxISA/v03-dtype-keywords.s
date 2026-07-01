@@ -23,5 +23,5 @@ test_v03_dtype_keywords:
 # CHECK: BSTART.ACCCVT{{[[:space:]]+}}BF16
 # CHECK: BSTART.TADD{{[[:space:]]+}}FP4
 # CHECK: BSTART.TEPL{{[[:space:]]+}}511, FPL4
-# CHECK: BSTART.TEPL{{[[:space:]]+}}12, UINT4
+# CHECK: BSTART.TCOLARGMIN{{[[:space:]]+}}UINT4
 # CHECK: C.BSTOP
