@@ -33,6 +33,11 @@
 #define memcpy __builtin_memcpy
 #define memcmp __builtin_memcmp
 
+#if defined(__linx__) || defined(__LINX__) || defined(__linxisa__) ||          \
+    defined(__LINXISA__)
+#define CRT_LINX_NO_C11_ATOMIC_BUILTINS 1
+#endif
+
 // Clang objects if you redefine a builtin.  This little hack allows us to
 // define a function with the same name as an intrinsic.
 #pragma redefine_extname __atomic_load_c SYMBOL_NAME(__atomic_load)
@@ -101,6 +106,15 @@ __inline static void unlock(Lock *l) { OSSpinLockUnlock(l); }
 __inline static void lock(Lock *l) { OSSpinLockLock(l); }
 static Lock locks[SPINLOCK_COUNT]; // initialized to OS_SPINLOCK_INIT which is 0
 
+#elif CRT_LINX_NO_C11_ATOMIC_BUILTINS
+// Linx currently lowers C11 atomic operations back to these public
+// compiler-rt entry points.  Keep this runtime from recursing into itself
+// until the backend has native atomic lowering.
+typedef unsigned char Lock;
+__inline static void unlock(Lock *l) { (void)l; }
+__inline static void lock(Lock *l) { (void)l; }
+static Lock locks[SPINLOCK_COUNT];
+
 #else
 _Static_assert(__atomic_always_lock_free(sizeof(uintptr_t), 0),
                "Implementation assumes lock-free pointer-size cmpxchg");
@@ -147,6 +161,19 @@ static __inline Lock *lock_for_pointer(void *ptr) {
 #define IS_LOCK_FREE_4(p) ATOMIC_ALWAYS_LOCK_FREE_OR_ALIGNED_LOCK_FREE(4, p)
 #define IS_LOCK_FREE_8(p) ATOMIC_ALWAYS_LOCK_FREE_OR_ALIGNED_LOCK_FREE(8, p)
 #define IS_LOCK_FREE_16(p) ATOMIC_ALWAYS_LOCK_FREE_OR_ALIGNED_LOCK_FREE(16, p)
+
+#if CRT_LINX_NO_C11_ATOMIC_BUILTINS
+#undef IS_LOCK_FREE_1
+#undef IS_LOCK_FREE_2
+#undef IS_LOCK_FREE_4
+#undef IS_LOCK_FREE_8
+#undef IS_LOCK_FREE_16
+#define IS_LOCK_FREE_1(p) false
+#define IS_LOCK_FREE_2(p) false
+#define IS_LOCK_FREE_4(p) false
+#define IS_LOCK_FREE_8(p) false
+#define IS_LOCK_FREE_16(p) false
+#endif
 
 /// Macro that calls the compiler-generated lock-free versions of functions
 /// when they exist.
