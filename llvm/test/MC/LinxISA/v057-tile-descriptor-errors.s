@@ -3,6 +3,6 @@
 	.text
 bad_v057_tzero_destination:
 	BSTART.TLOAD FP16
-	B.OTA ->TZERO<0>, last, 0
+	B.OTA ->T0<0>, last, 0
 
-# CHECK: error: B.OTA destination cannot be TZERO
+# CHECK: error: B.OTA destination cannot be T0/TZERO
