@@ -30,6 +30,21 @@ tile_i32 test_tile_tmov(tile_i32 src) {
 // CHECK-LABEL: define{{.*}} <1024 x i32> @test_tile_tmov
 // CHECK: call <1024 x i32> @llvm.linx.tile.tmov.legacy
 
+tile_i32 test_tile_tinsert(tile_i32 dst, tile_i32 src, long long meta) {
+  return __builtin_linx_tile_tinsert(dst, src, 8u, 1u, 16u, 32u, 16u, 8u,
+                                     meta);
+}
+
+// CHECK-LABEL: define{{.*}} <1024 x i32> @test_tile_tinsert
+// CHECK: call <1024 x i32> @llvm.linx.tile.tinsert.legacy
+
+tile_i32 test_tile_ttrans(tile_i32 src, tile_i32 tmp) {
+  return __builtin_linx_tile_ttrans(src, tmp, 8u, 1u, 32u, 16u, 16u, 32u);
+}
+
+// CHECK-LABEL: define{{.*}} <1024 x i32> @test_tile_ttrans
+// CHECK: call <1024 x i32> @llvm.linx.tile.ttrans.legacy
+
 tile_i32 test_cube_mamulb(tile_i32 a, tile_i32 b) {
   return __builtin_linx_cube_mamulb(a, b, 4u, 4u, 4u);
 }

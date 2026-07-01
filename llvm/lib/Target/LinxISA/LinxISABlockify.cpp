@@ -119,54 +119,7 @@ static void validateTileOpcode(int64_t TileOpcode, StringRef Context) {
 }
 
 static bool isWhitelistedTEPLTileOpcode(int64_t TileOpcode) {
-  switch (TileOpcode & 0x3ff) {
-  case 0x000:
-  case 0x001:
-  case 0x002:
-  case 0x003:
-  case 0x004:
-  case 0x005:
-  case 0x006:
-  case 0x007:
-  case 0x008:
-  case 0x009:
-  case 0x00a:
-  case 0x00b:
-  case 0x00c:
-  case 0x00d:
-  case 0x00e:
-  case 0x00f:
-  case 0x010:
-  case 0x011:
-  case 0x012:
-  case 0x013:
-  case 0x014:
-  case 0x015:
-  case 0x016:
-  case 0x017:
-  case 0x018:
-  case 0x019:
-  case 0x01a:
-  case 0x01b:
-  case 0x01c:
-  case 0x01d:
-  case 0x01e:
-  case 0x01f:
-  case 0x020:
-  case 0x021:
-  case 0x022:
-  case 0x023:
-  case 0x024:
-  case 0x025:
-  case 0x026:
-  case 0x027:
-  case 0x028:
-  case 0x029:
-  case 0x02a:
-    return true;
-  default:
-    return false;
-  }
+  return (TileOpcode & 0x3ff) <= 0x05b;
 }
 
 static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
@@ -174,7 +127,7 @@ static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
   validateTileOpcode(TileOpcode, Context);
   if (!isWhitelistedTEPLTileOpcode(TileOpcode))
     report_fatal_error(Twine("Linx: ") + Context +
-                       " uses TileOpcode outside the canonical v0.4 TEPL set");
+                       " uses TileOpcode outside the LinxISA v0.57 TEPL set");
 }
 
 static void validateCubeDimImm(int64_t Dim, StringRef DimName,
@@ -340,26 +293,6 @@ static unsigned tileIdFromRelRef(const TileRelRef &Ref) {
   return tileHandBase(Ref.Hand) + static_cast<unsigned>(Ref.Depth - 1u);
 }
 
-static unsigned dstTileFieldFromHand(TileHand Hand) {
-  switch (Hand) {
-  case TileHand::T:
-    return 0;
-  case TileHand::U:
-    return 1;
-  case TileHand::M:
-    return 2;
-  case TileHand::N:
-    return 3;
-  case TileHand::ACC:
-    return 4;
-  }
-  llvm_unreachable("invalid tile hand");
-}
-
-static unsigned dstTileFieldFromRelRef(const TileRelRef &Ref) {
-  return dstTileFieldFromHand(Ref.Hand);
-}
-
 static unsigned tileRegIdFromReg(const TargetRegisterInfo &TRI, Register Reg) {
   if (!Reg || !Reg.isPhysical() || !LinxISA::TILERegClass.contains(Reg))
     report_fatal_error("Linx: expected physical tile register");
@@ -378,6 +311,7 @@ static bool isMarkerInstr(const MachineInstr &MI) {
   case LinxISA::BSTART_STD_RET:
   case LinxISA::BSTART_TMA:
   case LinxISA::BSTART_CUBE:
+  case LinxISA::BSTART_FIXP:
   case LinxISA::BSTART_TEPL:
   case LinxISA::BSTART_VPAR:
   case LinxISA::BSTART_VSEQ:
@@ -406,16 +340,15 @@ static bool isHeaderDescriptorOpcode(unsigned Opc) {
   switch (Opc) {
   case LinxISA::B_TEXT:
   case LinxISA::B_ARG:
+  case LinxISA::B_META:
   case LinxISA::B_ATTR:
   case LinxISA::B_DIM_LB0:
   case LinxISA::B_DIM_LB1:
   case LinxISA::B_DIM_LB2:
   case LinxISA::C_B_DIMI:
   case LinxISA::B_IOR:
-  case LinxISA::B_IOT_G0:
-  case LinxISA::B_IOT_G1:
-  case LinxISA::B_IOTI_G0:
-  case LinxISA::B_IOTI_G1:
+  case LinxISA::B_ITP:
+  case LinxISA::B_OTA:
     return true;
   default:
     return false;
@@ -443,12 +376,17 @@ static bool isTilePseudoInstr(const MachineInstr &MI) {
   case LinxISA::PSEUDO_TMA_TLOAD_DESC:
   case LinxISA::PSEUDO_TMA_TSTORE:
   case LinxISA::PSEUDO_TMA_TSTORE_DESC:
+  case LinxISA::PSEUDO_TMA_MGATHER_DESC:
+  case LinxISA::PSEUDO_TMA_MSCATTER_DESC:
   case LinxISA::PSEUDO_TMA_TMOV:
+  case LinxISA::PSEUDO_FIXP_TINSERT:
+  case LinxISA::PSEUDO_FIXP_TTRANS:
   case LinxISA::PSEUDO_CUBE_MAMULB:
   case LinxISA::PSEUDO_CUBE_MAMULB_ACC:
   case LinxISA::PSEUDO_CUBE_ACCCVT:
   case LinxISA::PSEUDO_TEPL_UNARY:
   case LinxISA::PSEUDO_TEPL_BINARY:
+  case LinxISA::PSEUDO_TEPL_TERNARY:
   case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
   case LinxISA::PSEUDO_TEPL_SPLAT:
   case LinxISA::PSEUDO_VPAR_TADD:
@@ -475,6 +413,7 @@ static bool isTileBlockStartInstr(const MachineInstr &MI) {
   switch (MI.getOpcode()) {
   case LinxISA::BSTART_TMA:
   case LinxISA::BSTART_CUBE:
+  case LinxISA::BSTART_FIXP:
   case LinxISA::BSTART_TEPL:
     return true;
   default:
@@ -820,7 +759,7 @@ public:
       if (isArchivedRawVectorOperandName(Base))
         report_fatal_error(
             "Linx blockify: archived raw vector operand name is not allowed "
-            "in canonical v0.4; use TA/TB/TC/TD/TO/TS");
+            "in LinxISA v0.57; use TA/TB/TC/TD/TO/TS");
 
       auto RegCode = parseRegCode(Base);
       if (!RegCode)
@@ -1712,11 +1651,11 @@ public:
           .addSym(VTileAddBodySym);
 
       static const char kBodyAsm[] =
-          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
-          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
-          "  v.add vt#1.sw, vu#1.sw, ->vt.w\n"
-          "  v.sw.local vt#1, [to, lc0<<2, lc1<<8]\n"
-          "  C.BSTOP\n";
+	          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
+	          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
+	          "  v.add vt#1.sw, vu#1.sw, ->vt.w\n"
+	          "  v.sw.local vt#2, [to, lc0<<2, lc1<<8]\n"
+	          "  C.BSTOP\n";
       emitVectorBodyText(*VTileAddBodyBB, StringRef(kBodyAsm), "vtile add body");
       BuildMI(*VTileAddBodyBB, VTileAddBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
@@ -1746,11 +1685,11 @@ public:
           .addSym(VTileSubBodySym);
 
       static const char kBodyAsm[] =
-          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
-          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
-          "  v.sub vt#1.sw, vu#1.sw, ->vt.w\n"
-          "  v.sw.local vt#1, [to, lc0<<2, lc1<<8]\n"
-          "  C.BSTOP\n";
+	          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
+	          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
+	          "  v.sub vt#1.sw, vu#1.sw, ->vt.w\n"
+	          "  v.sw.local vt#2, [to, lc0<<2, lc1<<8]\n"
+	          "  C.BSTOP\n";
       emitVectorBodyText(*VTileSubBodyBB, StringRef(kBodyAsm), "vtile sub body");
       BuildMI(*VTileSubBodyBB, VTileSubBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
@@ -2054,12 +1993,14 @@ public:
       }
 
       constexpr unsigned DType_I32 = 17;
-      constexpr unsigned TMA_TLOAD = 0;
-      constexpr unsigned TMA_TSTORE = 1;
-      constexpr unsigned TMA_TMOV = 2;
-      constexpr unsigned CUBE_MAMULB = 0;
-      constexpr unsigned CUBE_MAMULB_ACC = 2;
-      constexpr unsigned CUBE_ACCCVT = 8;
+      constexpr unsigned TMA_MGATHER = 0;
+      constexpr unsigned TMA_MSCATTER = 1;
+      constexpr unsigned TMA_TLOAD = 2;
+      constexpr unsigned TMA_TSTORE = 4;
+      constexpr unsigned FIXP_TINSERT = 2;
+      constexpr unsigned FIXP_TMOV = 3;
+      constexpr unsigned FIXP_TTRANS = 7;
+      constexpr unsigned CUBE_TMATMUL = 1;
 
       auto emitDim = [&](MachineBasicBlock &DimMBB, MachineBasicBlock::iterator DimInsertPt,
                          unsigned LoopNest, int64_t Imm) {
@@ -2088,6 +2029,48 @@ public:
             .addImm(0);
       };
 
+      auto tileArchId = [](unsigned InternalTileId) -> unsigned {
+        if (InternalTileId >= 255u)
+          report_fatal_error("Linx: TileReg id does not fit v0.57 namespace");
+        return InternalTileId + 1u;
+      };
+
+      auto cellCountM1FromSizeCode = [](int64_t SizeCode) -> unsigned {
+        if (SizeCode < 0 || SizeCode > 31)
+          report_fatal_error("Linx: tile allocation size code must fit u5");
+        if (SizeCode < 3)
+          return 0u;
+        const unsigned Cells = 1u << static_cast<unsigned>(SizeCode - 3);
+        if (Cells == 0u || Cells > 256u)
+          report_fatal_error("Linx: tile allocation exceeds v0.57 B.OTA capacity");
+        return Cells - 1u;
+      };
+
+      auto emitTileInputPair = [&](MachineBasicBlock &DescMBB,
+                                   MachineBasicBlock::iterator DescInsertPt,
+                                   unsigned Src0, unsigned Src1,
+                                   unsigned S0R, unsigned S1R,
+                                   unsigned Last, unsigned SrcPair) {
+        return BuildMI(DescMBB, DescInsertPt, DL, TII.get(LinxISA::B_ITP))
+            .addImm(Src0)
+            .addImm(Src1)
+            .addImm(S0R)
+            .addImm(S1R)
+            .addImm(Last)
+            .addImm(SrcPair);
+      };
+
+      auto emitTileOutputAlloc = [&](MachineBasicBlock &DescMBB,
+                                     MachineBasicBlock::iterator DescInsertPt,
+                                     unsigned DstTile, int64_t SizeCode,
+                                     unsigned Last, unsigned DstSlot) {
+        return BuildMI(DescMBB, DescInsertPt, DL, TII.get(LinxISA::B_OTA))
+            .addImm(DstTile)
+            .addImm(cellCountM1FromSizeCode(SizeCode))
+            .addImm(Last)
+            .addImm(DstSlot);
+      };
+
       switch (PseudoMI->getOpcode()) {
       case LinxISA::PSEUDO_TMA_TLOAD: {
         const Register Dst = PseudoMI->getOperand(0).getReg();
@@ -2103,8 +2086,8 @@ public:
             .addImm(DType_I32)
             .addImm(TMA_TLOAD);
 
-        // Canonical descriptor-carrying TLOAD header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOTI.
+        // Descriptor-carrying TLOAD header:
+        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.OTA.
         //
         // The current PTO auto-mode bridge does not pass explicit layout/dim
         // metadata yet, so use bring-up defaults here:
@@ -2119,18 +2102,8 @@ public:
             .addReg(Base)        // RegSrc1: base pointer
             .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
 
-        // Canonical v0.4 contract: B.IOTI is the canonical descriptor; encode the
-        // tile destination register in the first absent source slot (SrcTile1)
-        // and set S0V/S1V to indicate no tile inputs.
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand)
-            .addImm(0)      // S0R
-            .addImm(1)      // S0V (absent)
-            .addImm(0)      // S1R
-            .addImm(1)      // S1V (absent)
-            .addImm(0)      // SrcTile0
-            .addImm(DstID)  // SrcTile1 (dst tile reg id)
-            .addImm(Size)   // SizeCode (imm5)
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                             /*Last=*/1, /*DstSlot=*/0)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2160,15 +2133,8 @@ public:
             .addReg(Base)
             .addReg(LinxISA::R0);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID)))
-            .addImm(0)
-            .addImm(1)
-            .addImm(0)
-            .addImm(1)
-            .addImm(0)
-            .addImm(DstID)
-            .addImm(Size)
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                             /*Last=*/1, /*DstSlot=*/0)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2212,15 +2178,58 @@ public:
             .addReg(Base)
             .addReg(LinxISA::R0);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID)))
-            .addImm(0)
-            .addImm(1)
-            .addImm(0)
-            .addImm(1)
-            .addImm(0)
-            .addImm(DstID)
-            .addImm(Size)
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                             /*Last=*/1, /*DstSlot=*/0)
+            .addReg(Dst, RegState::Define | RegState::Implicit);
+
+        PseudoMI->eraseFromParent();
+        Changed = true;
+        break;
+      }
+
+      case LinxISA::PSEUDO_TMA_MGATHER_DESC: {
+        const Register Dst = PseudoMI->getOperand(0).getReg();
+        const Register Base = PseudoMI->getOperand(1).getReg();
+        const Register Index = PseudoMI->getOperand(2).getReg();
+        const int64_t DType = PseudoMI->getOperand(3).getImm();
+        const int64_t Layout = PseudoMI->getOperand(4).getImm();
+        const int64_t LB0 = PseudoMI->getOperand(5).getImm();
+        const int64_t LB1 = PseudoMI->getOperand(6).getImm();
+        const int64_t Size = PseudoMI->getOperand(7).getImm();
+        const Register StrideReg = PseudoMI->getOperand(8).getReg();
+        if (DType < 0 || DType > 31)
+          report_fatal_error("Linx: TMA.MGATHER dtype must fit u5");
+        validateStrictTileSizeCode(Size, "TMA.MGATHER");
+        const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TMA.MGATHER");
+        const uint64_t Dim1 = requirePositiveDimImm(LB1, "lb1", "TMA.MGATHER");
+        validateTileByteBudget("TMA.MGATHER", Dim0, Dim1, /*dim2=*/1u,
+                               dtypeElementBitsForTileCheck(DType),
+                               static_cast<uint64_t>(Size));
+        if (!StrideReg)
+          report_fatal_error("Linx: TMA.MGATHER requires stride register binding");
+
+        const unsigned DstID = tileRegIdFromReg(TRI, Dst);
+        const unsigned IndexID = tileRegIdFromReg(TRI, Index);
+        if (DstID >= 16)
+          report_fatal_error("Linx: TMA.MGATHER dst must be in TILE0..TILE15");
+
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
+            .addImm(DType)
+            .addImm(TMA_MGATHER);
+        emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
+        emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
+            .addReg(LinxISA::R0)
+            .addReg(StrideReg)
+            .addReg(Base)
+            .addReg(LinxISA::R0);
+
+        emitTileInputPair(MBB, InsertPt, tileArchId(IndexID), /*Src1=*/0,
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/0, /*SrcPair=*/0)
+            .addReg(Index, RegState::Implicit);
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                             /*Last=*/1, /*DstSlot=*/0)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2240,8 +2249,8 @@ public:
             .addImm(DType_I32)
             .addImm(TMA_TSTORE);
 
-        // Canonical descriptor-carrying TSTORE header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOTI.
+        // Descriptor-carrying TSTORE header:
+        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.ITP.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
@@ -2252,17 +2261,57 @@ public:
             .addReg(Base)        // RegSrc1: base pointer
             .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
 
-        // Store: encode the source tile in SrcTile0 and mark it present (S0V=0).
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(SrcID))) // DstTile (hand hint)
-            .addImm(0)      // S0R
-            .addImm(0)      // S0V (present)
-            .addImm(0)      // S1R
-            .addImm(1)      // S1V (absent)
-            .addImm(SrcID)  // SrcTile0
-            .addImm(0)      // SrcTile1 (unused)
-            .addImm(Size)   // SizeCode (imm5)
+        emitTileInputPair(MBB, InsertPt, tileArchId(SrcID), /*Src1=*/0,
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/1, /*SrcPair=*/0)
             .addReg(Src, RegState::Implicit);
+
+        PseudoMI->eraseFromParent();
+        Changed = true;
+        break;
+      }
+
+      case LinxISA::PSEUDO_TMA_MSCATTER_DESC: {
+        const Register Base = PseudoMI->getOperand(0).getReg();
+        const Register Src = PseudoMI->getOperand(1).getReg();
+        const Register Index = PseudoMI->getOperand(2).getReg();
+        const int64_t DType = PseudoMI->getOperand(3).getImm();
+        const int64_t Layout = PseudoMI->getOperand(4).getImm();
+        const int64_t LB0 = PseudoMI->getOperand(5).getImm();
+        const int64_t LB1 = PseudoMI->getOperand(6).getImm();
+        const int64_t Size = PseudoMI->getOperand(7).getImm();
+        const Register StrideReg = PseudoMI->getOperand(8).getReg();
+        if (DType < 0 || DType > 31)
+          report_fatal_error("Linx: TMA.MSCATTER dtype must fit u5");
+        validateStrictTileSizeCode(Size, "TMA.MSCATTER");
+        const uint64_t Dim0 =
+            requirePositiveDimImm(LB0, "lb0", "TMA.MSCATTER");
+        const uint64_t Dim1 =
+            requirePositiveDimImm(LB1, "lb1", "TMA.MSCATTER");
+        validateTileByteBudget("TMA.MSCATTER", Dim0, Dim1, /*dim2=*/1u,
+                               dtypeElementBitsForTileCheck(DType),
+                               static_cast<uint64_t>(Size));
+        if (!StrideReg)
+          report_fatal_error("Linx: TMA.MSCATTER requires stride register binding");
+
+        const unsigned SrcID = tileRegIdFromReg(TRI, Src);
+        const unsigned IndexID = tileRegIdFromReg(TRI, Index);
+
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
+            .addImm(DType)
+            .addImm(TMA_MSCATTER);
+        emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
+        emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
+            .addReg(LinxISA::R0)
+            .addReg(StrideReg)
+            .addReg(Base)
+            .addReg(LinxISA::R0);
+
+        emitTileInputPair(MBB, InsertPt, tileArchId(SrcID), tileArchId(IndexID),
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/1, /*SrcPair=*/0)
+            .addReg(Src, RegState::Implicit)
+            .addReg(Index, RegState::Implicit);
 
         PseudoMI->eraseFromParent();
         Changed = true;
@@ -2302,15 +2351,8 @@ public:
             .addReg(Base)
             .addReg(LinxISA::R0);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(SrcID)))
-            .addImm(0)
-            .addImm(0)
-            .addImm(0)
-            .addImm(1)
-            .addImm(SrcID)
-            .addImm(0)
-            .addImm(Size)
+        emitTileInputPair(MBB, InsertPt, tileArchId(SrcID), /*Src1=*/0,
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/1, /*SrcPair=*/0)
             .addReg(Src, RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2340,10 +2382,6 @@ public:
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         const TileRelRef DstRef = tileRelRefFromId(DstID);
-        // PR6 parity baseline: encode concrete destination tile id.
-        // Queue-push hand-only encoding requires full runtime relref queue
-        // semantics, which is not yet modeled in QEMU tile execution.
-        const unsigned EncDstTile = DstID;
 
         unsigned EncSrc = 0;
         RegState SrcFlags = RegState::Implicit;
@@ -2360,37 +2398,24 @@ public:
           (void)tileIdFromRelRef(DstRef);
         }
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_FIXP))
             .addImm(Meta.DataType)
-            .addImm(TMA_TMOV);
+            .addImm(FIXP_TMOV);
 
         // B.ARG carries TMOV mode (strict profile: V2V + A2V).
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
 
         if (!IsA2V) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromRelRef(DstRef)) // DstTile (hand)
-              .addImm(SrcReuse ? 1 : 0)               // S0R
-              .addImm(0)                              // S0V (present)
-              .addImm(0)                              // S1R
-              .addImm(1)                              // S1V (absent)
-              .addImm(EncSrc)                         // SrcTile0
-              .addImm(EncDstTile)                     // SrcTile1 (dst tile id)
-              .addImm(Meta.SizeCode)                  // SizeCode
-              .addReg(Src, SrcFlags)
+          emitTileInputPair(MBB, InsertPt, tileArchId(EncSrc), /*Src1=*/0,
+                            SrcReuse ? 1 : 0, /*S1R=*/0, /*Last=*/0,
+                            /*SrcPair=*/0)
+              .addReg(Src, SrcFlags);
+          emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Meta.SizeCode,
+                              /*Last=*/1, /*DstSlot=*/0)
               .addReg(Dst, RegState::Define | RegState::Implicit);
         } else {
-          // A2V: source is implicit accumulator state, so no explicit source
-          // tile is bound in B.IOTI.
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromRelRef(DstRef)) // DstTile (hand)
-              .addImm(0)                              // S0R
-              .addImm(1)                              // S0V (absent)
-              .addImm(0)                              // S1R
-              .addImm(1)                              // S1V (absent)
-              .addImm(0)                              // SrcTile0 (unused)
-              .addImm(EncDstTile)                     // SrcTile1 (dst tile id)
-              .addImm(Meta.SizeCode)                  // SizeCode
+          emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Meta.SizeCode,
+                              /*Last=*/1, /*DstSlot=*/0)
               .addReg(Dst, RegState::Define | RegState::Implicit);
         }
 
@@ -2399,10 +2424,102 @@ public:
         break;
       }
 
+      case LinxISA::PSEUDO_FIXP_TINSERT: {
+        const Register Dst = PseudoMI->getOperand(0).getReg();
+        const Register DstBase = PseudoMI->getOperand(1).getReg();
+        const Register Src = PseudoMI->getOperand(2).getReg();
+        const Register MetaReg = PseudoMI->getOperand(3).getReg();
+        const int64_t Size = PseudoMI->getOperand(4).getImm();
+        const int64_t DType = PseudoMI->getOperand(5).getImm();
+        const int64_t DstRows = PseudoMI->getOperand(6).getImm();
+        const int64_t DstCols = PseudoMI->getOperand(7).getImm();
+        const int64_t SrcRows = PseudoMI->getOperand(8).getImm();
+        const int64_t SrcCols = PseudoMI->getOperand(9).getImm();
+        validateStrictTileSizeCode(Size, "FIXP.TINSERT");
+        if (DType < 0 || DType > 31)
+          report_fatal_error("Linx: FIXP.TINSERT dtype must fit u5");
+        requirePositiveDimImm(DstRows, "dst_rows", "FIXP.TINSERT");
+        requirePositiveDimImm(DstCols, "dst_cols", "FIXP.TINSERT");
+        requirePositiveDimImm(SrcRows, "src_rows", "FIXP.TINSERT");
+        requirePositiveDimImm(SrcCols, "src_cols", "FIXP.TINSERT");
+
+        const unsigned DstID = tileRegIdFromReg(TRI, Dst);
+        const unsigned DstBaseID = tileRegIdFromReg(TRI, DstBase);
+        const unsigned SrcID = tileRegIdFromReg(TRI, Src);
+        const int64_t SrcShape =
+            ((SrcRows & 0xffff) << 16) | (SrcCols & 0xffff);
+
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_FIXP))
+            .addImm(DType)
+            .addImm(FIXP_TINSERT);
+        emitDim(MBB, InsertPt, /*LoopNest=*/0, DstRows);
+        emitDim(MBB, InsertPt, /*LoopNest=*/1, DstCols);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, SrcShape);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_META))
+            .addReg(MetaReg)
+            .addImm(0);
+        emitTileInputPair(MBB, InsertPt, tileArchId(DstBaseID),
+                          tileArchId(SrcID), /*S0R=*/0, /*S1R=*/0,
+                          /*Last=*/0, /*SrcPair=*/0)
+            .addReg(DstBase, RegState::Implicit)
+            .addReg(Src, RegState::Implicit);
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                            /*Last=*/1, /*DstSlot=*/0)
+            .addReg(Dst, RegState::Define | RegState::Implicit);
+
+        PseudoMI->eraseFromParent();
+        Changed = true;
+        break;
+      }
+
+      case LinxISA::PSEUDO_FIXP_TTRANS: {
+        const Register Dst = PseudoMI->getOperand(0).getReg();
+        const Register Src = PseudoMI->getOperand(1).getReg();
+        const Register Tmp = PseudoMI->getOperand(2).getReg();
+        const int64_t Size = PseudoMI->getOperand(3).getImm();
+        const int64_t DType = PseudoMI->getOperand(4).getImm();
+        const int64_t DstRows = PseudoMI->getOperand(5).getImm();
+        const int64_t DstCols = PseudoMI->getOperand(6).getImm();
+        const int64_t SrcRows = PseudoMI->getOperand(7).getImm();
+        const int64_t SrcCols = PseudoMI->getOperand(8).getImm();
+        validateStrictTileSizeCode(Size, "FIXP.TTRANS");
+        if (DType < 0 || DType > 31)
+          report_fatal_error("Linx: FIXP.TTRANS dtype must fit u5");
+        requirePositiveDimImm(DstRows, "dst_rows", "FIXP.TTRANS");
+        requirePositiveDimImm(DstCols, "dst_cols", "FIXP.TTRANS");
+        requirePositiveDimImm(SrcRows, "src_rows", "FIXP.TTRANS");
+        requirePositiveDimImm(SrcCols, "src_cols", "FIXP.TTRANS");
+
+        const unsigned DstID = tileRegIdFromReg(TRI, Dst);
+        const unsigned SrcID = tileRegIdFromReg(TRI, Src);
+        const unsigned TmpID = tileRegIdFromReg(TRI, Tmp);
+        const int64_t DstShape =
+            ((DstRows & 0xffff) << 16) | (DstCols & 0xffff);
+
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_FIXP))
+            .addImm(DType)
+            .addImm(FIXP_TTRANS);
+        emitDim(MBB, InsertPt, /*LoopNest=*/0, SrcRows);
+        emitDim(MBB, InsertPt, /*LoopNest=*/1, SrcCols);
+        emitDim(MBB, InsertPt, /*LoopNest=*/2, DstShape);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
+        emitTileInputPair(MBB, InsertPt, tileArchId(SrcID), tileArchId(TmpID),
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/0,
+                          /*SrcPair=*/0)
+            .addReg(Src, RegState::Implicit)
+            .addReg(Tmp, RegState::Implicit);
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                            /*Last=*/1, /*DstSlot=*/0)
+            .addReg(Dst, RegState::Define | RegState::Implicit);
+
+        PseudoMI->eraseFromParent();
+        Changed = true;
+        break;
+      }
+
       case LinxISA::PSEUDO_CUBE_MAMULB: {
-        // Expand into two blocks:
-        //   BSTART.CUBE(MAMULB) + dims + B.IOT(srcA, srcB) -> ACC
-        //   BSTART.CUBE(ACCCVT) + B.IOT(dst)              -> tile
+        // Expand into one merged v0.57 TMATMUL block.
         const Register Dst = PseudoMI->getOperand(0).getReg();
         const Register SrcA = PseudoMI->getOperand(1).getReg();
         const Register SrcB = PseudoMI->getOperand(2).getReg();
@@ -2412,65 +2529,31 @@ public:
         validateCubeDimImm(M, "m", "CUBE.MAMULB");
         validateCubeDimImm(N, "n", "CUBE.MAMULB");
         validateCubeDimImm(K, "k", "CUBE.MAMULB");
-        validateTileByteBudget("CUBE.MAMULB",
-                               requirePositiveDimImm(M, "m", "CUBE.MAMULB"),
-                               requirePositiveDimImm(N, "n", "CUBE.MAMULB"),
-                               requirePositiveDimImm(K, "k", "CUBE.MAMULB"),
-                               dtypeElementBitsForTileCheck(DType_I32),
-                               std::nullopt);
+        requirePositiveDimImm(M, "m", "CUBE.MAMULB");
+        requirePositiveDimImm(N, "n", "CUBE.MAMULB");
+        requirePositiveDimImm(K, "k", "CUBE.MAMULB");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID < 16)
-          report_fatal_error("Linx: CUBE.ACCCVT dst must be in TILE16..TILE31");
-        const unsigned Group = (DstID >> 3) & 0x1u;
-        const unsigned Depth = DstID & 0x7u;
+          report_fatal_error("Linx: CUBE.TMATMUL dst must be in TILE16..TILE31");
 
         const unsigned AID = tileRegIdFromReg(TRI, SrcA);
         const unsigned BID = tileRegIdFromReg(TRI, SrcB);
 
-        // First block: MAMULB
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_CUBE))
             .addImm(DType_I32)
-            .addImm(CUBE_MAMULB);
+            .addImm(CUBE_TMATMUL);
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, M);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, N);
         emitDim(MBB, InsertPt, /*LoopNest=*/2, K);
-
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(4)    // DstTile (acc)
-            .addImm(0)    // S0R
-            .addImm(0)    // S0V (present)
-            .addImm(0)    // S1R
-            .addImm(0)    // S1V (present)
-            .addImm(AID)  // SrcTile0
-            .addImm(BID)  // SrcTile1
-            .addImm(8)    // SizeCode (bring-up: 4KiB accumulator)
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
+        emitTileInputPair(MBB, InsertPt, tileArchId(AID), tileArchId(BID),
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/0, /*SrcPair=*/0)
             .addReg(SrcA, RegState::Implicit)
             .addReg(SrcB, RegState::Implicit);
-
-        // Second block: ACCCVT into dst tile.
-        MachineFunction &MF = *MBB.getParent();
-        auto *AccBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
-        MF.insert(std::next(MBB.getIterator()), AccBB);
-        AccBB->transferSuccessorsAndUpdatePHIs(&MBB);
-        MBB.addSuccessor(AccBB);
-
-        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::BSTART_CUBE))
-            .addImm(DType_I32)
-            .addImm(CUBE_ACCCVT);
-
-        const unsigned DstKind =
-            dstTileFieldFromRelRef(tileRelRefFromId(Depth | (Group << 3) | 16u));
-        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(DstKind)
-            .addImm(0)       // S0R
-            .addImm(1)       // S0V (absent)
-            .addImm(0)       // S1R
-            .addImm(1)       // S1V (absent)
-            .addImm(0)       // SrcTile0 (unused)
-            .addImm(16u | (Group << 3) | Depth) // SrcTile1 (dst tile reg id)
-            .addImm(8)       // SizeCode (bring-up: 4KiB)
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID),
+                            /*SizeCode=*/8, /*Last=*/1, /*DstSlot=*/0)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2479,13 +2562,7 @@ public:
       }
 
       case LinxISA::PSEUDO_CUBE_MAMULB_ACC: {
-        // Expand into two blocks:
-        //   BSTART.CUBE(MAMULB.ACC) + dims + B.IOT(srcA, srcB) -> ACC
-        //   BSTART.CUBE(ACCCVT)     + B.IOT(dst)              -> tile
-        //
-        // The explicit ACC operand is preserved as an implicit use so SSA
-        // dependencies are maintained (the emulator models the accumulator as
-        // implicit state).
+        // Expand into one merged v0.57 TMATMUL.ACC-form block.
         const Register Dst = PseudoMI->getOperand(0).getReg();
         const Register Acc = PseudoMI->getOperand(1).getReg();
         const Register SrcA = PseudoMI->getOperand(2).getReg();
@@ -2496,66 +2573,35 @@ public:
         validateCubeDimImm(M, "m", "CUBE.MAMULB.ACC");
         validateCubeDimImm(N, "n", "CUBE.MAMULB.ACC");
         validateCubeDimImm(K, "k", "CUBE.MAMULB.ACC");
-        validateTileByteBudget(
-            "CUBE.MAMULB.ACC",
-            requirePositiveDimImm(M, "m", "CUBE.MAMULB.ACC"),
-            requirePositiveDimImm(N, "n", "CUBE.MAMULB.ACC"),
-            requirePositiveDimImm(K, "k", "CUBE.MAMULB.ACC"),
-            dtypeElementBitsForTileCheck(DType_I32), std::nullopt);
+        requirePositiveDimImm(M, "m", "CUBE.MAMULB.ACC");
+        requirePositiveDimImm(N, "n", "CUBE.MAMULB.ACC");
+        requirePositiveDimImm(K, "k", "CUBE.MAMULB.ACC");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID < 16)
-          report_fatal_error("Linx: CUBE.ACCCVT dst must be in TILE16..TILE31");
-        const unsigned Group = (DstID >> 3) & 0x1u;
-        const unsigned Depth = DstID & 0x7u;
+          report_fatal_error("Linx: CUBE.TMATMUL.ACC dst must be in TILE16..TILE31");
 
         const unsigned AID = tileRegIdFromReg(TRI, SrcA);
         const unsigned BID = tileRegIdFromReg(TRI, SrcB);
+        const unsigned AccID = tileRegIdFromReg(TRI, Acc);
 
-        // First block: MAMULB.ACC
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_CUBE))
             .addImm(DType_I32)
-            .addImm(CUBE_MAMULB_ACC);
+            .addImm(CUBE_TMATMUL);
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, M);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, N);
         emitDim(MBB, InsertPt, /*LoopNest=*/2, K);
-
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(4)    // DstTile (acc)
-            .addImm(0)    // S0R
-            .addImm(0)    // S0V (present)
-            .addImm(0)    // S1R
-            .addImm(0)    // S1V (present)
-            .addImm(AID)  // SrcTile0
-            .addImm(BID)  // SrcTile1
-            .addImm(8)    // SizeCode (bring-up: 4KiB accumulator)
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(1);
+        emitTileInputPair(MBB, InsertPt, tileArchId(AID), tileArchId(BID),
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/0, /*SrcPair=*/0)
             .addReg(SrcA, RegState::Implicit)
-            .addReg(SrcB, RegState::Implicit)
+            .addReg(SrcB, RegState::Implicit);
+        emitTileInputPair(MBB, InsertPt, tileArchId(AccID), /*Src1=*/0,
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/0, /*SrcPair=*/1)
             .addReg(Acc, RegState::Implicit);
-
-        // Second block: ACCCVT into dst tile.
-        MachineFunction &MF = *MBB.getParent();
-        auto *AccBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
-        MF.insert(std::next(MBB.getIterator()), AccBB);
-        AccBB->transferSuccessorsAndUpdatePHIs(&MBB);
-        MBB.addSuccessor(AccBB);
-
-        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::BSTART_CUBE))
-            .addImm(DType_I32)
-            .addImm(CUBE_ACCCVT);
-
-        const unsigned DstKind =
-            dstTileFieldFromRelRef(tileRelRefFromId(Depth | (Group << 3) | 16u));
-        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(DstKind)
-            .addImm(0)       // S0R
-            .addImm(1)       // S0V (absent)
-            .addImm(0)       // S1R
-            .addImm(1)       // S1V (absent)
-            .addImm(0)       // SrcTile0 (unused)
-            .addImm(16u | (Group << 3) | Depth) // SrcTile1 (dst tile reg id)
-            .addImm(8)       // SizeCode (bring-up: 4KiB)
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID),
+                            /*SizeCode=*/8, /*Last=*/1, /*DstSlot=*/0)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2565,7 +2611,7 @@ public:
 
       case LinxISA::PSEUDO_CUBE_ACCCVT: {
         // Expand into one block:
-        //   BSTART.CUBE(ACCCVT) + B.ARG(qarg0) + B.IOT(dst)
+        //   BSTART.FIXP(TMOV) + B.ARG(qarg0) + B.OTA(dst)
         //
         // qarg1 is reserved for follow-on quant wiring and must be 0 in PR5.
         const Register Dst = PseudoMI->getOperand(0).getReg();
@@ -2580,27 +2626,18 @@ public:
           report_fatal_error("Linx: CUBE.ACCCVT dtype must fit u5");
         if (QArg1 != 0)
           report_fatal_error(
-              "Linx: CUBE.ACCCVT currently requires qarg1=0 in canonical v0.4");
+              "Linx: CUBE.ACCCVT currently requires qarg1=0 in LinxISA v0.57");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID < 16)
           report_fatal_error("Linx: CUBE.ACCCVT dst must be in TILE16..TILE31");
-        const unsigned DstKind =
-            dstTileFieldFromRelRef(tileRelRefFromId(DstID));
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_CUBE))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_FIXP))
             .addImm(DType)
-            .addImm(CUBE_ACCCVT);
+            .addImm(FIXP_TMOV);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(QArg0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-            .addImm(DstKind)
-            .addImm(0)       // S0R
-            .addImm(1)       // S0V (absent)
-            .addImm(0)       // S1R
-            .addImm(1)       // S1V (absent)
-            .addImm(0)       // SrcTile0 (unused)
-            .addImm(DstID)   // SrcTile1 (dst tile id)
-            .addImm(Size)    // SizeCode
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                            /*Last=*/1, /*DstSlot=*/0)
             .addReg(Acc, RegState::Implicit)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
@@ -2611,36 +2648,63 @@ public:
 
       case LinxISA::PSEUDO_TEPL_UNARY:
       case LinxISA::PSEUDO_TEPL_BINARY:
+      case LinxISA::PSEUDO_TEPL_TERNARY:
       case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
       case LinxISA::PSEUDO_TEPL_SPLAT: {
         const unsigned Opc = PseudoMI->getOpcode();
         const bool IsUnary = Opc == LinxISA::PSEUDO_TEPL_UNARY;
         const bool IsBinary = Opc == LinxISA::PSEUDO_TEPL_BINARY;
+        const bool IsTernary = Opc == LinxISA::PSEUDO_TEPL_TERNARY;
         const bool IsBinaryScalar = Opc == LinxISA::PSEUDO_TEPL_BINARY_SCALAR;
         const bool IsSplat = Opc == LinxISA::PSEUDO_TEPL_SPLAT;
-        const char *Ctx = IsUnary
-                              ? "TEPL.UNARY"
-                              : (IsBinary ? "TEPL.BINARY"
-                                          : (IsBinaryScalar ? "TEPL.BINARY.SCALAR"
-                                                            : "TEPL.SPLAT"));
+        const char *Ctx =
+            IsUnary
+                ? "TEPL.UNARY"
+                : (IsBinary ? "TEPL.BINARY"
+                            : (IsTernary
+                                   ? "TEPL.TERNARY"
+                                   : (IsBinaryScalar ? "TEPL.BINARY.SCALAR"
+                                                     : "TEPL.SPLAT")));
 
         const Register Dst = PseudoMI->getOperand(0).getReg();
-        const Register SrcA = (IsUnary || IsBinary || IsBinaryScalar)
+        const Register SrcA = (IsUnary || IsBinary || IsTernary || IsBinaryScalar)
                                   ? PseudoMI->getOperand(1).getReg()
                                   : Register();
-        const Register SrcB = IsBinary ? PseudoMI->getOperand(2).getReg() : Register();
+        const Register SrcB =
+            (IsBinary || IsTernary) ? PseudoMI->getOperand(2).getReg()
+                                    : Register();
+        const Register SrcC =
+            IsTernary ? PseudoMI->getOperand(3).getReg() : Register();
         const Register SrcS = IsBinaryScalar
                                   ? PseudoMI->getOperand(2).getReg()
                                   : (IsSplat ? PseudoMI->getOperand(1).getReg()
                                              : Register());
         const int64_t TileOpcode =
-            PseudoMI->getOperand(IsUnary ? 2 : (IsBinary ? 3 : (IsBinaryScalar ? 3 : 2)))
+            PseudoMI
+                ->getOperand(IsUnary ? 2
+                                     : (IsBinary ? 3
+                                                 : (IsTernary
+                                                        ? 4
+                                                        : (IsBinaryScalar ? 3
+                                                                          : 2))))
                 .getImm();
         const int64_t Size =
-            PseudoMI->getOperand(IsUnary ? 3 : (IsBinary ? 4 : (IsBinaryScalar ? 4 : 3)))
+            PseudoMI
+                ->getOperand(IsUnary ? 3
+                                     : (IsBinary ? 4
+                                                 : (IsTernary
+                                                        ? 5
+                                                        : (IsBinaryScalar ? 4
+                                                                          : 3))))
                 .getImm();
         const int64_t DType =
-            PseudoMI->getOperand(IsUnary ? 4 : (IsBinary ? 5 : (IsBinaryScalar ? 5 : 4)))
+            PseudoMI
+                ->getOperand(IsUnary ? 4
+                                     : (IsBinary ? 5
+                                                 : (IsTernary
+                                                        ? 6
+                                                        : (IsBinaryScalar ? 5
+                                                                          : 4))))
                 .getImm();
         const int64_t Mode =
             IsBinaryScalar
@@ -2658,23 +2722,21 @@ public:
           report_fatal_error("Linx: TEPL.BINARY.SCALAR requires mode=1 (VS)");
         if (IsSplat && Mode != static_cast<int64_t>(TEPLMode::SV))
           report_fatal_error("Linx: TEPL.SPLAT requires mode=2 (SV)");
-        if ((IsUnary || IsBinary) && Mode != static_cast<int64_t>(TEPLMode::VV))
-          report_fatal_error("Linx: TEPL.UNARY/BINARY require mode=0 (VV)");
+        if ((IsUnary || IsBinary || IsTernary) &&
+            Mode != static_cast<int64_t>(TEPLMode::VV))
+          report_fatal_error(
+              "Linx: TEPL.UNARY/BINARY/TERNARY require mode=0 (VV)");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
-        const unsigned AID = (IsUnary || IsBinary || IsBinaryScalar)
+        const unsigned AID = (IsUnary || IsBinary || IsTernary || IsBinaryScalar)
                                  ? tileRegIdFromReg(TRI, SrcA)
                                  : 0u;
-        const unsigned BID = IsBinary ? tileRegIdFromReg(TRI, SrcB) : 0u;
-        const TileRelRef DstRef = tileRelRefFromId(DstID);
-        const unsigned EncA =
-            (IsUnary || IsBinary || IsBinaryScalar)
-                ? tileIdFromRelRef(tileRelRefFromId(AID))
-                : 0u;
-        const unsigned EncB =
-            IsBinary ? tileIdFromRelRef(tileRelRefFromId(BID)) : 0u;
-        const bool HasS0Tile = IsUnary || IsBinary || IsBinaryScalar;
-        const bool HasS1Tile = IsBinary;
+        const unsigned BID =
+            (IsBinary || IsTernary) ? tileRegIdFromReg(TRI, SrcB) : 0u;
+        const unsigned CID = IsTernary ? tileRegIdFromReg(TRI, SrcC) : 0u;
+        const bool HasS0Tile = IsUnary || IsBinary || IsTernary || IsBinaryScalar;
+        const bool HasS1Tile = IsBinary || IsTernary;
+        const bool HasS2Tile = IsTernary;
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TEPL))
             .addImm(DType)
@@ -2690,51 +2752,27 @@ public:
               .addReg(SrcS, RegState::Implicit);
         }
 
-        // Descriptor 0: input bindings.
-        auto InDesc = BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G0))
-                          .addImm(dstTileFieldFromRelRef(DstRef))   // DstTile hand
-                          .addImm(0)                                // S0R
-                          .addImm(HasS0Tile ? 0 : 1)                // S0V
-                          .addImm(0)                                // S1R
-                          .addImm(HasS1Tile ? 0 : 1)                // S1V
-                          .addImm(EncA)                             // SrcTile0
-                          .addImm(EncB)                             // SrcTile1
-                          .addImm(Size);                            // SizeCode
-        if (HasS0Tile)
-          InDesc.addReg(SrcA, RegState::Implicit);
-        if (HasS1Tile)
-          InDesc.addReg(SrcB, RegState::Implicit);
-
-        // Descriptor 1: destination tile binding (queue-push destination).
-        //
-        // In-place TEPL forms (dst aliases a source tile) still use B.IOTI so
-        // size metadata stays explicit and disassembly remains canonical.
-        // Runtime destination allocation is guarded by descriptor shape checks.
-        const bool InPlace = (HasS0Tile && DstID == AID) ||
-                             (HasS1Tile && DstID == BID);
-        if (InPlace) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromRelRef(DstRef))
-              .addImm(0)     // S0R
-              .addImm(1)     // S0V (absent)
-              .addImm(0)     // S1R
-              .addImm(1)     // S1V (absent)
-              .addImm(0)     // SrcTile0 (unused)
-              .addImm(DstID) // SrcTile1 (dst tile id)
-              .addImm(Size)  // SizeCode
-              .addReg(Dst, RegState::Define | RegState::Implicit);
-        } else {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromRelRef(DstRef))
-              .addImm(0)     // S0R
-              .addImm(1)     // S0V (absent)
-              .addImm(0)     // S1R
-              .addImm(1)     // S1V (absent)
-              .addImm(0)     // SrcTile0 (unused)
-              .addImm(DstID) // SrcTile1 (dst tile id)
-              .addImm(Size)  // SizeCode
-              .addReg(Dst, RegState::Define | RegState::Implicit);
+        if (HasS0Tile || HasS1Tile) {
+          auto InDesc =
+              emitTileInputPair(MBB, InsertPt,
+                                HasS0Tile ? tileArchId(AID) : 0u,
+                                HasS1Tile ? tileArchId(BID) : 0u,
+                                /*S0R=*/0, /*S1R=*/0, /*Last=*/0,
+                                /*SrcPair=*/0);
+          if (HasS0Tile)
+            InDesc.addReg(SrcA, RegState::Implicit);
+          if (HasS1Tile)
+            InDesc.addReg(SrcB, RegState::Implicit);
         }
+        if (HasS2Tile) {
+          emitTileInputPair(MBB, InsertPt, tileArchId(CID), /*Src1=*/0,
+                            /*S0R=*/0, /*S1R=*/0, /*Last=*/0,
+                            /*SrcPair=*/1)
+              .addReg(SrcC, RegState::Implicit);
+        }
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                            /*Last=*/1, /*DstSlot=*/0)
+            .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
         Changed = true;
@@ -2746,8 +2784,8 @@ public:
       case LinxISA::PSEUDO_VTILE_ADD:
       case LinxISA::PSEUDO_VTILE_SUB: {
         // Expand into a VPAR decoupled header that binds:
-        // - input tiles through TA/TB (first B.IOTI)
-        // - output tile through TO (second B.IOTI or B.IOT for in-place)
+        // - input tiles through a B.ITP source-pair descriptor
+        // - output tile through B.OTA
         //
         // The out-of-line body is a single-lane snippet that executes:
         //   load TA, load TB, add/sub, store TO
@@ -2788,45 +2826,13 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_VPAR)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_TEXT)).addSym(BodySym);
 
-        // Descriptor 0: inputs (TA/TB), group=0.
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G0))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand hint)
-            .addImm(0)                     // S0R
-            .addImm(0)                     // S0V (present)
-            .addImm(0)                     // S1R
-            .addImm(0)                     // S1V (present)
-            .addImm(AID)                   // SrcTile0 (TA)
-            .addImm(BID)                   // SrcTile1 (TB)
-            .addImm(Size)                  // SizeCode
+        emitTileInputPair(MBB, InsertPt, tileArchId(AID), tileArchId(BID),
+                          /*S0R=*/0, /*S1R=*/0, /*Last=*/0, /*SrcPair=*/0)
             .addReg(SrcA, RegState::Implicit)
             .addReg(SrcB, RegState::Implicit);
-
-        // Descriptor 1: output (TO), group=1 (last). Keep B.IOTI for both
-        // in-place and out-of-place forms so size metadata stays explicit.
-        const bool InPlace = (DstID == AID) || (DstID == BID);
-        if (InPlace) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand hint)
-              .addImm(0)                     // S0R
-              .addImm(1)                     // S0V (absent)
-              .addImm(0)                     // S1R
-              .addImm(1)                     // S1V (absent)
-              .addImm(0)                     // SrcTile0 (unused)
-              .addImm(DstID)                 // SrcTile1 (dst tile id)
-              .addImm(Size)                  // SizeCode
-              .addReg(Dst, RegState::Define | RegState::Implicit);
-        } else {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand hint)
-              .addImm(0)                     // S0R
-              .addImm(1)                     // S0V (absent)
-              .addImm(0)                     // S1R
-              .addImm(1)                     // S1V (absent)
-              .addImm(0)                     // SrcTile0 (unused)
-              .addImm(DstID)                 // SrcTile1 (dst tile id)
-              .addImm(Size)                  // SizeCode
-              .addReg(Dst, RegState::Define | RegState::Implicit);
-        }
+        emitTileOutputAlloc(MBB, InsertPt, tileArchId(DstID), Size,
+                            /*Last=*/1, /*DstSlot=*/0)
+            .addReg(Dst, RegState::Define | RegState::Implicit);
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
@@ -2904,7 +2910,7 @@ public:
         }
         if ((Attr & ~AttrAQRLMask) != 0u) {
           report_fatal_error(
-              "Linx: vblock.launch only supports aq/rl B.ATTR bits in canonical v0.4");
+              "Linx: vblock.launch only supports aq/rl B.ATTR bits in LinxISA v0.57");
         }
         if (Attr != 0u) {
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ATTR))
@@ -2940,24 +2946,11 @@ public:
         if (EmitLocalScratch) {
           // Reserve the first two output descriptors for TO/TS so the body
           // can use the canonical `.local` output-tile order.
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromHand(TileHand::T))
-              .addImm(0)
-              .addImm(1)
-              .addImm(0)
-              .addImm(1)
-              .addImm(0)
-              .addImm(0)
-              .addImm(0);
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
-              .addImm(dstTileFieldFromHand(TileHand::U))
-              .addImm(0)
-              .addImm(1)
-              .addImm(0)
-              .addImm(1)
-              .addImm(0)
-              .addImm(8)
-              .addImm(LocalScratchSizeCode);
+          emitTileOutputAlloc(MBB, InsertPt, tileArchId(0), /*SizeCode=*/0,
+                              /*Last=*/0, /*DstSlot=*/0);
+          emitTileOutputAlloc(MBB, InsertPt, tileArchId(8),
+                              LocalScratchSizeCode, /*Last=*/1,
+                              /*DstSlot=*/1);
         }
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, Dim0);

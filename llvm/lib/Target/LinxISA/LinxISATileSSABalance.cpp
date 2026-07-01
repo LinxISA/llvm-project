@@ -212,6 +212,15 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     Meta.Layout = MI.getOperand(3).getImm();
     return true;
 
+  case LinxISA::PSEUDO_TMA_MGATHER_DESC:
+    Meta.HasSize = true;
+    Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(7).getImm() & 0x1f);
+    Meta.HasDataType = true;
+    Meta.DataType = static_cast<uint8_t>(MI.getOperand(3).getImm() & 0x1f);
+    Meta.HasLayout = true;
+    Meta.Layout = MI.getOperand(4).getImm();
+    return true;
+
   case LinxISA::PSEUDO_CUBE_MAMULB:
   case LinxISA::PSEUDO_CUBE_MAMULB_ACC:
     Meta.HasSize = true;
@@ -257,6 +266,13 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     Meta.DataType = static_cast<uint8_t>(MI.getOperand(5).getImm() & 0x1f);
     return true;
 
+  case LinxISA::PSEUDO_TEPL_TERNARY:
+    Meta.HasSize = true;
+    Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(5).getImm() & 0x1f);
+    Meta.HasDataType = true;
+    Meta.DataType = static_cast<uint8_t>(MI.getOperand(6).getImm() & 0x1f);
+    return true;
+
   case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
     Meta.HasSize = true;
     Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(4).getImm() & 0x1f);
@@ -279,6 +295,20 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     Meta.HasLayout = (MI.getOperand(5).getImm() & 1) != 0;
     if (Meta.HasLayout)
       Meta.Layout = MI.getOperand(4).getImm();
+    return true;
+
+  case LinxISA::PSEUDO_FIXP_TINSERT:
+    Meta.HasSize = true;
+    Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(4).getImm() & 0x1f);
+    Meta.HasDataType = true;
+    Meta.DataType = static_cast<uint8_t>(MI.getOperand(5).getImm() & 0x1f);
+    return true;
+
+  case LinxISA::PSEUDO_FIXP_TTRANS:
+    Meta.HasSize = true;
+    Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(3).getImm() & 0x1f);
+    Meta.HasDataType = true;
+    Meta.DataType = static_cast<uint8_t>(MI.getOperand(4).getImm() & 0x1f);
     return true;
 
   default:
@@ -515,18 +545,19 @@ public:
           const unsigned SrcId = getTileRegId(TRI, CopyMI->getOperand(1).getReg());
           BundleSrcByDst.try_emplace(DstId, SrcId);
         }
-        DenseMap<unsigned, TileMeta> BundleResolvedMeta;
+        DenseMap<unsigned, TileMeta> BundleSourceMeta;
+        DenseMap<unsigned, TileMeta> BundleDstMeta;
         auto resolveMetaForTile =
             [&](auto &&Self, unsigned TileId,
                 SmallVectorImpl<unsigned> &Visiting)
             -> std::optional<TileMeta> {
-          auto ResolvedIt = BundleResolvedMeta.find(TileId);
-          if (ResolvedIt != BundleResolvedMeta.end())
-            return ResolvedIt->second;
+          auto SourceIt = BundleSourceMeta.find(TileId);
+          if (SourceIt != BundleSourceMeta.end())
+            return SourceIt->second;
 
           auto GlobalIt = RegMetaById.find(TileId);
           if (GlobalIt != RegMetaById.end()) {
-            BundleResolvedMeta[TileId] = GlobalIt->second;
+            BundleSourceMeta[TileId] = GlobalIt->second;
             return GlobalIt->second;
           }
 
@@ -544,7 +575,7 @@ public:
           if (!SrcMeta)
             return std::nullopt;
 
-          BundleResolvedMeta[TileId] = *SrcMeta;
+          BundleSourceMeta[TileId] = *SrcMeta;
           return *SrcMeta;
         };
 
@@ -581,20 +612,12 @@ public:
                     ")");
           }
 
-          if (auto DstMetaIt = RegMetaById.find(DstId);
-              DstMetaIt != RegMetaById.end()) {
-            std::string Reason;
-            if (!metadataCompatible(DstMetaIt->second, CopyMeta, Reason)) {
-              reportTileBalanceError(
-                  MF, *CopyMI,
-                  Twine("tile COPY metadata mismatch across CFG edges (dst id=") +
-                      Twine(DstId) + ", src id=" + Twine(SrcId) + "): " +
-                      Reason);
-            }
-            CopyMeta = mergeMetadata(CopyMeta, DstMetaIt->second);
-          }
-          if (auto DstResolvedIt = BundleResolvedMeta.find(DstId);
-              DstResolvedIt != BundleResolvedMeta.end()) {
+          // Parallel COPYs describe incoming values on an edge. A physical
+          // destination register may have stale metadata from a previous value
+          // with a different dtype/layout, so only duplicate destination writes
+          // in this COPY bundle constrain the new destination metadata.
+          if (auto DstResolvedIt = BundleDstMeta.find(DstId);
+              DstResolvedIt != BundleDstMeta.end()) {
             std::string Reason;
             if (!metadataCompatible(DstResolvedIt->second, CopyMeta, Reason)) {
               reportTileBalanceError(
@@ -617,7 +640,7 @@ public:
           (void)encodeTileRelRef(DstRef);
 
           Op.Meta = CopyMeta;
-          BundleResolvedMeta[DstId] = CopyMeta;
+          BundleDstMeta[DstId] = CopyMeta;
           Ops.push_back(Op);
         }
 

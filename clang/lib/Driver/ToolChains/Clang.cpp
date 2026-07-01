@@ -1781,6 +1781,7 @@ void Clang::AddLinxISATargetArgs(const ArgList &Args,
   // ToolChains/Arch/LinxISA.cpp.
   (void)Args.getLastArg(options::OPT_mcpu_EQ);
   (void)Args.getLastArg(options::OPT_march_EQ);
+  (void)Args.getLastArg(options::OPT_mlxbc);
 
   if (const Arg *A = Args.getLastArg(options::OPT_mtune_EQ)) {
     CmdArgs.push_back("-tune-cpu");

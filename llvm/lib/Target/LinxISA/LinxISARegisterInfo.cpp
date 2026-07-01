@@ -199,7 +199,9 @@ bool LinxISARegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   switch (MI.getOpcode()) {
   case LinxISA::PSEUDO_TMA_TLOAD:
   case LinxISA::PSEUDO_TMA_TLOAD_ANY:
-  case LinxISA::PSEUDO_TMA_TSTORE: {
+  case LinxISA::PSEUDO_TMA_TSTORE:
+  case LinxISA::PSEUDO_TMA_MGATHER_DESC:
+  case LinxISA::PSEUDO_TMA_MSCATTER_DESC: {
     if (OffsetBytes == 0) {
       MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
       return false;

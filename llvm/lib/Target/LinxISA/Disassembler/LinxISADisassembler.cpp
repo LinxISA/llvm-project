@@ -80,6 +80,12 @@ static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
     // under-constrained and can otherwise steal TEPL/TMA/CUBE headers during
     // disassembly.
     StringRef Mnem(F.mnemonic ? F.mnemonic : "");
+    // v0.57 routes all TMA selectors through BSTART.TMA Function, DataType.
+    // The generated direct TLOAD/TSTORE/TMOV rows still carry pre-v0.57 fixed
+    // selector bits, so let the generic TMA row decode those encodings.
+    if (Mnem == "BSTART.TLOAD" || Mnem == "BSTART.TSTORE" ||
+        Mnem == "BSTART.TMOV")
+      continue;
     if ((Mnem == "BSTART.MSEQ" || Mnem == "BSTART.MPAR") &&
         (((Insn >> 25) & 0x1ULL) != 0ULL))
       continue;

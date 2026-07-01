@@ -142,6 +142,10 @@ def uimm6 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<6>(N->getZExtValue
   let ParserMatchClass = ImmAsmOperand;
 }
 
+def uimm8 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<8>(N->getZExtValue()); }]> {
+  let ParserMatchClass = ImmAsmOperand;
+}
+
 def uimm10 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<10>(N->getZExtValue()); }]> {
   let ParserMatchClass = ImmAsmOperand;
 }
@@ -433,7 +437,7 @@ def BSTOP : LinxISAInst<(outs), (ins), "", []>;
 // Tile blocks (TAU) - bring-up (selected manually from intrinsics)
 //
 // These are expanded very late (pre-emit) into block-structured sequences:
-//   BSTART.TMA / BSTART.CUBE + B.IOT/B.IOTI/B.DIM descriptors.
+//   BSTART.TMA / BSTART.CUBE + B.ITP/B.OTA/B.DIM descriptors.
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
@@ -465,6 +469,23 @@ def PSEUDO_TMA_TSTORE_DESC : Pseudo<(outs),
                                          i64imm:$size, GPR_Arch:$stride_bytes),
                                     "# PSEUDO_TMA_TSTORE_DESC", []>;
 
+let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
+def PSEUDO_TMA_MGATHER_DESC : Pseudo<(outs TILE_TU:$dst),
+                                     (ins GPR_Arch:$base, TILE:$index,
+                                          i64imm:$dtype, i64imm:$layout,
+                                          i64imm:$lb0, i64imm:$lb1,
+                                          i64imm:$size, GPR_Arch:$stride_bytes),
+                                     "# PSEUDO_TMA_MGATHER_DESC", []>;
+
+let hasSideEffects = 1, isBarrier = 1, mayStore = 1, Size = 4 in
+def PSEUDO_TMA_MSCATTER_DESC : Pseudo<(outs),
+                                      (ins GPR_Arch:$base, TILE:$src,
+                                           TILE:$index, i64imm:$dtype,
+                                           i64imm:$layout, i64imm:$lb0,
+                                           i64imm:$lb1, i64imm:$size,
+                                           GPR_Arch:$stride_bytes),
+                                      "# PSEUDO_TMA_MSCATTER_DESC", []>;
+
 // Compiler-inserted tile SSA edge balancing pseudo.
 //
 // Operand contract:
@@ -482,6 +503,23 @@ def PSEUDO_TMA_TMOV : Pseudo<(outs TILE:$dst),
                                   i64imm:$layout, i64imm:$has_layout,
                                   i64imm:$mode, i64imm:$src_reuse),
                              "# PSEUDO_TMA_TMOV", []>;
+
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_FIXP_TINSERT : Pseudo<(outs TILE:$dst),
+                                 (ins TILE:$dst_base, TILE:$src,
+                                      GPR_Arch:$meta, i64imm:$size,
+                                      i64imm:$dtype, i64imm:$dst_rows,
+                                      i64imm:$dst_cols, i64imm:$src_rows,
+                                      i64imm:$src_cols),
+                                 "# PSEUDO_FIXP_TINSERT", []>;
+
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_FIXP_TTRANS : Pseudo<(outs TILE:$dst),
+                                (ins TILE:$src, TILE:$tmp, i64imm:$size,
+                                     i64imm:$dtype, i64imm:$dst_rows,
+                                     i64imm:$dst_cols, i64imm:$src_rows,
+                                     i64imm:$src_cols),
+                                "# PSEUDO_FIXP_TTRANS", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
 def PSEUDO_CUBE_MAMULB : Pseudo<(outs TILE_MN:$dst),
@@ -515,6 +553,13 @@ def PSEUDO_TEPL_BINARY : Pseudo<(outs TILE:$dst),
                                 (ins TILE:$srcA, TILE:$srcB, i64imm:$tileop,
                                      i64imm:$size, i64imm:$dtype),
                                 "# PSEUDO_TEPL_BINARY", []>;
+
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TEPL_TERNARY : Pseudo<(outs TILE:$dst),
+                                 (ins TILE:$srcA, TILE:$srcB, TILE:$srcC,
+                                      i64imm:$tileop, i64imm:$size,
+                                      i64imm:$dtype),
+                                 "# PSEUDO_TEPL_TERNARY", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
 def PSEUDO_TEPL_BINARY_SCALAR : Pseudo<(outs TILE:$dst),
@@ -750,9 +795,10 @@ let hasSideEffects = 1, Size = 2 in {
 
 // Real tile-block descriptor instructions (emitted after register allocation).
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
-  def BSTART_TMA  : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
-  def BSTART_CUBE : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
-  def BSTART_TEPL : LinxISAInst<(outs), (ins uimm5:$dtype, uimm10:$tileop), "", []>;
+  def BSTART_TMA  : LinxISAInst<(outs), (ins uimm5:$dtype, uimm8:$func), "", []>;
+  def BSTART_CUBE : LinxISAInst<(outs), (ins uimm5:$dtype, uimm8:$func), "", []>;
+  def BSTART_FIXP : LinxISAInst<(outs), (ins uimm5:$dtype, uimm8:$func), "", []>;
+  def BSTART_TEPL : LinxISAInst<(outs), (ins uimm5:$dtype, uimm8:$tileop), "", []>;
 
   // Vector block start markers (decoupled headers).
   //
@@ -767,6 +813,7 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   def B_TEXT : LinxISAInst<(outs), (ins BrTarget:$dst), "", []>;
 
   def B_ARG : LinxISAInst<(outs), (ins i64imm:$format), "", []>;
+  def B_META : LinxISAInst<(outs), (ins GPR_Arch:$meta, i64imm:$mode), "", []>;
 
   // Full B.ATTR descriptor (strict-v0.3):
   // {C, DR, DataLayout, DataType, PadValue, T, aq, atom, far, rl}
@@ -786,25 +833,13 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
                                        GPR_Arch:$regsrc1,
                                        GPR_Arch:$regsrc2), "", []>;
 
-  // B.IOT / B.IOTI descriptor forms: group bit is selected by opcode.
-  def B_IOT_G0  : LinxISAInst<(outs), (ins i64imm:$dst, GPR_Arch:$regsrc,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
-                                       i64imm:$src0, i64imm:$src1), "", []>;
-  def B_IOT_G1  : LinxISAInst<(outs), (ins i64imm:$dst, GPR_Arch:$regsrc,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
-                                       i64imm:$src0, i64imm:$src1), "", []>;
-  def B_IOTI_G0 : LinxISAInst<(outs), (ins i64imm:$dst,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
-                                       i64imm:$src0, i64imm:$src1,
-                                       i64imm:$size), "", []>;
-  def B_IOTI_G1 : LinxISAInst<(outs), (ins i64imm:$dst,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
-                                       i64imm:$src0, i64imm:$src1,
-                                       i64imm:$size), "", []>;
+  def B_ITP : LinxISAInst<(outs), (ins i64imm:$src0, i64imm:$src1,
+                                        i64imm:$s0r, i64imm:$s1r,
+                                        i64imm:$last, i64imm:$src_pair), "", []>;
+  def B_OTA : LinxISAInst<(outs), (ins i64imm:$dst,
+                                        i64imm:$cell_count_m1,
+                                        i64imm:$last,
+                                        i64imm:$dst_slot), "", []>;
 }
 
 // Branch-condition setters used by BlockISA (no explicit branch instructions).

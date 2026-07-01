@@ -89,6 +89,17 @@ static void printTileRef(raw_ostream &OS, unsigned TileId) {
   OS << Prefix << "#" << utostr(Depth + 1u);
 }
 
+static void printTileRef8(raw_ostream &OS, unsigned TileId) {
+  TileId &= 0xffu;
+  if (TileId == 0u) {
+    OS << "TZERO";
+  } else if (TileId <= 32u) {
+    printTileRef(OS, TileId - 1u);
+  } else {
+    OS << "tile#" << utostr(TileId);
+  }
+}
+
 static StringRef dtypeName(unsigned DT) {
   switch (DT & 0x1f) {
   case 0:
@@ -156,11 +167,15 @@ static StringRef parTileOpName(unsigned TileOpcode) {
 static StringRef tmaAliasMnemonic(unsigned Func) {
   switch (Func & 0x1fu) {
   case 0:
-    return "BSTART.TLOAD";
+    return "BSTART.MGATHER";
   case 1:
-    return "BSTART.TSTORE";
+    return "BSTART.MSCATTER";
   case 2:
-    return "BSTART.TMOV";
+    return "BSTART.TLOAD";
+  case 3:
+    return "BSTART.TPREFETCH";
+  case 4:
+    return "BSTART.TSTORE";
   default:
     return StringRef();
   }
@@ -169,11 +184,32 @@ static StringRef tmaAliasMnemonic(unsigned Func) {
 static StringRef cubeAliasMnemonic(unsigned Func) {
   switch (Func & 0x1fu) {
   case 0:
+    return "BSTART.TGEMV";
+  case 1:
     return "BSTART.TMATMUL";
+  default:
+    return StringRef();
+  }
+}
+
+static StringRef fixpAliasMnemonic(unsigned Func) {
+  switch (Func & 0x1fu) {
+  case 0:
+    return "BSTART.TDEQUANT";
+  case 1:
+    return "BSTART.TEXTRACT";
   case 2:
-    return "BSTART.TMATMUL.ACC";
-  case 8:
-    return "BSTART.ACCCVT";
+    return "BSTART.TINSERT";
+  case 3:
+    return "BSTART.TMOV";
+  case 4:
+    return "BSTART.TCONCAT";
+  case 5:
+    return "BSTART.TFILLPAD";
+  case 6:
+    return "BSTART.TQUANT";
+  case 7:
+    return "BSTART.TTRANS";
   default:
     return StringRef();
   }
@@ -201,91 +237,189 @@ static StringRef legacyPackedAliasMnemonic(unsigned TileOpcode) {
 static StringRef teplAliasMnemonic(unsigned TileOpcode) {
   switch (TileOpcode & 0x3ffu) {
   case 0x000:
-    return "BSTART.TADD";
+    return "BSTART.TABS";
   case 0x001:
-    return "BSTART.TSUB";
+    return "BSTART.TADD";
   case 0x002:
-    return "BSTART.TMUL";
+    return "BSTART.TADDC";
   case 0x003:
-    return "BSTART.TDIV";
+    return "BSTART.TADDS";
   case 0x004:
-    return "BSTART.TMAX";
+    return "BSTART.TADDSC";
   case 0x005:
-    return "BSTART.TMIN";
-  case 0x006:
     return "BSTART.TAND";
+  case 0x006:
+    return "BSTART.TANDS";
   case 0x007:
-    return "BSTART.TOR";
+    return "BSTART.TAXPY";
   case 0x008:
-    return "BSTART.TXOR";
+    return "BSTART.TCI";
   case 0x009:
-    return "BSTART.TSHL";
+    return "BSTART.TCMP";
   case 0x00a:
-    return "BSTART.TSHR";
+    return "BSTART.TCMPS";
   case 0x00b:
-    return "BSTART.TRELU";
+    return "BSTART.TCOLARGMAX";
   case 0x00c:
-    return "BSTART.TPRELU";
+    return "BSTART.TCOLARGMIN";
   case 0x00d:
-    return "BSTART.TCVT";
+    return "BSTART.TCOLEXPAND";
   case 0x00e:
-    return "BSTART.TEXP";
+    return "BSTART.TCOLEXPANDADD";
   case 0x00f:
-    return "BSTART.TLOG";
+    return "BSTART.TCOLEXPANDDIV";
   case 0x010:
-    return "BSTART.TSQRT";
+    return "BSTART.TCOLEXPANDEXPDIF";
   case 0x011:
-    return "BSTART.TRSQRT";
+    return "BSTART.TCOLEXPANDMAX";
   case 0x012:
-    return "BSTART.TROWMAX";
+    return "BSTART.TCOLEXPANDMIN";
   case 0x013:
-    return "BSTART.TROWMIN";
+    return "BSTART.TCOLEXPANDMUL";
   case 0x014:
-    return "BSTART.TROWSUM";
+    return "BSTART.TCOLEXPANDSUB";
   case 0x015:
     return "BSTART.TCOLMAX";
   case 0x016:
     return "BSTART.TCOLMIN";
   case 0x017:
-    return "BSTART.TCOLSUM";
+    return "BSTART.TCOLPROD";
   case 0x018:
-    return "BSTART.TRECIP";
+    return "BSTART.TCOLSUM";
   case 0x019:
-    return "BSTART.TEXPANDS";
+    return "BSTART.TCVT";
   case 0x01a:
-    return "BSTART.TGATHER";
+    return "BSTART.TDIV";
   case 0x01b:
-    return "BSTART.TSCATTER";
-  case 0x01c:
-    return "BSTART.TRESHAPE";
-  case 0x01d:
-    return "BSTART.TTRANSPOSE";
-  case 0x01e:
-    return "BSTART.TCOLEXPAND";
-  case 0x01f:
-    return "BSTART.TROWEXPAND";
-  case 0x020:
-    return "BSTART.TADDS";
-  case 0x021:
-    return "BSTART.TSUBS";
-  case 0x022:
-    return "BSTART.TMULS";
-  case 0x023:
     return "BSTART.TDIVS";
+  case 0x01c:
+    return "BSTART.TEXP";
+  case 0x01d:
+    return "BSTART.TEXPANDS";
+  case 0x01e:
+    return "BSTART.TFMOD";
+  case 0x01f:
+    return "BSTART.TFMODS";
+  case 0x020:
+    return "BSTART.TGATHER";
+  case 0x021:
+    return "BSTART.TGATHERB";
+  case 0x022:
+    return "BSTART.THISTOGRAM";
+  case 0x023:
+    return "BSTART.TLOG";
   case 0x024:
-    return "BSTART.TMAXS";
+    return "BSTART.TLRELU";
   case 0x025:
-    return "BSTART.TMINS";
+    return "BSTART.TMAX";
   case 0x026:
-    return "BSTART.TANDS";
+    return "BSTART.TMAXS";
   case 0x027:
-    return "BSTART.TORS";
+    return "BSTART.TMIN";
   case 0x028:
-    return "BSTART.TXORS";
+    return "BSTART.TMINS";
   case 0x029:
-    return "BSTART.TSHLS";
+    return "BSTART.TMRGSORT";
   case 0x02a:
+    return "BSTART.TMUL";
+  case 0x02b:
+    return "BSTART.TMULS";
+  case 0x02c:
+    return "BSTART.TNEG";
+  case 0x02d:
+    return "BSTART.TNOT";
+  case 0x02e:
+    return "BSTART.TOR";
+  case 0x02f:
+    return "BSTART.TORS";
+  case 0x030:
+    return "BSTART.TPARTADD";
+  case 0x031:
+    return "BSTART.TPARTARGMAX";
+  case 0x032:
+    return "BSTART.TPARTARGMIN";
+  case 0x033:
+    return "BSTART.TPARTMAX";
+  case 0x034:
+    return "BSTART.TPARTMIN";
+  case 0x035:
+    return "BSTART.TPARTMUL";
+  case 0x036:
+    return "BSTART.TPOW";
+  case 0x037:
+    return "BSTART.TPRELU";
+  case 0x038:
+    return "BSTART.TRANDOM";
+  case 0x039:
+    return "BSTART.TRECIP";
+  case 0x03a:
+    return "BSTART.TRELU";
+  case 0x03b:
+    return "BSTART.TREM";
+  case 0x03c:
+    return "BSTART.TREMS";
+  case 0x03d:
+    return "BSTART.TROWARGMAX";
+  case 0x03e:
+    return "BSTART.TROWARGMIN";
+  case 0x03f:
+    return "BSTART.TROWEXPAND";
+  case 0x040:
+    return "BSTART.TROWEXPANDADD";
+  case 0x041:
+    return "BSTART.TROWEXPANDDIV";
+  case 0x042:
+    return "BSTART.TROWEXPANDEXPDIF";
+  case 0x043:
+    return "BSTART.TROWEXPANDMAX";
+  case 0x044:
+    return "BSTART.TROWEXPANDMIN";
+  case 0x045:
+    return "BSTART.TROWEXPANDMUL";
+  case 0x046:
+    return "BSTART.TROWEXPANDSUB";
+  case 0x047:
+    return "BSTART.TROWMAX";
+  case 0x048:
+    return "BSTART.TROWMIN";
+  case 0x049:
+    return "BSTART.TROWPROD";
+  case 0x04a:
+    return "BSTART.TROWSUM";
+  case 0x04b:
+    return "BSTART.TRSQRT";
+  case 0x04c:
+    return "BSTART.TSCATTER";
+  case 0x04d:
+    return "BSTART.TSEL";
+  case 0x04e:
+    return "BSTART.TSELS";
+  case 0x04f:
+    return "BSTART.TSHL";
+  case 0x050:
+    return "BSTART.TSHLS";
+  case 0x051:
+    return "BSTART.TSHR";
+  case 0x052:
     return "BSTART.TSHRS";
+  case 0x053:
+    return "BSTART.TSORT32";
+  case 0x054:
+    return "BSTART.TSQRT";
+  case 0x055:
+    return "BSTART.TSUB";
+  case 0x056:
+    return "BSTART.TSUBC";
+  case 0x057:
+    return "BSTART.TSUBS";
+  case 0x058:
+    return "BSTART.TSUBSC";
+  case 0x059:
+    return "BSTART.TTRI";
+  case 0x05a:
+    return "BSTART.TXOR";
+  case 0x05b:
+    return "BSTART.TXORS";
   default:
     return StringRef();
   }
@@ -1169,9 +1303,14 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     if (IsTypedFIXP) {
       const unsigned Function =
-          static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x3ffu;
-      OS << "BSTART.FIXP\t" << utostr(Function) << ", ";
-      printDataType();
+          static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x1fu;
+      if (StringRef Alias = fixpAliasMnemonic(Function); !Alias.empty()) {
+        OS << Alias << "\t";
+        printDataType();
+      } else {
+        OS << "BSTART.FIXP\t" << utostr(Function) << ", ";
+        printDataType();
+      }
       LastParTileOp = 0u;
       LastParTileOpValid = false;
       LastTileHeader = LastTileHeaderKind::None;
@@ -1209,23 +1348,21 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       if (Alias.empty())
         Alias = teplAliasMnemonic(TileOpcode);
       if (!Alias.empty() &&
-          (Alias.starts_with("BSTART.TLOAD") || Alias.starts_with("BSTART.TSTORE") ||
-           Alias.starts_with("BSTART.TMOV"))) {
+          (Alias.starts_with("BSTART.MGATHER") ||
+           Alias.starts_with("BSTART.MSCATTER") ||
+           Alias.starts_with("BSTART.TLOAD") ||
+           Alias.starts_with("BSTART.TPREFETCH") ||
+           Alias.starts_with("BSTART.TSTORE"))) {
         LastTileHeader = LastTileHeaderKind::TMA;
       } else if (!Alias.empty() &&
-                 (Alias.starts_with("BSTART.TMATMUL") ||
-                  Alias.starts_with("BSTART.ACCCVT"))) {
+                 (Alias.starts_with("BSTART.TGEMV") ||
+                  Alias.starts_with("BSTART.TMATMUL"))) {
         LastTileHeader = LastTileHeaderKind::CUBE;
       } else if (!Alias.empty() || !isLegacyCubeTileOp(TileOpcode)) {
         LastTileHeader = LastTileHeaderKind::TEPL;
       } else {
         LastTileHeader = LastTileHeaderKind::None;
       }
-
-      LastParTileOp = ParStateOp;
-      LastParTileOpValid = true;
-      printAnnotation(OS, Annot);
-      return;
     }
 
     if (!Alias.empty()) {
@@ -1453,7 +1590,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     }
 
     // Non-tile block starts terminate any tile-header descriptor context used
-    // by B.ARG/B.IOT pretty-printing.
+    // by B.ARG/B.ITP/B.OTA pretty-printing.
     LastParTileOp = 0;
     LastParTileOpValid = false;
     LastTileHeader = LastTileHeaderKind::None;
@@ -1655,127 +1792,54 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Special-case: tile block IO descriptors (B.IOT / B.IOTI).
-  //
-  // These use bracket syntax in the ISA, but they are not memory operands and
-  // should not be routed through the generic load/store pretty printer.
-  if (AsmFmt.starts_with("B.IOT")) {
-    const bool IsIOTI = AsmFmt.starts_with("B.IOTI");
-    const unsigned S0V =
-        static_cast<unsigned>(findFieldImm("S0V").value_or(0)) & 0x1u;
-    const unsigned S1V =
-        static_cast<unsigned>(findFieldImm("S1V").value_or(0)) & 0x1u;
+  // Special-case: v0.57 tile input-pair descriptor.
+  if (AsmFmt.starts_with("B.ITP")) {
+    const unsigned Src0 =
+        static_cast<unsigned>(findFieldImm("SrcTile0").value_or(0)) & 0xffu;
+    const unsigned Src1 =
+        static_cast<unsigned>(findFieldImm("SrcTile1").value_or(0)) & 0xffu;
     const unsigned S0R =
         static_cast<unsigned>(findFieldImm("S0R").value_or(0)) & 0x1u;
     const unsigned S1R =
         static_cast<unsigned>(findFieldImm("S1R").value_or(0)) & 0x1u;
-    const unsigned DstTile =
-        static_cast<unsigned>(findFieldImm("DstTile").value_or(0)) & 0x7u;
-    const unsigned Src0 =
-        static_cast<unsigned>(findFieldImm("SrcTile0").value_or(0)) & 0x1fu;
-    const unsigned Src1 =
-        static_cast<unsigned>(findFieldImm("SrcTile1").value_or(0)) & 0x1fu;
-    const unsigned Reg =
-        static_cast<unsigned>(findFieldImm("RegSrc").value_or(0)) & 0x1fu;
-    std::optional<int64_t> SizeOpt = findFieldImm("Size");
-    if (!SizeOpt)
-      SizeOpt = findFieldImm("imm5");
-    if (!SizeOpt)
-      SizeOpt = findFieldImm("uimm5");
-    const unsigned Size = static_cast<unsigned>(SizeOpt.value_or(0)) & 0x1fu;
+    const unsigned Last =
+        static_cast<unsigned>(findFieldImm("L").value_or(0)) & 0x1u;
+    const unsigned SrcPair =
+        static_cast<unsigned>(findFieldImm("src_pair").value_or(0)) & 0x3u;
 
-    OS << (IsIOTI ? "B.IOTI" : "B.IOT");
-    OS << "\t[";
-
-    const bool Src0Present = (S0V == 0u);
-    const bool Src1Present = (S1V == 0u);
-    bool First = true;
-    if (Src0Present) {
-      printTileRef(OS, Src0);
-      if (S0R)
-        OS << ".reuse";
-      First = false;
-    }
-    if (Src1Present) {
-      if (!First)
-        OS << ", ";
-      printTileRef(OS, Src1);
-      if (S1R)
-        OS << ".reuse";
-    }
-
+    OS << "B.ITP\t[";
+    printTileRef8(OS, Src0);
+    if (S0R)
+      OS << ".reuse";
+    OS << ", ";
+    printTileRef8(OS, Src1);
+    if (S1R)
+      OS << ".reuse";
     OS << "]";
-    const bool Group1 = AsmFmt.contains("group=1");
-    if (Group1)
+    if (Last)
       OS << ", last";
+    OS << ", " << utostr(SrcPair);
+    printAnnotation(OS, Annot);
+    return;
+  }
 
-    const unsigned ActiveParOp = LastParTileOpValid ? LastParTileOp : 0u;
+  // Special-case: v0.57 tile output allocation descriptor.
+  if (AsmFmt.starts_with("B.OTA")) {
+    const unsigned Dst =
+        static_cast<unsigned>(findFieldImm("DstTile").value_or(0)) & 0xffu;
+    const unsigned CellCountM1 =
+        static_cast<unsigned>(findFieldImm("CellCountM1").value_or(0)) & 0xffu;
+    const unsigned Last =
+        static_cast<unsigned>(findFieldImm("L").value_or(0)) & 0x1u;
+    const unsigned DstSlot =
+        static_cast<unsigned>(findFieldImm("dst_slot").value_or(0)) & 0x3u;
 
-    // Canonical v0.4 CUBE contract: MAMULB-class blocks write an implicit
-    // accumulator destination.
-    const bool IsAccDst = (LastTileHeader == LastTileHeaderKind::CUBE) &&
-                          (ActiveParOp == 2u || ActiveParOp == 66u);
-
-    const char *DstKind = "t";
-    if (IsAccDst) {
-      DstKind = "acc";
-    } else {
-      // If a tile destination is encoded, it lives in the first *absent* source
-      // slot (preferring SrcTile1). This matches the disassembly snippet
-      // contract where the arrow kind tracks the destination tile hand.
-      std::optional<unsigned> DstTileReg;
-      if (!Src1Present)
-        DstTileReg = Src1;
-      else if (!Src0Present)
-        DstTileReg = Src0;
-
-      if (DstTileReg) {
-        const unsigned Tile = *DstTileReg & 0x1fu;
-        if (Tile < 8u)
-          DstKind = "t";
-        else if (Tile < 16u)
-          DstKind = "u";
-        else if (Tile < 24u)
-          DstKind = "m";
-        else
-          DstKind = "n";
-      } else {
-        // Fallback: treat DstTile as an enum in bring-up streams.
-        switch (DstTile) {
-        case 0u:
-          DstKind = "t";
-          break;
-        case 1u:
-          DstKind = "u";
-          break;
-        case 2u:
-          DstKind = "m";
-          break;
-        case 3u:
-          DstKind = "n";
-          break;
-        case 4u:
-          DstKind = "acc";
-          break;
-        default:
-          DstKind = "t";
-          break;
-        }
-      }
-    }
-
-    OS << "\t->" << DstKind << "<";
-    if (IsIOTI) {
-      const uint64_t Bytes = (Size < 60u) ? (1ull << (Size + 4u)) : 0ull;
-      if (Bytes >= 1024u && (Bytes % 1024u) == 0u)
-        OS << utostr(static_cast<unsigned>(Bytes / 1024u)) << "KB";
-      else
-        OS << utostr(Size);
-    } else {
-      OS << reg5Name(Reg);
-    }
-    OS << ">";
-
+    OS << "B.OTA\t->";
+    printTileRef8(OS, Dst);
+    OS << "<" << utostr(CellCountM1) << ">";
+    if (Last)
+      OS << ", last";
+    OS << ", " << utostr(DstSlot);
     printAnnotation(OS, Annot);
     return;
   }

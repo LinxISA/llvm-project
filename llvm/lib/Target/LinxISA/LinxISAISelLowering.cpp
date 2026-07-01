@@ -1875,6 +1875,9 @@ const char *LinxISATargetLowering::getTargetNodeName(unsigned Opcode) const {
 std::pair<unsigned, const TargetRegisterClass *>
 LinxISATargetLowering::getRegForInlineAsmConstraint(
     const TargetRegisterInfo *TRI, StringRef Constraint, MVT VT) const {
+  if (Constraint == "Tr")
+    return std::make_pair(0u, &LinxISA::TILERegClass);
+
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     case 'r':
