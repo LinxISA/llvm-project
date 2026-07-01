@@ -2208,37 +2208,37 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     //   addr = ADDI(ADDTPC(sym), sym) [+ const]
     //   load [addr] -> *.pcr [sym+const]
     SDValue PcrSym;
-	    if (selectPcrSymbolAddr(LD->getBasePtr(), PcrSym)) {
-	      unsigned Opc = 0;
-	      switch (MemVT.SimpleTy) {
-	      case MVT::i8:
-	        Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LBU_PCR
-	                                                        : LinxISA::LB_PCR;
-	        break;
-	      case MVT::i16:
-	        Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LHU_PCR
-	                                                        : LinxISA::LH_PCR;
-	        break;
-	      case MVT::f16:
-	      case MVT::bf16:
-	        Opc = LinxISA::LHU_PCR;
-	        break;
-	      case MVT::i32:
-	        Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LWU_PCR
-	                                                        : LinxISA::LW_PCR;
-	        break;
-	      case MVT::f32:
-	        // Preserve the f32 bit-pattern in the low 32 bits.
-	        Opc = LinxISA::LWU_PCR;
-	        break;
-	      case MVT::i64:
-	      case MVT::f64:
-	        Opc = LinxISA::LD_PCR;
-	        break;
-	      default:
-	        Opc = 0;
-	        break;
-	      }
+    if (selectPcrSymbolAddr(LD->getBasePtr(), PcrSym)) {
+      unsigned Opc = 0;
+      switch (MemVT.SimpleTy) {
+      case MVT::i8:
+        Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LBU_PCR
+                                                        : LinxISA::LB_PCR;
+        break;
+      case MVT::i16:
+        Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LHU_PCR
+                                                        : LinxISA::LH_PCR;
+        break;
+      case MVT::f16:
+      case MVT::bf16:
+        Opc = LinxISA::LHU_PCR;
+        break;
+      case MVT::i32:
+        Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LWU_PCR
+                                                        : LinxISA::LW_PCR;
+        break;
+      case MVT::f32:
+        // Preserve the f32 bit-pattern in the low 32 bits.
+        Opc = LinxISA::LWU_PCR;
+        break;
+      case MVT::i64:
+      case MVT::f64:
+        Opc = LinxISA::LD_PCR;
+        break;
+      default:
+        Opc = 0;
+        break;
+      }
 
       if (Opc) {
         SDVTList VTs = CurDAG->getVTList(LD->getValueType(0), MVT::Other);
@@ -2376,31 +2376,31 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     //   addr = ADDI(ADDTPC(sym), sym) [+ const]
     //   store [addr] -> *.pcr [sym+const]
     SDValue PcrSym;
-	    if (selectPcrSymbolAddr(ST->getBasePtr(), PcrSym)) {
-	      unsigned Opc = 0;
-	      switch (MemVT.SimpleTy) {
-	      case MVT::i8:
-	        Opc = LinxISA::SB_PCR;
-	        break;
-	      case MVT::i16:
-	        Opc = LinxISA::SH_PCR;
-	        break;
-	      case MVT::f16:
-	      case MVT::bf16:
-	        Opc = LinxISA::SH_PCR;
-	        break;
-	      case MVT::i32:
-	      case MVT::f32:
-	        Opc = LinxISA::SW_PCR;
-	        break;
-	      case MVT::i64:
-	      case MVT::f64:
-	        Opc = LinxISA::SD_PCR;
-	        break;
-	      default:
-	        Opc = 0;
-	        break;
-	      }
+    if (selectPcrSymbolAddr(ST->getBasePtr(), PcrSym)) {
+      unsigned Opc = 0;
+      switch (MemVT.SimpleTy) {
+      case MVT::i8:
+        Opc = LinxISA::SB_PCR;
+        break;
+      case MVT::i16:
+        Opc = LinxISA::SH_PCR;
+        break;
+      case MVT::f16:
+      case MVT::bf16:
+        Opc = LinxISA::SH_PCR;
+        break;
+      case MVT::i32:
+      case MVT::f32:
+        Opc = LinxISA::SW_PCR;
+        break;
+      case MVT::i64:
+      case MVT::f64:
+        Opc = LinxISA::SD_PCR;
+        break;
+      default:
+        Opc = 0;
+        break;
+      }
 
       if (Opc) {
         SDValue Ops[] = {ST->getValue(), PcrSym, ST->getChain()};
