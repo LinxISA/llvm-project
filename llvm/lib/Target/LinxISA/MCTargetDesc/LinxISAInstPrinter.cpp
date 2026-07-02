@@ -79,8 +79,25 @@ static void printReg10Name(raw_ostream &OS, unsigned Code) {
   OS << "vreg" << utostr(Code);
 }
 
+static void printTileRef(raw_ostream &OS, unsigned TileId) {
+  const unsigned Hand = (TileId >> 3) & 0x3u;
+  const unsigned Depth = TileId & 0x7u;
+  const char Prefix = (Hand == 0) ? 't'
+                     : (Hand == 1) ? 'u'
+                     : (Hand == 2) ? 'm'
+                                   : 'n';
+  OS << Prefix << "#" << utostr(Depth + 1u);
+}
+
 static void printTileRef8(raw_ostream &OS, unsigned TileId) {
-  OS << "T" << utostr(TileId & 0xffu);
+  TileId &= 0xffu;
+  if (TileId == 0u) {
+    OS << "TZERO";
+  } else if (TileId <= 32u) {
+    printTileRef(OS, TileId - 1u);
+  } else {
+    OS << "tile#" << utostr(TileId);
+  }
 }
 
 static StringRef dtypeName(unsigned DT) {

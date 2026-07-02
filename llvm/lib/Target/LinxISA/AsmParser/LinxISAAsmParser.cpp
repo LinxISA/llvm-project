@@ -208,14 +208,6 @@ static std::optional<unsigned> parseTileRef(StringRef Name, bool &Reuse,
   if (Base.equals_insensitive("TZERO"))
     return 0u;
 
-  if (Base.size() >= 2 && (Base[0] == 'T' || Base[0] == 't') &&
-      Base[1] >= '0' && Base[1] <= '9') {
-    unsigned Tile = 0;
-    if (Base.drop_front(1).getAsInteger(10, Tile) || Tile > 255u)
-      return std::nullopt;
-    return Tile;
-  }
-
   if (Base.consume_front_insensitive("tile#")) {
     unsigned Tile = 0;
     if (Base.getAsInteger(10, Tile) || Tile > 255u)
@@ -1607,7 +1599,7 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
   Lex();
 
   // Optional tile-descriptor angle suffix:
-  //   - `->Tn<CellCountM1>` / `->acc#N<CellCountM1>` (B.OTA)
+  //   - `->t#N<CellCountM1>` / `->acc#N<CellCountM1>` (B.OTA)
   // This syntax is used by tile descriptor forms and is not a normal register
   // operand.
   if (getTok().is(AsmToken::Less)) {
@@ -2015,8 +2007,8 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
         }
 
         if (getTok().is(AsmToken::Identifier)) {
-          // Tile descriptors: treat Tn direct references as tile IDs (not
-          // registers) and encode `.reuse` inline.
+          // Tile descriptors: treat t#/u#/m#/n# as tile IDs (not registers) and
+          // encode `.reuse` inline.
           if (IsTileIODesc) {
             bool Reuse = false;
             if (auto Tile = parseTileRef(getTok().getString(), Reuse,
@@ -3222,7 +3214,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       return false;
     if (!require(PI.ArrowDests[0].HasAngleSize &&
                      !PI.ArrowDests[0].HasAngleReg,
-                 "B.OTA expects CellCountM1 suffix, for example ->T1<31>"))
+                 "B.OTA expects CellCountM1 suffix, for example ->t#1<31>"))
       return false;
 
     bool WantLast = false;
@@ -3237,7 +3229,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     const unsigned DstSlot = static_cast<unsigned>(SlotRaw) & 0x3u;
     const unsigned DstTile = PI.ArrowDests[0].Code & 0xffu;
     const unsigned CellCountM1 = PI.ArrowDests[0].AngleSize & 0xffu;
-    if (!require(DstTile != 0u, "B.OTA destination cannot be T0/TZERO"))
+    if (!require(DstTile != 0u, "B.OTA destination cannot be TZERO"))
       return false;
 
     for (unsigned i = 0; i < Form.field_count; ++i) {

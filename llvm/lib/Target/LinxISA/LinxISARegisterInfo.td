@@ -44,11 +44,10 @@ def U2  : LinxISAReg<29, "u#2">;
 def U3  : LinxISAReg<30, "u#3">;
 def U4  : LinxISAReg<31, "u#4">;
 
-// Tile registers (TAU): 4 hands (T/U/M/N) × depth 8 = 32 compiler-managed
-// physical tiles. v0.57 descriptors encode direct architectural TileReg
-// references T0..T255; Blockify maps TILE0..TILE31 to T1..T32 and reserves T0
-// for source padding. The hands below are backend allocation banks, not the
-// v0.57 descriptor assembly spelling:
+// Tile registers (TAU): 4 hands (T/U/M/N) × depth 8 = 32 tiles.
+// The current ISA encoding uses 5-bit tile indices for sources (0..31) and a
+// 3-bit destination depth (0..7) plus a 1-bit group selector. The backend maps
+// physical tile registers TILE0..TILE31 to hands as:
 //   TILE0..TILE7   = T hand
 //   TILE8..TILE15  = U hand
 //   TILE16..TILE23 = M hand
