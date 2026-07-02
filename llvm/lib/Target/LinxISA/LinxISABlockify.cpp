@@ -1664,11 +1664,11 @@ public:
           .addSym(VTileAddBodySym);
 
       static const char kBodyAsm[] =
-          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
-          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
-          "  v.add vt#1.sw, vu#1.sw, ->vt.w\n"
-          "  v.sw.brg.local vt#2, [to, lc0<<2, lc1<<8]\n"
-          "  C.BSTOP\n";
+	          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
+	          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
+	          "  v.add vt#1.sw, vu#1.sw, ->vt.w\n"
+	          "  v.sw.local vt#2, [to, lc0<<2, lc1<<8]\n"
+	          "  C.BSTOP\n";
       emitVectorBodyText(*VTileAddBodyBB, StringRef(kBodyAsm), "vtile add body");
       BuildMI(*VTileAddBodyBB, VTileAddBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
@@ -1698,11 +1698,11 @@ public:
           .addSym(VTileSubBodySym);
 
       static const char kBodyAsm[] =
-          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
-          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
-          "  v.sub vt#1.sw, vu#1.sw, ->vt.w\n"
-          "  v.sw.brg.local vt#2, [to, lc0<<2, lc1<<8]\n"
-          "  C.BSTOP\n";
+	          "  v.lw.local [ta, lc0<<2, lc1<<8], ->vt.w\n"
+	          "  v.lw.local [tb, lc0<<2, lc1<<8], ->vu.w\n"
+	          "  v.sub vt#1.sw, vu#1.sw, ->vt.w\n"
+	          "  v.sw.local vt#2, [to, lc0<<2, lc1<<8]\n"
+	          "  C.BSTOP\n";
       emitVectorBodyText(*VTileSubBodyBB, StringRef(kBodyAsm), "vtile sub body");
       BuildMI(*VTileSubBodyBB, VTileSubBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
