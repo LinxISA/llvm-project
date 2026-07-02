@@ -73,17 +73,8 @@ bool LinxISATargetInfo::validateAsmConstraint(
   // e - even register (for paired registers)
   // z - zero register (r0)
   // Z - first special register (ra/r10)
-  // Tr - tile register
 
   switch (Name[0]) {
-  case 'T': {
-    if (Name[1] == 'r') {
-      Info.setAllowsRegister();
-      Name++;
-      return true;
-    }
-    return false;
-  }
   case 'r': {
     // General purpose register
     Info.setAllowsRegister();

@@ -3348,21 +3348,8 @@ const linxisa_field_piece linxisa_field_pieces[] = {
   { .insn_lsb = 20, .width = 5, .value_lsb = 0 },
   { .insn_lsb = 25, .width = 2, .value_lsb = 0 },
   { .insn_lsb = 27, .width = 5, .value_lsb = 0 },
-  /* v0.57 PTO block descriptor extension rows. */
-  { .insn_lsb = 24, .width = 8, .value_lsb = 0 },
-  { .insn_lsb = 16, .width = 8, .value_lsb = 0 },
-  { .insn_lsb = 15, .width = 1, .value_lsb = 0 },
-  { .insn_lsb = 10, .width = 2, .value_lsb = 0 },
-  { .insn_lsb = 9, .width = 1, .value_lsb = 0 },
-  { .insn_lsb = 8, .width = 1, .value_lsb = 0 },
-  { .insn_lsb = 24, .width = 8, .value_lsb = 0 },
-  { .insn_lsb = 16, .width = 8, .value_lsb = 0 },
-  { .insn_lsb = 15, .width = 1, .value_lsb = 0 },
-  { .insn_lsb = 10, .width = 2, .value_lsb = 0 },
-  { .insn_lsb = 15, .width = 5, .value_lsb = 0 },
-  { .insn_lsb = 11, .width = 1, .value_lsb = 0 },
 };
-const size_t linxisa_field_pieces_count = 3356;
+const size_t linxisa_field_pieces_count = 3344;
 
 const linxisa_field linxisa_fields[] = {
   { .name = "RST_Type", .signed_hint = -1, .bit_width = 4, .piece_start = 0, .piece_count = 1 },
@@ -5976,21 +5963,8 @@ const linxisa_field linxisa_fields[] = {
   { .name = "SrcR", .signed_hint = -1, .bit_width = 5, .piece_start = 3341, .piece_count = 1 },
   { .name = "SrcRType", .signed_hint = -1, .bit_width = 2, .piece_start = 3342, .piece_count = 1 },
   { .name = "shamt", .signed_hint = -1, .bit_width = 5, .piece_start = 3343, .piece_count = 1 },
-  /* v0.57 PTO block descriptor extension fields. */
-  { .name = "SrcTile1", .signed_hint = -1, .bit_width = 8, .piece_start = 3344, .piece_count = 1 },
-  { .name = "SrcTile0", .signed_hint = -1, .bit_width = 8, .piece_start = 3345, .piece_count = 1 },
-  { .name = "L", .signed_hint = -1, .bit_width = 1, .piece_start = 3346, .piece_count = 1 },
-  { .name = "src_pair", .signed_hint = -1, .bit_width = 2, .piece_start = 3347, .piece_count = 1 },
-  { .name = "S1R", .signed_hint = -1, .bit_width = 1, .piece_start = 3348, .piece_count = 1 },
-  { .name = "S0R", .signed_hint = -1, .bit_width = 1, .piece_start = 3349, .piece_count = 1 },
-  { .name = "DstTile", .signed_hint = -1, .bit_width = 8, .piece_start = 3350, .piece_count = 1 },
-  { .name = "CellCountM1", .signed_hint = -1, .bit_width = 8, .piece_start = 3351, .piece_count = 1 },
-  { .name = "L", .signed_hint = -1, .bit_width = 1, .piece_start = 3352, .piece_count = 1 },
-  { .name = "dst_slot", .signed_hint = -1, .bit_width = 2, .piece_start = 3353, .piece_count = 1 },
-  { .name = "MetaGpr", .signed_hint = -1, .bit_width = 5, .piece_start = 3354, .piece_count = 1 },
-  { .name = "MetaMode", .signed_hint = -1, .bit_width = 1, .piece_start = 3355, .piece_count = 1 },
 };
-const size_t linxisa_fields_count = 2623;
+const size_t linxisa_fields_count = 2611;
 
 const linxisa_inst_form linxisa_inst_forms[] = {
   { .id = "acrc_32_a9c0e33f9904", .mnemonic = "ACRC", .asm_fmt = "acrc rst_type", .length_bits = 32, .mask = 0x00000000ff0fffffULL, .match = 0x000000000000302bULL, .field_start = 0, .field_count = 1 },
@@ -6023,6 +5997,9 @@ const linxisa_inst_form linxisa_inst_forms[] = {
   { .id = "b_hint_32_a65821182bf3", .mnemonic = "B.HINT", .asm_fmt = "B.HINT TRACE.{begin, end}", .length_bits = 32, .mask = 0x0000000000007fffULL, .match = 0x0000000000001033ULL, .field_start = 70, .field_count = 2 },
   { .id = "b_iod_32_d4d0a426dcab", .mnemonic = "B.IOD", .asm_fmt = "B.IOD DepSrc0, DepSrc1, DepSrc2, ->DepDst", .length_bits = 32, .mask = 0x000000000600707fULL, .match = 0x0000000000001013ULL, .field_start = 72, .field_count = 4 },
   { .id = "b_ior_32_c3ea71404eb3", .mnemonic = "B.IOR", .asm_fmt = "B.IOR [RegSrc0, RegSrc1, RegSrc2],[RegDst]", .length_bits = 32, .mask = 0x000000000600707fULL, .match = 0x0000000000000013ULL, .field_start = 76, .field_count = 4 },
+  { .id = "b_iot_32_10db6db84f5d", .mnemonic = "B.IOT", .asm_fmt = "B.IOT SrcTile0<.reuse>, <last>, ->DstTile<Size>", .length_bits = 32, .mask = 0x00000000803f707fULL, .match = 0x0000000000005013ULL, .field_start = 80, .field_count = 5 },
+  { .id = "b_iot_32_8b8bce6bffe8", .mnemonic = "B.IOT", .asm_fmt = "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000004013ULL, .field_start = 85, .field_count = 7 },
+  { .id = "b_iot_32_efa0fe3fe49a", .mnemonic = "B.IOT", .asm_fmt = "B.IOT <last>, ->DstTile<Size>", .length_bits = 32, .mask = 0x00000000c03fffffULL, .match = 0x0000000000006013ULL, .field_start = 92, .field_count = 3 },
   { .id = "b_lt_32_2ca5ecd25cfb", .mnemonic = "B.LT", .asm_fmt = "b.lt SrcL, SrcR, label", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000002027ULL, .field_start = 95, .field_count = 3 },
   { .id = "b_ltu_32_f1ea7ad44e37", .mnemonic = "B.LTU", .asm_fmt = "b.ltu SrcL, SrcR, label", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000004027ULL, .field_start = 98, .field_count = 3 },
   { .id = "b_ne_32_831af6a36ff4", .mnemonic = "B.NE", .asm_fmt = "b.ne SrcL, SrcR, label", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000001027ULL, .field_start = 101, .field_count = 3 },
@@ -6040,7 +6017,7 @@ const linxisa_inst_form linxisa_inst_forms[] = {
   { .id = "bstart_call_32_9404418d1ae5", .mnemonic = "BSTART CALL", .asm_fmt = "BSTART.CALL, <br_label>, <rt_label>, -> ra", .length_bits = 32, .mask = 0x00000000f83f000fULL, .match = 0x0000000050160002ULL, .field_start = 123, .field_count = 2 },
   { .id = "bstart_acccvt_32_56c3ce3838c5", .mnemonic = "BSTART.ACCCVT", .asm_fmt = "BSTART.ACCCVT DataType", .length_bits = 32, .mask = 0x0000000007ffffffULL, .match = 0x0000000000831181ULL, .field_start = 125, .field_count = 1 },
   { .id = "bstart_cube_32_bd3f337acb9d", .mnemonic = "BSTART.CUBE", .asm_fmt = "BSTART.CUBE Function, DataType", .length_bits = 32, .mask = 0x00000000060fffffULL, .match = 0x0000000000031181ULL, .field_start = 126, .field_count = 2 },
-  { .id = "bstart_fixp_32_3b0ae11126a6", .mnemonic = "BSTART.FIXP", .asm_fmt = "BSTART.FIXP Function, DataType", .length_bits = 32, .mask = 0x00000000060fffffULL, .match = 0x0000000000039181ULL, .field_start = 128, .field_count = 2 },
+  { .id = "bstart_fixp_32_3b0ae11126a6", .mnemonic = "BSTART.FIXP", .asm_fmt = "BSTART.FIXP TileOp, DataType", .length_bits = 32, .mask = 0x00000000060fffffULL, .match = 0x0000000000039181ULL, .field_start = 128, .field_count = 2 },
   { .id = "bstart_fp_32_2fbcd8fd8e97", .mnemonic = "BSTART.FP", .asm_fmt = "BSTART.FP RET", .length_bits = 32, .mask = 0x0000000000007fffULL, .match = 0x0000000000007101ULL, .field_start = 130, .field_count = 1 },
   { .id = "bstart_fp_32_49b15de09969", .mnemonic = "BSTART.FP", .asm_fmt = "BSTART.FP IND", .length_bits = 32, .mask = 0x0000000000007fffULL, .match = 0x0000000000005101ULL, .field_start = 131, .field_count = 1 },
   { .id = "bstart_fp_32_58ad7954fb49", .mnemonic = "BSTART.FP", .asm_fmt = "BSTART.FP COND, <label>", .length_bits = 32, .mask = 0x0000000000007fffULL, .match = 0x0000000000003101ULL, .field_start = 132, .field_count = 1 },
@@ -6730,9 +6707,5 @@ const linxisa_inst_form linxisa_inst_forms[] = {
   { .id = "xori_32_5cf7e5be17e7", .mnemonic = "XORI", .asm_fmt = "xori SrcL, simm, ->{t, u, Rd}", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000004015ULL, .field_start = 2600, .field_count = 3 },
   { .id = "xoriw_32_1f8c6f43e2bd", .mnemonic = "XORIW", .asm_fmt = "xoriw SrcL, simm, ->{t, u, Rd}", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000004035ULL, .field_start = 2603, .field_count = 3 },
   { .id = "xorw_32_32282566e32d", .mnemonic = "XORW", .asm_fmt = "xorw SrcL, SrcR<{.sw,.uw,.not}><<<shamt>, ->{t, u, Rd}", .length_bits = 32, .mask = 0x000000000000707fULL, .match = 0x0000000000004025ULL, .field_start = 2606, .field_count = 5 },
-  /* v0.57 PTO block descriptor extension forms. */
-  { .id = "b_itp_32_v057", .mnemonic = "B.ITP", .asm_fmt = "B.ITP [SrcTile0<.reuse>, SrcTile1<.reuse>], <last>, src_pair", .length_bits = 32, .mask = 0x00000000000070ffULL, .match = 0x0000000000002013ULL, .field_start = 2611, .field_count = 6 },
-  { .id = "b_ota_32_v057", .mnemonic = "B.OTA", .asm_fmt = "B.OTA ->DstTile<CellCountM1>, <last>, dst_slot", .length_bits = 32, .mask = 0x00000000000070ffULL, .match = 0x0000000000003013ULL, .field_start = 2617, .field_count = 4 },
-  { .id = "b_meta_32_v057", .mnemonic = "B.META", .asm_fmt = "B.META MetaGpr, MetaMode", .length_bits = 32, .mask = 0x00000000fff077ffULL, .match = 0x0000000000004043ULL, .field_start = 2621, .field_count = 2 },
 };
 const size_t linxisa_inst_forms_count = 740;

@@ -5095,10 +5095,6 @@ def mqdsp6_compat : Flag<["-"], "mqdsp6-compat">, Group<m_Group>,
   MarshallingInfoFlag<LangOpts<"HexagonQdsp6Compat">>;
 def m64 : Flag<["-"], "m64">, Group<m_Group>, Flags<[NoXarchOption]>,
   Visibility<[ClangOption, CLOption, DXCOption, FlangOption]>;
-def mlxbc : Flag<["-"], "mlxbc">, Group<m_Group>,
-  Flags<[NoXarchOption, TargetSpecific]>,
-  Visibility<[ClangOption, CLOption]>,
-  HelpText<"Select the Linx block ISA bare-metal target">;
 def maix64 : Flag<["-"], "maix64">, Group<m_Group>, Flags<[NoXarchOption]>,
   Visibility<[FlangOption]>;
 def mx32 : Flag<["-"], "mx32">, Group<m_Group>, Flags<[NoXarchOption]>,

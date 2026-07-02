@@ -615,10 +615,6 @@ static llvm::Triple computeTargetTriple(const Driver &D,
   // FIXME: Already done in Compilation *Driver::BuildCompilation
   if (const Arg *A = Args.getLastArg(options::OPT_target))
     TargetTriple = A->getValue();
-  else if (Arg *A = Args.getLastArg(options::OPT_mlxbc)) {
-    TargetTriple = "linx64-linx-none-elf";
-    A->claim();
-  }
 
   llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
 

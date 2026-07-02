@@ -353,7 +353,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::BSTART_TMA: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t Func = I(1) & 0xff;
+    const int64_t Func = I(1) & 0x1f;
     OutMI.setOpcode(
         getSpecOpcodeByAsmFmt("BSTART.TMA Function, DataType", /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
@@ -362,7 +362,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
   case LinxISA::BSTART_CUBE: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t Func = I(1) & 0xff;
+    const int64_t Func = I(1) & 0x1f;
     OutMI.setOpcode(
         getSpecOpcodeByAsmFmt("BSTART.CUBE Function, DataType",
                               /*LengthBits=*/32));
@@ -370,19 +370,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(Func));
     return;
   }
-  case LinxISA::BSTART_FIXP: {
-    const int64_t DataType = I(0) & 0x1f;
-    const int64_t Func = I(1) & 0xff;
-    OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("BSTART.FIXP Function, DataType",
-                              /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(DataType));
-    OutMI.addOperand(MCOperand::createImm(Func));
-    return;
-  }
   case LinxISA::BSTART_TEPL: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t TileOpcode = I(1) & 0xff;
+    const int64_t TileOpcode = I(1) & 0x3ff;
     OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.TEPL TileOpcode, DataType",
                                           /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
@@ -416,14 +406,6 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::B_ARG: {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt("B.ARG format", /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(I(0))); // format
-    return;
-  }
-
-  case LinxISA::B_META: {
-    OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("B.META MetaGpr, MetaMode", /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(R(0)));        // MetaGpr
-    OutMI.addOperand(MCOperand::createImm(I(1) & 0x1));  // MetaMode
     return;
   }
 
@@ -487,26 +469,39 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  case LinxISA::B_ITP: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(
-        "B.ITP [SrcTile0<.reuse>, SrcTile1<.reuse>], <last>, src_pair",
-        /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcTile1
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcTile0
-    OutMI.addOperand(MCOperand::createImm(I(4))); // L
-    OutMI.addOperand(MCOperand::createImm(I(5))); // src_pair
-    OutMI.addOperand(MCOperand::createImm(I(3))); // S1R
+  case LinxISA::B_IOT_G0:
+  case LinxISA::B_IOT_G1: {
+    StringRef AsmFmt =
+        (Opc == LinxISA::B_IOT_G0)
+            ? "B.IOT [SrcTile0<.reuse>, SrcTile1<.reuse>],  group=0, ->DstTile<RegSrc>"
+            : "B.IOT [SrcTile0<.reuse>, SrcTile1<.reuse>],  group=1, ->DstTile<RegSrc>";
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
+    OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
+    OutMI.addOperand(MCOperand::createImm(R(1))); // RegSrc
     OutMI.addOperand(MCOperand::createImm(I(2))); // S0R
+    OutMI.addOperand(MCOperand::createImm(I(3))); // S0V
+    OutMI.addOperand(MCOperand::createImm(I(4))); // S1R
+    OutMI.addOperand(MCOperand::createImm(I(5))); // S1V
+    OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile0
+    OutMI.addOperand(MCOperand::createImm(I(7))); // SrcTile1
     return;
   }
-  case LinxISA::B_OTA: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(
-        "B.OTA ->DstTile<CellCountM1>, <last>, dst_slot",
-        /*LengthBits=*/32));
+
+  case LinxISA::B_IOTI_G0:
+  case LinxISA::B_IOTI_G1: {
+    StringRef AsmFmt =
+        (Opc == LinxISA::B_IOTI_G0)
+            ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>"
+            : "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>";
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
-    OutMI.addOperand(MCOperand::createImm(I(1))); // CellCountM1
-    OutMI.addOperand(MCOperand::createImm(I(2))); // L
-    OutMI.addOperand(MCOperand::createImm(I(3))); // dst_slot
+    OutMI.addOperand(MCOperand::createImm(I(1))); // S0R
+    OutMI.addOperand(MCOperand::createImm(I(2))); // S0V
+    OutMI.addOperand(MCOperand::createImm(I(3))); // S1R
+    OutMI.addOperand(MCOperand::createImm(I(4))); // S1V
+    OutMI.addOperand(MCOperand::createImm(I(5))); // SrcTile0
+    OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile1
+    OutMI.addOperand(MCOperand::createImm(I(7))); // imm5 (Size)
     return;
   }
 

@@ -15,7 +15,7 @@ let TargetPrefix = "linx" in {
   // -------------------------------------------------------------------------
   // Tile block intrinsics (TAU) - PR4 surface
   //
-  // Preferred LinxISA v0.57 frontend surface:
+  // Preferred strict-v0.3 frontend surface:
   //   llvm.linx.tile.tload/tstore/tmov
   //
   // Type contract:
@@ -70,35 +70,6 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
                  ImmArg<ArgIndex<5>>]>;
-
-  // %linx.tile @llvm.linx.tile.tinsert(%linx.tile dst, %linx.tile src,
-  //                                    i32 immSizeCode, i32 immDType,
-  //                                    i32 immDstRows, i32 immDstCols,
-  //                                    i32 immSrcRows, i32 immSrcCols,
-  //                                    i64 meta)
-  def int_linx_tile_tinsert :
-      Intrinsic<[llvm_linx_tile_ty],
-                [llvm_linx_tile_ty, llvm_linx_tile_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i64_ty],
-                [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
-                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>,
-                 ImmArg<ArgIndex<6>>, ImmArg<ArgIndex<7>>]>;
-
-  // %linx.tile @llvm.linx.tile.ttrans(%linx.tile src, %linx.tile tmp,
-  //                                   i32 immSizeCode, i32 immDType,
-  //                                   i32 immDstRows, i32 immDstCols,
-  //                                   i32 immSrcRows, i32 immSrcCols)
-  def int_linx_tile_ttrans :
-      Intrinsic<[llvm_linx_tile_ty],
-                [llvm_linx_tile_ty, llvm_linx_tile_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty],
-                [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
-                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>,
-                 ImmArg<ArgIndex<6>>, ImmArg<ArgIndex<7>>]>;
 
   // %linx.tile @llvm.linx.cube.mamulb(%linx.tile a, %linx.tile b,
   //                                  i32 immM, i32 immN, i32 immK)
@@ -168,22 +139,11 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
                  ImmArg<ArgIndex<4>>]>;
 
-  // %linx.tile @llvm.linx.tepl.ternary(%linx.tile a, %linx.tile b,
-  //                                    %linx.tile c, i32 immTileOp10,
-  //                                    i32 immSizeCode, i32 immDType)
-  def int_linx_tepl_ternary :
-      Intrinsic<[llvm_linx_tile_ty],
-                [llvm_linx_tile_ty, llvm_linx_tile_ty, llvm_linx_tile_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
-                 ImmArg<ArgIndex<5>>]>;
-
   // %linx.tile @llvm.linx.tepl.binary.scalar(%linx.tile a, i64 scalar,
   //                                          i32 immTileOp10, i32 immSizeCode,
   //                                          i32 immDType, i32 immMode)
   //
-  // Scalar TEPL mode extension for LinxISA v0.57:
+  // Scalar TEPL mode extension for strict-v0.3:
   // - mode 1 = VS (tile,scalar)
   def int_linx_tepl_binary_scalar :
       Intrinsic<[llvm_linx_tile_ty],
@@ -197,7 +157,7 @@ let TargetPrefix = "linx" in {
   //                                  i32 immSizeCode, i32 immDType,
   //                                  i32 immMode)
   //
-  // Scalar TEPL mode extension for LinxISA v0.57:
+  // Scalar TEPL mode extension for strict-v0.3:
   // - mode 2 = SV (scalar->tile splat)
   def int_linx_tepl_splat :
       Intrinsic<[llvm_linx_tile_ty],
@@ -282,7 +242,7 @@ let TargetPrefix = "linx" in {
   // Bring-up contract:
   // - Executed as a decoupled BSTART.VPAR header that replays a single-lane
   //   vector body over LB0/LB1 dimensions.
-  // - Tile operands are bound via B.ITP/B.OTA descriptors and accessed through TA/TB/TO.
+  // - Tile operands are bound via B.IOTI descriptors and accessed through TA/TB/TO.
   // - immSizeCode uses the same 2^(SizeCode+4) convention as TLOAD/TSTORE.
   // -------------------------------------------------------------------------
 
@@ -324,25 +284,6 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
                  ImmArg<ArgIndex<5>>, ImmArg<ArgIndex<6>>,
                  ImmArg<ArgIndex<7>>]>;
-  def int_linx_tma_mgather_desc :
-      Intrinsic<[llvm_anyvector_ty],
-                [llvm_ptr_ty, LLVMMatchType<0>, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty],
-                [IntrReadMem, IntrArgMemOnly,
-                 NoCapture<ArgIndex<0>>, ImmArg<ArgIndex<2>>,
-                 ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
-                 ImmArg<ArgIndex<5>>, ImmArg<ArgIndex<6>>,
-                 ImmArg<ArgIndex<7>>]>;
-  def int_linx_tma_mscatter_desc :
-      Intrinsic<[],
-                [llvm_ptr_ty, llvm_anyvector_ty, LLVMMatchType<0>,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i64_ty],
-                [IntrWriteMem, IntrArgMemOnly,
-                 NoCapture<ArgIndex<0>>, ImmArg<ArgIndex<3>>,
-                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>,
-                 ImmArg<ArgIndex<6>>, ImmArg<ArgIndex<7>>,
-                 ImmArg<ArgIndex<8>>]>;
 
   // Legacy vector TMOV bridge.
   def int_linx_tile_tmov_legacy :
@@ -353,23 +294,6 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
                  ImmArg<ArgIndex<5>>]>;
-  def int_linx_tile_tinsert_legacy :
-      Intrinsic<[llvm_anyvector_ty],
-                [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i64_ty],
-                [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
-                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>,
-                 ImmArg<ArgIndex<6>>, ImmArg<ArgIndex<7>>]>;
-  def int_linx_tile_ttrans_legacy :
-      Intrinsic<[llvm_anyvector_ty],
-                [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
-                 ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>,
-                 ImmArg<ArgIndex<6>>, ImmArg<ArgIndex<7>>]>;
 
   // Legacy CUBE forms.
   def int_linx_cube_mamulb_legacy :
@@ -408,13 +332,6 @@ let TargetPrefix = "linx" in {
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
                  ImmArg<ArgIndex<4>>]>;
-  def int_linx_tepl_ternary_legacy :
-      Intrinsic<[llvm_anyvector_ty],
-                [LLVMMatchType<0>, LLVMMatchType<0>, LLVMMatchType<0>,
-                 llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
-                [IntrNoMem, IntrHasSideEffects,
-                 ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
-                 ImmArg<ArgIndex<5>>]>;
   def int_linx_tepl_binary_scalar_legacy :
       Intrinsic<[llvm_anyvector_ty],
                 [LLVMMatchType<0>, llvm_i64_ty, llvm_i32_ty, llvm_i32_ty,

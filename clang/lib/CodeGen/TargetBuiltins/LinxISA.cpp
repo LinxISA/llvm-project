@@ -57,42 +57,6 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
                               {Base, Tile, DType, Layout, LB0, LB1, Size,
                                Stride});
   }
-  case LinxISA::BI__builtin_linx_tile_mgather: {
-    llvm::Value *Base = EmitScalarExpr(E->getArg(0));
-    llvm::Value *Index = EmitScalarExpr(E->getArg(1));
-    llvm::Value *Size = castToI32(EmitScalarExpr(E->getArg(2)));
-    llvm::Value *DType = castToI32(EmitScalarExpr(E->getArg(3)));
-    llvm::Value *Layout = castToI32(EmitScalarExpr(E->getArg(4)));
-    llvm::Value *LB0 = castToI32(EmitScalarExpr(E->getArg(5)));
-    llvm::Value *LB1 = castToI32(EmitScalarExpr(E->getArg(6)));
-    llvm::Value *Stride = castToI64(EmitScalarExpr(E->getArg(7)));
-
-    llvm::Type *TileTy = ConvertType(E->getType());
-    llvm::Function *F =
-        CGM.getIntrinsic(llvm::Intrinsic::linx_tma_mgather_desc, {TileTy});
-    return Builder.CreateCall(F,
-                              {Base, Index, DType, Layout, LB0, LB1, Size,
-                               Stride},
-                              "linx.tile.mgather");
-  }
-  case LinxISA::BI__builtin_linx_tile_mscatter: {
-    llvm::Value *Base = EmitScalarExpr(E->getArg(0));
-    llvm::Value *Tile = EmitScalarExpr(E->getArg(1));
-    llvm::Value *Index = EmitScalarExpr(E->getArg(2));
-    llvm::Value *Size = castToI32(EmitScalarExpr(E->getArg(3)));
-    llvm::Value *DType = castToI32(EmitScalarExpr(E->getArg(4)));
-    llvm::Value *Layout = castToI32(EmitScalarExpr(E->getArg(5)));
-    llvm::Value *LB0 = castToI32(EmitScalarExpr(E->getArg(6)));
-    llvm::Value *LB1 = castToI32(EmitScalarExpr(E->getArg(7)));
-    llvm::Value *Stride = castToI64(EmitScalarExpr(E->getArg(8)));
-
-    llvm::Function *F =
-        CGM.getIntrinsic(llvm::Intrinsic::linx_tma_mscatter_desc,
-                         {Tile->getType()});
-    return Builder.CreateCall(F,
-                              {Base, Tile, Index, DType, Layout, LB0, LB1,
-                               Size, Stride});
-  }
   case LinxISA::BI__builtin_linx_tile_tmov: {
     llvm::Value *Src = EmitScalarExpr(E->getArg(0));
     llvm::Value *Mode = castToI32(EmitScalarExpr(E->getArg(1)));
@@ -108,39 +72,6 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
         llvm::Intrinsic::linx_tile_tmov_legacy, {Src->getType()});
     return Builder.CreateCall(F, {Src, Mode, Size, DType, Layout, HasLayout},
                               "linx.tile.tmov");
-  }
-  case LinxISA::BI__builtin_linx_tile_tinsert: {
-    llvm::Value *Dst = EmitScalarExpr(E->getArg(0));
-    llvm::Value *Src = EmitScalarExpr(E->getArg(1));
-    llvm::Value *Size = castToI32(EmitScalarExpr(E->getArg(2)));
-    llvm::Value *DType = castToI32(EmitScalarExpr(E->getArg(3)));
-    llvm::Value *DstRows = castToI32(EmitScalarExpr(E->getArg(4)));
-    llvm::Value *DstCols = castToI32(EmitScalarExpr(E->getArg(5)));
-    llvm::Value *SrcRows = castToI32(EmitScalarExpr(E->getArg(6)));
-    llvm::Value *SrcCols = castToI32(EmitScalarExpr(E->getArg(7)));
-    llvm::Value *Meta = castToI64(EmitScalarExpr(E->getArg(8)));
-
-    llvm::Function *F = CGM.getIntrinsic(
-        llvm::Intrinsic::linx_tile_tinsert_legacy, {Dst->getType()});
-    return Builder.CreateCall(F, {Dst, Src, Size, DType, DstRows, DstCols,
-                                  SrcRows, SrcCols, Meta},
-                              "linx.tile.tinsert");
-  }
-  case LinxISA::BI__builtin_linx_tile_ttrans: {
-    llvm::Value *Src = EmitScalarExpr(E->getArg(0));
-    llvm::Value *Tmp = EmitScalarExpr(E->getArg(1));
-    llvm::Value *Size = castToI32(EmitScalarExpr(E->getArg(2)));
-    llvm::Value *DType = castToI32(EmitScalarExpr(E->getArg(3)));
-    llvm::Value *DstRows = castToI32(EmitScalarExpr(E->getArg(4)));
-    llvm::Value *DstCols = castToI32(EmitScalarExpr(E->getArg(5)));
-    llvm::Value *SrcRows = castToI32(EmitScalarExpr(E->getArg(6)));
-    llvm::Value *SrcCols = castToI32(EmitScalarExpr(E->getArg(7)));
-
-    llvm::Function *F = CGM.getIntrinsic(
-        llvm::Intrinsic::linx_tile_ttrans_legacy, {Src->getType()});
-    return Builder.CreateCall(F, {Src, Tmp, Size, DType, DstRows, DstCols,
-                                  SrcRows, SrcCols},
-                              "linx.tile.ttrans");
   }
   case LinxISA::BI__builtin_linx_cube_mamulb: {
     llvm::Value *A = EmitScalarExpr(E->getArg(0));
@@ -198,19 +129,6 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
         llvm::Intrinsic::linx_tepl_binary_legacy, {A->getType()});
     return Builder.CreateCall(F, {A, B, TileOp, Size, DType},
                               "linx.tepl.b");
-  }
-  case LinxISA::BI__builtin_linx_tepl_ternary: {
-    llvm::Value *A = EmitScalarExpr(E->getArg(0));
-    llvm::Value *B = EmitScalarExpr(E->getArg(1));
-    llvm::Value *C = EmitScalarExpr(E->getArg(2));
-    llvm::Value *TileOp = castToI32(EmitScalarExpr(E->getArg(3)));
-    llvm::Value *Size = castToI32(EmitScalarExpr(E->getArg(4)));
-    llvm::Value *DType = castToI32(EmitScalarExpr(E->getArg(5)));
-
-    llvm::Function *F = CGM.getIntrinsic(
-        llvm::Intrinsic::linx_tepl_ternary_legacy, {A->getType()});
-    return Builder.CreateCall(F, {A, B, C, TileOp, Size, DType},
-                              "linx.tepl.t");
   }
   case LinxISA::BI__builtin_linx_tepl_binary_scalar: {
     llvm::Value *A = EmitScalarExpr(E->getArg(0));

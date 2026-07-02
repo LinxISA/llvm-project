@@ -23,16 +23,11 @@ let Attributes = [NoThrow] in {
   // PR4/PR5 strict tile surfaces.
   def tile_tload : LinxISABuiltin<"_Vector<1024, int>(void const *, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant long long int, _Constant long long int, _Constant long long int)">;
   def tile_tstore : LinxISABuiltin<"void(void *, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant long long int, _Constant long long int, _Constant long long int)">;
-  def tile_mgather : LinxISABuiltin<"_Vector<1024, int>(void const *, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant long long int, _Constant long long int, _Constant long long int)">;
-  def tile_mscatter : LinxISABuiltin<"void(void *, _Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant long long int, _Constant long long int, _Constant long long int)">;
   def tile_tmov : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant unsigned int)">;
-  def tile_tinsert : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int)">;
-  def tile_ttrans : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
 
   def cube_acccvt : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant long long int)">;
   def tepl_unary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
   def tepl_binary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
-  def tepl_ternary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
   def tepl_binary_scalar : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, long long int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
   def tepl_splat : LinxISABuiltin<"_Vector<1024, int>(long long int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
 
