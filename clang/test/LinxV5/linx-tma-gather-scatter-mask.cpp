@@ -47,7 +47,7 @@ inline void MGATHER(tile_shape_out &dst, const gm_shape &src,
                     const tile_shape_offset &offset) {
   static_assert(tile_shape_offset::ValidCol <= tile_shape_offset::Cols, "");
   asm volatile(
-      "BSTART.TMA MGATHER, %c[DataType]\n"
+      "BSTART.TLSU MGATHER, %c[DataType]\n"
       "B.DATR %c[PadValue]\n"
       "B.DIM zero, %c[ValidCol], ->LB0\n"
       "B.DIM zero, %c[ValidRow], ->LB1\n"
@@ -71,7 +71,7 @@ inline void MSCATTER(gm_shape &dst, const tile_shape_in &src,
                      const tile_shape_offset &offset) {
   static_assert(tile_shape_offset::ValidCol <= tile_shape_offset::Cols, "");
   asm volatile(
-      "BSTART.TMA MSCATTER, %c[DataType]\n"
+      "BSTART.TLSU MSCATTER, %c[DataType]\n"
       "B.DIM zero, %c[ValidCol], ->LB0\n"
       "B.DIM zero, %c[ValidRow], ->LB1\n"
       "B.DIM zero, %c[Col], ->LB2\n"
@@ -94,7 +94,7 @@ inline void MGATHER_MASK(tile_shape_out &dst, const gm_shape &src,
                          const tile_shape_offset &offset,
                          const tile_shape_mask &mask) {
   asm volatile(
-      "BSTART.TMA MGATHER.MASK, %c[DataType]\n"
+      "BSTART.TLSU MGATHER.MASK, %c[DataType]\n"
       "B.DATR %c[PadValue]\n"
       "B.DIM zero, %c[Col], ->LB0\n"
       "B.DIM zero, %c[Row], ->LB1\n"
@@ -118,7 +118,7 @@ inline void MSCATTER_MASK(gm_shape &dst, const tile_shape_in &src,
                           const tile_shape_offset &offset,
                           const tile_shape_mask &mask) {
   asm volatile(
-      "BSTART.TMA MSCATTER.MASK, %c[DataType]\n"
+      "BSTART.TLSU MSCATTER.MASK, %c[DataType]\n"
       "B.DIM zero, %c[Col], ->LB0\n"
       "B.DIM zero, %c[Row], ->LB1\n"
       "B.IOT [%[src], %[off]]\n"
