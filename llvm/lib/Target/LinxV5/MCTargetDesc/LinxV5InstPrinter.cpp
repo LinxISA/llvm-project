@@ -893,6 +893,10 @@ static const std::unordered_map<unsigned, const char *> TileOpMap = {
     {0b11001, "TSUBC"},
     {0b11010, "TSEL"},
     {0b11011, "TCVT"},
+    {0b11100, "TPARTADD"},
+    {0b11101, "TPARTMUL"},
+    {0b11110, "TPARTMAX"},
+    {0b11111, "TPARTMIN"},
 
     {0b0100000, "TADDS"},
     {0b0100001, "TSUBS"},
@@ -909,6 +913,7 @@ static const std::unordered_map<unsigned, const char *> TileOpMap = {
     {0b0101100, "TMINS"},
     {0b0101101, "TCMPS"},
     {0b0101110, "TLRELU"},
+    {0b0101111, "TAXPY"},
 
     {0b0111000, "TADDSC"},
     {0b0111001, "TSUBSC"},
@@ -927,6 +932,8 @@ static const std::unordered_map<unsigned, const char *> TileOpMap = {
     {0b1001001, "TROWEXPANDMAX"},
     {0b1001010, "TROWEXPANDMIN"},
     {0b1001011, "TROWEXPANDEXPDIF"},
+    {0b1001100, "TROWARGMAX"},
+    {0b1001101, "TROWARGMIN"},
 
     {0b1010000, "TCOLSUM"},
     {0b1010001, "TCOLMAX"},
@@ -940,6 +947,11 @@ static const std::unordered_map<unsigned, const char *> TileOpMap = {
     {0b1011001, "TCOLEXPANDMAX"},
     {0b1011010, "TCOLEXPANDMIN"},
     {0b1011011, "TCOLEXPANDEXPDIF"},
+    {0b1011100, "TCOLARGMAX"},
+    {0b1011101, "TCOLARGMIN"},
+
+    {0b1100000, "TCONCAT"},
+    {0b1100001, "TGATHERB"},
 
     {0b1101000, "THISTOGRAM"},
 };
