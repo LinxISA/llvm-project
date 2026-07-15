@@ -90,7 +90,7 @@ The assembler accepts and disassembler prints typed aliases:
 - `BSTART.TLOAD`/`BSTART.TSTORE`/`BSTART.TMOV` are exact aliases of `BSTART.TMA Function={0,1,2}`.
 - `BSTART.TMATMUL`/`BSTART.TMATMUL.ACC`/`BSTART.ACCCVT` are exact aliases of `BSTART.CUBE Function={0,2,8}`.
 - `BSTART.T*` PTO template aliases (for example `BSTART.TADD`, `BSTART.TROWMAX`) are exact aliases of `BSTART.TEPL TileOp10=<value>`.
-- `BSTART.PAR` is treated as legacy packed compatibility input/output; canonical strict-v0.3 disassembly prefers typed aliases above.
+- `BSTART.PAR` is not accepted in v0.56.5; use the typed block headers above.
 
 ## 6. Examples
 
@@ -98,7 +98,7 @@ The assembler accepts and disassembler prints typed aliases:
 
 ```asm
 BSTART.TADD FP16
-B.IOTI [t#1, t#2], last ->t<4KB>
+B.IOT t#1, t#2, last, ->t<4KB>
 C.BSTOP
 ```
 
@@ -128,21 +128,21 @@ No `BSTART.TVEC` mnemonic is defined.
 - TLOAD/TSTORE descriptor contract:
   - layout/pad descriptor via `B.ARG` (for example ND2ZN/DN2NZ flavor + element format);
   - address/stride descriptor via `B.IOR` (`[base,stride,...]`);
-  - tile binding/allocation via `B.IOT`/`B.IOTI` (including relative tile destination and size class).
+  - tile binding/allocation via `B.IOT` (including relative tile destination and size class).
 - `BSTART.TMOV` (`Function=2`) is tile-state-only movement (no GM memory transfer). It uses:
   - `B.ARG` for TMOV mode (`V2V=0`, `A2V=1`);
-  - tile binding descriptors (`B.IOT`/`B.IOTI`) for source/destination relrefs and `SizeCode`;
+  - tile binding descriptors (`B.IOT`) for source/destination relrefs and `SizeCode`;
   - no `B.IOR` memory base/stride descriptor in minimal PR2 TMOV lowering.
-  - strict `SizeCode` policy: `512B..4KB` (`SizeCode=5..8`) in strict-v0.3 profile.
+  - canonical `SizeCode` policy: the immediate `imm4` selects the v0.56.5 size table; register-sized descriptors are rejected.
 - `BSTART.TMATMUL` (`Function=0`) and `BSTART.TMATMUL.ACC` (`Function=2`) are CUBE blocks and require matrix shape descriptors:
   - `m,n,k` via `B.DIM` or repeated `C.B.DIMI` into `LB0/LB1/LB2`;
-  - tile source/destination bindings via `B.IOT`/`B.IOTI` (A/B/(optional)ACC).
+  - tile source/destination bindings via `B.IOT` (A/B/(optional)ACC).
 - `BSTART.ACCCVT` (`Function=8`) is CUBE accumulator conversion and requires quantization descriptors:
   - scale/zero-point and conversion policy carried by `B.ARG` + `B.IOR` profile-defined arguments;
-  - accumulator/source/destination tile bindings via `B.IOT`/`B.IOTI`.
+  - accumulator/source/destination tile bindings via `B.IOT`.
 - `BSTART.TEPL` is header-only template dispatch:
   - `TileOp10` chooses the PTO template op;
-  - descriptor requirements are op-family specific (shape/reduction axes/stride policy) and are carried via `B.ARG`, `B.IOR`, `B.DIM`/`C.B.DIMI`, and tile bindings (`B.IOT`/`B.IOTI`) as required by that template.
+  - descriptor requirements are op-family specific (shape/reduction axes/stride policy) and are carried via `B.ARG`, `B.IOR`, `B.DIM`/`C.B.DIMI`, and `B.IOT` tile bindings as required by that template.
 - `BSTART.VPAR`/`BSTART.VSEQ` are SIMT-body blocks:
   - header encodes vector execution mode only;
   - operation sequence resides in the `B.TEXT` body and must terminate at `BSTOP/C.BSTOP`.
@@ -198,7 +198,7 @@ Canonical mapping:
 - `m#k -> 16 + (k-1)`
 - `n#k -> 24 + (k-1)`
 
-ISA encoding layout is unchanged: relrefs are lowered into existing `B.IOT/B.IOTI` fields (5-bit tile-id plus existing destination hand/group model).
+Relrefs lower into canonical `B.IOT` fields: source tile identifiers use the 6-bit hand/depth namespace and destinations use the encoded destination-hand field.
 
 ### 8.3 Strict metadata rules for COPY->TMOV conversion
 
@@ -218,9 +218,9 @@ On mismatch, the backend emits a precise fatal diagnostic with function + MBB + 
 
 1. `BSTART.TMA` with `Function=2` (`TMOV`)
 2. `B.ARG` carrying TMOV mode (`V2V=0`, `A2V=1`)
-3. `B.IOTI` descriptor with relref-derived source/destination and propagated `SizeCode`
+3. `B.IOT` descriptor with relref-derived source/destination and propagated `SizeCode`
 
-No new opcode encoding was added; this reuses current TMA/B.IOTI encoding space and canonical aliases.
+No new opcode encoding was added; this reuses the canonical TMA/B.IOT encoding space.
 
 ## 9. PR3 Relay-Minimization (implemented)
 
@@ -262,7 +262,7 @@ Interior COPY chains that are not edge bundles keep sequential semantics.
 - strict tile size policy: `SizeCode=5..8` (`512B..4KB`) is enforced in:
   - `LinxISATileSSABalance` metadata validation;
   - `LinxISABlockify` TLOAD/TSTORE/TMOV lowering;
-  - asm parser angle-size parsing for `B.IOT/B.IOTI` (`-><kind><size>`).
+  - asm parser angle-size parsing for `B.IOT` (`-><kind><size>`).
 - queue-push destination encoding for TMOV lowering:
   - destination hand is encoded in `DstTile`;
   - destination tile-id payload in `SrcTile1` is normalized to hand head (push slot), not explicit depth.

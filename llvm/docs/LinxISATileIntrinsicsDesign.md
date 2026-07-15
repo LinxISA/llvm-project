@@ -104,7 +104,7 @@ Blockify expansion:
 - `B.DIM` / `C.B.DIMI` for `LB0/LB1`
 - `B.ARG(layout)`
 - `B.IOR` (base in `RegSrc1`, stride lane currently zero)
-- `B.IOTI` destination push descriptor with `SizeCode=size`
+- `B.IOT` destination push descriptor with `SizeCode=size`
 
 ### 5.2 `llvm.linx.tile.tstore`
 
@@ -118,7 +118,7 @@ Blockify expansion:
 - `B.DIM` / `C.B.DIMI` for `LB0/LB1`
 - `B.ARG(layout)`
 - `B.IOR` (base in `RegSrc1`, stride lane currently zero)
-- `B.IOTI` source descriptor with `SizeCode=size`
+- `B.IOT` source descriptor with `SizeCode=size`
 
 ### 5.3 `llvm.linx.tile.tmov`
 
@@ -131,7 +131,7 @@ Blockify expansion:
 
 - `BSTART.TMOV` (`BSTART.TMA Function=2, DataType=dtype`)
 - `B.ARG(mode)` where mode is `0(V2V)` or `1(A2V)`
-- `B.IOTI` relref bindings
+- `B.IOT` relref bindings
   - V2V: explicit source tile
   - A2V: accumulator-source semantics (no explicit source tile binding)
 
@@ -171,7 +171,7 @@ Blockify expansion:
 
 - `BSTART.ACCCVT` (`BSTART.CUBE Function=8, DataType=dtype`)
 - `B.ARG(qarg0)`
-- `B.IOTI` destination descriptor (current strict stub requires `qarg1=0`)
+- `B.IOT` destination descriptor (current strict stub requires `qarg1=0`)
 
 Current PR5 behavior keeps quant descriptor wiring minimal; `qarg1` is reserved until full quantization descriptor plumbing lands.
 
@@ -185,8 +185,8 @@ Lowering target pseudos:
 Blockify expansion:
 
 - `BSTART.TEPL(tileop10, dtype)`
-- input `B.IOTI` descriptor (unary: one source, binary: two sources)
-- output `B.IOTI` descriptor (queue-push destination bind with `SizeCode=size`)
+- input `B.IOT` descriptor (unary: one source, binary: two sources)
+- output `B.IOT` descriptor (queue-push destination bind with `SizeCode=size`)
 
 ### 5.8 Typed TEPL wrappers
 
