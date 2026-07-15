@@ -235,8 +235,7 @@ static bool isSupportedSIMTCall(const CallBase *CB) {
   // Bring-up: allow a small set of pure math helpers that we can lower into
   // SIMT body code. This is intentionally a whitelist.
   const StringRef Name = Callee->getName();
-  return Name == "fabsf" || Name == "sqrtf" || Name == "sinf" ||
-         Name == "cosf";
+  return Name == "fabsf" || Name == "sqrtf";
 }
 
 static bool hasUnsupportedCalls(Loop *L) {
@@ -4761,13 +4760,6 @@ public:
               ValOp[V] = *Dst;
               return *Dst;
             }
-            if ((Name == "sinf" || Name == "cosf") && CB->arg_size() == 1) {
-              // The freestanding bring-up runtime implements sin/cos as
-              // conservative stubs (returns 0.0). Keep SIMT lowering aligned.
-              ValOp[V] = "zero";
-              return "zero";
-            }
-
             return std::nullopt;
           }
 
