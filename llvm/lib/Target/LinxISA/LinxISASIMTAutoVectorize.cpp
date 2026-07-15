@@ -1922,6 +1922,12 @@ public:
 	        }
 	        RemarkHasRecurrence = !RecurrencePlans.empty();
 
+        // Scalar-lane replay preserves recurrence order only under sequential
+        // group execution. A parallel-safe loop hint must not retain MPAR once
+        // a generic recurrence plan has been discovered.
+        if (!RecurrencePlans.empty())
+          SelectedMode = "mseq";
+
 	        SmallVector<Instruction *, 8> LiveOutInsts;
 	        SmallPtrSet<const Instruction *, 8> LiveOutInstSet;
 
@@ -2309,6 +2315,11 @@ public:
         };
 
         auto canUseGroupedLaneCount = [&](uint64_t CandidateLaneCount) {
+          // Generic loop-carried recurrences are order-dependent. Unlike the
+          // supported reduction plans above, they cannot be split into
+          // independent per-lane states and combined after grouped execution.
+          if (!RecurrencePlans.empty())
+            return false;
           if (!HasConstTripCount || ConstTripCount == 0 || CandidateLaneCount <= 1)
             return false;
           if (!isPowerOf2_64(CandidateLaneCount))
@@ -2321,6 +2332,8 @@ public:
         };
 
         auto groupedRejectReason = [&]() -> const char * {
+          if (!RecurrencePlans.empty())
+            return "grouped_layout_unsupported_recurrence";
           if (!HasConstTripCount)
             return "grouped_layout_requires_static_tripcount";
           if (NeedsExecMaskSaveRestore)
@@ -6879,7 +6892,11 @@ public:
             BasicBlock::Create(Ctx, "linx.vblock.launch", &F, Exit);
         IRBuilder<> LB(LaunchBB);
 
-        const bool TouchesMemory = !Stores.empty() || !Loads.empty();
+        // Recurrence lowering synthesizes v.lw/v.sw.brg traffic even when the
+        // source loop has no explicit memory operation. Such bodies require an
+        // MSEQ/MPAR header; VSEQ/VPAR is tile-only.
+        const bool TouchesMemory =
+            !Stores.empty() || !Loads.empty() || !RecurrencePlans.empty();
         const bool ParallelMode = (SelectedMode == "mpar");
         unsigned VKindImm = 0;
         if (TouchesMemory) {
