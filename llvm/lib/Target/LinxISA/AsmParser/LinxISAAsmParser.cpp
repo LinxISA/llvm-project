@@ -643,7 +643,10 @@ static std::optional<std::string> getLegacyAliasDiag(StringRef Mnemonic) {
   if (Key == "L.BSTOP")
     return "legacy alias 'L.BSTOP' is not allowed in canonical v0.56; use 'C.BSTOP'";
 
-  if (Key.starts_with("L."))
+  const bool IsCanonicalLongBStart =
+      Key == "L.BSTART.STD" || Key == "L.BSTART.FP" ||
+      Key == "L.BSTART.SYS";
+  if (Key.starts_with("L.") && !IsCanonicalLongBStart)
     return "legacy 'L.*' mnemonics are not allowed in canonical v0.56; use canonical "
            "mnemonics (for example 'V.*' and typed BSTART.* forms)";
 
@@ -2191,11 +2194,12 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  // Block headers: BSTART/C.BSTART/HL.BSTART (branch-kind forms only).
+  // Block headers: BSTART/C.BSTART/HL.BSTART/L.BSTART (branch-kind forms only).
   const bool IsBStartBranchHeader =
       (AsmFmt.starts_with_insensitive("bstart") ||
        AsmFmt.starts_with_insensitive("c.bstart") ||
-       AsmFmt.starts_with_insensitive("hl.bstart")) &&
+       AsmFmt.starts_with_insensitive("hl.bstart") ||
+       AsmFmt.starts_with_insensitive("l.bstart")) &&
       (hasField(Form, "BrType") || AsmFmt.contains_insensitive("{DIRECT, CALL}") ||
        AsmFmt.contains_insensitive(" FALL") || AsmFmt.contains_insensitive(" DIRECT") ||
        AsmFmt.contains_insensitive(" COND") || AsmFmt.contains_insensitive(" CALL") ||
@@ -2324,10 +2328,20 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
           continue;
         }
         int64_t V = 0;
-        if (isConstExpr(LabelExpr, V))
+        if (isConstExpr(LabelExpr, V)) {
+          if (FN == "simm" &&
+              AsmFmt.starts_with_insensitive("L.BSTART")) {
+            if (!require((V & 0x1) == 0,
+                         "L.BSTART target is not 2-byte aligned"))
+              return false;
+            V >>= 1;
+            if (!require(isInt<42>(V), "L.BSTART target out of range"))
+              return false;
+          }
           emitFieldImm(V);
-        else
+        } else {
           emitFieldExpr(LabelExpr);
+        }
         continue;
       }
       Err = ("unsupported BSTART field: " + FN).str();

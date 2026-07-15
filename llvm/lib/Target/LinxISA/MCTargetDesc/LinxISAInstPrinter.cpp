@@ -1282,12 +1282,12 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   }
 
   const bool IsCBSTART = AsmFmt.starts_with("C.BSTART");
-  const bool IsBSTART = AsmFmt.starts_with("HL.BSTART") ||
-                        AsmFmt.starts_with("BSTART.STD") ||
-                        AsmFmt.starts_with("BSTART.FP") ||
-                        AsmFmt.starts_with("BSTART.SYS") ||
-                        AsmFmt.starts_with("BSTART.") ||
-                        AsmFmt.starts_with("BSTART ");
+  const bool IsLBSTART = AsmFmt.starts_with("L.BSTART");
+  const bool IsBSTART =
+      AsmFmt.starts_with("HL.BSTART") || IsLBSTART ||
+      AsmFmt.starts_with("BSTART.STD") || AsmFmt.starts_with("BSTART.FP") ||
+      AsmFmt.starts_with("BSTART.SYS") || AsmFmt.starts_with("BSTART.") ||
+      AsmFmt.starts_with("BSTART ");
   if (IsCBSTART || IsBSTART) {
     StringRef FirstTok = RawTok;
     StringRef FirstTokBase = stripAngleSuffix(FirstTok);
@@ -1389,7 +1389,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     auto emitKindAndLabel = [&](StringRef S) {
       OS << "\t" << S << ", ";
-      emitBlockTarget();
+      if (IsLBSTART) {
+        if (auto Op = findField("simm")) {
+          if (Op->isExpr())
+            MAI.printExpr(OS, *Op->getExpr());
+          else if (Op->isImm())
+            OS << shlSigned64(Op->getImm(), /*Shift=*/1);
+        }
+      } else {
+        emitBlockTarget();
+      }
     };
 
     switch (K) {
@@ -1414,8 +1423,12 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         Off = *V;
       else if (auto V = findFieldImm("simm"))
         Off = *V;
-      if (Off != 0)
+      const bool HasExprTarget =
+          IsLBSTART && findField("simm") && findField("simm")->isExpr();
+      if (Off != 0 || HasExprTarget)
         emitKindAndLabel("FALL");
+      else if (IsLBSTART)
+        emitKind("FALL");
       break;
     }
     case BrKind::Direct:

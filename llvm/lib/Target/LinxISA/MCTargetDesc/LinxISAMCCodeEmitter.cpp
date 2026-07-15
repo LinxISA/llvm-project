@@ -18,14 +18,17 @@
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
 
 namespace {
 
 class LinxISAMCCodeEmitter : public MCCodeEmitter {
+  MCContext &Ctx;
+
 public:
-  LinxISAMCCodeEmitter() = default;
+  explicit LinxISAMCCodeEmitter(MCContext &Ctx) : Ctx(Ctx) {}
 
   void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
@@ -112,8 +115,19 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
   for (unsigned i = 0; i < FieldCount && i < MI.getNumOperands(); ++i) {
     const linxisa_field &F = linxisa_fields[Form.field_start + i];
     const MCOperand &Op = MI.getOperand(i);
+    StringRef Name = F.name ? StringRef(F.name) : StringRef();
+    StringRef Mnemonic = Form.mnemonic ? StringRef(Form.mnemonic) : StringRef();
 
     if (Op.isImm()) {
+      if (Name == "simm" && Mnemonic.starts_with("L.BSTART")) {
+        const int64_t Imm = Op.getImm();
+        if (!isInt<42>(Imm)) {
+          Ctx.reportError(MI.getLoc(), "L.BSTART target out of range");
+          return;
+        }
+        encodeFieldBits(Insn, F, static_cast<uint64_t>(Imm) & maskBits(42));
+        continue;
+      }
       uint64_t V = static_cast<uint64_t>(Op.getImm()) & maskBits(F.bit_width);
       encodeFieldBits(Insn, F, V);
       continue;
@@ -123,9 +137,6 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
       report_fatal_error("Linx: unsupported MCOperand kind for field");
 
     const MCExpr *Expr = Op.getExpr();
-    StringRef Name = F.name ? StringRef(F.name) : StringRef();
-    StringRef Mnemonic = Form.mnemonic ? StringRef(Form.mnemonic) : StringRef();
-
     // Minimal fixup support for early bring-up: only branch/jump PC-relative
     // label operands are supported, plus the basic global-address sequence
     // (ADDTPC + ADDI/ADDIW).
@@ -148,6 +159,8 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
         Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B17_PCREL);
     } else if (Name == "simm" && Mnemonic.starts_with("HL.BSTART")) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_HL_BSTART30_PCREL);
+    } else if (Name == "simm" && Mnemonic.starts_with("L.BSTART")) {
+      Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_L_BSTART42_PCREL);
     } else if (Name == "uimm5" && Mnemonic == "C.SETRET") {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CSETRET5_PCREL);
     } else if (Name == "imm20" && Mnemonic == "SETRET") {
@@ -204,5 +217,5 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
 
 MCCodeEmitter *llvm::createLinxISAMCCodeEmitter(const MCInstrInfo &MII,
                                                 MCContext &Ctx) {
-  return new LinxISAMCCodeEmitter();
+  return new LinxISAMCCodeEmitter(Ctx);
 }

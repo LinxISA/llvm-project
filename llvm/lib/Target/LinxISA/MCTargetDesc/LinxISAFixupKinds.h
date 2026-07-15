@@ -41,6 +41,10 @@ enum Fixups {
   // instruction-aligned).
   FIXUP_LINX_HL_BSTART30_PCREL,
 
+  // PC-relative 64-bit block-start byte delta. L.BSTART.* encodes the
+  // 2-byte-scaled result in a signed split simm42 field.
+  FIXUP_LINX_L_BSTART42_PCREL,
+
   // PC-relative compressed setret immediate (C.SETRET uimm5, scaled by 2
   // bytes).
   FIXUP_LINX_CSETRET5_PCREL,
