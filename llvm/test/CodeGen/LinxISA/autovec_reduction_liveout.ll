@@ -25,8 +25,8 @@ exit:                                             ; preds = %loop
 ; CHECK-LABEL: sum_liveout:
 ; CHECK: BSTART.MSEQ
 ; CHECK: B.IOR
-; CHECK: B.IOTI
-; CHECK: B.IOTI
+; CHECK: B.IOT
+; CHECK: B.IOT
 ; CHECK: C.B.DIMI 32, ->lb0
 ; CHECK: C.B.DIMI 2, ->lb1
 ; CHECK: v.lw.brg

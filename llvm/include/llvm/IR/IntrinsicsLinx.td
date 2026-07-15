@@ -242,7 +242,7 @@ let TargetPrefix = "linx" in {
   // Bring-up contract:
   // - Executed as a decoupled BSTART.VPAR header that replays a single-lane
   //   vector body over LB0/LB1 dimensions.
-  // - Tile operands are bound via B.IOTI descriptors and accessed through TA/TB/TO.
+  // - Tile operands are bound via B.IOT descriptors and accessed through TA/TB/TO.
   // - immSizeCode uses the same 2^(SizeCode+4) convention as TLOAD/TSTORE.
   // -------------------------------------------------------------------------
 

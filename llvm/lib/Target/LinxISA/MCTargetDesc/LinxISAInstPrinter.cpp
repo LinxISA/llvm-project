@@ -80,8 +80,8 @@ static void printReg10Name(raw_ostream &OS, unsigned Code) {
 }
 
 static void printTileRef(raw_ostream &OS, unsigned TileId) {
-  const unsigned Hand = (TileId >> 3) & 0x3u;
-  const unsigned Depth = TileId & 0x7u;
+  const unsigned Hand = (TileId >> 4) & 0x3u;
+  const unsigned Depth = TileId & 0xfu;
   const char Prefix = (Hand == 0) ? 't'
                      : (Hand == 1) ? 'u'
                      : (Hand == 2) ? 'm'
@@ -1655,16 +1655,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Special-case: tile block IO descriptors (B.IOT / B.IOTI).
-  //
-  // These use bracket syntax in the ISA, but they are not memory operands and
-  // should not be routed through the generic load/store pretty printer.
+  // Special-case: canonical v0.56.5 immediate-size B.IOT descriptors.
   if (AsmFmt.starts_with("B.IOT")) {
-    const bool IsIOTI = AsmFmt.starts_with("B.IOTI");
-    const unsigned S0V =
-        static_cast<unsigned>(findFieldImm("S0V").value_or(0)) & 0x1u;
-    const unsigned S1V =
-        static_cast<unsigned>(findFieldImm("S1V").value_or(0)) & 0x1u;
     const unsigned S0R =
         static_cast<unsigned>(findFieldImm("S0R").value_or(0)) & 0x1u;
     const unsigned S1R =
@@ -1672,23 +1664,15 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned DstTile =
         static_cast<unsigned>(findFieldImm("DstTile").value_or(0)) & 0x7u;
     const unsigned Src0 =
-        static_cast<unsigned>(findFieldImm("SrcTile0").value_or(0)) & 0x1fu;
+        static_cast<unsigned>(findFieldImm("SrcTile0").value_or(0)) & 0x3fu;
     const unsigned Src1 =
-        static_cast<unsigned>(findFieldImm("SrcTile1").value_or(0)) & 0x1fu;
-    const unsigned Reg =
-        static_cast<unsigned>(findFieldImm("RegSrc").value_or(0)) & 0x1fu;
-    std::optional<int64_t> SizeOpt = findFieldImm("Size");
-    if (!SizeOpt)
-      SizeOpt = findFieldImm("imm5");
-    if (!SizeOpt)
-      SizeOpt = findFieldImm("uimm5");
-    const unsigned Size = static_cast<unsigned>(SizeOpt.value_or(0)) & 0x1fu;
+        static_cast<unsigned>(findFieldImm("SrcTile1").value_or(0)) & 0x3fu;
+    const unsigned Size =
+        static_cast<unsigned>(findFieldImm("imm4").value_or(0)) & 0xfu;
+    const bool Src0Present = AsmFmt.contains("SrcTile0");
+    const bool Src1Present = AsmFmt.contains("SrcTile1");
 
-    OS << (IsIOTI ? "B.IOTI" : "B.IOT");
-    OS << "\t[";
-
-    const bool Src0Present = (S0V == 0u);
-    const bool Src1Present = (S1V == 0u);
+    OS << "B.IOT\t";
     bool First = true;
     if (Src0Present) {
       printTileRef(OS, Src0);
@@ -1704,75 +1688,22 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         OS << ".reuse";
     }
 
-    OS << "]";
-    const bool Group1 = AsmFmt.contains("group=1");
-    if (Group1)
-      OS << ", last";
+    if (!First)
+      OS << ", ";
+    if ((static_cast<unsigned>(findFieldImm("L").value_or(0)) & 1u) != 0u)
+      OS << "last, ";
 
-    const unsigned ActiveParOp = LastParTileOpValid ? LastParTileOp : 0u;
-
-    // Canonical v0.4 CUBE contract: MAMULB-class blocks write an implicit
-    // accumulator destination.
-    const bool IsAccDst = (LastTileHeader == LastTileHeaderKind::CUBE) &&
-                          (ActiveParOp == 2u || ActiveParOp == 66u);
-
-    const char *DstKind = "t";
-    if (IsAccDst) {
-      DstKind = "acc";
+    static constexpr const char *DstKinds[] = {"t", "u", "m", "n", "acc"};
+    const char *DstKind = DstTile < std::size(DstKinds) ? DstKinds[DstTile] : "t";
+    OS << "->" << DstKind << "<";
+    if (Size == 0u) {
+      OS << "0";
     } else {
-      // If a tile destination is encoded, it lives in the first *absent* source
-      // slot (preferring SrcTile1). This matches the disassembly snippet
-      // contract where the arrow kind tracks the destination tile hand.
-      std::optional<unsigned> DstTileReg;
-      if (!Src1Present)
-        DstTileReg = Src1;
-      else if (!Src0Present)
-        DstTileReg = Src0;
-
-      if (DstTileReg) {
-        const unsigned Tile = *DstTileReg & 0x1fu;
-        if (Tile < 8u)
-          DstKind = "t";
-        else if (Tile < 16u)
-          DstKind = "u";
-        else if (Tile < 24u)
-          DstKind = "m";
-        else
-          DstKind = "n";
-      } else {
-        // Fallback: treat DstTile as an enum in bring-up streams.
-        switch (DstTile) {
-        case 0u:
-          DstKind = "t";
-          break;
-        case 1u:
-          DstKind = "u";
-          break;
-        case 2u:
-          DstKind = "m";
-          break;
-        case 3u:
-          DstKind = "n";
-          break;
-        case 4u:
-          DstKind = "acc";
-          break;
-        default:
-          DstKind = "t";
-          break;
-        }
-      }
-    }
-
-    OS << "\t->" << DstKind << "<";
-    if (IsIOTI) {
-      const uint64_t Bytes = (Size < 60u) ? (1ull << (Size + 4u)) : 0ull;
+      const uint64_t Bytes = 1ull << (Size + 4u);
       if (Bytes >= 1024u && (Bytes % 1024u) == 0u)
         OS << utostr(static_cast<unsigned>(Bytes / 1024u)) << "KB";
       else
-        OS << utostr(Size);
-    } else {
-      OS << reg5Name(Reg);
+        OS << utostr(static_cast<unsigned>(Bytes)) << "B";
     }
     OS << ">";
 
@@ -1837,32 +1768,14 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Special-case: block attributes with named fields.
-  if (AsmFmt.starts_with("B.ATTR")) {
-    const unsigned C = static_cast<unsigned>(
-                           findFieldImm("C")
-                               .value_or(findFieldImm("c").value_or(0))) &
-                       0x1u;
+  // Canonical v0.56.5 control attributes.
+  if (AsmFmt.starts_with("B.CATR")) {
+    const unsigned Trap =
+        static_cast<unsigned>(findFieldImm("trap").value_or(0)) & 0x1u;
     const unsigned DR = static_cast<unsigned>(
                             findFieldImm("DR")
                                 .value_or(findFieldImm("dr").value_or(0))) &
                         0x1u;
-    const unsigned Layout =
-        static_cast<unsigned>(findFieldImm("DataLayout")
-                                  .value_or(findFieldImm("layout").value_or(0))) &
-        0x1fu;
-    const unsigned DType =
-        static_cast<unsigned>(findFieldImm("DataType")
-                                  .value_or(findFieldImm("dtype").value_or(0))) &
-        0x1fu;
-    const unsigned Pad =
-        static_cast<unsigned>(findFieldImm("PadValue")
-                                  .value_or(findFieldImm("pad").value_or(0))) &
-        0x1fu;
-    const unsigned T = static_cast<unsigned>(
-                           findFieldImm("T")
-                               .value_or(findFieldImm("t").value_or(0))) &
-                       0x1u;
     const unsigned Aq = static_cast<unsigned>(
                             findFieldImm("aq")
                                 .value_or(findFieldImm("AQ").value_or(0))) &
@@ -1880,10 +1793,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                 .value_or(findFieldImm("RL").value_or(0))) &
                         0x1u;
 
-    const StringRef LayoutName = ((Layout & 0x1u) != 0u) ? "normal" : "canon";
-    const StringRef DTName = dtypeName(DType);
-    const StringRef PadName = padValueName(Pad);
-    StringRef OrderName = "none";
+    StringRef OrderName;
     if (Aq && Rl)
       OrderName = "aqrl";
     else if (Aq)
@@ -1891,26 +1801,57 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     else if (Rl)
       OrderName = "rl";
 
-    OS << "B.ATTR\t{"
-       << "trap=" << (C ? "on" : "off")
-       << ", atomic=" << (Atom ? "on" : "off")
-       << ", order=" << OrderName
-       << ", far=" << (Far ? "on" : "off")
-       << ", layout=" << LayoutName
-       << ", dtype=";
+    OS << "B.CATR";
+    bool First = true;
+    auto emitToken = [&](StringRef Token) {
+      OS << (First ? "\t" : ", ") << Token;
+      First = false;
+    };
+    if (Trap)
+      emitToken("trap");
+    if (Atom)
+      emitToken("atomic");
+    if (!OrderName.empty())
+      emitToken(OrderName);
+    if (Far)
+      emitToken("far");
+    if (DR)
+      emitToken("dr");
+
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  // Canonical v0.56.5 data attributes.
+  if (AsmFmt.starts_with("B.DATR")) {
+    const unsigned CMode =
+        static_cast<unsigned>(findFieldImm("CMode").value_or(0)) & 0x7u;
+    const unsigned Layout =
+        static_cast<unsigned>(findFieldImm("DataLayout").value_or(0)) & 0x1fu;
+    const unsigned DType =
+        static_cast<unsigned>(findFieldImm("DataType").value_or(0)) & 0x1fu;
+    const unsigned Pad =
+        static_cast<unsigned>(findFieldImm("PadValue").value_or(0)) & 0x1fu;
+    const unsigned RMode =
+        static_cast<unsigned>(findFieldImm("RMode").value_or(0)) & 0x7u;
+    const unsigned Sat =
+        static_cast<unsigned>(findFieldImm("Sat").value_or(0)) & 0x1u;
+    const StringRef DTName = dtypeName(DType);
+    const StringRef PadName = padValueName(Pad);
+
+    OS << "B.DATR\t" << ((Layout & 1u) ? "normal" : "canon") << ", ";
     if (!DTName.empty())
       OS << DTName;
     else
       OS << "DT" << utostr(DType);
-    OS << ", pad=";
+    OS << ", ";
     if (!PadName.empty())
       OS << PadName;
     else
       OS << "Pad" << utostr(Pad);
-    OS << ", dr=" << (DR ? "on" : "off")
-       << ", t=" << (T ? "on" : "off")
-       << "}";
-
+    OS << ", cmode" << CMode << ", rmode" << RMode;
+    if (Sat)
+      OS << ", sat";
     printAnnotation(OS, Annot);
     return;
   }

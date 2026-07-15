@@ -433,7 +433,7 @@ def BSTOP : LinxISAInst<(outs), (ins), "", []>;
 // Tile blocks (TAU) - bring-up (selected manually from intrinsics)
 //
 // These are expanded very late (pre-emit) into block-structured sequences:
-//   BSTART.TMA / BSTART.CUBE + B.IOT/B.IOTI/B.DIM descriptors.
+//   BSTART.TMA / BSTART.CUBE + B.IOT/B.IOT/B.DIM descriptors.
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
@@ -768,13 +768,15 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
 
   def B_ARG : LinxISAInst<(outs), (ins i64imm:$format), "", []>;
 
-  // Full B.ATTR descriptor (strict-v0.3):
-  // {C, DR, DataLayout, DataType, PadValue, T, aq, atom, far, rl}
-  def B_ATTR : LinxISAInst<(outs), (ins i64imm:$c, i64imm:$dr,
-                                       i64imm:$layout, i64imm:$dtype,
-                                       i64imm:$pad, i64imm:$t,
+  // Canonical v0.56.5 splits control and data attributes.  Keep these as
+  // separate MachineInstrs so the backend cannot recreate the retired
+  // canonical split B.CATR/B.DATR surface.
+  def B_CATR : LinxISAInst<(outs), (ins i64imm:$trap, i64imm:$dr,
                                        i64imm:$aq, i64imm:$atom,
                                        i64imm:$far, i64imm:$rl), "", []>;
+  def B_DATR : LinxISAInst<(outs), (ins i64imm:$cmode, i64imm:$layout,
+                                       i64imm:$dtype, i64imm:$pad,
+                                       i64imm:$rmode, i64imm:$sat), "", []>;
 
   def B_DIM_LB0 : LinxISAInst<(outs), (ins GPR_Arch:$reg, i64imm:$imm), "", []>;
   def B_DIM_LB1 : LinxISAInst<(outs), (ins GPR_Arch:$reg, i64imm:$imm), "", []>;
@@ -786,21 +788,15 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
                                        GPR_Arch:$regsrc1,
                                        GPR_Arch:$regsrc2), "", []>;
 
-  // B.IOT / B.IOTI descriptor forms: group bit is selected by opcode.
-  def B_IOT_G0  : LinxISAInst<(outs), (ins i64imm:$dst, GPR_Arch:$regsrc,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
-                                       i64imm:$src0, i64imm:$src1), "", []>;
-  def B_IOT_G1  : LinxISAInst<(outs), (ins i64imm:$dst, GPR_Arch:$regsrc,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
-                                       i64imm:$src0, i64imm:$src1), "", []>;
-  def B_IOTI_G0 : LinxISAInst<(outs), (ins i64imm:$dst,
+  // Canonical B.IOT always carries an immediate size.  The validity operands
+  // select the zero-, one-, or two-source canonical form; the opcode selects
+  // the architectural L (last) bit.
+  def B_IOT_SIZE_G0 : LinxISAInst<(outs), (ins i64imm:$dst,
                                        i64imm:$s0r, i64imm:$s0v,
                                        i64imm:$s1r, i64imm:$s1v,
                                        i64imm:$src0, i64imm:$src1,
                                        i64imm:$size), "", []>;
-  def B_IOTI_G1 : LinxISAInst<(outs), (ins i64imm:$dst,
+  def B_IOT_SIZE_G1 : LinxISAInst<(outs), (ins i64imm:$dst,
                                        i64imm:$s0r, i64imm:$s0v,
                                        i64imm:$s1r, i64imm:$s1v,
                                        i64imm:$src0, i64imm:$src1,

@@ -419,16 +419,15 @@ static bool isHeaderDescriptorOpcode(unsigned Opc) {
   switch (Opc) {
   case LinxISA::B_TEXT:
   case LinxISA::B_ARG:
-  case LinxISA::B_ATTR:
+  case LinxISA::B_CATR:
+  case LinxISA::B_DATR:
   case LinxISA::B_DIM_LB0:
   case LinxISA::B_DIM_LB1:
   case LinxISA::B_DIM_LB2:
   case LinxISA::C_B_DIMI:
   case LinxISA::B_IOR:
-  case LinxISA::B_IOT_G0:
-  case LinxISA::B_IOT_G1:
-  case LinxISA::B_IOTI_G0:
-  case LinxISA::B_IOTI_G1:
+  case LinxISA::B_IOT_SIZE_G0:
+  case LinxISA::B_IOT_SIZE_G1:
     return true;
   default:
     return false;
@@ -2148,7 +2147,7 @@ public:
             .addImm(TMA_TLOAD);
 
         // Canonical descriptor-carrying TLOAD header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOTI.
+        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOT.
         //
         // The current PTO auto-mode bridge does not pass explicit layout/dim
         // metadata yet, so use bring-up defaults here:
@@ -2163,10 +2162,10 @@ public:
             .addReg(Base)        // RegSrc1: base pointer
             .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
 
-        // Canonical v0.4 contract: B.IOTI is the canonical descriptor; encode the
+        // Canonical v0.4 contract: B.IOT is the canonical descriptor; encode the
         // tile destination register in the first absent source slot (SrcTile1)
         // and set S0V/S1V to indicate no tile inputs.
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand)
             .addImm(0)      // S0R
             .addImm(1)      // S0V (absent)
@@ -2204,7 +2203,7 @@ public:
             .addReg(Base)
             .addReg(LinxISA::R0);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID)))
             .addImm(0)
             .addImm(1)
@@ -2256,7 +2255,7 @@ public:
             .addReg(Base)
             .addReg(LinxISA::R0);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID)))
             .addImm(0)
             .addImm(1)
@@ -2285,7 +2284,7 @@ public:
             .addImm(TMA_TSTORE);
 
         // Canonical descriptor-carrying TSTORE header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOTI.
+        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOT.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
@@ -2297,7 +2296,7 @@ public:
             .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
 
         // Store: encode the source tile in SrcTile0 and mark it present (S0V=0).
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(dstTileFieldFromRelRef(tileRelRefFromId(SrcID))) // DstTile (hand hint)
             .addImm(0)      // S0R
             .addImm(0)      // S0V (present)
@@ -2346,7 +2345,7 @@ public:
             .addReg(Base)
             .addReg(LinxISA::R0);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(dstTileFieldFromRelRef(tileRelRefFromId(SrcID)))
             .addImm(0)
             .addImm(0)
@@ -2412,7 +2411,7 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
 
         if (!IsA2V) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromRelRef(DstRef)) // DstTile (hand)
               .addImm(SrcReuse ? 1 : 0)               // S0R
               .addImm(0)                              // S0V (present)
@@ -2425,8 +2424,8 @@ public:
               .addReg(Dst, RegState::Define | RegState::Implicit);
         } else {
           // A2V: source is implicit accumulator state, so no explicit source
-          // tile is bound in B.IOTI.
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          // tile is bound in B.IOT.
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromRelRef(DstRef)) // DstTile (hand)
               .addImm(0)                              // S0R
               .addImm(1)                              // S0V (absent)
@@ -2481,7 +2480,7 @@ public:
         emitDim(MBB, InsertPt, /*LoopNest=*/1, N);
         emitDim(MBB, InsertPt, /*LoopNest=*/2, K);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(4)    // DstTile (acc)
             .addImm(0)    // S0R
             .addImm(0)    // S0V (present)
@@ -2506,7 +2505,7 @@ public:
 
         const unsigned DstKind =
             dstTileFieldFromRelRef(tileRelRefFromId(Depth | (Group << 3) | 16u));
-        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
             .addImm(0)       // S0R
             .addImm(1)       // S0V (absent)
@@ -2565,7 +2564,7 @@ public:
         emitDim(MBB, InsertPt, /*LoopNest=*/1, N);
         emitDim(MBB, InsertPt, /*LoopNest=*/2, K);
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(4)    // DstTile (acc)
             .addImm(0)    // S0R
             .addImm(0)    // S0V (present)
@@ -2591,7 +2590,7 @@ public:
 
         const unsigned DstKind =
             dstTileFieldFromRelRef(tileRelRefFromId(Depth | (Group << 3) | 16u));
-        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
             .addImm(0)       // S0R
             .addImm(1)       // S0V (absent)
@@ -2636,7 +2635,7 @@ public:
             .addImm(DType)
             .addImm(CUBE_ACCCVT);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(QArg0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
             .addImm(0)       // S0R
             .addImm(1)       // S0V (absent)
@@ -2735,7 +2734,7 @@ public:
         }
 
         // Descriptor 0: input bindings.
-        auto InDesc = BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G0))
+        auto InDesc = BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G0))
                           .addImm(dstTileFieldFromRelRef(DstRef))   // DstTile hand
                           .addImm(0)                                // S0R
                           .addImm(HasS0Tile ? 0 : 1)                // S0V
@@ -2751,13 +2750,13 @@ public:
 
         // Descriptor 1: destination tile binding (queue-push destination).
         //
-        // In-place TEPL forms (dst aliases a source tile) still use B.IOTI so
+        // In-place TEPL forms (dst aliases a source tile) still use B.IOT so
         // size metadata stays explicit and disassembly remains canonical.
         // Runtime destination allocation is guarded by descriptor shape checks.
         const bool InPlace = (HasS0Tile && DstID == AID) ||
                              (HasS1Tile && DstID == BID);
         if (InPlace) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromRelRef(DstRef))
               .addImm(0)     // S0R
               .addImm(1)     // S0V (absent)
@@ -2768,7 +2767,7 @@ public:
               .addImm(Size)  // SizeCode
               .addReg(Dst, RegState::Define | RegState::Implicit);
         } else {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromRelRef(DstRef))
               .addImm(0)     // S0R
               .addImm(1)     // S0V (absent)
@@ -2790,8 +2789,8 @@ public:
       case LinxISA::PSEUDO_VTILE_ADD:
       case LinxISA::PSEUDO_VTILE_SUB: {
         // Expand into a VPAR decoupled header that binds:
-        // - input tiles through TA/TB (first B.IOTI)
-        // - output tile through TO (second B.IOTI or B.IOT for in-place)
+        // - input tiles through TA/TB (first B.IOT)
+        // - output tile through TO (second B.IOT or B.IOT for in-place)
         //
         // The out-of-line body is a single-lane snippet that executes:
         //   load TA, load TB, add/sub, store TO
@@ -2833,7 +2832,7 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_TEXT)).addSym(BodySym);
 
         // Descriptor 0: inputs (TA/TB), group=0.
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G0))
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G0))
             .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand hint)
             .addImm(0)                     // S0R
             .addImm(0)                     // S0V (present)
@@ -2845,11 +2844,11 @@ public:
             .addReg(SrcA, RegState::Implicit)
             .addReg(SrcB, RegState::Implicit);
 
-        // Descriptor 1: output (TO), group=1 (last). Keep B.IOTI for both
+        // Descriptor 1: output (TO), group=1 (last). Keep B.IOT for both
         // in-place and out-of-place forms so size metadata stays explicit.
         const bool InPlace = (DstID == AID) || (DstID == BID);
         if (InPlace) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand hint)
               .addImm(0)                     // S0R
               .addImm(1)                     // S0V (absent)
@@ -2860,7 +2859,7 @@ public:
               .addImm(Size)                  // SizeCode
               .addReg(Dst, RegState::Define | RegState::Implicit);
         } else {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand hint)
               .addImm(0)                     // S0R
               .addImm(1)                     // S0V (absent)
@@ -2948,19 +2947,15 @@ public:
         }
         if ((Attr & ~AttrAQRLMask) != 0u) {
           report_fatal_error(
-              "Linx: vblock.launch only supports aq/rl B.ATTR bits in canonical v0.4");
+              "Linx: vblock.launch only supports aq/rl B.CATR bits in canonical v0.56.5");
         }
         if (Attr != 0u) {
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ATTR))
-              .addImm((Attr >> 0) & 0x1u)  // C
-              .addImm((Attr >> 1) & 0x1u)  // DR
-              .addImm((Attr >> 2) & 0x1fu) // DataLayout
-              .addImm((Attr >> 7) & 0x1fu) // DataType
-              .addImm((Attr >> 12) & 0x1fu) // PadValue
-              .addImm((Attr >> 17) & 0x1u) // T
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_CATR))
+              .addImm(0)                    // trap
+              .addImm(0)                    // DR
               .addImm((Attr >> 18) & 0x1u) // aq
-              .addImm((Attr >> 19) & 0x1u) // atom
-              .addImm((Attr >> 20) & 0x1u) // far
+              .addImm(0)                    // atom
+              .addImm(0)                    // far
               .addImm((Attr >> 21) & 0x1u); // rl
         }
 
@@ -2984,7 +2979,7 @@ public:
         if (EmitLocalScratch) {
           // Reserve the first two output descriptors for TO/TS so the body
           // can use the canonical `.local` output-tile order.
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromHand(TileHand::T))
               .addImm(0)
               .addImm(1)
@@ -2993,7 +2988,7 @@ public:
               .addImm(0)
               .addImm(0)
               .addImm(0);
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOTI_G1))
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromHand(TileHand::U))
               .addImm(0)
               .addImm(1)

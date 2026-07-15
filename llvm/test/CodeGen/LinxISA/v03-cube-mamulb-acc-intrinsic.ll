@@ -21,8 +21,8 @@ entry:
 ; CHECK: BSTART.TMATMUL
 ; CHECK: BSTART.ACCCVT
 ; CHECK: BSTART.TMATMUL.ACC
-; CHECK: B.IOTI{{[[:space:]]+\[[^]]+,[[:space:]]*[^]]+\], last[[:space:]]+}}->acc<4KB>
-; CHECK-NOT: B.IOTI{{[[:space:]]+\[[^]]+\], last[[:space:]]+}}->acc<4KB>
+; CHECK: B.IOT{{[[:space:]]+[^,]+,[[:space:]]*[^,]+, last,[[:space:]]+}}->acc<4KB>
+; CHECK-NOT: B.IOT{{[[:space:]]+[^,]+, last,[[:space:]]+}}->acc<4KB>
 ; CHECK: BSTART.ACCCVT
-; CHECK: B.IOTI{{[[:space:]]+\[\], last[[:space:]]+}}->{{m|n}}<4KB>
+; CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->{{m|n}}<4KB>
 ; CHECK: BSTART.TSTORE

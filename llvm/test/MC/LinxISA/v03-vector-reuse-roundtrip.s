@@ -6,8 +6,8 @@
 test_v03_vector_reuse_roundtrip:
 	BSTART.MSEQ 0
 	B.TEXT .body
-	B.IOTI [], last ->t<4KB>
-	B.IOTI [], last ->u<2KB>
+	B.IOT last, ->t<4KB>
+	B.IOT last, ->u<2KB>
 	C.B.DIMI 8, ->lb0
 	C.B.DIMI 1, ->lb1
 	C.BSTART
@@ -21,8 +21,8 @@ test_v03_vector_reuse_roundtrip:
 # CHECK-LABEL: <test_v03_vector_reuse_roundtrip>:
 # CHECK: BSTART.MSEQ
 # CHECK: B.TEXT
-# CHECK: B.IOTI{{[[:space:]]+}}[], last{{[[:space:]]+}}->t<4KB>
-# CHECK: B.IOTI{{[[:space:]]+}}[], last{{[[:space:]]+}}->u<2KB>
+# CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<4KB>
+# CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->u<2KB>
 # CHECK: C.B.DIMI{{[[:space:]]+}}8, {{[[:space:]]*}}->lb0
 # CHECK: C.B.DIMI{{[[:space:]]+}}1, {{[[:space:]]*}}->lb1
 # CHECK: C.BSTART

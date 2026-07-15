@@ -1,64 +1,23 @@
 # RUN: llvm-mc -triple=linx64 -filetype=obj %s -o - | llvm-objdump -d --triple=linx64 - | FileCheck %s
 
 	.text
-	.globl	test_v03_par_snippet
-	.type	test_v03_par_snippet,@function
-test_v03_par_snippet:
-	.long 0x22109181
-	.long 0x180221a3
-	.long 0x30007493
-	.long 0x00858013
-	.short 0x103c
-	.short 0x503c
-	.short 0x903c
-	.long 0x22011181
-	.long 0x88207513
-	.short 0x0800
-	.long 0x22519181
-	.long 0x1800a4a3
-	.long 0x20057493
-	.short 0x103c
-	.short 0x503c
-	.long 0x22011181
-	.long 0x88207513
-	.short 0x103c
-	.short 0x503c
-	.short 0x903c
-	.short 0x0800
-	.long 0x22519181
-	.long 0x1800a4a3
-	.long 0x2004f493
-	.short 0x103c
-	.short 0x503c
-	.long 0x22211181
-	.long 0x88207513
-	.short 0x103c
-	.short 0x503c
-	.short 0x903c
-	.size	test_v03_par_snippet, .-test_v03_par_snippet
+	.globl	test_v056_block_descriptor_roundtrip
+	.type	test_v056_block_descriptor_roundtrip,@function
+test_v056_block_descriptor_roundtrip:
+	BSTART.TMOV FP16
+	B.IOT t#1, t#3.reuse, last, ->acc<4KB>
+	B.IOT u#3, last, ->t<1KB>
+	B.IOT last, ->u<0>
+	B.CATR trap, atomic, aqrl, far, dr
+	B.DATR normal, INT8, ZERO, cmode3, rmode2, sat
+	C.BSTOP
+	.size	test_v056_block_descriptor_roundtrip, .-test_v056_block_descriptor_roundtrip
 
-# CHECK-LABEL: <test_v03_par_snippet>:
-# CHECK: BSTART.TLOAD{{[[:space:]]+}}DT4
-# CHECK: B.ARG{{[[:space:]]+}}ND2ZN.normal, FP16, Null
-# CHECK: B.IOTI{{[[:space:]]+\[\], last[[:space:]]+}}->t<
-# CHECK: B.IOR{{[[:space:]]+\[a6,s0\],\[\]}}
-# CHECK: C.B.DIMI{{[[:space:]]+}}64,{{[[:space:]]+}}->lb0
-# CHECK: C.B.DIMI{{[[:space:]]+}}64,{{[[:space:]]+}}->lb1
-# CHECK: C.B.DIMI{{[[:space:]]+}}64,{{[[:space:]]+}}->lb2
-# CHECK: BSTART.TMATMUL{{[[:space:]]+}}DT4
-# CHECK: B.IOTI{{[[:space:]]+\[t#1, t#3\.reuse\], last[[:space:]]+}}->acc<
-# CHECK: C.BSTART.STD
-# CHECK: BSTART.TEPL{{[[:space:]]+}}163, DT4
-# CHECK: B.ARG{{[[:space:]]+}}DN2NZ.normal, FP32, Null
-# CHECK: B.IOTI{{[[:space:]]+\[u#3\], last[[:space:]]+}}->t<
-# CHECK: C.B.DIMI{{[[:space:]]+}}64,{{[[:space:]]+}}->lb0
-# CHECK: C.B.DIMI{{[[:space:]]+}}64,{{[[:space:]]+}}->lb1
-# CHECK: BSTART.TMATMUL{{[[:space:]]+}}DT4
-# CHECK: B.IOTI{{[[:space:]]+\[t#1, t#3\.reuse\], last[[:space:]]+}}->acc<
-# CHECK: C.B.DIMI{{[[:space:]]+}}64,{{[[:space:]]+}}->lb2
-# CHECK: C.BSTART.STD
-# CHECK: BSTART.TEPL{{[[:space:]]+}}163, DT4
-# CHECK: B.ARG{{[[:space:]]+}}DN2NZ.normal, FP32, Null
-# CHECK: B.IOTI{{[[:space:]]+\[u#2\], last[[:space:]]+}}->t<
-# CHECK: BSTART.TMATMUL.ACC{{[[:space:]]+}}DT4
-# CHECK: B.IOTI{{[[:space:]]+\[t#1, t#3\.reuse\], last[[:space:]]+}}->acc<
+# CHECK-LABEL: <test_v056_block_descriptor_roundtrip>:
+# CHECK: BSTART.TMOV{{[[:space:]]+}}FP16
+# CHECK: B.IOT{{[[:space:]]+}}t#1, t#3.reuse, last,{{[[:space:]]+}}->acc<4KB>
+# CHECK: B.IOT{{[[:space:]]+}}u#3, last,{{[[:space:]]+}}->t<1KB>
+# CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->u<0>
+# CHECK: B.CATR{{[[:space:]]+}}trap, atomic, aqrl, far, dr
+# CHECK: B.DATR{{[[:space:]]+}}normal, INT8, Zero, cmode3, rmode2, sat
+# CHECK: C.BSTOP

@@ -409,21 +409,29 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  case LinxISA::B_ATTR: {
+  case LinxISA::B_CATR: {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(
-        "B.ATTR {trap, atomic, <aq, rl, aqrl>, far, DataLayout.{canon, normal}, "
-        "SrcType, PadValue, DR}",
+        "B.CATR {trap, atomic, <aq, rl, aqrl>, far, dr}",
         /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // C
+    // Canonical catalog field order: DR, aq, atom, far, reserve, rl, trap.
     OutMI.addOperand(MCOperand::createImm(I(1))); // DR
-    OutMI.addOperand(MCOperand::createImm(I(2))); // DataLayout
-    OutMI.addOperand(MCOperand::createImm(I(3))); // DataType
-    OutMI.addOperand(MCOperand::createImm(I(4))); // PadValue
-    OutMI.addOperand(MCOperand::createImm(I(5))); // T
-    OutMI.addOperand(MCOperand::createImm(I(6))); // aq
-    OutMI.addOperand(MCOperand::createImm(I(7))); // atom
-    OutMI.addOperand(MCOperand::createImm(I(8))); // far
-    OutMI.addOperand(MCOperand::createImm(I(9))); // rl
+    OutMI.addOperand(MCOperand::createImm(I(2))); // aq
+    OutMI.addOperand(MCOperand::createImm(I(3))); // atom
+    OutMI.addOperand(MCOperand::createImm(I(4))); // far
+    OutMI.addOperand(MCOperand::createImm(0));    // reserve
+    OutMI.addOperand(MCOperand::createImm(I(5))); // rl
+    OutMI.addOperand(MCOperand::createImm(I(0))); // trap
+    return;
+  }
+
+  case LinxISA::B_DATR: {
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(
+        "B.DATR {layout.{canon, normal}, datatype, padvalue, cmode, rmode, sat}",
+        /*LengthBits=*/32));
+    // Canonical catalog field order: CMode, DataLayout, DataType, PadValue,
+    // RMode, Sat.
+    for (unsigned Index = 0; Index != 6; ++Index)
+      OutMI.addOperand(MCOperand::createImm(I(Index)));
     return;
   }
 
@@ -469,39 +477,33 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  case LinxISA::B_IOT_G0:
-  case LinxISA::B_IOT_G1: {
-    StringRef AsmFmt =
-        (Opc == LinxISA::B_IOT_G0)
-            ? "B.IOT [SrcTile0<.reuse>, SrcTile1<.reuse>],  group=0, ->DstTile<RegSrc>"
-            : "B.IOT [SrcTile0<.reuse>, SrcTile1<.reuse>],  group=1, ->DstTile<RegSrc>";
+  case LinxISA::B_IOT_SIZE_G0:
+  case LinxISA::B_IOT_SIZE_G1: {
+    const bool Last = Opc == LinxISA::B_IOT_SIZE_G1;
+    const bool Src0Valid = I(2) == 0;
+    const bool Src1Valid = I(4) == 0;
+    const bool HasSrc0 = Src0Valid || Src1Valid;
+    const bool HasSrc1 = Src0Valid && Src1Valid;
+    StringRef AsmFmt = HasSrc1
+                           ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>"
+                       : HasSrc0
+                           ? "B.IOT SrcTile0<.reuse>, <last>, ->DstTile<Size>"
+                           : "B.IOT <last>, ->DstTile<Size>";
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
+    // Emit operands in the selected canonical form's catalog field order.
     OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
-    OutMI.addOperand(MCOperand::createImm(R(1))); // RegSrc
-    OutMI.addOperand(MCOperand::createImm(I(2))); // S0R
-    OutMI.addOperand(MCOperand::createImm(I(3))); // S0V
-    OutMI.addOperand(MCOperand::createImm(I(4))); // S1R
-    OutMI.addOperand(MCOperand::createImm(I(5))); // S1V
-    OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile0
-    OutMI.addOperand(MCOperand::createImm(I(7))); // SrcTile1
-    return;
-  }
-
-  case LinxISA::B_IOTI_G0:
-  case LinxISA::B_IOTI_G1: {
-    StringRef AsmFmt =
-        (Opc == LinxISA::B_IOTI_G0)
-            ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>"
-            : "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>";
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
-    OutMI.addOperand(MCOperand::createImm(I(1))); // S0R
-    OutMI.addOperand(MCOperand::createImm(I(2))); // S0V
-    OutMI.addOperand(MCOperand::createImm(I(3))); // S1R
-    OutMI.addOperand(MCOperand::createImm(I(4))); // S1V
-    OutMI.addOperand(MCOperand::createImm(I(5))); // SrcTile0
-    OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile1
-    OutMI.addOperand(MCOperand::createImm(I(7))); // imm5 (Size)
+    OutMI.addOperand(MCOperand::createImm(Last)); // L
+    if (HasSrc0) {
+      const unsigned SrcIndex = Src0Valid ? 5 : 6;
+      const unsigned ReuseIndex = Src0Valid ? 1 : 3;
+      OutMI.addOperand(MCOperand::createImm(I(ReuseIndex))); // S0R
+      if (HasSrc1)
+        OutMI.addOperand(MCOperand::createImm(I(3))); // S1R
+      OutMI.addOperand(MCOperand::createImm(I(SrcIndex))); // SrcTile0
+      if (HasSrc1)
+        OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile1
+    }
+    OutMI.addOperand(MCOperand::createImm(I(7))); // imm4 (Size)
     return;
   }
 

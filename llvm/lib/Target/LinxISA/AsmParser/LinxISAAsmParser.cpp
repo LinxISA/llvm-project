@@ -231,9 +231,9 @@ static std::optional<unsigned> parseTileRef(StringRef Name, bool &Reuse) {
 
   unsigned Depth = 0;
   StringRef Tail = Base.drop_front(2);
-  if (Tail.getAsInteger(10, Depth) || Depth == 0 || Depth > 8)
+  if (Tail.getAsInteger(10, Depth) || Depth == 0 || Depth > 16)
     return std::nullopt;
-  return (Hand << 3) | ((Depth - 1u) & 0x7u);
+  return (Hand << 4) | ((Depth - 1u) & 0xfu);
 }
 
 static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
@@ -641,10 +641,10 @@ static std::optional<std::string> getLegacyAliasDiag(StringRef Mnemonic) {
   const StringRef Key(Up);
 
   if (Key == "L.BSTOP")
-    return "legacy alias 'L.BSTOP' is not allowed in canonical v0.4; use 'C.BSTOP'";
+    return "legacy alias 'L.BSTOP' is not allowed in canonical v0.56; use 'C.BSTOP'";
 
   if (Key.starts_with("L."))
-    return "legacy 'L.*' mnemonics are not allowed in canonical v0.4; use canonical "
+    return "legacy 'L.*' mnemonics are not allowed in canonical v0.56; use canonical "
            "mnemonics (for example 'V.*' and typed BSTART.* forms)";
 
   return std::nullopt;
@@ -1233,8 +1233,6 @@ static const StringMap<SmallVector<unsigned, 4>> &getMnemonicMap() {
         addKey("BSTART", i);
       if (M.starts_with("C.BSTART.STD"))
         addKey("C.BSTART", i);
-      if (M == "B.CATR")
-        addKey("B.ATTR", i);
     }
   }
 
@@ -1468,9 +1466,9 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
   Lex();
 
   // Optional tile-descriptor angle suffix:
-  //   - `->t<Size>` / `->acc<Size>` (B.IOTI)
+  //   - `->t<Size>` / `->acc<Size>` (B.IOT)
   //   - `->t<RegSrc>` / `->acc<RegSrc>` (B.IOT)
-  // This syntax is used by B.IOT/B.IOTI and is not a normal register operand.
+  // This syntax is used by B.IOT/B.IOT and is not a normal register operand.
   if (getTok().is(AsmToken::Less)) {
     std::string Up = toUpperStr(Base);
     unsigned Kind = 0;
@@ -1637,6 +1635,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
   bool AllowMemOperands = false;
   bool AllowFrameRangeOperands = false;
   bool IsTileIODesc = false;
+  bool IsBlockAttr = false;
   unsigned MaxArrowDests = 0;
   {
     std::string Key = toUpperStr(Name);
@@ -1700,7 +1699,8 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
     }
 
     StringRef KeyRef(Key);
-    IsTileIODesc = KeyRef == "B.IOT" || KeyRef == "B.IOTI";
+    IsTileIODesc = KeyRef == "B.IOT";
+    IsBlockAttr = KeyRef == "B.CATR" || KeyRef == "B.DATR";
   }
 
   while (!getTok().is(AsmToken::EndOfStatement)) {
@@ -1735,6 +1735,10 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
     }
 
     if (getTok().is(AsmToken::LBrac)) {
+      if (IsTileIODesc)
+        return Error(getTok().getLoc(),
+                     "bracketed B.IOT source lists are not canonical v0.56; "
+                     "write tile sources as comma-separated operands");
       if (AllowFrameRangeOperands) {
         SMLoc Start = getTok().getLoc();
         Lex(); // '['
@@ -1875,7 +1879,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
               SMLoc S = getTok().getLoc();
               SMLoc E = getTok().getEndLoc();
               Lex();
-              const unsigned Enc = (*Tile & 0x1fu) | (Reuse ? (1u << 5) : 0u);
+              const unsigned Enc = (*Tile & 0x3fu) | (Reuse ? (1u << 6) : 0u);
               Operands.push_back(LinxOperand::createImm(
                   MCConstantExpr::create(Enc, getContext()), S, E));
               continue;
@@ -1993,6 +1997,39 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
         Lex();
         Operands.push_back(LinxOperand::createKeyword(T, L, E));
         continue;
+      }
+
+      if (IsTileIODesc) {
+        bool Reuse = false;
+        if (auto Tile = parseTileRef(getTok().getString(), Reuse)) {
+          SMLoc L = getTok().getLoc();
+          SMLoc E = getTok().getEndLoc();
+          Lex();
+          const unsigned Enc = (*Tile & 0x3fu) | (Reuse ? (1u << 6) : 0u);
+          Operands.push_back(LinxOperand::createImm(
+              MCConstantExpr::create(Enc, getContext()), L, E));
+          continue;
+        }
+      }
+
+      if (IsBlockAttr) {
+        StringRef Text = getTok().getString();
+        if (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
+            Text.equals_insensitive("AQRL") ||
+            Text.equals_insensitive("ATOMIC") ||
+            Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
+            Text.equals_insensitive("FAR") || Text.equals_insensitive("SAT") ||
+            Text.starts_with_insensitive("CMODE") ||
+            Text.starts_with_insensitive("RMODE") ||
+            Text.equals_insensitive("NORMAL") ||
+            Text.equals_insensitive("CANON") || parseDataTypeKeyword(Text) ||
+            parsePadValueKeyword(Text)) {
+          SMLoc L = getTok().getLoc();
+          SMLoc E = getTok().getEndLoc();
+          Lex();
+          Operands.push_back(LinxOperand::createKeyword(Text, L, E));
+          continue;
+        }
       }
 
       // Registers (including suffixed forms like a0.sw).
@@ -2742,11 +2779,6 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  if (AsmFmt.starts_with("B.IOD")) {
-    Err = "B.IOD is deprecated in canonical v0.4; use B.IOR/B.IOT/B.IOTI";
-    return false;
-  }
-
   // Special-case: GPR descriptor binding (B.IOR).
   if (AsmFmt.starts_with("B.IOR")) {
     if (!require(!PI.Mem && PI.ArrowDests.empty() && !PI.SetRetTarget,
@@ -2783,14 +2815,15 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  if (AsmFmt.starts_with("B.ATTR") || AsmFmt.starts_with("B.CATR") ||
-      AsmFmt.starts_with("B.DATR")) {
+  if (AsmFmt.starts_with("B.CATR") || AsmFmt.starts_with("B.DATR")) {
     if (!require(!PI.Mem && PI.Regs.empty() && PI.ArrowDests.empty() &&
                      !PI.SetRetTarget,
-                 "unexpected operands for B.ATTR"))
+                 "unexpected operands for B.CATR"))
       return false;
 
     StringMap<StringRef> Attrs;
+    unsigned CMode = 0;
+    unsigned RMode = 0;
     auto recordAttrToken = [&](StringRef RawText) {
       StringRef Text = RawText;
       if (Text.starts_with("."))
@@ -2806,8 +2839,21 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         return;
       }
       if (Text.equals_insensitive("ATOMIC") || Text.equals_insensitive("TRAP") ||
-          Text.equals_insensitive("DR") || Text.equals_insensitive("T")) {
+          Text.equals_insensitive("DR") || Text.equals_insensitive("FAR") ||
+          Text.equals_insensitive("SAT")) {
         Attrs[Text] = "ON";
+        return;
+      }
+      if (Text.starts_with_insensitive("CMODE")) {
+        unsigned Value = 0;
+        if (!Text.drop_front(5).getAsInteger(0, Value) && Value < 8)
+          CMode = Value;
+        return;
+      }
+      if (Text.starts_with_insensitive("RMODE")) {
+        unsigned Value = 0;
+        if (!Text.drop_front(5).getAsInteger(0, Value) && Value < 8)
+          RMode = Value;
         return;
       }
       if (Text.equals_insensitive("NORMAL") || Text.equals_insensitive("CANON")) {
@@ -2856,7 +2902,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     unsigned DType = 0;
     if (auto It = Attrs.find("DTYPE"); It != Attrs.end()) {
       auto DT = parseDataTypeKeyword(It->second);
-      if (!require(DT.has_value(), "invalid B.ATTR dtype"))
+      if (!require(DT.has_value(), "invalid B.CATR dtype"))
         return false;
       DType = *DT;
     }
@@ -2864,14 +2910,14 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     unsigned Pad = 0;
     if (auto It = Attrs.find("PAD"); It != Attrs.end()) {
       auto P = parsePadValueKeyword(It->second);
-      if (!require(P.has_value(), "invalid B.ATTR pad value"))
+      if (!require(P.has_value(), "invalid B.CATR pad value"))
         return false;
       Pad = *P;
     }
 
     for (unsigned i = 0; i < Form.field_count; ++i) {
       StringRef FN(linxisa_fields[Form.field_start + i].name);
-      if (FN == "C" || FN == "trap")
+      if (FN == "trap")
         emitFieldImm(onBit("TRAP"));
       else if (FN == "DR" || FN == "dr")
         emitFieldImm(onBit("DR"));
@@ -2881,8 +2927,12 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         emitFieldImm(DType);
       else if (FN == "PadValue")
         emitFieldImm(Pad);
-      else if (FN == "T")
-        emitFieldImm(onBit("T"));
+      else if (FN == "CMode")
+        emitFieldImm(CMode);
+      else if (FN == "RMode")
+        emitFieldImm(RMode);
+      else if (FN == "Sat")
+        emitFieldImm(onBit("SAT"));
       else if (FN == "aq")
         emitFieldImm(Aq);
       else if (FN == "atom" || FN == "atomic")
@@ -2894,7 +2944,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       else if (FN == "reserve")
         emitFieldImm(0);
       else
-        return require(false, ("unsupported B.ATTR field: " + FN).str());
+        return require(false, ("unsupported block attribute field: " + FN).str());
     }
     return true;
   }
@@ -2976,44 +3026,44 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  // Special-case: tile block IO descriptors (B.IOT / B.IOTI).
+  // Special-case: canonical v0.56.5 immediate-size B.IOT descriptors.
   if (AsmFmt.starts_with("B.IOT")) {
-    const bool IsIOTI = AsmFmt.starts_with("B.IOTI");
     if (!require(!PI.Mem && !PI.SetRetTarget,
-                 "unexpected operands for B.IOT/B.IOTI"))
+                 "unexpected operands for B.IOT"))
       return false;
     if (!require(PI.Regs.empty(),
-                 "unexpected register operands for B.IOT/B.IOTI"))
+                 "unexpected register operands for B.IOT"))
       return false;
 
     bool WantLast = false;
     for (const ParsedKeyword &K : PI.Keywords)
       if (K.TextUpper == "LAST")
         WantLast = true;
-    const bool FormLast = AsmFmt.contains("group=1");
-    if (!require(WantLast == FormLast,
-                 "group/last marker does not match encoding"))
-      return false;
-
     if (!require(PI.ArrowDests.size() == 1,
-                 "expected tile destination suffix (for example '->t<1KB>' or "
-                 "'->t<a0>')"))
+                 "expected tile destination suffix (for example '->t<1KB>')"))
       return false;
 
     const unsigned DstHand = PI.ArrowDests[0].Code & 0x7u;
-    unsigned DstTile = DstHand;
-    if (DstHand < 4u)
-      DstTile = DstHand + 1u;
-    else if (DstHand == 4u)
-      DstTile = 4u;
-    const unsigned SizeCode = PI.ArrowDests[0].AngleSize & 0x1fu;
-    const unsigned RegSrc = PI.ArrowDests[0].AngleReg & 0x1fu;
-
-    if (!require(PI.Imms.size() <= 2,
-                 "B.IOT/B.IOTI supports at most 2 SrcTile operands"))
+    const unsigned DstTile = DstHand;
+    const unsigned SizeCode = PI.ArrowDests[0].AngleSize;
+    if (!require(SizeCode <= 15u, "B.IOT size code must fit canonical imm4"))
+      return false;
+    if (!require(PI.ArrowDests[0].HasAngleSize &&
+                     !PI.ArrowDests[0].HasAngleReg,
+                 "B.IOT expects size suffix '->t<Size>'"))
       return false;
 
-    unsigned S0V = 1, S1V = 1;
+    if (!require(PI.Imms.size() <= 2,
+                 "B.IOT supports at most 2 SrcTile operands"))
+      return false;
+
+    const unsigned ExpectedSources = AsmFmt.contains("SrcTile1")
+                                         ? 2u
+                                     : AsmFmt.contains("SrcTile0") ? 1u : 0u;
+    if (!require(PI.Imms.size() == ExpectedSources,
+                 "source tile count does not match B.IOT encoding form"))
+      return false;
+
     unsigned S0R = 0, S1R = 0;
     unsigned Src0 = 0, Src1 = 0;
     auto takeTileImm = [&](unsigned i, unsigned &Tile,
@@ -3021,8 +3071,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       int64_t V = 0;
       if (!isConstExpr(PI.Imms[i].Expr, V))
         return false;
-      Tile = static_cast<unsigned>(V) & 0x1fu;
-      Reuse = (static_cast<unsigned>(V) >> 5) & 0x1u;
+      Tile = static_cast<unsigned>(V) & 0x3fu;
+      Reuse = (static_cast<unsigned>(V) >> 6) & 0x1u;
       return true;
     };
 
@@ -3031,7 +3081,6 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(takeTileImm(0, Src0, Reuse),
                    "tile refs must be constant in bring-up"))
         return false;
-      S0V = 0;
       S0R = Reuse & 1u;
     }
     if (PI.Imms.size() >= 2) {
@@ -3039,75 +3088,29 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(takeTileImm(1, Src1, Reuse),
                    "tile refs must be constant in bring-up"))
         return false;
-      S1V = 0;
       S1R = Reuse & 1u;
     }
 
-    // Canonical v0.4 printer elides the hidden sentinel slots when the
-    // descriptor has no explicit source tile list. Preserve those sentinels so
-    // llvm-mc can reassemble the disassembled form byte-for-byte.
-    const bool UseHiddenEmptySentinels = PI.Imms.empty() && DstHand < 4u;
-    if (UseHiddenEmptySentinels) {
-      const unsigned Hidden = ((DstHand & 0x3u) << 3) | 1u;
-      Src0 = Hidden;
-      Src1 = Hidden;
-      S0R = 1u;
-      S1R = 1u;
-      S0V = 1u;
-      S1V = 1u;
-    }
-
-    // Bring-up contract: if an output tile register is not explicitly present
-    // in the source list, encode the default destination tile ID in the first
-    // absent slot (preferring SrcTile1). This supports QEMU/local-base binding.
-    if (!UseHiddenEmptySentinels && DstTile != 4u) { // not acc
-      const unsigned DefaultDst = (DstHand & 0x3u) << 3; // depth 0
-      if (S1V == 1u) {
-        Src1 = DefaultDst;
-      } else if (S0V == 1u) {
-        Src0 = DefaultDst;
-      }
-    }
-
-    if (!require(Form.field_count == 8, "unexpected B.IOT/B.IOTI field layout"))
-      return false;
-
-    if (IsIOTI) {
-      if (!require(PI.ArrowDests[0].HasAngleSize && !PI.ArrowDests[0].HasAngleReg,
-                   "B.IOTI expects size suffix '->t<Size>'"))
-        return false;
-    } else {
-      if (!require(PI.ArrowDests[0].HasAngleReg && !PI.ArrowDests[0].HasAngleSize,
-                   "B.IOT expects register suffix '->t<RegSrc>'"))
-        return false;
-    }
-
-    // Emit fields in the actual spec order. B.IOT places RegSrc immediately
-    // after DstTile, while B.IOTI carries imm5 at the tail.
     for (unsigned i = 0; i < Form.field_count; ++i) {
       const linxisa_field &Field = linxisa_fields[Form.field_start + i];
       StringRef FN(Field.name);
       if (FN == "DstTile")
         emitFieldImm(DstTile);
-      else if (FN == "RegSrc")
-        emitFieldImm(RegSrc);
+      else if (FN == "L")
+        emitFieldImm(WantLast);
       else if (FN == "S0R")
         emitFieldImm(S0R);
-      else if (FN == "S0V")
-        emitFieldImm(S0V);
       else if (FN == "S1R")
         emitFieldImm(S1R);
-      else if (FN == "S1V")
-        emitFieldImm(S1V);
       else if (FN == "SrcTile0")
         emitFieldImm(Src0);
       else if (FN == "SrcTile1")
         emitFieldImm(Src1);
-      else if (FN == "imm5" || FN == "uimm5")
+      else if (FN == "imm4")
         emitFieldImm(SizeCode);
       else
         return require(false,
-                       ("unsupported B.IOT/B.IOTI field: " + FN).str());
+                       ("unsupported B.IOT field: " + FN).str());
     }
 
     return true;

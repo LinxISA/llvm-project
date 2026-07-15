@@ -8,7 +8,7 @@ test_v04_vector_simt:
 	B.TEXT .body
 	B.ARG NORM.normal
 	B.IOR [s0],[]
-	B.IOTI [], last ->t<4KB>
+	B.IOT last, ->t<4KB>
 	C.B.DIMI 64, ->lb0
 	C.B.DIMI 32, ->lb1
 	C.BSTART
@@ -28,7 +28,7 @@ test_v04_vector_simt:
 # CHECK: B.TEXT
 # CHECK: B.ARG{{[[:space:]]+}}NORM.normal
 # CHECK: B.IOR{{[[:space:]]+}}[s0],[]{{[[:space:]]*$}}
-# CHECK: B.IOTI{{[[:space:]]+}}[], last{{[[:space:]]+}}->t<4KB>
+# CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<4KB>
 # CHECK: C.B.DIMI{{[[:space:]]+}}64, {{[[:space:]]*}}->lb0
 # CHECK: C.B.DIMI{{[[:space:]]+}}32, {{[[:space:]]*}}->lb1
 # CHECK: C.BSTART

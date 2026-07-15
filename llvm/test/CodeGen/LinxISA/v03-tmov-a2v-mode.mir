@@ -3,7 +3,7 @@
 # CHECK-LABEL: name: tile_tmov_a2v
 # CHECK: BSTART_TMA 0, 2
 # CHECK-NEXT: B_ARG 1
-# CHECK: B_IOTI_G1 0, 0, 1, 0, 1, 0, 0, 8, implicit-def $tile0
+# CHECK: B_IOT_SIZE_G1 0, 0, 1, 0, 1, 0, 0, 8, implicit-def $tile0
 
 --- |
   define i64 @tile_tmov_a2v(ptr %out) {

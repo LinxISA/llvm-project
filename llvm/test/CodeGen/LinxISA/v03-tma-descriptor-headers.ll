@@ -18,8 +18,8 @@ entry:
 ; CHECK: C.B.DIMI{{.*}}->lb1
 ; CHECK: B.ARG
 ; CHECK: B.IOR
-; CHECK: B.IOTI
+; CHECK: B.IOT
 ; CHECK: BSTART.TSTORE{{[[:space:]]+}}
 ; CHECK: B.ARG
 ; CHECK: B.IOR
-; CHECK: B.IOTI
+; CHECK: B.IOT
