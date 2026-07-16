@@ -172,6 +172,41 @@ def simm24_w : Operand<i32>, PatLeaf<(i32 imm), [{
   let ParserMatchClass = ImmAsmOperand;
 }
 
+// LLVM canonicalizes source-level subtraction by a constant to add of the
+// corresponding negative constant. Match that DAG form and pass the positive
+// magnitude to the ISA's unsigned SUBI immediate field.
+def neg_uimm_xform_i64 : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant(-N->getAPIntValue(), SDLoc(N), MVT::i64);
+}]>;
+
+def neg_uimm12_i64 : PatLeaf<(i64 imm), [{
+  APInt V = N->getAPIntValue();
+  APInt Magnitude = -V;
+  return V.isNegative() && !Magnitude.isZero() && Magnitude.isIntN(12);
+}], neg_uimm_xform_i64>;
+
+def neg_uimm24_i64 : PatLeaf<(i64 imm), [{
+  APInt V = N->getAPIntValue();
+  APInt Magnitude = -V;
+  return V.isNegative() && Magnitude.ugt(0xfff) && Magnitude.isIntN(24);
+}], neg_uimm_xform_i64>;
+
+def neg_uimm_xform_i32 : SDNodeXForm<imm, [{
+  return CurDAG->getTargetConstant(-N->getAPIntValue(), SDLoc(N), MVT::i32);
+}]>;
+
+def neg_uimm12_i32 : PatLeaf<(i32 imm), [{
+  APInt V = N->getAPIntValue();
+  APInt Magnitude = -V;
+  return V.isNegative() && !Magnitude.isZero() && Magnitude.isIntN(12);
+}], neg_uimm_xform_i32>;
+
+def neg_uimm24_i32 : PatLeaf<(i32 imm), [{
+  APInt V = N->getAPIntValue();
+  APInt Magnitude = -V;
+  return V.isNegative() && Magnitude.ugt(0xfff) && Magnitude.isIntN(24);
+}], neg_uimm_xform_i32>;
+
 def uimm5_w : Operand<i32>, PatLeaf<(i32 imm), [{ return isUInt<5>(N->getZExtValue()); }]> {
   let ParserMatchClass = ImmAsmOperand;
 }
@@ -327,6 +362,11 @@ let Size = 6 in {
                              [(set (i64 GPR:$rd), (xor (i64 GPR:$rs1), simm24:$imm))]>;
 }
 
+def : Pat<(add i64:$a, neg_uimm12_i64:$b),
+          (SUBIri $a, (neg_uimm_xform_i64 imm:$b))>;
+def : Pat<(add i64:$a, neg_uimm24_i64:$b),
+          (HLSUBIri $a, (neg_uimm_xform_i64 imm:$b))>;
+
 def SLLrr  : LinxISAInst<(outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2), "", [(set (i64 GPR:$rd), (shl (i64 GPR:$rs1), (i64 GPR:$rs2)))]>;
 def SRLrr  : LinxISAInst<(outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2), "", [(set (i64 GPR:$rd), (srl (i64 GPR:$rs1), (i64 GPR:$rs2)))]>;
 def SRArr  : LinxISAInst<(outs GPR:$rd), (ins GPR:$rs1, GPR:$rs2), "", [(set (i64 GPR:$rd), (sra (i64 GPR:$rs1), (i64 GPR:$rs2)))]>;
@@ -373,6 +413,8 @@ def SRAIWri : LinxISAInst<(outs GPR:$rd), (ins GPR:$rs1, uimm5_w:$shamt), "", []
 
 // Prefer immediate forms when the RHS is a constant.
 def : Pat<(add i32:$a, uimm12_w:$b), (ADDIWri $a, $b)>;
+def : Pat<(add i32:$a, neg_uimm12_i32:$b),
+          (SUBIWri $a, (neg_uimm_xform_i32 imm:$b))>;
 def : Pat<(sub i32:$a, uimm12_w:$b), (SUBIWri $a, $b)>;
 def : Pat<(and i32:$a, simm12_w:$b), (ANDIWri $a, $b)>;
 def : Pat<(or  i32:$a, simm12_w:$b), (ORIWri  $a, $b)>;
@@ -380,6 +422,8 @@ def : Pat<(xor i32:$a, simm12_w:$b), (XORIWri $a, $b)>;
 
 // 48-bit HL.*W variants when immediates don't fit 12 bits.
 def : Pat<(add i32:$a, uimm24_w:$b), (HLADDIWri $a, $b)>;
+def : Pat<(add i32:$a, neg_uimm24_i32:$b),
+          (HLSUBIWri $a, (neg_uimm_xform_i32 imm:$b))>;
 def : Pat<(sub i32:$a, uimm24_w:$b), (HLSUBIWri $a, $b)>;
 def : Pat<(and i32:$a, simm24_w:$b), (HLANDIWri $a, $b)>;
 def : Pat<(or  i32:$a, simm24_w:$b), (HLORIWri  $a, $b)>;
