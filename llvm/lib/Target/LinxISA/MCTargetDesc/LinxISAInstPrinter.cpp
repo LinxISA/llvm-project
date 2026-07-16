@@ -1711,6 +1711,11 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     OS << "->" << DstKind << "<";
     if (Size == 0u) {
       OS << "0";
+    } else if (Size < 5u || Size > 8u) {
+      // Unit-qualified source syntax intentionally accepts only 512B..4KB.
+      // Preserve other raw imm4 encodings as numeric size codes so objdump
+      // output remains byte-stable when passed back through llvm-mc.
+      OS << utostr(Size);
     } else {
       const uint64_t Bytes = 1ull << (Size + 4u);
       if (Bytes >= 1024u && (Bytes % 1024u) == 0u)
