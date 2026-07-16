@@ -2194,6 +2194,47 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
+  // Atomic fused CALL encodings carry two independent PC-relative fields in
+  // one instruction.  Do not route these through the legacy `ra=` sugar,
+  // which emits a BSTART followed by a separate C.SETRET.
+  const bool IsFusedCall32 =
+      AsmFmt.starts_with_insensitive("BSTART.CALL ");
+  const bool IsFusedCall48 =
+      AsmFmt.starts_with_insensitive("HL.BSTART.CALL ");
+  if (IsFusedCall32 || IsFusedCall48) {
+    if (!require(PI.Regs.empty() && PI.Keywords.empty() && !PI.Mem &&
+                     !PI.SetRetTarget,
+                 "unexpected operands for fused BSTART.CALL"))
+      return false;
+    if (!require(PI.Imms.size() == 2,
+                 "expected call target and return target for fused "
+                 "BSTART.CALL"))
+      return false;
+    if (!require(PI.ArrowDests.size() == 1 &&
+                     PI.ArrowDests[0].Code == 10,
+                 "fused BSTART.CALL destination must be ->ra"))
+      return false;
+    if (!require(Form.field_count == 2,
+                 "unexpected fused BSTART.CALL field layout"))
+      return false;
+
+    const StringRef CallField(linxisa_fields[Form.field_start].name);
+    const StringRef ReturnField(linxisa_fields[Form.field_start + 1].name);
+    if (!require(CallField == (IsFusedCall32 ? "simm12" : "simm25") &&
+                     ReturnField == "uimm5",
+                 "unexpected fused BSTART.CALL field contract"))
+      return false;
+
+    for (const ParsedImm &Imm : PI.Imms) {
+      int64_t Value = 0;
+      if (isConstExpr(Imm.Expr, Value))
+        emitFieldImm(Value);
+      else
+        emitFieldExpr(Imm.Expr);
+    }
+    return true;
+  }
+
   // Block headers: BSTART/C.BSTART/HL.BSTART/L.BSTART (branch-kind forms only).
   const bool IsBStartBranchHeader =
       (AsmFmt.starts_with_insensitive("bstart") ||

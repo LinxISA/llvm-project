@@ -142,7 +142,18 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     // (ADDTPC + ADDI/ADDIW).
     MCFixupKind Kind = FK_NONE;
     bool PCRel = true;
-    if (Name == "simm12" && Mnemonic.starts_with("B.")) {
+    unsigned FixupOffset = 0;
+    if (Name == "simm12" && Mnemonic == "BSTART CALL") {
+      Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CBSTART12_PCREL);
+    } else if (Name == "simm25" && Mnemonic == "HL.BSTART CALL") {
+      Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B25_PCREL);
+    } else if (Name == "uimm5" && Mnemonic == "BSTART CALL") {
+      Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CSETRET5_PCREL);
+      FixupOffset = 2;
+    } else if (Name == "uimm5" && Mnemonic == "HL.BSTART CALL") {
+      Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CSETRET5_PCREL);
+      FixupOffset = 4;
+    } else if (Name == "simm12" && Mnemonic.starts_with("B.")) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B12_PCREL);
     } else if ((Name == "simm22" || Name == "label") &&
                Mnemonic.starts_with("B.")) {
@@ -205,7 +216,8 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
       report_fatal_error(OS.str());
     }
 
-    Fixups.push_back(MCFixup::create(/*Offset=*/0, Expr, Kind, /*PCRel=*/PCRel));
+    Fixups.push_back(
+        MCFixup::create(FixupOffset, Expr, Kind, /*PCRel=*/PCRel));
   }
 
   const unsigned Bytes = Form.length_bits / 8;

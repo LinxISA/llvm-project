@@ -1253,14 +1253,29 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // Special-case: block split instructions. LLVM uses these as block
   // terminators; Linx uses halfword PC-relative offsets.
+  auto emitFusedReturnTarget = [&](uint64_t PcBaseOffset) -> bool {
+    auto Op = findField("uimm5");
+    if (!Op)
+      return false;
+    if (Op->isExpr()) {
+      MAI.printExpr(OS, *Op->getExpr());
+      return true;
+    }
+    if (!Op->isImm())
+      return false;
+    OS << "0x"
+       << utohexstr(Address + PcBaseOffset +
+                        (static_cast<uint64_t>(Op->getImm()) << 1),
+                    /*LowerCase=*/true);
+    return true;
+  };
+
   if (AsmFmt.starts_with("BSTART.CALL")) {
     OS << "BSTART.CALL\t";
     if (!emitPcRelTargetHex("simm12", /*Signed=*/true))
       OS << "0x0";
     OS << ", ";
-    if (auto V = findFieldImm("uimm5"))
-      OS << "0x" << utohexstr(static_cast<uint64_t>(*V), /*LowerCase=*/true);
-    else
+    if (!emitFusedReturnTarget(/*PcBaseOffset=*/2))
       OS << "0x0";
     OS << ",\t->ra";
     printAnnotation(OS, Annot);
@@ -1272,9 +1287,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     if (!emitPcRelTargetHex("simm25", /*Signed=*/true))
       OS << "0x0";
     OS << ", ";
-    if (auto V = findFieldImm("uimm5"))
-      OS << "0x" << utohexstr(static_cast<uint64_t>(*V), /*LowerCase=*/true);
-    else
+    if (!emitFusedReturnTarget(/*PcBaseOffset=*/4))
       OS << "0x0";
     OS << ",\t->ra";
     printAnnotation(OS, Annot);
