@@ -3225,7 +3225,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     if (IsBStartTMA)
       if (!require(*FuncVal >= 0 && *FuncVal <= 2,
                    "BSTART.TMA Function must be in range 0..2 in canonical "
-                   "v0.4"))
+                   "v0.56"))
         return false;
     if (IsBStartTEPL)
       if (!require(*FuncVal >= 0 && *FuncVal <= 0x3ff,

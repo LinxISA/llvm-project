@@ -4,4 +4,4 @@
 bad_v03_tma_func:
 	BSTART.TMA 3, FP16
 
-# CHECK: error: BSTART.TMA Function must be in range 0..2 in minimal v0.3 mode
+# CHECK: error: BSTART.TMA Function must be in range 0..2 in canonical v0.56
