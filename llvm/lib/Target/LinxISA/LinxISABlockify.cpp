@@ -6253,7 +6253,11 @@ public:
         // hand where the value is still within the 4-deep queue at its use.
         SmallVector<unsigned, 32> Sorted = CandidateSegs;
         llvm::sort(Sorted, [&](unsigned A, unsigned B) {
-          return Segs[A].DefIdx > Segs[B].DefIdx;
+          if (Segs[A].DefIdx != Segs[B].DefIdx)
+            return Segs[A].DefIdx > Segs[B].DefIdx;
+          // Visit the shallowest result first: later def operands are pushed
+          // later and therefore sit nearer the top of the LIFO hand queue.
+          return Segs[A].DefOpNo > Segs[B].DefOpNo;
         });
 
 	        SmallVector<unsigned, 32> AssignedT;
@@ -6266,7 +6270,14 @@ public:
 	          unsigned Between = 0;
 	          for (unsigned J : Assigned) {
 	            const Segment &B = Segs[J];
-	            if (B.DefIdx > S.DefIdx && B.DefIdx < UseIdx)
+	            // Multi-def instructions push results in operand order. A later
+	            // def operand from the same instruction therefore occupies a
+	            // shallower queue slot and must count just like a later
+	            // instruction definition.
+	            const bool PushedAfter =
+	                B.DefIdx > S.DefIdx ||
+	                (B.DefIdx == S.DefIdx && B.DefOpNo > S.DefOpNo);
+	            if (PushedAfter && B.DefIdx < UseIdx)
 	              ++Between;
 	          }
 	          return Between;

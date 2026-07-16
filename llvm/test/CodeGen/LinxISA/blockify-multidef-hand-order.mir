@@ -1,0 +1,89 @@
+# RUN: llc -mtriple=linx64 -run-pass=linx-blockify -o - %s | FileCheck %s
+
+# HL.LDIP pushes rd0 before rd1. The three ADDI values create hand pressure that
+# keeps both results on T: the latest ADDI occupies T, while the other two are
+# forced to U by sharing uses with it. The later rd1 push is therefore t#2 and
+# the earlier rd0 push is t#3 after the additional T push.
+#
+# CHECK-LABEL: name: multidef_hand_order
+# CHECK: $u4, $u4 = HL_LDIP $r1, 0
+# CHECK: $r4 = SUBIri killed $t2, 1
+# CHECK-NEXT: $r5 = ADDIri killed $t3, 1
+
+# At the four-deep admission boundary, rd1 has exactly three later T pushes and
+# remains legal as t#4. Counting rd1 as a later same-instruction push makes rd0
+# too deep for T, so it must move to U where it is still legal as u#4.
+#
+# CHECK-LABEL: name: multidef_depth4_boundary
+# CHECK: $u3, $u4 = HL_LDIP $r1, 0
+# CHECK: $r4 = SUBIri killed $t4, 1
+# CHECK-NEXT: $r5 = ADDIri killed $u4, 1
+
+--- |
+  target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
+  target triple = "linx64-unknown-unknown-elf"
+
+  define void @multidef_hand_order() {
+  entry:
+    ret void
+  }
+
+  define void @multidef_depth4_boundary() {
+  entry:
+    ret void
+  }
+...
+---
+name:            multidef_hand_order
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+frameInfo:
+  stackSize:       0
+  maxAlignment:    1
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $r1
+
+    $r2, $r3 = HL_LDIP $r1, 0
+    $r6 = ADDIri $r0, 40
+    $r7 = ADDIri $r0, 41
+    $r8 = ADDIri $r0, 42
+    $r9 = ADDrr killed $r7, $r8
+    $r10 = ADDrr killed $r6, killed $r8
+    $r4 = SUBIri killed $r3, 1
+    $r5 = ADDIri killed $r2, 1
+    BSTOP
+...
+---
+name:            multidef_depth4_boundary
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+frameInfo:
+  stackSize:       0
+  maxAlignment:    1
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $r1
+
+    $r2, $r3 = HL_LDIP $r1, 0
+    $r6 = ADDIri $r0, 10
+    $r7 = ADDIri $r0, 11
+    $r12 = ADDrr killed $r6, killed $r7
+    $r8 = ADDIri $r0, 20
+    $r9 = ADDIri $r0, 21
+    $r13 = ADDrr killed $r8, killed $r9
+    $r15 = ADDIri $r0, 30
+    $r16 = ADDIri $r0, 31
+    $r17 = ADDrr killed $r15, killed $r16
+    $r4 = SUBIri killed $r3, 1
+    $r5 = ADDIri killed $r2, 1
+    BSTOP
+...
