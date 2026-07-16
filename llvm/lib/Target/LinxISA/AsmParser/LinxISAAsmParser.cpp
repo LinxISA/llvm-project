@@ -3691,10 +3691,22 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(E != nullptr, "missing immediate operand"))
         return false;
       int64_t V = 0;
-      if (isConstExpr(E, V))
+      const bool IsShuffleImmediate =
+          FN == "imm" && AsmFmt.starts_with_insensitive("v.shfli.");
+      if (IsShuffleImmediate) {
+        if (!require(isConstExpr(E, V),
+                     "V.SHFLI immediate must be a constant"))
+          return false;
+        const uint64_t Limit = uint64_t{1} << Field.bit_width;
+        if (!require(V >= 0 && static_cast<uint64_t>(V) < Limit,
+                     "V.SHFLI immediate must be an unsigned 14-bit value"))
+          return false;
         emitFieldImm(V);
-      else
+      } else if (isConstExpr(E, V)) {
+        emitFieldImm(V);
+      } else {
         emitFieldExpr(E);
+      }
       continue;
     }
 
