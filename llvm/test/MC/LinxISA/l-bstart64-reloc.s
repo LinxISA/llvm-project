@@ -60,4 +60,4 @@ cross_section:
 
 #--- legacy.s
 	L.ADD a0, a1, ->a2
-# LEGACY: error: legacy 'L.*' mnemonics are not allowed in canonical v0.56
+# LEGACY: error: legacy 'L.*' mnemonics are not allowed in canonical v0.57

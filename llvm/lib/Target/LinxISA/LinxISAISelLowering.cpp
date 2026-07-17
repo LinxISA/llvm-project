@@ -1878,14 +1878,17 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     case 'r':
-      if (!VT.isVector())
-        // The Linx GPR encoding space includes queue pseudo-registers
-        // (t#k/u#k and the special RegDst encodings for ->t/->u). These are not
-        // general-purpose registers and are not safe for C inline-asm operands
-        // (especially for syscall/ACR entry/exit sequences). Restrict the "r"
-        // constraint to architectural registers only.
-        return std::make_pair(0u, &LinxISA::GPR_ArchRegClass);
-      break;
+      if (VT.isVector() || VT == MVT::linxtile)
+        // v0.57 uses the ordinary register constraint for typed tile carriers;
+        // the value type, rather than a retired multi-letter constraint,
+        // selects the architectural TILE register file.
+        return std::make_pair(0u, &LinxISA::TILERegClass);
+      // The Linx GPR encoding space includes queue pseudo-registers
+      // (t#k/u#k and the special RegDst encodings for ->t/->u). These are not
+      // general-purpose registers and are not safe for C inline-asm operands
+      // (especially for syscall/ACR entry/exit sequences). Restrict scalar "r"
+      // operands to architectural registers only.
+      return std::make_pair(0u, &LinxISA::GPR_ArchRegClass);
     default:
       break;
     }

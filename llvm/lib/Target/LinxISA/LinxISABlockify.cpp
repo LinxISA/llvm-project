@@ -11,6 +11,7 @@
 #include "LinxISAInstrInfo.h"
 #include "LinxISAMachineFunctionInfo.h"
 #include "LinxISARegisterInfo.h"
+#include "LinxISATileOpcodesV057.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
@@ -129,54 +130,8 @@ static void validateTileOpcode(int64_t TileOpcode, StringRef Context) {
 }
 
 static bool isWhitelistedTEPLTileOpcode(int64_t TileOpcode) {
-  switch (TileOpcode & 0x3ff) {
-  case 0x000:
-  case 0x001:
-  case 0x002:
-  case 0x003:
-  case 0x004:
-  case 0x005:
-  case 0x006:
-  case 0x007:
-  case 0x008:
-  case 0x009:
-  case 0x00a:
-  case 0x00b:
-  case 0x00c:
-  case 0x00d:
-  case 0x00e:
-  case 0x00f:
-  case 0x010:
-  case 0x011:
-  case 0x012:
-  case 0x013:
-  case 0x014:
-  case 0x015:
-  case 0x016:
-  case 0x017:
-  case 0x018:
-  case 0x019:
-  case 0x01a:
-  case 0x01b:
-  case 0x01c:
-  case 0x01d:
-  case 0x01e:
-  case 0x01f:
-  case 0x020:
-  case 0x021:
-  case 0x022:
-  case 0x023:
-  case 0x024:
-  case 0x025:
-  case 0x026:
-  case 0x027:
-  case 0x028:
-  case 0x029:
-  case 0x02a:
-    return true;
-  default:
-    return false;
-  }
+  return TileOpcode >= 0 && LinxISA::isCanonicalTEPLTileOpcodeV057(
+                                static_cast<unsigned>(TileOpcode));
 }
 
 static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
@@ -184,7 +139,7 @@ static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
   validateTileOpcode(TileOpcode, Context);
   if (!isWhitelistedTEPLTileOpcode(TileOpcode))
     report_fatal_error(Twine("Linx: ") + Context +
-                       " uses TileOpcode outside the canonical v0.4 TEPL set");
+                       " uses a reserved TileOpcode in canonical v0.57");
 }
 
 static void validateCubeDimImm(int64_t Dim, StringRef DimName,
@@ -3099,7 +3054,7 @@ public:
         }
         if ((Attr & ~AttrAQRLMask) != 0u) {
           report_fatal_error(
-              "Linx: vblock.launch only supports aq/rl B.CATR bits in canonical v0.56.5");
+              "Linx: vblock.launch only supports aq/rl B.CATR bits in canonical v0.57");
         }
         if (Attr != 0u) {
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_CATR))
@@ -3380,7 +3335,7 @@ public:
 		        continue;
 		      }
 
-      // Tile blocks (TAU) have their own BSTART.TMA/BSTART.CUBE headers and
+      // Tile blocks (TAU) have their own named-TMA/BSTART.CUBE headers and
       // must not be wrapped by standard BSTART.STD or have T/U-hand queue
       // remapping applied.
       auto isStdBStartOpcode = [&](unsigned Opc) -> bool {

@@ -17,7 +17,7 @@ removed_spellings:
 # CHECK: error:
 # CHECK: B.IOT
 # CHECK: error:
-# CHECK: bracketed B.IOT source lists are not canonical v0.56
+# CHECK: bracketed B.IOT source lists are not canonical v0.57
 # CHECK: error:
 # CHECK: B.ATTR
 # CHECK: error:

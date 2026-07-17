@@ -477,7 +477,7 @@ def BSTOP : LinxISAInst<(outs), (ins), "", []>;
 // Tile blocks (TAU) - bring-up (selected manually from intrinsics)
 //
 // These are expanded very late (pre-emit) into block-structured sequences:
-//   BSTART.TMA / BSTART.CUBE + B.IOT/B.IOT/B.DIM descriptors.
+//   named TMA / BSTART.CUBE headers + B.IOT/B.IOT/B.DIM descriptors.
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
@@ -812,7 +812,7 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
 
   def B_ARG : LinxISAInst<(outs), (ins i64imm:$format), "", []>;
 
-  // Canonical v0.56.5 splits control and data attributes.  Keep these as
+  // Canonical v0.57 splits control and data attributes.  Keep these as
   // separate MachineInstrs so the backend cannot recreate the retired
   // canonical split B.CATR/B.DATR surface.
   def B_CATR : LinxISAInst<(outs), (ins i64imm:$trap, i64imm:$dr,

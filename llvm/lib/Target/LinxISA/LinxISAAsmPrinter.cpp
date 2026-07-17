@@ -8,6 +8,7 @@
 
 #include "LinxISA.h"
 #include "LinxISAMCInstLower.h"
+#include "LinxISARegisterInfo.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
 #include "TargetInfo/LinxISATargetInfo.h"
@@ -141,11 +142,27 @@ static StringRef linxReg5Name(unsigned Code) {
   return "r?";
 }
 
+static void printLinxInlineAsmRegister(raw_ostream &OS, unsigned Reg,
+                                       unsigned Enc) {
+  if (LinxISA::TILERegClass.contains(Reg)) {
+    static constexpr char Banks[4] = {'t', 'u', 'm', 'n'};
+    OS << Banks[(Enc >> 3) & 0x3] << '#' << ((Enc & 0x7) + 1);
+    return;
+  }
+  OS << linxReg5Name(Enc);
+}
+
 bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                                        const char *ExtraCode,
                                        raw_ostream &OS) {
-  // No target-specific modifiers supported yet.
-  if (ExtraCode && ExtraCode[0] != 0)
+  // Clang/GCC use %cN for an immediate without target punctuation. Linx block
+  // templates rely on that conventional modifier for selector and dimension
+  // fields. %qN prints only a tile register's destination queue bank because
+  // canonical B.IOT destinations are written as ->t/u/m/n<Size>, while source
+  // operands name a concrete queue slot such as t#1.
+  if (ExtraCode && ExtraCode[0] != 0 &&
+      !((ExtraCode[0] == 'c' || ExtraCode[0] == 'q') &&
+        ExtraCode[1] == 0))
     return true;
 
   if (!MCInstLowering)
@@ -156,7 +173,14 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   const MachineOperand &MO = MI->getOperand(OpNo);
   if (MO.isReg()) {
     const unsigned Enc = MCInstLowering->getReg5Encoding(MO.getReg());
-    OS << linxReg5Name(Enc);
+    if (ExtraCode && ExtraCode[0] == 'q') {
+      if (!LinxISA::TILERegClass.contains(MO.getReg()))
+        return true;
+      static constexpr char Banks[4] = {'t', 'u', 'm', 'n'};
+      OS << Banks[(Enc >> 3) & 0x3];
+      return false;
+    }
+    printLinxInlineAsmRegister(OS, MO.getReg(), Enc);
     return false;
   }
 
@@ -195,7 +219,7 @@ bool LinxISAAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
   auto PrintOne = [&](const MachineOperand &MO) -> bool {
     if (MO.isReg()) {
       const unsigned Enc = MCInstLowering->getReg5Encoding(MO.getReg());
-      OS << linxReg5Name(Enc);
+      printLinxInlineAsmRegister(OS, MO.getReg(), Enc);
       return false;
     }
 
