@@ -28,6 +28,7 @@ static uint32_t encodeB12Pcrel(Ctx &ctx, uint8_t *loc, int64_t value,
   if (value & 0x1)
     Err(ctx) << getErrorLoc(ctx, loc) << "unaligned branch target";
 
+  // The split field carries a signed halfword delta.
   int64_t imm = value >> 1;
   checkInt(ctx, loc, imm, 12, rel);
   uint32_t uimm = static_cast<uint32_t>(imm) & 0x0FFFu;
@@ -88,6 +89,22 @@ static uint64_t encodeHLBStart30Pcrel(Ctx &ctx, uint8_t *loc, int64_t value,
   uint64_t patch = 0;
   patch |= ((uimm >> 1) & 0x1FFFFull) << 31;   // simm[17:1] -> insn[47:31]
   patch |= ((uimm >> 18) & 0x0FFFull) << 4;    // simm[29:18] -> insn[15:4]
+  return patch;
+}
+
+static uint64_t encodeLBStart42Pcrel(Ctx &ctx, uint8_t *loc, int64_t value,
+                                     const Relocation &rel) {
+  if (value & 0x1)
+    Err(ctx) << getErrorLoc(ctx, loc) << "unaligned L.BSTART target";
+
+  int64_t imm = value >> 1;
+  checkInt(ctx, loc, imm, 42, rel);
+  uint64_t uimm = static_cast<uint64_t>(imm) & 0x3FF'FFFF'FFFFull;
+  uint64_t patch = 0;
+  // simm[24:0] -> insn[31:7]
+  patch |= (uimm & 0x1FF'FFFFull) << 7;
+  // simm[41:25] -> insn[63:47]
+  patch |= ((uimm >> 25) & 0x1FFFFull) << 47;
   return patch;
 }
 
@@ -519,6 +536,7 @@ RelExpr LinxISA::getRelExpr(RelType type, const Symbol &s,
   case R_LINX_CSETRET5_PCREL:
   case R_LINX_SETRET20_PCREL:
   case R_LINX_HL_SETRET32_PCREL:
+  case R_LINX_L_BSTART42_PCREL:
   case R_LINX_PCR17_LOAD:
   case R_LINX_PCR17_STORE:
   case R_LINX_HL_PCR29_LOAD:
@@ -702,6 +720,12 @@ void LinxISA::relocate(uint8_t *loc, const Relocation &rel,
     cur |= encodeHLBStart30Pcrel(ctx, loc, sval, rel);
     for (unsigned i = 0; i < 6; ++i)
       loc[i] = static_cast<uint8_t>((cur >> (i * 8)) & 0xFF);
+    return;
+  }
+  case R_LINX_L_BSTART42_PCREL: {
+    uint64_t cur = read64le(loc);
+    cur |= encodeLBStart42Pcrel(ctx, loc, sval, rel);
+    write64le(loc, cur);
     return;
   }
   case R_LINX_CSETRET5_PCREL: {

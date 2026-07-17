@@ -2,8 +2,9 @@
 
 ; The Linx GPR encoding space includes queue pseudo-registers (t#k/u#k and the
 ; special RegDst encodings for ->t/->u). These are not valid "general-purpose"
-; registers for C/LLVM inline asm operands. Ensure the generic "r" constraint
-; maps to architectural GPRs only.
+; registers for scalar C/LLVM inline asm operands. Ensure the generic "r"
+; constraint maps scalar values to architectural GPRs only; vector values use
+; the tile-register path covered by inlineasm-tile-r-constraint.ll.
 
 define i64 @inlineasm_r() {
 entry:
@@ -15,4 +16,3 @@ entry:
 ; CHECK: # OUT=
 ; CHECK-NOT: # OUT=t#
 ; CHECK-NOT: # OUT=u#
-

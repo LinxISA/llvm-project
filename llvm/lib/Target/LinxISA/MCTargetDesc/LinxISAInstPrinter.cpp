@@ -1,5 +1,6 @@
 #include "MCTargetDesc/LinxISAInstPrinter.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "LinxISATileOpcodesV057.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -132,177 +133,44 @@ static StringRef dtypeName(unsigned DT) {
   }
 }
 
-static StringRef parTileOpName(unsigned TileOpcode) {
-  switch (TileOpcode & 0x3ffu) {
-  case 0:
-    return "VCALL";
-  case 2:
-    return "MAMULB";
-  case 33:
-    return "TLOAD";
-  case 65:
-    return "TSTORE";
-  case 34:
-    return "TMOV";
-  case 66:
-    return "MAMULB.ACC";
-  case 258:
-    return "ACCCVT";
-  default:
-    return StringRef();
-  }
-}
-
-static StringRef tmaAliasMnemonic(unsigned Func) {
-  switch (Func & 0x1fu) {
-  case 0:
-    return "BSTART.TLOAD";
-  case 1:
-    return "BSTART.TSTORE";
-  case 2:
-    return "BSTART.TMOV";
-  default:
-    return StringRef();
-  }
-}
-
 static StringRef cubeAliasMnemonic(unsigned Func) {
   switch (Func & 0x1fu) {
   case 0:
     return "BSTART.TMATMUL";
+  case 1:
+    return "BSTART.TMATMUL.BIAS";
   case 2:
     return "BSTART.TMATMUL.ACC";
+  case 4:
+    return "BSTART.TMATMULMX";
+  case 5:
+    return "BSTART.TMATMULMX.BIAS";
+  case 6:
+    return "BSTART.TMATMULMX.ACC";
   case 8:
     return "BSTART.ACCCVT";
-  default:
-    return StringRef();
-  }
-}
-
-static StringRef legacyPackedAliasMnemonic(unsigned TileOpcode) {
-  switch (TileOpcode & 0x3ffu) {
-  case 33:
-    return tmaAliasMnemonic(0);
-  case 65:
-    return tmaAliasMnemonic(1);
-  case 34:
-    return tmaAliasMnemonic(2);
-  case 2:
-    return cubeAliasMnemonic(0);
-  case 66:
-    return cubeAliasMnemonic(2);
-  case 258:
-    return cubeAliasMnemonic(8);
+  case 16:
+    return "BSTART.TGEMV";
+  case 17:
+    return "BSTART.TGEMV.BIAS";
+  case 18:
+    return "BSTART.TGEMV.ACC";
+  case 20:
+    return "BSTART.TGEMVMX";
+  case 21:
+    return "BSTART.TGEMVMX.BIAS";
+  case 22:
+    return "BSTART.TGEMVMX.ACC";
   default:
     return StringRef();
   }
 }
 
 static StringRef teplAliasMnemonic(unsigned TileOpcode) {
-  switch (TileOpcode & 0x3ffu) {
-  case 0x000:
-    return "BSTART.TADD";
-  case 0x001:
-    return "BSTART.TSUB";
-  case 0x002:
-    return "BSTART.TMUL";
-  case 0x003:
-    return "BSTART.TDIV";
-  case 0x004:
-    return "BSTART.TMAX";
-  case 0x005:
-    return "BSTART.TMIN";
-  case 0x006:
-    return "BSTART.TAND";
-  case 0x007:
-    return "BSTART.TOR";
-  case 0x008:
-    return "BSTART.TXOR";
-  case 0x009:
-    return "BSTART.TSHL";
-  case 0x00a:
-    return "BSTART.TSHR";
-  case 0x00b:
-    return "BSTART.TRELU";
-  case 0x00c:
-    return "BSTART.TPRELU";
-  case 0x00d:
-    return "BSTART.TCVT";
-  case 0x00e:
-    return "BSTART.TEXP";
-  case 0x00f:
-    return "BSTART.TLOG";
-  case 0x010:
-    return "BSTART.TSQRT";
-  case 0x011:
-    return "BSTART.TRSQRT";
-  case 0x012:
-    return "BSTART.TROWMAX";
-  case 0x013:
-    return "BSTART.TROWMIN";
-  case 0x014:
-    return "BSTART.TROWSUM";
-  case 0x015:
-    return "BSTART.TCOLMAX";
-  case 0x016:
-    return "BSTART.TCOLMIN";
-  case 0x017:
-    return "BSTART.TCOLSUM";
-  case 0x018:
-    return "BSTART.TRECIP";
-  case 0x019:
-    return "BSTART.TEXPANDS";
-  case 0x01a:
-    return "BSTART.TGATHER";
-  case 0x01b:
-    return "BSTART.TSCATTER";
-  case 0x01c:
-    return "BSTART.TRESHAPE";
-  case 0x01d:
-    return "BSTART.TTRANSPOSE";
-  case 0x01e:
-    return "BSTART.TCOLEXPAND";
-  case 0x01f:
-    return "BSTART.TROWEXPAND";
-  case 0x020:
-    return "BSTART.TADDS";
-  case 0x021:
-    return "BSTART.TSUBS";
-  case 0x022:
-    return "BSTART.TMULS";
-  case 0x023:
-    return "BSTART.TDIVS";
-  case 0x024:
-    return "BSTART.TMAXS";
-  case 0x025:
-    return "BSTART.TMINS";
-  case 0x026:
-    return "BSTART.TANDS";
-  case 0x027:
-    return "BSTART.TORS";
-  case 0x028:
-    return "BSTART.TXORS";
-  case 0x029:
-    return "BSTART.TSHLS";
-  case 0x02a:
-    return "BSTART.TSHRS";
-  default:
-    return StringRef();
-  }
+  return LinxISA::canonicalTEPLAliasMnemonicV057(TileOpcode & 0x3ffu);
 }
 
-static bool isLegacyCubeTileOp(unsigned TileOpcode) {
-  switch (TileOpcode & 0x3ffu) {
-  case 2:
-  case 66:
-  case 258:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static unsigned legacyParOpFromTMAFunction(unsigned Func) {
+static unsigned tmaStateOpFromFunction(unsigned Func) {
   switch (Func & 0x1fu) {
   case 0:
     return 33u;
@@ -313,7 +181,7 @@ static unsigned legacyParOpFromTMAFunction(unsigned Func) {
   }
 }
 
-static unsigned legacyParOpFromCubeFunction(unsigned Func) {
+static unsigned cubeStateOpFromFunction(unsigned Func) {
   switch (Func & 0x1fu) {
   case 0:
     return 2u;
@@ -1065,12 +933,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // Special-case: accelerator/tile block-start instructions.
   //
-  // Canonical v0.4 disassembly is typed (`BSTART.TMA` / `BSTART.CUBE` /
-  // `BSTART.TEPL`) and also accepts direct typed aliases
-  // (`BSTART.TLOAD`, `BSTART.TMATMUL`, `BSTART.TADD`, ...).
-  static constexpr StringLiteral LegacyPackedStart = "BSTART." "PAR";
-  const bool IsLegacyPacked = AsmFmt.starts_with(LegacyPackedStart);
-  const bool IsTypedTMA = AsmFmt.starts_with("BSTART.TMA");
+  // Canonical v0.57 disassembly uses direct named TMA/CUBE/TEPL forms where
+  // the selector has an architectural name.
   const bool IsTypedCUBE = AsmFmt.starts_with("BSTART.CUBE");
   const bool IsTypedTEPL = AsmFmt.starts_with("BSTART.TEPL");
   const bool IsTypedFIXP = AsmFmt.starts_with("BSTART.FIXP");
@@ -1079,18 +943,43 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   const bool IsTypedMPAR = AsmFmt.starts_with("BSTART.MPAR");
   const bool IsTypedMSEQ = AsmFmt.starts_with("BSTART.MSEQ");
   const StringRef TypedTok = stripAngleSuffix(RawTok);
-  const bool IsDirectTMAAlias =
-      TypedTok == "BSTART.TLOAD" || TypedTok == "BSTART.TSTORE" ||
-      TypedTok == "BSTART.TMOV";
-  const bool IsDirectCUBEAlias =
-      TypedTok == "BSTART.TMATMUL" || TypedTok == "BSTART.TMATMUL.ACC" ||
-      TypedTok == "BSTART.ACCCVT";
-  const bool IsDirectTEPLAlias =
-      TypedTok.starts_with("BSTART.T") && !IsDirectTMAAlias &&
-      !IsDirectCUBEAlias && TypedTok != "BSTART.TMA" &&
-      TypedTok != "BSTART.TEPL";
-  if (IsLegacyPacked || IsTypedTMA || IsTypedCUBE || IsTypedTEPL || IsTypedFIXP ||
-      IsTypedVPAR || IsTypedVSEQ || IsTypedMPAR || IsTypedMSEQ ||
+  const std::optional<unsigned> DirectTMAFunc =
+      StringSwitch<std::optional<unsigned>>(TypedTok)
+          .Case("BSTART.TLOAD", 0u)
+          .Case("BSTART.TSTORE", 1u)
+          .Case("BSTART.TMOV", 2u)
+          .Case("BSTART.TPREFETCH", 3u)
+          .Case("BSTART.MGATHER", 4u)
+          .Case("BSTART.MSCATTER", 5u)
+          .Case("BSTART.MGATHER.MASK", 6u)
+          .Case("BSTART.MSCATTER.MASK", 7u)
+          .Case("BSTART.MGATHER.CAS", 8u)
+          .Default(std::nullopt);
+  const std::optional<unsigned> DirectCUBEFunc =
+      StringSwitch<std::optional<unsigned>>(TypedTok)
+          .Case("BSTART.TMATMUL", 0u)
+          .Case("BSTART.TMATMUL.BIAS", 1u)
+          .Case("BSTART.TMATMUL.ACC", 2u)
+          .Case("BSTART.TMATMULMX", 4u)
+          .Case("BSTART.TMATMULMX.BIAS", 5u)
+          .Case("BSTART.TMATMULMX.ACC", 6u)
+          .Case("BSTART.ACCCVT", 8u)
+          .Case("BSTART.TGEMV", 16u)
+          .Case("BSTART.TGEMV.BIAS", 17u)
+          .Case("BSTART.TGEMV.ACC", 18u)
+          .Case("BSTART.TGEMVMX", 20u)
+          .Case("BSTART.TGEMVMX.BIAS", 21u)
+          .Case("BSTART.TGEMVMX.ACC", 22u)
+          .Default(std::nullopt);
+  std::optional<unsigned> DirectTEPLOpcode;
+  if (TypedTok.starts_with("BSTART."))
+    DirectTEPLOpcode = LinxISA::parseCanonicalTEPLTileOpcodeV057(
+        TypedTok.drop_front(StringRef("BSTART.").size()));
+  const bool IsDirectTMAAlias = DirectTMAFunc.has_value();
+  const bool IsDirectCUBEAlias = DirectCUBEFunc.has_value();
+  const bool IsDirectTEPLAlias = DirectTEPLOpcode.has_value();
+  if (IsTypedCUBE || IsTypedTEPL || IsTypedFIXP || IsTypedVPAR ||
+      IsTypedVSEQ || IsTypedMPAR || IsTypedMSEQ ||
       IsDirectTMAAlias || IsDirectCUBEAlias || IsDirectTEPLAlias) {
     const unsigned DT = static_cast<unsigned>(
                             findFieldImm("DataType")
@@ -1112,22 +1001,13 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
       if (IsDirectTMAAlias) {
         LastTileHeader = LastTileHeaderKind::TMA;
-        if (TypedTok == "BSTART.TLOAD")
-          ParStateOp = 33u;
-        else if (TypedTok == "BSTART.TSTORE")
-          ParStateOp = 65u;
-        else
-          ParStateOp = 34u; // TMOV
+        ParStateOp = tmaStateOpFromFunction(*DirectTMAFunc);
       } else if (IsDirectCUBEAlias) {
         LastTileHeader = LastTileHeaderKind::CUBE;
-        if (TypedTok == "BSTART.TMATMUL")
-          ParStateOp = 2u;
-        else if (TypedTok == "BSTART.TMATMUL.ACC")
-          ParStateOp = 66u;
-        else
-          ParStateOp = 258u; // ACCCVT
+        ParStateOp = cubeStateOpFromFunction(*DirectCUBEFunc);
       } else {
         LastTileHeader = LastTileHeaderKind::TEPL;
+        ParStateOp = *DirectTEPLOpcode;
       }
 
       LastParTileOp = ParStateOp;
@@ -1136,30 +1016,18 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return;
     }
 
-    if (IsTypedTMA || IsTypedCUBE) {
+    if (IsTypedCUBE) {
       const unsigned Func =
           static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x1fu;
-      if (IsTypedTMA) {
-        ParStateOp = legacyParOpFromTMAFunction(Func);
-        if (StringRef Alias = tmaAliasMnemonic(Func); !Alias.empty()) {
-          OS << Alias << "\t";
-          printDataType();
-        } else {
-          OS << "BSTART.TMA\t" << utostr(Func) << ", ";
-          printDataType();
-        }
-        LastTileHeader = LastTileHeaderKind::TMA;
+      ParStateOp = cubeStateOpFromFunction(Func);
+      if (StringRef Alias = cubeAliasMnemonic(Func); !Alias.empty()) {
+        OS << Alias << "\t";
+        printDataType();
       } else {
-        ParStateOp = legacyParOpFromCubeFunction(Func);
-        if (StringRef Alias = cubeAliasMnemonic(Func); !Alias.empty()) {
-          OS << Alias << "\t";
-          printDataType();
-        } else {
-          OS << "BSTART.CUBE\t" << utostr(Func) << ", ";
-          printDataType();
-        }
-        LastTileHeader = LastTileHeaderKind::CUBE;
+        OS << "BSTART.CUBE\t" << utostr(Func) << ", ";
+        printDataType();
       }
+      LastTileHeader = LastTileHeaderKind::CUBE;
 
       LastParTileOp = ParStateOp;
       LastParTileOpValid = true;
@@ -1202,46 +1070,13 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     if (IsTypedTEPL) {
       Alias = teplAliasMnemonic(TileOpcode);
       LastTileHeader = LastTileHeaderKind::TEPL;
-    } else {
-      // Legacy packed PAR encodes both TEPL and TMA/CUBE families; prefer
-      // canonical typed aliases.
-      Alias = legacyPackedAliasMnemonic(TileOpcode);
-      if (Alias.empty())
-        Alias = teplAliasMnemonic(TileOpcode);
-      if (!Alias.empty() &&
-          (Alias.starts_with("BSTART.TLOAD") || Alias.starts_with("BSTART.TSTORE") ||
-           Alias.starts_with("BSTART.TMOV"))) {
-        LastTileHeader = LastTileHeaderKind::TMA;
-      } else if (!Alias.empty() &&
-                 (Alias.starts_with("BSTART.TMATMUL") ||
-                  Alias.starts_with("BSTART.ACCCVT"))) {
-        LastTileHeader = LastTileHeaderKind::CUBE;
-      } else if (!Alias.empty() || !isLegacyCubeTileOp(TileOpcode)) {
-        LastTileHeader = LastTileHeaderKind::TEPL;
-      } else {
-        LastTileHeader = LastTileHeaderKind::None;
-      }
-
-      LastParTileOp = ParStateOp;
-      LastParTileOpValid = true;
-      printAnnotation(OS, Annot);
-      return;
     }
 
     if (!Alias.empty()) {
       OS << Alias << "\t";
       printDataType();
     } else {
-      const char *TypedPrefix =
-          IsLegacyPacked
-              ? (isLegacyCubeTileOp(TileOpcode) ? "BSTART.CUBE" : "BSTART.TEPL")
-              : "BSTART.TEPL";
-      OS << TypedPrefix << "\t";
-      if (StringRef N = parTileOpName(TileOpcode); !N.empty())
-        OS << N;
-      else
-        OS << utostr(TileOpcode);
-      OS << ", ";
+      OS << "BSTART.TEPL\t" << utostr(TileOpcode) << ", ";
       printDataType();
     }
 
@@ -1253,14 +1088,29 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // Special-case: block split instructions. LLVM uses these as block
   // terminators; Linx uses halfword PC-relative offsets.
+  auto emitFusedReturnTarget = [&](uint64_t PcBaseOffset) -> bool {
+    auto Op = findField("uimm5");
+    if (!Op)
+      return false;
+    if (Op->isExpr()) {
+      MAI.printExpr(OS, *Op->getExpr());
+      return true;
+    }
+    if (!Op->isImm())
+      return false;
+    OS << "0x"
+       << utohexstr(Address + PcBaseOffset +
+                        (static_cast<uint64_t>(Op->getImm()) << 1),
+                    /*LowerCase=*/true);
+    return true;
+  };
+
   if (AsmFmt.starts_with("BSTART.CALL")) {
     OS << "BSTART.CALL\t";
     if (!emitPcRelTargetHex("simm12", /*Signed=*/true))
       OS << "0x0";
     OS << ", ";
-    if (auto V = findFieldImm("uimm5"))
-      OS << "0x" << utohexstr(static_cast<uint64_t>(*V), /*LowerCase=*/true);
-    else
+    if (!emitFusedReturnTarget(/*PcBaseOffset=*/2))
       OS << "0x0";
     OS << ",\t->ra";
     printAnnotation(OS, Annot);
@@ -1272,9 +1122,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     if (!emitPcRelTargetHex("simm25", /*Signed=*/true))
       OS << "0x0";
     OS << ", ";
-    if (auto V = findFieldImm("uimm5"))
-      OS << "0x" << utohexstr(static_cast<uint64_t>(*V), /*LowerCase=*/true);
-    else
+    if (!emitFusedReturnTarget(/*PcBaseOffset=*/4))
       OS << "0x0";
     OS << ",\t->ra";
     printAnnotation(OS, Annot);
@@ -1282,12 +1130,12 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   }
 
   const bool IsCBSTART = AsmFmt.starts_with("C.BSTART");
-  const bool IsBSTART = AsmFmt.starts_with("HL.BSTART") ||
-                        AsmFmt.starts_with("BSTART.STD") ||
-                        AsmFmt.starts_with("BSTART.FP") ||
-                        AsmFmt.starts_with("BSTART.SYS") ||
-                        AsmFmt.starts_with("BSTART.") ||
-                        AsmFmt.starts_with("BSTART ");
+  const bool IsLBSTART = AsmFmt.starts_with("L.BSTART");
+  const bool IsBSTART =
+      AsmFmt.starts_with("HL.BSTART") || IsLBSTART ||
+      AsmFmt.starts_with("BSTART.STD") || AsmFmt.starts_with("BSTART.FP") ||
+      AsmFmt.starts_with("BSTART.SYS") || AsmFmt.starts_with("BSTART.") ||
+      AsmFmt.starts_with("BSTART ");
   if (IsCBSTART || IsBSTART) {
     StringRef FirstTok = RawTok;
     StringRef FirstTokBase = stripAngleSuffix(FirstTok);
@@ -1389,7 +1237,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     auto emitKindAndLabel = [&](StringRef S) {
       OS << "\t" << S << ", ";
-      emitBlockTarget();
+      if (IsLBSTART) {
+        if (auto Op = findField("simm")) {
+          if (Op->isExpr())
+            MAI.printExpr(OS, *Op->getExpr());
+          else if (Op->isImm())
+            OS << shlSigned64(Op->getImm(), /*Shift=*/1);
+        }
+      } else {
+        emitBlockTarget();
+      }
     };
 
     switch (K) {
@@ -1414,8 +1271,12 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         Off = *V;
       else if (auto V = findFieldImm("simm"))
         Off = *V;
-      if (Off != 0)
+      const bool HasExprTarget =
+          IsLBSTART && findField("simm") && findField("simm")->isExpr();
+      if (Off != 0 || HasExprTarget)
         emitKindAndLabel("FALL");
+      else if (IsLBSTART)
+        emitKind("FALL");
       break;
     }
     case BrKind::Direct:
@@ -1655,7 +1516,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Special-case: canonical v0.56.5 immediate-size B.IOT descriptors.
+  // Special-case: canonical B.IOT descriptors, including v0.57 source-only
+  // forms with no destination suffix.
   if (AsmFmt.starts_with("B.IOT")) {
     const unsigned S0R =
         static_cast<unsigned>(findFieldImm("S0R").value_or(0)) & 0x1u;
@@ -1671,6 +1533,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         static_cast<unsigned>(findFieldImm("imm4").value_or(0)) & 0xfu;
     const bool Src0Present = AsmFmt.contains("SrcTile0");
     const bool Src1Present = AsmFmt.contains("SrcTile1");
+    const bool HasDestination = AsmFmt.contains("->DstTile");
 
     OS << "B.IOT\t";
     bool First = true;
@@ -1688,16 +1551,30 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         OS << ".reuse";
     }
 
+    if ((static_cast<unsigned>(findFieldImm("L").value_or(0)) & 1u) != 0u) {
+      if (!First)
+        OS << ", ";
+      OS << "last";
+      First = false;
+    }
+
+    if (!HasDestination) {
+      printAnnotation(OS, Annot);
+      return;
+    }
     if (!First)
       OS << ", ";
-    if ((static_cast<unsigned>(findFieldImm("L").value_or(0)) & 1u) != 0u)
-      OS << "last, ";
 
     static constexpr const char *DstKinds[] = {"t", "u", "m", "n", "acc"};
     const char *DstKind = DstTile < std::size(DstKinds) ? DstKinds[DstTile] : "t";
     OS << "->" << DstKind << "<";
     if (Size == 0u) {
       OS << "0";
+    } else if (Size < 5u || Size > 8u) {
+      // Unit-qualified source syntax intentionally accepts only 512B..4KB.
+      // Preserve other raw imm4 encodings as numeric size codes so objdump
+      // output remains byte-stable when passed back through llvm-mc.
+      OS << utostr(Size);
     } else {
       const uint64_t Bytes = 1ull << (Size + 4u);
       if (Bytes >= 1024u && (Bytes % 1024u) == 0u)
@@ -1768,7 +1645,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Canonical v0.56.5 control attributes.
+  // Canonical v0.57 control attributes.
   if (AsmFmt.starts_with("B.CATR")) {
     const unsigned Trap =
         static_cast<unsigned>(findFieldImm("trap").value_or(0)) & 0x1u;
@@ -1822,7 +1699,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Canonical v0.56.5 data attributes.
+  // Canonical v0.57 data attributes.
   if (AsmFmt.starts_with("B.DATR")) {
     const unsigned CMode =
         static_cast<unsigned>(findFieldImm("CMode").value_or(0)) & 0x7u;

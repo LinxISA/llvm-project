@@ -235,8 +235,7 @@ static bool isSupportedSIMTCall(const CallBase *CB) {
   // Bring-up: allow a small set of pure math helpers that we can lower into
   // SIMT body code. This is intentionally a whitelist.
   const StringRef Name = Callee->getName();
-  return Name == "fabsf" || Name == "sqrtf" || Name == "sinf" ||
-         Name == "cosf";
+  return Name == "fabsf" || Name == "sqrtf";
 }
 
 static bool hasUnsupportedCalls(Loop *L) {
@@ -1922,6 +1921,12 @@ public:
 	        }
 	        RemarkHasRecurrence = !RecurrencePlans.empty();
 
+        // Scalar-lane replay preserves recurrence order only under sequential
+        // group execution. A parallel-safe loop hint must not retain MPAR once
+        // a generic recurrence plan has been discovered.
+        if (!RecurrencePlans.empty())
+          SelectedMode = "mseq";
+
 	        SmallVector<Instruction *, 8> LiveOutInsts;
 	        SmallPtrSet<const Instruction *, 8> LiveOutInstSet;
 
@@ -2309,6 +2314,11 @@ public:
         };
 
         auto canUseGroupedLaneCount = [&](uint64_t CandidateLaneCount) {
+          // Generic loop-carried recurrences are order-dependent. Unlike the
+          // supported reduction plans above, they cannot be split into
+          // independent per-lane states and combined after grouped execution.
+          if (!RecurrencePlans.empty())
+            return false;
           if (!HasConstTripCount || ConstTripCount == 0 || CandidateLaneCount <= 1)
             return false;
           if (!isPowerOf2_64(CandidateLaneCount))
@@ -2321,6 +2331,8 @@ public:
         };
 
         auto groupedRejectReason = [&]() -> const char * {
+          if (!RecurrencePlans.empty())
+            return "grouped_layout_unsupported_recurrence";
           if (!HasConstTripCount)
             return "grouped_layout_requires_static_tripcount";
           if (NeedsExecMaskSaveRestore)
@@ -4748,13 +4760,6 @@ public:
               ValOp[V] = *Dst;
               return *Dst;
             }
-            if ((Name == "sinf" || Name == "cosf") && CB->arg_size() == 1) {
-              // The freestanding bring-up runtime implements sin/cos as
-              // conservative stubs (returns 0.0). Keep SIMT lowering aligned.
-              ValOp[V] = "zero";
-              return "zero";
-            }
-
             return std::nullopt;
           }
 
@@ -6879,7 +6884,11 @@ public:
             BasicBlock::Create(Ctx, "linx.vblock.launch", &F, Exit);
         IRBuilder<> LB(LaunchBB);
 
-        const bool TouchesMemory = !Stores.empty() || !Loads.empty();
+        // Recurrence lowering synthesizes v.lw/v.sw.brg traffic even when the
+        // source loop has no explicit memory operation. Such bodies require an
+        // MSEQ/MPAR header; VSEQ/VPAR is tile-only.
+        const bool TouchesMemory =
+            !Stores.empty() || !Loads.empty() || !RecurrencePlans.empty();
         const bool ParallelMode = (SelectedMode == "mpar");
         unsigned VKindImm = 0;
         if (TouchesMemory) {

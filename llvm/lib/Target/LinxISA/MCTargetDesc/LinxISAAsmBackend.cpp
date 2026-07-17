@@ -33,6 +33,7 @@ uint32_t encodeB12Pcrel(uint64_t Value) {
   if (Value & 0x1)
     report_fatal_error("Linx branch target is not 2-byte aligned");
 
+  // The split field carries a signed halfword delta.
   int64_t Imm = static_cast<int64_t>(Value) >> 1;
   if (!isInt<12>(Imm))
     report_fatal_error("Linx branch target out of range");
@@ -108,6 +109,23 @@ uint64_t encodeHLBStart30Pcrel(uint64_t Value) {
   Patch |= ((UImm >> 1) & 0x1FFFFull) << 31;
   // simm[29:18] -> insn[15:4]
   Patch |= ((UImm >> 18) & 0x0FFFull) << 4;
+  return Patch;
+}
+
+uint64_t encodeLBStart42Pcrel(uint64_t Value) {
+  if (Value & 0x1)
+    report_fatal_error("Linx L.BSTART target is not 2-byte aligned");
+
+  int64_t Imm = static_cast<int64_t>(Value) >> 1;
+  if (!isInt<42>(Imm))
+    report_fatal_error("Linx L.BSTART target out of range");
+
+  uint64_t UImm = static_cast<uint64_t>(Imm) & 0x3FF'FFFF'FFFFull;
+  uint64_t Patch = 0;
+  // simm[24:0] -> insn[31:7]
+  Patch |= (UImm & 0x1FF'FFFFull) << 7;
+  // simm[41:25] -> insn[63:47]
+  Patch |= ((UImm >> 25) & 0x1FFFFull) << 47;
   return Patch;
 }
 
@@ -553,6 +571,10 @@ public:
       PatchBytes = 6;
       Patch = encodeHLBStart30Pcrel(Value);
       break;
+    case LinxISA::FIXUP_LINX_L_BSTART42_PCREL:
+      PatchBytes = 8;
+      Patch = encodeLBStart42Pcrel(Value);
+      break;
     case LinxISA::FIXUP_LINX_CSETRET5_PCREL:
       PatchBytes = 2;
       Patch = encodeCSetRet5Pcrel(Value);
@@ -647,6 +669,8 @@ public:
         {"FIXUP_LINX_B17_PLT", 0, 17, 0},
         // simm30 byte offset, instruction-aligned.
         {"FIXUP_LINX_HL_BSTART30_PCREL", 0, 30, 0},
+        // Signed simm42 halfword offset from a 2-byte-aligned byte delta.
+        {"FIXUP_LINX_L_BSTART42_PCREL", 0, 42, 0},
         {"FIXUP_LINX_CSETRET5_PCREL", 0, 5, 0},
         {"FIXUP_LINX_SETRET20_PCREL", 0, 20, 0},
         {"FIXUP_LINX_HL_SETRET32_PCREL", 0, 32, 0},

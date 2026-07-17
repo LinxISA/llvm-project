@@ -8,6 +8,7 @@
 
 #include "LinxISA.h"
 #include "LinxISABaseInfo.h"
+#include "LinxISATileOpcodesV057.h"
 #include "LinxISATargetMachine.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
@@ -298,54 +299,7 @@ static void validateTileOpcode(uint64_t TileOpcode, StringRef IntrinsicName) {
 }
 
 static bool isWhitelistedTEPLTileOpcode(uint64_t TileOpcode) {
-  switch (TileOpcode & 0x3ffu) {
-  case 0x000: // TADD
-  case 0x001: // TSUB
-  case 0x002: // TMUL
-  case 0x003: // TDIV
-  case 0x004: // TMAX
-  case 0x005: // TMIN
-  case 0x006: // TAND
-  case 0x007: // TOR
-  case 0x008: // TXOR
-  case 0x009: // TSHL
-  case 0x00a: // TSHR
-  case 0x00b: // TRELU
-  case 0x00c: // TPRELU
-  case 0x00d: // TCVT
-  case 0x00e: // TEXP
-  case 0x00f: // TLOG
-  case 0x010: // TSQRT
-  case 0x011: // TRSQRT
-  case 0x012: // TROWMAX
-  case 0x013: // TROWMIN
-  case 0x014: // TROWSUM
-  case 0x015: // TCOLMAX
-  case 0x016: // TCOLMIN
-  case 0x017: // TCOLSUM
-  case 0x018: // TRECIP
-  case 0x019: // TEXPANDS
-  case 0x01a: // TGATHER
-  case 0x01b: // TSCATTER
-  case 0x01c: // TRESHAPE
-  case 0x01d: // TTRANSPOSE
-  case 0x01e: // TCOLEXPAND
-  case 0x01f: // TROWEXPAND
-  case 0x020: // TADDS
-  case 0x021: // TSUBS
-  case 0x022: // TMULS
-  case 0x023: // TDIVS
-  case 0x024: // TMAXS
-  case 0x025: // TMINS
-  case 0x026: // TANDS
-  case 0x027: // TORS
-  case 0x028: // TXORS
-  case 0x029: // TSHLS
-  case 0x02a: // TSHRS
-    return true;
-  default:
-    return false;
-  }
+  return LinxISA::isCanonicalTEPLTileOpcodeV057(TileOpcode & 0x3ffu);
 }
 
 static void validateWhitelistedTEPLTileOpcode(uint64_t TileOpcode,
@@ -353,7 +307,7 @@ static void validateWhitelistedTEPLTileOpcode(uint64_t TileOpcode,
   validateTileOpcode(TileOpcode, IntrinsicName);
   if (!isWhitelistedTEPLTileOpcode(TileOpcode)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " uses TileOpcode outside the canonical v0.4 TEPL set");
+                       " uses a reserved TileOpcode in canonical v0.57");
   }
 }
 
@@ -806,6 +760,15 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
 
     if (IsScalarGPRVT(VT) && IsScalarGPRVT(SrcVT) &&
         VT.getSizeInBits() == SrcVT.getSizeInBits()) {
+      ReplaceNode(N, CurDAG->getMachineNode(TargetOpcode::COPY, DL, VT, Src));
+      return;
+    }
+
+    // Clang's public tile carrier is v1024i32 while inline-assembly register
+    // assignment uses the backend's opaque linxtile value type. They describe
+    // the same 4 KiB architectural tile register and require no data movement.
+    if ((VT == MVT::v1024i32 && SrcVT == MVT::linxtile) ||
+        (VT == MVT::linxtile && SrcVT == MVT::v1024i32)) {
       ReplaceNode(N, CurDAG->getMachineNode(TargetOpcode::COPY, DL, VT, Src));
       return;
     }

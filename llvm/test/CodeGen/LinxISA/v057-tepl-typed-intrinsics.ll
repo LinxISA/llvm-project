@@ -20,7 +20,11 @@ entry:
 
 ; CHECK-LABEL: typed_tepl_binops:
 ; CHECK: BSTART.TADD
+; CHECK-NEXT: B.ARG{{[[:space:]]+}}VV
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1.reuse, last, ->t<4KB>
 ; CHECK: BSTART.TSUB
+; CHECK-NEXT: B.ARG{{[[:space:]]+}}VV
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, t#2, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
 
 define void @typed_tepl_rowmax(ptr %a, ptr %dst) {
@@ -33,4 +37,6 @@ entry:
 
 ; CHECK-LABEL: typed_tepl_rowmax:
 ; CHECK: BSTART.TROWMAX
+; CHECK-NEXT: B.ARG{{[[:space:]]+}}VV
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE

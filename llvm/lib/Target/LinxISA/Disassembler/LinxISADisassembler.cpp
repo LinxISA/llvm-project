@@ -188,6 +188,9 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
                                     /*InstSize=*/Size);
   };
 
+  const bool IsFusedCall32 = Mnem == "BSTART CALL";
+  const bool IsFusedCall48 = Mnem == "HL.BSTART CALL";
+
   auto isHalfwordPcRel = [&](StringRef FieldName) -> bool {
     // Control-flow immediates are halfword-scaled.
     return FieldName == "simm12" || FieldName == "simm17" ||
@@ -221,6 +224,26 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
       WantsSym = true;
       IsBranchLike = true;
       SymValue = static_cast<int64_t>(Address) + (V << 1);
+    } else if (FieldName == "simm12" && IsFusedCall32) {
+      WantsSym = true;
+      IsBranchLike = true;
+      SymValue = static_cast<int64_t>(Address) + (V << 1);
+    } else if (FieldName == "simm25" && IsFusedCall48) {
+      WantsSym = true;
+      IsBranchLike = true;
+      SymValue = static_cast<int64_t>(Address) + (V << 1);
+    } else if (FieldName == "uimm5" &&
+               (IsFusedCall32 || IsFusedCall48)) {
+      WantsSym = true;
+      IsBranchLike = true;
+      const uint64_t ReturnFieldOffset = IsFusedCall32 ? 2 : 4;
+      SymValue = static_cast<int64_t>(Address + ReturnFieldOffset) + (V << 1);
+      if (tryAddingSymbolicOperand(Instr, SymValue, Address, IsBranchLike,
+                                   /*Offset=*/ReturnFieldOffset,
+                                   /*OpSize=*/2, /*InstSize=*/Size))
+        continue;
+      Instr.addOperand(MCOperand::createImm(V));
+      continue;
     } else if (FieldName == "simm12" && Mnem.starts_with("C.BSTART")) {
       WantsSym = true;
       IsBranchLike = true;

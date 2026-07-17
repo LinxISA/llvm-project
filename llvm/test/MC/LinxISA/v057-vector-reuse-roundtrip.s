@@ -1,9 +1,9 @@
 # RUN: llvm-mc -triple=linx64 -filetype=obj %s -o - | llvm-objdump -d --triple=linx64 - | FileCheck %s
 
 	.text
-	.globl	test_v03_vector_reuse_roundtrip
-	.type	test_v03_vector_reuse_roundtrip,@function
-test_v03_vector_reuse_roundtrip:
+	.globl	test_v057_vector_reuse_roundtrip
+	.type	test_v057_vector_reuse_roundtrip,@function
+test_v057_vector_reuse_roundtrip:
 	BSTART.MSEQ 0
 	B.TEXT .body
 	B.IOT last, ->t<4KB>
@@ -16,9 +16,9 @@ test_v03_vector_reuse_roundtrip:
 	v.add vt#1.reuse.sw, lc0.uh, ->vu.w
 	v.swi.u.local vu#1.reuse.uw, [ts, lc0<<2, 12]
 	C.BSTOP
-	.size	test_v03_vector_reuse_roundtrip, .-test_v03_vector_reuse_roundtrip
+	.size	test_v057_vector_reuse_roundtrip, .-test_v057_vector_reuse_roundtrip
 
-# CHECK-LABEL: <test_v03_vector_reuse_roundtrip>:
+# CHECK-LABEL: <test_v057_vector_reuse_roundtrip>:
 # CHECK: BSTART.MSEQ
 # CHECK: B.TEXT
 # CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<4KB>

@@ -353,11 +353,23 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::BSTART_TMA: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t Func = I(1) & 0x1f;
-    OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("BSTART.TMA Function, DataType", /*LengthBits=*/32));
+    const unsigned Func = static_cast<unsigned>(I(1)) & 0x1fu;
+    static constexpr const char *TMAAsmFormats[] = {
+        "BSTART.TLOAD DataType",
+        "BSTART.TSTORE DataType",
+        "BSTART.TMOV DataType",
+        "BSTART.TPREFETCH DataType",
+        "BSTART.MGATHER DataType",
+        "BSTART.MSCATTER DataType",
+        "BSTART.MGATHER.MASK DataType",
+        "BSTART.MSCATTER.MASK DataType",
+        "BSTART.MGATHER.CAS DataType",
+    };
+    if (Func >= std::size(TMAAsmFormats))
+      report_fatal_error("LinxISA: invalid v0.57 TMA Function");
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(TMAAsmFormats[Func],
+                                          /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
-    OutMI.addOperand(MCOperand::createImm(Func));
     return;
   }
   case LinxISA::BSTART_CUBE: {
