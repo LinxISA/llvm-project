@@ -2875,6 +2875,27 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TEPL))
             .addImm(DType)
             .addImm(TileOpcode);
+        // Legacy TEPL builtins carry the tile byte size and dtype but not an
+        // explicit logical shape.  Canonical v0.57 TEPL reductions, expands,
+        // transpose, sort, gather, and scatter require B.DIM metadata, so
+        // materialize the full-tile profile used by the public PTO wrappers.
+        //
+        // Keep LB0 at 32 lanes when possible and derive LB1 from the active
+        // element count.  This yields 32x32 for the 4 KiB FP32/S32 profile and
+        // 32x128 for the 4 KiB S8/U8 profile.  A future shape-carrying
+        // intrinsic may override this compatibility profile explicitly.
+        const unsigned ElemBits = dtypeElementBitsForTileCheck(DType);
+        const uint64_t TileBytes = uint64_t{1} << (Size + 4);
+        const uint64_t TileElems =
+            ElemBits == 0 ? 0 : (TileBytes * 8u) / ElemBits;
+        uint64_t LB0 = (TileElems % 32u) == 0u ? 32u : 1u;
+        uint64_t LB1 = LB0 == 0 ? 0 : TileElems / LB0;
+        if (LB0 > 0 && LB0 <= 255 && LB1 > 0 && LB1 <= 255) {
+          emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
+          emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        } else {
+          report_fatal_error("Linx: TEPL full-tile profile does not fit B.DIM");
+        }
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
         if (IsBinaryScalar || IsSplat) {
           // TEPL scalar extensions bind scalar source through B.IOR.
