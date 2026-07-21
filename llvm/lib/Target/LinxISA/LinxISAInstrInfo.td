@@ -509,6 +509,22 @@ def PSEUDO_TMA_TSTORE_DESC : Pseudo<(outs),
                                          i64imm:$size, GPR_Arch:$stride_bytes),
                                     "# PSEUDO_TMA_TSTORE_DESC", []>;
 
+let hasSideEffects = 1, mayLoad = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TMA_TLOAD_SHAPE : Pseudo<
+    (outs TILE_TU:$dst),
+    (ins GPR_Arch:$base, i64imm:$dtype, i64imm:$layout,
+         GPR_Arch:$lb0, GPR_Arch:$lb1, GPR_Arch:$lb2,
+         i64imm:$size, GPR_Arch:$stride),
+    "# PSEUDO_TMA_TLOAD_SHAPE", []>;
+
+let hasSideEffects = 1, mayStore = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TMA_TSTORE_SHAPE : Pseudo<
+    (outs),
+    (ins GPR_Arch:$base, TILE:$src, i64imm:$dtype, i64imm:$layout,
+         GPR_Arch:$lb0, GPR_Arch:$lb1, GPR_Arch:$lb2,
+         i64imm:$size, GPR_Arch:$stride),
+    "# PSEUDO_TMA_TSTORE_SHAPE", []>;
+
 // Compiler-inserted tile SSA edge balancing pseudo.
 //
 // Operand contract:
@@ -573,6 +589,45 @@ def PSEUDO_TEPL_SPLAT : Pseudo<(outs TILE:$dst),
                                     i64imm:$size, i64imm:$dtype,
                                     i64imm:$mode),
                                "# PSEUDO_TEPL_SPLAT", []>;
+
+// Canonical v0.57 shape-carrying TEPL pseudos.  Shape registers map directly
+// to B.DIM LB0=ValidCol, LB1=ValidRow, LB2=physical Col.
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TEPL_UNARY_SHAPE : Pseudo<(outs TILE:$dst),
+                                     (ins TILE:$src, i64imm:$tileop,
+                                          i64imm:$size, i64imm:$dtype,
+                                          GPR_Arch:$validcol,
+                                          GPR_Arch:$validrow,
+                                          GPR_Arch:$physicalcol),
+                                     "# PSEUDO_TEPL_UNARY_SHAPE", []>;
+
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TEPL_BINARY_SHAPE : Pseudo<(outs TILE:$dst),
+                                      (ins TILE:$srcA, TILE:$srcB,
+                                           i64imm:$tileop, i64imm:$size,
+                                           i64imm:$dtype,
+                                           GPR_Arch:$validcol,
+                                           GPR_Arch:$validrow,
+                                           GPR_Arch:$physicalcol),
+                                      "# PSEUDO_TEPL_BINARY_SHAPE", []>;
+
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TEPL_BINARY_SCALAR_SHAPE : Pseudo<
+    (outs TILE:$dst),
+    (ins TILE:$srcA, GPR_Arch:$srcS, i64imm:$tileop, i64imm:$size,
+         i64imm:$dtype, i64imm:$mode, GPR_Arch:$validcol,
+         GPR_Arch:$validrow, GPR_Arch:$physicalcol),
+    "# PSEUDO_TEPL_BINARY_SCALAR_SHAPE", []>;
+
+let hasSideEffects = 1, isBarrier = 1, Size = 4 in
+def PSEUDO_TEPL_SPLAT_SHAPE : Pseudo<(outs TILE:$dst),
+                                     (ins GPR_Arch:$srcS, i64imm:$tileop,
+                                          i64imm:$size, i64imm:$dtype,
+                                          i64imm:$mode,
+                                          GPR_Arch:$validcol,
+                                          GPR_Arch:$validrow,
+                                          GPR_Arch:$physicalcol),
+                                     "# PSEUDO_TEPL_SPLAT_SHAPE", []>;
 
 // Vector decoupled blocks (bring-up): lowered late into BSTART.VSEQ/VPAR headers
 // with B.TEXT + B.DIM descriptors and a per-function empty body stub.

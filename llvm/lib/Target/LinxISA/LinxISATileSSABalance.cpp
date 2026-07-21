@@ -17,8 +17,8 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineOperand.h"
-#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
@@ -164,7 +164,8 @@ static bool metadataCompatible(const TileMeta &A, const TileMeta &B,
   return true;
 }
 
-static TileMeta mergeMetadata(const TileMeta &Primary, const TileMeta &Secondary) {
+static TileMeta mergeMetadata(const TileMeta &Primary,
+                              const TileMeta &Secondary) {
   TileMeta Out = Primary;
   if (!Out.HasDataType && Secondary.HasDataType) {
     Out.HasDataType = true;
@@ -212,6 +213,15 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     Meta.Layout = MI.getOperand(3).getImm();
     return true;
 
+  case LinxISA::PSEUDO_TMA_TLOAD_SHAPE:
+    Meta.HasSize = true;
+    Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(7).getImm() & 0x1f);
+    Meta.HasDataType = true;
+    Meta.DataType = static_cast<uint8_t>(MI.getOperand(2).getImm() & 0x1f);
+    Meta.HasLayout = true;
+    Meta.Layout = MI.getOperand(3).getImm();
+    return true;
+
   case LinxISA::PSEUDO_CUBE_MAMULB:
   case LinxISA::PSEUDO_CUBE_MAMULB_ACC:
     Meta.HasSize = true;
@@ -244,6 +254,7 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     return true;
 
   case LinxISA::PSEUDO_TEPL_UNARY:
+  case LinxISA::PSEUDO_TEPL_UNARY_SHAPE:
     Meta.HasSize = true;
     Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(3).getImm() & 0x1f);
     Meta.HasDataType = true;
@@ -251,6 +262,7 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     return true;
 
   case LinxISA::PSEUDO_TEPL_BINARY:
+  case LinxISA::PSEUDO_TEPL_BINARY_SHAPE:
     Meta.HasSize = true;
     Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(4).getImm() & 0x1f);
     Meta.HasDataType = true;
@@ -258,6 +270,7 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     return true;
 
   case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
+  case LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE:
     Meta.HasSize = true;
     Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(4).getImm() & 0x1f);
     Meta.HasDataType = true;
@@ -265,6 +278,7 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     return true;
 
   case LinxISA::PSEUDO_TEPL_SPLAT:
+  case LinxISA::PSEUDO_TEPL_SPLAT_SHAPE:
     Meta.HasSize = true;
     Meta.SizeCode = static_cast<uint8_t>(MI.getOperand(3).getImm() & 0x1f);
     Meta.HasDataType = true;
@@ -356,7 +370,9 @@ public:
 
   LinxISATileSSABalance() : MachineFunctionPass(ID) {}
 
-  StringRef getPassName() const override { return "Linx Tile SSA Edge Balance"; }
+  StringRef getPassName() const override {
+    return "Linx Tile SSA Edge Balance";
+  }
 
   bool runOnMachineFunction(MachineFunction &MF) override {
     const auto &TRI = *MF.getSubtarget().getRegisterInfo();
@@ -397,12 +413,11 @@ public:
       It->second = mergeMetadata(It->second, Incoming);
     };
 
-    auto emitTMOVPseudo = [&](MachineBasicBlock &MBB,
-                              MachineBasicBlock::iterator InsertPt,
-                              const DebugLoc &DL, Register Dst, Register Src,
-                              const TileMeta &Meta, bool SrcKill, bool SrcReuse,
-                              bool DstDead, bool SrcUndef,
-                              TMovMode Mode) -> MachineInstr * {
+    auto emitTMOVPseudo =
+        [&](MachineBasicBlock &MBB, MachineBasicBlock::iterator InsertPt,
+            const DebugLoc &DL, Register Dst, Register Src,
+            const TileMeta &Meta, bool SrcKill, bool SrcReuse, bool DstDead,
+            bool SrcUndef, TMovMode Mode) -> MachineInstr * {
       MachineInstrBuilder MIB =
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::PSEUDO_TMA_TMOV), Dst)
               .addReg(Src, getKillRegState(SrcKill))
@@ -435,7 +450,8 @@ public:
                              const DebugLoc &DL, Register Dst, int SpillSlotFI,
                              uint8_t SizeCode, bool DstDead) {
       MachineInstrBuilder MIB =
-          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::PSEUDO_TMA_TLOAD_ANY), Dst)
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::PSEUDO_TMA_TLOAD_ANY),
+                  Dst)
               .addFrameIndex(SpillSlotFI)
               .addImm(SizeCode);
       if (DstDead)
@@ -459,7 +475,8 @@ public:
                   break;
                 }
               }
-              if (PrevDef && !isCubeAccumulatorProducerOpcode(PrevDef->getOpcode())) {
+              if (PrevDef &&
+                  !isCubeAccumulatorProducerOpcode(PrevDef->getOpcode())) {
                 reportTileBalanceError(
                     MF, MI,
                     Twine(MI.getOpcode() == LinxISA::PSEUDO_CUBE_MAMULB_ACC
@@ -511,14 +528,15 @@ public:
 
         DenseMap<unsigned, unsigned> BundleSrcByDst;
         for (MachineInstr *CopyMI : CopyBundle) {
-          const unsigned DstId = getTileRegId(TRI, CopyMI->getOperand(0).getReg());
-          const unsigned SrcId = getTileRegId(TRI, CopyMI->getOperand(1).getReg());
+          const unsigned DstId =
+              getTileRegId(TRI, CopyMI->getOperand(0).getReg());
+          const unsigned SrcId =
+              getTileRegId(TRI, CopyMI->getOperand(1).getReg());
           BundleSrcByDst.try_emplace(DstId, SrcId);
         }
         DenseMap<unsigned, TileMeta> BundleResolvedMeta;
-        auto resolveMetaForTile =
-            [&](auto &&Self, unsigned TileId,
-                SmallVectorImpl<unsigned> &Visiting)
+        auto resolveMetaForTile = [&](auto &&Self, unsigned TileId,
+                                      SmallVectorImpl<unsigned> &Visiting)
             -> std::optional<TileMeta> {
           auto ResolvedIt = BundleResolvedMeta.find(TileId);
           if (ResolvedIt != BundleResolvedMeta.end())
@@ -539,7 +557,8 @@ public:
             return std::nullopt;
 
           Visiting.push_back(TileId);
-          std::optional<TileMeta> SrcMeta = Self(Self, EdgeIt->second, Visiting);
+          std::optional<TileMeta> SrcMeta =
+              Self(Self, EdgeIt->second, Visiting);
           Visiting.pop_back();
           if (!SrcMeta)
             return std::nullopt;
@@ -568,7 +587,8 @@ public:
           if (!SrcMeta || !SrcMeta->HasSize) {
             reportTileBalanceError(
                 MF, *CopyMI,
-                Twine("tile COPY source lacks required size metadata (src id=") +
+                Twine(
+                    "tile COPY source lacks required size metadata (src id=") +
                     Twine(SrcId) + ")");
           }
 
@@ -577,8 +597,8 @@ public:
             reportTileBalanceError(
                 MF, *CopyMI,
                 Twine("SizeCode outside strict 512B..4KB policy (src id=") +
-                    Twine(SrcId) + ", size=" + Twine(unsigned(CopyMeta.SizeCode)) +
-                    ")");
+                    Twine(SrcId) +
+                    ", size=" + Twine(unsigned(CopyMeta.SizeCode)) + ")");
           }
 
           if (auto DstMetaIt = RegMetaById.find(DstId);
@@ -587,9 +607,10 @@ public:
             if (!metadataCompatible(DstMetaIt->second, CopyMeta, Reason)) {
               reportTileBalanceError(
                   MF, *CopyMI,
-                  Twine("tile COPY metadata mismatch across CFG edges (dst id=") +
-                      Twine(DstId) + ", src id=" + Twine(SrcId) + "): " +
-                      Reason);
+                  Twine(
+                      "tile COPY metadata mismatch across CFG edges (dst id=") +
+                      Twine(DstId) + ", src id=" + Twine(SrcId) +
+                      "): " + Reason);
             }
             CopyMeta = mergeMetadata(CopyMeta, DstMetaIt->second);
           }
@@ -597,11 +618,11 @@ public:
               DstResolvedIt != BundleResolvedMeta.end()) {
             std::string Reason;
             if (!metadataCompatible(DstResolvedIt->second, CopyMeta, Reason)) {
-              reportTileBalanceError(
-                  MF, *CopyMI,
-                  Twine("tile COPY metadata mismatch in entry normalization (dst id=") +
-                      Twine(DstId) + ", src id=" + Twine(SrcId) + "): " +
-                      Reason);
+              reportTileBalanceError(MF, *CopyMI,
+                                     Twine("tile COPY metadata mismatch in "
+                                           "entry normalization (dst id=") +
+                                         Twine(DstId) + ", src id=" +
+                                         Twine(SrcId) + "): " + Reason);
             }
             CopyMeta = mergeMetadata(CopyMeta, DstResolvedIt->second);
           }
@@ -640,7 +661,8 @@ public:
         }
         const bool ParallelBundle = AtBlockEntry || AtBlockTail;
 
-        MachineBasicBlock::iterator InsertPt = CopyBundle.front()->getIterator();
+        MachineBasicBlock::iterator InsertPt =
+            CopyBundle.front()->getIterator();
         if (!ParallelBundle) {
           // Non-edge COPY chains keep sequential semantics.
           for (TileCopyOp &Op : Ops) {
@@ -661,8 +683,8 @@ public:
         SmallVector<uint8_t, 8> Pending(Ops.size(), 1u);
         unsigned PendingCount = Ops.size();
 
-        auto pendingSourceUsesReg =
-            [&](Register Reg, std::optional<unsigned> Excl) -> bool {
+        auto pendingSourceUsesReg = [&](Register Reg,
+                                        std::optional<unsigned> Excl) -> bool {
           for (unsigned I = 0; I < Ops.size(); ++I) {
             if (!Pending[I])
               continue;
@@ -703,7 +725,8 @@ public:
           }
         };
 
-        auto replacePendingSrcWithSpill = [&](Register OldSrc, int SpillSlotFI) {
+        auto replacePendingSrcWithSpill = [&](Register OldSrc,
+                                              int SpillSlotFI) {
           for (unsigned I = 0; I < Ops.size(); ++I) {
             if (!Pending[I] || Ops[I].SrcFromSpill)
               continue;
@@ -742,9 +765,9 @@ public:
               const bool SrcStillNeeded = pendingSourceUsesReg(Op.Src, I);
               const bool SrcReuse = SrcStillNeeded || !Op.SrcKillHint;
               const bool SrcKill = !SrcReuse;
-              emitTMOVPseudo(MBB, InsertPt, Op.MI->getDebugLoc(), Op.Dst, Op.Src,
-                             Op.Meta, SrcKill, SrcReuse, Op.DstDead, Op.SrcUndef,
-                             TMovMode::V2V);
+              emitTMOVPseudo(MBB, InsertPt, Op.MI->getDebugLoc(), Op.Dst,
+                             Op.Src, Op.Meta, SrcKill, SrcReuse, Op.DstDead,
+                             Op.SrcUndef, TMovMode::V2V);
             }
 
             const unsigned DstId = getTileRegId(TRI, Op.Dst);
@@ -791,8 +814,8 @@ public:
             const int SpillSlotFI =
                 MFI.CreateStackObject(/*Size=*/4096, Align(64),
                                       /*isSpillSlot=*/false);
-            emitSpillStore(MBB, InsertPt, BreakOp.MI->getDebugLoc(), SpillSlotFI,
-                           BreakSrc, BreakMeta.SizeCode);
+            emitSpillStore(MBB, InsertPt, BreakOp.MI->getDebugLoc(),
+                           SpillSlotFI, BreakSrc, BreakMeta.SizeCode);
             replacePendingSrcWithSpill(BreakSrc, SpillSlotFI);
           }
         }
@@ -846,7 +869,8 @@ public:
           continue;
         if (NextMI.getNumOperands() < 8)
           continue;
-        if (!NextMI.getOperand(1).isReg() || NextMI.getOperand(1).getReg() != Dst)
+        if (!NextMI.getOperand(1).isReg() ||
+            NextMI.getOperand(1).getReg() != Dst)
           continue;
         if (!MRI.hasOneNonDBGUse(Dst))
           continue;
