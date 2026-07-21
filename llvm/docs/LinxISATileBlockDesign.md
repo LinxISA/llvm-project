@@ -1,4 +1,4 @@
-# LinxISA Tile Block Encoding Contract (PR1 + PR2 core CFG/RelRef)
+# LinxISA v0.57 Tile Block Encoding Contract
 
 Status: PR1 implemented; PR2 core CFG balancing + relative tile binding is implemented; PR3 extends edge balancing with cycle handling, strict tile-size policy, and TMOV mode expansion (`V2V` + `A2V`).
 
@@ -90,7 +90,7 @@ The assembler accepts and disassembler prints typed aliases:
 - `BSTART.TLOAD`/`BSTART.TSTORE`/`BSTART.TMOV` are exact aliases of `BSTART.TMA Function={0,1,2}`.
 - `BSTART.TMATMUL`/`BSTART.TMATMUL.ACC`/`BSTART.ACCCVT` are exact aliases of `BSTART.CUBE Function={0,2,8}`.
 - `BSTART.T*` PTO template aliases (for example `BSTART.TADD`, `BSTART.TROWMAX`) are exact aliases of `BSTART.TEPL TileOp10=<value>`.
-- `BSTART.PAR` is not accepted in v0.56.5; use the typed block headers above.
+- `BSTART.PAR` is not accepted in v0.57; use the typed block headers above.
 
 ## 6. Examples
 
@@ -133,7 +133,7 @@ No `BSTART.TVEC` mnemonic is defined.
   - `B.ARG` for TMOV mode (`V2V=0`, `A2V=1`);
   - tile binding descriptors (`B.IOT`) for source/destination relrefs and `SizeCode`;
   - no `B.IOR` memory base/stride descriptor in minimal PR2 TMOV lowering.
-  - canonical `SizeCode` policy: the immediate `imm4` selects the v0.56.5 size table; register-sized descriptors are rejected.
+  - canonical `SizeCode` policy: the immediate `imm4` selects the v0.57 size table; register-sized descriptors are rejected.
 - `BSTART.TMATMUL` (`Function=0`) and `BSTART.TMATMUL.ACC` (`Function=2`) are CUBE blocks and require matrix shape descriptors:
   - `m,n,k` via `B.DIM` or repeated `C.B.DIMI` into `LB0/LB1/LB2`;
   - tile source/destination bindings via `B.IOT` (A/B/(optional)ACC).
@@ -143,6 +143,22 @@ No `BSTART.TVEC` mnemonic is defined.
 - `BSTART.TEPL` is header-only template dispatch:
   - `TileOp10` chooses the PTO template op;
   - descriptor requirements are op-family specific (shape/reduction axes/stride policy) and are carried via `B.ARG`, `B.IOR`, `B.DIM`/`C.B.DIMI`, and `B.IOT` tile bindings as required by that template.
+
+### 6.4 Runtime rectangular tile shapes
+
+The v0.57 Clang/PTO bridge makes the three shape descriptors operative at
+runtime:
+
+- `LB0 = ValidCol`
+- `LB1 = ValidRow`
+- `LB2 = physical Col`
+
+`ValidCol <= physical Col`; `ValidRow * physical Col` must fit the selected
+carrier. TLOAD and TSTORE additionally bind the byte stride through the first
+`B.IOR` source register. A tail tile therefore retains the same physical
+carrier and row pitch as a full tile while restricting memory and TEPL work to
+the `ValidRow x ValidCol` rectangle. There is no implicit full-tile inference
+on the canonical frontend path.
 - `BSTART.VPAR`/`BSTART.VSEQ` are SIMT-body blocks:
   - header encodes vector execution mode only;
   - operation sequence resides in the `B.TEXT` body and must terminate at `BSTOP/C.BSTOP`.

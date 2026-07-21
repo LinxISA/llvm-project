@@ -14,10 +14,10 @@
 #include "LinxISATileOpcodesV057.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -26,9 +26,9 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
-#include "llvm/MC/MCContext.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -135,7 +135,7 @@ static bool isWhitelistedTEPLTileOpcode(int64_t TileOpcode) {
 }
 
 static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
-                                            StringRef Context) {
+                                              StringRef Context) {
   validateTileOpcode(TileOpcode, Context);
   if (!isWhitelistedTEPLTileOpcode(TileOpcode))
     report_fatal_error(Twine("Linx: ") + Context +
@@ -221,8 +221,9 @@ static uint64_t computeTileBytesOrDie(StringRef Context, uint64_t Dim0,
                        "dim0*dim1*dim2*elem_bits");
   }
   if (Tmp > std::numeric_limits<uint64_t>::max() - 7u) {
-    report_fatal_error(Twine("Linx: ") + Context +
-                       " tile-byte check overflow while rounding bits to bytes");
+    report_fatal_error(
+        Twine("Linx: ") + Context +
+        " tile-byte check overflow while rounding bits to bytes");
   }
   return (Tmp + 7u) / 8u;
 }
@@ -290,8 +291,8 @@ static unsigned physicalTileHandIndex(unsigned TileId) {
 static unsigned tileRegIdFromReg(const TargetRegisterInfo &TRI, Register Reg);
 
 static unsigned encodeTileQueueSource(const TargetRegisterInfo &TRI,
-                                      const TileQueueState &State,
-                                      Register Reg, StringRef Context) {
+                                      const TileQueueState &State, Register Reg,
+                                      StringRef Context) {
   const unsigned TileId = tileRegIdFromReg(TRI, Reg);
   const unsigned Hand = physicalTileHandIndex(TileId);
   const auto &Queue = State.Hands[Hand];
@@ -325,7 +326,8 @@ static void pushTileQueueValue(const TargetRegisterInfo &TRI,
     Queue.erase(It);
   Queue.insert(Queue.begin(), Reg);
   if (Queue.size() > 8u)
-    report_fatal_error("Linx: tile queue live depth exceeds architectural limit 8");
+    report_fatal_error(
+        "Linx: tile queue live depth exceeds architectural limit 8");
 }
 
 static TileRelRef tileRelRefFromId(unsigned TileId, bool Reuse = false) {
@@ -403,15 +405,13 @@ static bool isMarkerInstr(const MachineInstr &MI) {
 }
 
 static bool inlineAsmHasExplicitBlockBoundary(const MachineInstr &MI) {
-  if (!MI.isInlineAsm() ||
-      MI.getNumOperands() <= InlineAsm::MIOp_AsmString ||
+  if (!MI.isInlineAsm() || MI.getNumOperands() <= InlineAsm::MIOp_AsmString ||
       !MI.getOperand(InlineAsm::MIOp_AsmString).isSymbol())
     return false;
 
   StringRef Asm(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName());
   return Asm.contains_insensitive("bstop") ||
-         Asm.contains_insensitive("bstart") ||
-         Asm.contains_insensitive("acrc");
+         Asm.contains_insensitive("bstart") || Asm.contains_insensitive("acrc");
 }
 
 static bool isSimtBodyHeaderOpcode(unsigned Opc) {
@@ -464,8 +464,10 @@ static bool isTilePseudoInstr(const MachineInstr &MI) {
   case LinxISA::PSEUDO_TMA_TLOAD:
   case LinxISA::PSEUDO_TMA_TLOAD_ANY:
   case LinxISA::PSEUDO_TMA_TLOAD_DESC:
+  case LinxISA::PSEUDO_TMA_TLOAD_SHAPE:
   case LinxISA::PSEUDO_TMA_TSTORE:
   case LinxISA::PSEUDO_TMA_TSTORE_DESC:
+  case LinxISA::PSEUDO_TMA_TSTORE_SHAPE:
   case LinxISA::PSEUDO_TMA_TMOV:
   case LinxISA::PSEUDO_CUBE_MAMULB:
   case LinxISA::PSEUDO_CUBE_MAMULB_ACC:
@@ -474,6 +476,10 @@ static bool isTilePseudoInstr(const MachineInstr &MI) {
   case LinxISA::PSEUDO_TEPL_BINARY:
   case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
   case LinxISA::PSEUDO_TEPL_SPLAT:
+  case LinxISA::PSEUDO_TEPL_UNARY_SHAPE:
+  case LinxISA::PSEUDO_TEPL_BINARY_SHAPE:
+  case LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE:
+  case LinxISA::PSEUDO_TEPL_SPLAT_SHAPE:
   case LinxISA::PSEUDO_VPAR_TADD:
   case LinxISA::PSEUDO_VPAR_TSUB:
   case LinxISA::PSEUDO_VTILE_ADD:
@@ -659,12 +665,13 @@ public:
       std::string Out;
       Out.reserve(S.size());
       for (char C : S)
-        Out.push_back(static_cast<char>(
-            std::toupper(static_cast<unsigned char>(C))));
+        Out.push_back(
+            static_cast<char>(std::toupper(static_cast<unsigned char>(C))));
       return Out;
     };
 
-    auto parseSrcRTypeSuffix = [&](StringRef Suffix) -> std::optional<unsigned> {
+    auto parseSrcRTypeSuffix =
+        [&](StringRef Suffix) -> std::optional<unsigned> {
       std::string Up = toUpperStr(Suffix);
       if (Up == "SW")
         return 0u;
@@ -688,9 +695,9 @@ public:
 
       std::string Upper = toUpperStr(N);
 
-      auto parsePrefixedIndex = [&](StringRef Prefix, unsigned Class,
-                                    unsigned MaxIndex)
-          -> std::optional<unsigned> {
+      auto parsePrefixedIndex =
+          [&](StringRef Prefix, unsigned Class,
+              unsigned MaxIndex) -> std::optional<unsigned> {
         StringRef U(Upper);
         if (!U.starts_with(Prefix))
           return std::nullopt;
@@ -971,8 +978,7 @@ public:
     };
 
     auto assignVecPipeDstCode = [&](StringRef DstPart, unsigned ParsedCode,
-                                    VecPipeCursorState &PipeState)
-        -> unsigned {
+                                    VecPipeCursorState &PipeState) -> unsigned {
       auto nextCode = [&](unsigned Class, unsigned &NextIndex) {
         return (Class << 5) | (NextIndex++ & 0x1fu);
       };
@@ -994,10 +1000,11 @@ public:
       return ParsedCode;
     };
 
-    auto emitVectorBodyLine =
-        [&](MachineBasicBlock &BodyBB, StringRef RawLine, StringRef CtxName,
-            VecPipeCursorState &PipeState,
-            function_ref<MCSymbol *(StringRef)> LookupLabelSym) {
+    auto emitVectorBodyLine = [&](MachineBasicBlock &BodyBB, StringRef RawLine,
+                                  StringRef CtxName,
+                                  VecPipeCursorState &PipeState,
+                                  function_ref<MCSymbol *(StringRef)>
+                                      LookupLabelSym) {
       StringRef Line = RawLine;
       if (size_t Semi = Line.find(';'); Semi != StringRef::npos)
         Line = Line.take_front(Semi);
@@ -1020,12 +1027,14 @@ public:
         MCSymbol *Sym = LookupLabelSym(Label);
         if (!Sym)
           fail("undefined vector body label");
-        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(TargetOpcode::EH_LABEL))
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(),
+                TII.get(TargetOpcode::EH_LABEL))
             .addSym(Sym);
         return;
       }
 
-      if (Line.equals_insensitive("C.BSTOP") || Line.equals_insensitive("BSTOP")) {
+      if (Line.equals_insensitive("C.BSTOP") ||
+          Line.equals_insensitive("BSTOP")) {
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::BSTOP));
         return;
       }
@@ -1066,7 +1075,8 @@ public:
 
       if (Head.equals_insensitive("b.eq") || Head.equals_insensitive("b.ne") ||
           Head.equals_insensitive("b.lt") || Head.equals_insensitive("b.ge") ||
-          Head.equals_insensitive("b.ltu") || Head.equals_insensitive("b.geu")) {
+          Head.equals_insensitive("b.ltu") ||
+          Head.equals_insensitive("b.geu")) {
         SmallVector<StringRef, 4> Ops;
         splitCSV(Rest, Ops);
         if (Ops.size() != 3)
@@ -1132,7 +1142,7 @@ public:
         DstCode = assignVecPipeDstCode(DstPart, DstOp->Code, PipeState);
         return true;
       };
-    
+
       if (Head.equals_insensitive("c.movr")) {
         StringRef SrcPart;
         ParsedVReg Dst;
@@ -1152,11 +1162,12 @@ public:
         return;
       }
 
-      if (Head.equals_insensitive("v.add") || Head.equals_insensitive("v.sub")) {
+      if (Head.equals_insensitive("v.add") ||
+          Head.equals_insensitive("v.sub")) {
         StringRef SrcPart;
         ParsedVReg Dst;
         if (!parseArrow(Rest, SrcPart, Dst))
-	          fail("expected '->Dst' in vector ALU op");
+          fail("expected '->Dst' in vector ALU op");
         SmallVector<StringRef, 4> Ops;
         splitCSV(SrcPart, Ops);
         if (Ops.size() != 2)
@@ -1175,33 +1186,36 @@ public:
             .addImm(SrcR->Code)
             .addImm(SrcRType)
             .addImm(SrcR->Shamt);
-	        return;
-	      }
+        return;
+      }
 
-	      if (Head.equals_insensitive("v.mul")) {
-	        StringRef SrcPart;
-	        ParsedVReg Dst;
-	        if (!parseArrow(Rest, SrcPart, Dst))
-	          fail("expected '->Dst' in vector mul op");
-	        SmallVector<StringRef, 4> Ops;
-	        splitCSV(SrcPart, Ops);
-	        if (Ops.size() != 2)
-	          fail("expected two source operands for vector mul op");
-	        auto SrcL = parseVecRegToken(Ops[0]);
-	        auto SrcR = parseVecRegToken(Ops[1]);
-	        if (!SrcL || !SrcR)
-	          fail("failed to parse source operands for vector mul op");
-	        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_MUL))
-	            .addImm(Dst.Code)
-	            .addImm(SrcL->Code)
-	            .addImm(SrcR->Code);
-	        return;
-	      }
+      if (Head.equals_insensitive("v.mul")) {
+        StringRef SrcPart;
+        ParsedVReg Dst;
+        if (!parseArrow(Rest, SrcPart, Dst))
+          fail("expected '->Dst' in vector mul op");
+        SmallVector<StringRef, 4> Ops;
+        splitCSV(SrcPart, Ops);
+        if (Ops.size() != 2)
+          fail("expected two source operands for vector mul op");
+        auto SrcL = parseVecRegToken(Ops[0]);
+        auto SrcR = parseVecRegToken(Ops[1]);
+        if (!SrcL || !SrcR)
+          fail("failed to parse source operands for vector mul op");
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(),
+                TII.get(LinxISA::PSEUDO_V_MUL))
+            .addImm(Dst.Code)
+            .addImm(SrcL->Code)
+            .addImm(SrcR->Code);
+        return;
+      }
 
-	      if (Head.equals_insensitive("v.fadd") || Head.equals_insensitive("v.fsub") ||
-	          Head.equals_insensitive("v.fmul") || Head.equals_insensitive("v.fdiv")) {
-	        StringRef SrcPart;
-	        ParsedVReg Dst;
+      if (Head.equals_insensitive("v.fadd") ||
+          Head.equals_insensitive("v.fsub") ||
+          Head.equals_insensitive("v.fmul") ||
+          Head.equals_insensitive("v.fdiv")) {
+        StringRef SrcPart;
+        ParsedVReg Dst;
         if (!parseArrow(Rest, SrcPart, Dst))
           fail("expected '->Dst' in vector FP op");
         SmallVector<StringRef, 4> Ops;
@@ -1223,33 +1237,34 @@ public:
             .addImm(Dst.Code)
             .addImm(SrcL->Code)
             .addImm(SrcR->Code);
-	        return;
-	      }
+        return;
+      }
 
-	      if (Head.equals_insensitive("v.fabs") || Head.equals_insensitive("v.fsqrt")) {
-	        StringRef SrcPart;
-	        ParsedVReg Dst;
-	        if (!parseArrow(Rest, SrcPart, Dst))
-	          fail("expected '->Dst' in vector FP unop");
-	        SmallVector<StringRef, 2> Ops;
-	        splitCSV(SrcPart, Ops);
-	        if (Ops.size() != 1)
-	          fail("expected one source operand for vector FP unop");
-	        auto SrcL = parseVecRegToken(Ops[0]);
-	        if (!SrcL)
-	          fail("failed to parse source operand for vector FP unop");
-	        const unsigned Opc = Head.equals_insensitive("v.fabs")
-	                                 ? LinxISA::PSEUDO_V_FABS
-	                                 : LinxISA::PSEUDO_V_FSQRT;
-	        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
-	            .addImm(Dst.Code)
-	            .addImm(SrcL->Code);
-	        return;
-	      }
+      if (Head.equals_insensitive("v.fabs") ||
+          Head.equals_insensitive("v.fsqrt")) {
+        StringRef SrcPart;
+        ParsedVReg Dst;
+        if (!parseArrow(Rest, SrcPart, Dst))
+          fail("expected '->Dst' in vector FP unop");
+        SmallVector<StringRef, 2> Ops;
+        splitCSV(SrcPart, Ops);
+        if (Ops.size() != 1)
+          fail("expected one source operand for vector FP unop");
+        auto SrcL = parseVecRegToken(Ops[0]);
+        if (!SrcL)
+          fail("failed to parse source operand for vector FP unop");
+        const unsigned Opc = Head.equals_insensitive("v.fabs")
+                                 ? LinxISA::PSEUDO_V_FABS
+                                 : LinxISA::PSEUDO_V_FSQRT;
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
+            .addImm(Dst.Code)
+            .addImm(SrcL->Code);
+        return;
+      }
 
       if (Head.starts_with_insensitive("v.icvtf.")) {
-        auto parseVecIntSrcType = [&](StringRef Suffix)
-            -> std::optional<unsigned> {
+        auto parseVecIntSrcType =
+            [&](StringRef Suffix) -> std::optional<unsigned> {
           if (Suffix.equals_insensitive("sd"))
             return 0u;
           if (Suffix.equals_insensitive("sw"))
@@ -1260,8 +1275,8 @@ public:
             return 3u;
           return std::nullopt;
         };
-        auto parseVecFpDstType = [&](StringRef Suffix)
-            -> std::optional<unsigned> {
+        auto parseVecFpDstType =
+            [&](StringRef Suffix) -> std::optional<unsigned> {
           if (Suffix.equals_insensitive("fd"))
             return 0u;
           if (Suffix.equals_insensitive("fs"))
@@ -1302,10 +1317,10 @@ public:
         return;
       }
 
-	      if (Head.starts_with_insensitive("v.cmp.")) {
-	        StringRef SrcPart;
-	        unsigned DstCode = 0;
-	        if (!parseArrowDstCode(Rest, SrcPart, DstCode))
+      if (Head.starts_with_insensitive("v.cmp.")) {
+        StringRef SrcPart;
+        unsigned DstCode = 0;
+        if (!parseArrowDstCode(Rest, SrcPart, DstCode))
           fail("expected '->Dst' in vector compare op");
         SmallVector<StringRef, 4> Ops;
         splitCSV(SrcPart, Ops);
@@ -1339,8 +1354,10 @@ public:
         return;
       }
 
-      if (Head.equals_insensitive("v.feq") || Head.equals_insensitive("v.fne") ||
-          Head.equals_insensitive("v.flt") || Head.equals_insensitive("v.fge")) {
+      if (Head.equals_insensitive("v.feq") ||
+          Head.equals_insensitive("v.fne") ||
+          Head.equals_insensitive("v.flt") ||
+          Head.equals_insensitive("v.fge")) {
         StringRef SrcPart;
         unsigned DstCode = 0;
         if (!parseArrowDstCode(Rest, SrcPart, DstCode))
@@ -1426,7 +1443,8 @@ public:
           auto SrcL = parseVecRegToken(Ops[1]);
           if (!SrcP || !SrcL)
             fail("failed to parse source operands for v.psel");
-          BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_PSEL))
+          BuildMI(BodyBB, BodyBB.end(), DebugLoc(),
+                  TII.get(LinxISA::PSEUDO_V_PSEL))
               .addImm(Dst.Code)
               .addImm(SrcP->Code)
               .addImm(SrcL->Code);
@@ -1440,7 +1458,8 @@ public:
         if (!SrcP || !SrcL || !SrcR)
           fail("failed to parse source operands for vector select");
         const unsigned SrcRType = (SrcR->SrcRType == 3u) ? 0u : SrcR->SrcRType;
-        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(LinxISA::PSEUDO_V_CSEL))
+        BuildMI(BodyBB, BodyBB.end(), DebugLoc(),
+                TII.get(LinxISA::PSEUDO_V_CSEL))
             .addImm(Dst.Code)
             .addImm(SrcP->Code)
             .addImm(SrcL->Code)
@@ -1464,39 +1483,33 @@ public:
         if (!parseArrow(Rest, SrcPart, Dst))
           fail("expected '->Dst' in v.l[b|h|w]");
         ParsedVReg Base, Index;
-        const bool IsSignedByte =
-            Head.starts_with_insensitive("v.lb.brg") ||
-            Head.equals_insensitive("v.lb.local");
-        const bool IsSignedHalf =
-            Head.starts_with_insensitive("v.lh.brg") ||
-            Head.equals_insensitive("v.lh.local");
-        const bool IsByte =
-            Head.starts_with_insensitive("v.lbu.brg") ||
-            Head.equals_insensitive("v.lbu.local");
-        const bool IsHalf =
-            Head.starts_with_insensitive("v.lhu.brg") ||
-            Head.equals_insensitive("v.lhu.local");
+        const bool IsSignedByte = Head.starts_with_insensitive("v.lb.brg") ||
+                                  Head.equals_insensitive("v.lb.local");
+        const bool IsSignedHalf = Head.starts_with_insensitive("v.lh.brg") ||
+                                  Head.equals_insensitive("v.lh.local");
+        const bool IsByte = Head.starts_with_insensitive("v.lbu.brg") ||
+                            Head.equals_insensitive("v.lbu.local");
+        const bool IsHalf = Head.starts_with_insensitive("v.lhu.brg") ||
+                            Head.equals_insensitive("v.lhu.local");
         const bool IsNarrowByte = IsSignedByte || IsByte;
         const bool IsNarrowHalf = IsSignedHalf || IsHalf;
         const unsigned WantLaneShamt =
             IsNarrowByte ? 0u : (IsNarrowHalf ? 1u : 2u);
         if (!parseMemTriple(SrcPart, WantLaneShamt, Base, Index))
           fail("expected memory form [base, lc0<<esize, idx] in v.l[b|h|w]");
-        const unsigned LocalBit =
-            (Head.contains_insensitive(".local") ||
-             Head.equals_insensitive("v.lb.local") ||
-             Head.equals_insensitive("v.lh.local") ||
-             Head.equals_insensitive("v.lbu.local") ||
-             Head.equals_insensitive("v.lhu.local") ||
-             Head.equals_insensitive("v.lw.local"))
-                ? 1u
-                : 0u;
-        const unsigned Opc =
-            IsSignedByte    ? LinxISA::PSEUDO_V_LB_BRG
-            : IsSignedHalf ? LinxISA::PSEUDO_V_LH_BRG
-            : IsByte       ? LinxISA::PSEUDO_V_LBU_BRG
-            : IsHalf       ? LinxISA::PSEUDO_V_LHU_BRG
-                           : LinxISA::PSEUDO_V_LW_BRG;
+        const unsigned LocalBit = (Head.contains_insensitive(".local") ||
+                                   Head.equals_insensitive("v.lb.local") ||
+                                   Head.equals_insensitive("v.lh.local") ||
+                                   Head.equals_insensitive("v.lbu.local") ||
+                                   Head.equals_insensitive("v.lhu.local") ||
+                                   Head.equals_insensitive("v.lw.local"))
+                                      ? 1u
+                                      : 0u;
+        const unsigned Opc = IsSignedByte   ? LinxISA::PSEUDO_V_LB_BRG
+                             : IsSignedHalf ? LinxISA::PSEUDO_V_LH_BRG
+                             : IsByte       ? LinxISA::PSEUDO_V_LBU_BRG
+                             : IsHalf       ? LinxISA::PSEUDO_V_LHU_BRG
+                                            : LinxISA::PSEUDO_V_LW_BRG;
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
             .addImm(Dst.Code)
             .addImm(Base.Code)
@@ -1546,12 +1559,10 @@ public:
         StringRef MemPart = Rest.drop_front(LBr).trim();
         auto SrcD = parseVecRegToken(ValuePart);
         ParsedVReg Base, Index;
-        const bool IsByte =
-            Head.starts_with_insensitive("v.sb.brg") ||
-            Head.equals_insensitive("v.sb.local");
-        const bool IsHalf =
-            Head.starts_with_insensitive("v.sh.brg") ||
-            Head.equals_insensitive("v.sh.local");
+        const bool IsByte = Head.starts_with_insensitive("v.sb.brg") ||
+                            Head.equals_insensitive("v.sb.local");
+        const bool IsHalf = Head.starts_with_insensitive("v.sh.brg") ||
+                            Head.equals_insensitive("v.sh.local");
         const unsigned WantLaneShamt = IsByte ? 0u : (IsHalf ? 1u : 2u);
         if (!SrcD || !parseMemTriple(MemPart, WantLaneShamt, Base, Index))
           fail("expected v.s[b|h|w] SrcD, [base, lc0<<esize, idx]");
@@ -1561,14 +1572,13 @@ public:
         const unsigned EncodedShamt =
             IsByte ? Index.Shamt
                    : (IsZeroIndex ? 0u : (Index.Shamt - WantLaneShamt));
-        const unsigned LocalBit =
-            (Head.contains_insensitive(".local") ||
-             Head.equals_insensitive("v.sb.local") ||
-             Head.equals_insensitive("v.sh.local") ||
-             Head.equals_insensitive("v.sw.local"))
-                ? 1u
-                : 0u;
-        const unsigned Opc = IsByte    ? LinxISA::PSEUDO_V_SB_BRG
+        const unsigned LocalBit = (Head.contains_insensitive(".local") ||
+                                   Head.equals_insensitive("v.sb.local") ||
+                                   Head.equals_insensitive("v.sh.local") ||
+                                   Head.equals_insensitive("v.sw.local"))
+                                      ? 1u
+                                      : 0u;
+        const unsigned Opc = IsByte   ? LinxISA::PSEUDO_V_SB_BRG
                              : IsHalf ? LinxISA::PSEUDO_V_SH_BRG
                                       : LinxISA::PSEUDO_V_SW_BRG;
         BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
@@ -1630,8 +1640,8 @@ public:
         Tag.reserve(S.size());
         for (char C : S) {
           if (std::isalnum(static_cast<unsigned char>(C)))
-            Tag.push_back(static_cast<char>(
-                std::tolower(static_cast<unsigned char>(C))));
+            Tag.push_back(
+                static_cast<char>(std::tolower(static_cast<unsigned char>(C))));
           else
             Tag.push_back('_');
         }
@@ -1648,8 +1658,8 @@ public:
           return It->second;
         SmallString<96> SymName;
         raw_svector_ostream OS(SymName);
-        OS << ".__linx_vbody_" << CtxTag << "." << MF.getFunctionNumber()
-           << "." << Key;
+        OS << ".__linx_vbody_" << CtxTag << "." << MF.getFunctionNumber() << "."
+           << Key;
         MCSymbol *Sym = Ctx.getOrCreateSymbol(OS.str());
         LabelSyms[Key] = Sym;
         return Sym;
@@ -1677,8 +1687,7 @@ public:
 
       VecPipeCursorState PipeState;
       for (StringRef RawLine : Lines)
-        emitVectorBodyLine(BodyBB, RawLine, CtxName, PipeState,
-                           lookupLabelSym);
+        emitVectorBodyLine(BodyBB, RawLine, CtxName, PipeState, lookupLabelSym);
     };
 
     auto getOrCreateVBlockBodySym = [&]() -> MCSymbol * {
@@ -1698,9 +1707,8 @@ public:
       BuildMI(*VBlockBodyBB, VBlockBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
           .addSym(VBlockBodySym);
-      static const char kDefaultBodyAsm[] =
-          "  v.add lc0.sw, lc1.sw, ->vt\n"
-          "  C.BSTOP\n";
+      static const char kDefaultBodyAsm[] = "  v.add lc0.sw, lc1.sw, ->vt\n"
+                                            "  C.BSTOP\n";
       StringRef BodyText = kDefaultBodyAsm;
       if (auto *MFI = MF.getInfo<LinxISAMachineFunctionInfo>()) {
         if (MFI->hasVBlockBodyAsm())
@@ -1740,7 +1748,8 @@ public:
           "  v.add vt#1.sw, vu#1.sw, ->vt.w\n"
           "  v.sw.local vt#1, [to, lc0<<2, lc1<<8]\n"
           "  C.BSTOP\n";
-      emitVectorBodyText(*VTileAddBodyBB, StringRef(kBodyAsm), "vtile add body");
+      emitVectorBodyText(*VTileAddBodyBB, StringRef(kBodyAsm),
+                         "vtile add body");
       BuildMI(*VTileAddBodyBB, VTileAddBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
           .addSym(Ctx.getOrCreateSymbol(VTileAddBodySym->getName() + ".end"));
@@ -1774,7 +1783,8 @@ public:
           "  v.sub vt#1.sw, vu#1.sw, ->vt.w\n"
           "  v.sw.local vt#1, [to, lc0<<2, lc1<<8]\n"
           "  C.BSTOP\n";
-      emitVectorBodyText(*VTileSubBodyBB, StringRef(kBodyAsm), "vtile sub body");
+      emitVectorBodyText(*VTileSubBodyBB, StringRef(kBodyAsm),
+                         "vtile sub body");
       BuildMI(*VTileSubBodyBB, VTileSubBodyBB->end(), DebugLoc(),
               TII.get(TargetOpcode::EH_LABEL))
           .addSym(Ctx.getOrCreateSymbol(VTileSubBodySym->getName() + ".end"));
@@ -1784,8 +1794,8 @@ public:
       return VTileSubBodySym;
     };
 
-    auto splitAfterCall = [&](MachineBasicBlock &MBB, MachineInstr &CallMI)
-        -> MachineBasicBlock * {
+    auto splitAfterCall = [&](MachineBasicBlock &MBB,
+                              MachineInstr &CallMI) -> MachineBasicBlock * {
       MachineFunction &MF = *MBB.getParent();
       auto *ContBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
       MF.insert(std::next(MBB.getIterator()), ContBB);
@@ -1794,15 +1804,15 @@ public:
       auto SplitPt = std::next(CallMI.getIterator());
       ContBB->splice(ContBB->end(), &MBB, SplitPt, MBB.end());
 
-      // Continuation inherits the original CFG edges; call block falls through to
-      // the continuation after return.
+      // Continuation inherits the original CFG edges; call block falls through
+      // to the continuation after return.
       ContBB->transferSuccessorsAndUpdatePHIs(&MBB);
       MBB.addSuccessor(ContBB);
       return ContBB;
     };
 
-    auto splitAfterInstr = [&](MachineBasicBlock &MBB, MachineInstr &MI)
-        -> MachineBasicBlock * {
+    auto splitAfterInstr = [&](MachineBasicBlock &MBB,
+                               MachineInstr &MI) -> MachineBasicBlock * {
       MachineFunction &MF = *MBB.getParent();
       auto *ContBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
       MF.insert(std::next(MBB.getIterator()), ContBB);
@@ -1815,8 +1825,8 @@ public:
       return ContBB;
     };
 
-    auto splitBeforeInstr = [&](MachineBasicBlock &MBB, MachineInstr &MI)
-        -> MachineBasicBlock * {
+    auto splitBeforeInstr = [&](MachineBasicBlock &MBB,
+                                MachineInstr &MI) -> MachineBasicBlock * {
       MachineFunction &MF = *MBB.getParent();
       auto *TailBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
       MF.insert(std::next(MBB.getIterator()), TailBB);
@@ -1942,7 +1952,8 @@ public:
       switch (MacroMI->getOpcode()) {
       case LinxISA::FENTRY: {
         if (hasRealInstrBefore(*MacroMI))
-          report_fatal_error("Linx: FENTRY must be the first instruction in its block");
+          report_fatal_error(
+              "Linx: FENTRY must be the first instruction in its block");
         if (!hasRealInstrAfter(*MacroMI))
           continue;
         MachineBasicBlock *ContBB = splitAfterInstr(*MBB, *MacroMI);
@@ -1954,8 +1965,8 @@ public:
       case LinxISA::FRET_RA:
       case LinxISA::FRET_STK: {
         if (hasRealInstrAfter(*MacroMI)) {
-          // Some late CFG cleanups may merge a standalone frame-macro block with
-          // its successor. Re-split instead of hard-failing.
+          // Some late CFG cleanups may merge a standalone frame-macro block
+          // with its successor. Re-split instead of hard-failing.
           MachineBasicBlock *ContBB = splitAfterInstr(*MBB, *MacroMI);
           MacroSplitWorklist.push_back(ContBB);
           MacroSplitWorklist.push_back(MBB);
@@ -2077,8 +2088,7 @@ public:
     }
 
     auto recordSources = [&](const MachineInstr &MI, TileQueueState &State,
-                             ArrayRef<unsigned> OperandNos,
-                             StringRef Context) {
+                             ArrayRef<unsigned> OperandNos, StringRef Context) {
       SmallVector<unsigned, 2> Codes;
       SmallVector<Register, 2> Consumed;
       for (unsigned OperandNo : OperandNos) {
@@ -2099,15 +2109,17 @@ public:
       case LinxISA::PSEUDO_TMA_TLOAD:
       case LinxISA::PSEUDO_TMA_TLOAD_ANY:
       case LinxISA::PSEUDO_TMA_TLOAD_DESC:
+      case LinxISA::PSEUDO_TMA_TLOAD_SHAPE:
         pushTileQueueValue(TRI, State, MI.getOperand(0).getReg());
         return;
       case LinxISA::PSEUDO_TMA_TSTORE:
       case LinxISA::PSEUDO_TMA_TSTORE_DESC:
+      case LinxISA::PSEUDO_TMA_TSTORE_SHAPE:
         recordSources(MI, State, {1}, "TMA.TSTORE");
         return;
       case LinxISA::PSEUDO_TMA_TMOV: {
-        const bool IsA2V = MI.getOperand(6).getImm() ==
-                           static_cast<int64_t>(TMovMode::A2V);
+        const bool IsA2V =
+            MI.getOperand(6).getImm() == static_cast<int64_t>(TMovMode::A2V);
         if (!IsA2V) {
           const Register Src = MI.getOperand(1).getReg();
           TileSourceCodes[&MI] = {
@@ -2145,14 +2157,18 @@ public:
         return;
       case LinxISA::PSEUDO_TEPL_UNARY:
       case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
+      case LinxISA::PSEUDO_TEPL_UNARY_SHAPE:
+      case LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE:
         recordSources(MI, State, {1}, "TEPL tile op");
         pushTileQueueValue(TRI, State, MI.getOperand(0).getReg());
         return;
       case LinxISA::PSEUDO_TEPL_BINARY:
+      case LinxISA::PSEUDO_TEPL_BINARY_SHAPE:
         recordSources(MI, State, {1, 2}, "TEPL.BINARY");
         pushTileQueueValue(TRI, State, MI.getOperand(0).getReg());
         return;
       case LinxISA::PSEUDO_TEPL_SPLAT:
+      case LinxISA::PSEUDO_TEPL_SPLAT_SHAPE:
         pushTileQueueValue(TRI, State, MI.getOperand(0).getReg());
         return;
       case LinxISA::PSEUDO_VPAR_TADD:
@@ -2190,8 +2206,8 @@ public:
     for (const MachineBasicBlock &MBB : MF) {
       for (const MachineInstr &MI : MBB) {
         if (isTilePseudoInstr(MI) && !TileQueueProcessed.lookup(&MBB))
-          report_fatal_error(
-              "Linx: tile queue order is not provable through unreachable or cyclic control flow");
+          report_fatal_error("Linx: tile queue order is not provable through "
+                             "unreachable or cyclic control flow");
       }
     }
 
@@ -2256,7 +2272,8 @@ public:
       constexpr unsigned CUBE_MAMULB_ACC = 2;
       constexpr unsigned CUBE_ACCCVT = 8;
 
-      auto emitDim = [&](MachineBasicBlock &DimMBB, MachineBasicBlock::iterator DimInsertPt,
+      auto emitDim = [&](MachineBasicBlock &DimMBB,
+                         MachineBasicBlock::iterator DimInsertPt,
                          unsigned LoopNest, int64_t Imm) {
         if (Imm >= 0 && Imm <= 255) {
           BuildMI(DimMBB, DimInsertPt, DL, TII.get(LinxISA::C_B_DIMI))
@@ -2265,8 +2282,8 @@ public:
           return;
         }
         const unsigned BDimOpc = (LoopNest == 0)   ? LinxISA::B_DIM_LB0
-                               : (LoopNest == 1) ? LinxISA::B_DIM_LB1
-                               :                  LinxISA::B_DIM_LB2;
+                                 : (LoopNest == 1) ? LinxISA::B_DIM_LB1
+                                                   : LinxISA::B_DIM_LB2;
         BuildMI(DimMBB, DimInsertPt, DL, TII.get(BDimOpc))
             .addReg(LinxISA::R0)
             .addImm(Imm);
@@ -2276,8 +2293,8 @@ public:
                             MachineBasicBlock::iterator DimInsertPt,
                             unsigned LoopNest, Register SrcReg) {
         const unsigned BDimOpc = (LoopNest == 0)   ? LinxISA::B_DIM_LB0
-                               : (LoopNest == 1) ? LinxISA::B_DIM_LB1
-                               :                  LinxISA::B_DIM_LB2;
+                                 : (LoopNest == 1) ? LinxISA::B_DIM_LB1
+                                                   : LinxISA::B_DIM_LB2;
         BuildMI(DimMBB, DimInsertPt, DL, TII.get(BDimOpc))
             .addReg(SrcReg)
             .addImm(0);
@@ -2306,26 +2323,26 @@ public:
         //   LB0/LB1 = 0, format=0 (Normal), RegSrc1/2=zero, RegDst=zero.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
-            .addImm(0);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
-            .addReg(LinxISA::R0) // RegDst (bring-up: unused)
-            .addReg(LinxISA::R0) // RegSrc0: stride bytes (default 0)
-            .addReg(Base)        // RegSrc1: base pointer
-            .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
+            .addReg(LinxISA::R0)  // RegDst (bring-up: unused)
+            .addReg(LinxISA::R0)  // RegSrc0: stride bytes (default 0)
+            .addReg(Base)         // RegSrc1: base pointer
+            .addReg(LinxISA::R0); // RegSrc2: aux/layout source (default 0)
 
-        // Canonical v0.4 contract: B.IOT is the canonical descriptor; encode the
-        // tile destination register in the first absent source slot (SrcTile1)
-        // and set S0V/S1V to indicate no tile inputs.
+        // Canonical v0.4 contract: B.IOT is the canonical descriptor; encode
+        // the tile destination register in the first absent source slot
+        // (SrcTile1) and set S0V/S1V to indicate no tile inputs.
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // DstTile (hand)
-            .addImm(0)      // S0R
-            .addImm(1)      // S0V (absent)
-            .addImm(0)      // S1R
-            .addImm(1)      // S1V (absent)
-            .addImm(0)      // SrcTile0
-            .addImm(DstID)  // SrcTile1 (dst tile reg id)
-            .addImm(Size)   // SizeCode (imm5)
+            .addImm(dstTileFieldFromRelRef(
+                tileRelRefFromId(DstID))) // DstTile (hand)
+            .addImm(0)                    // S0R
+            .addImm(1)                    // S0V (absent)
+            .addImm(0)                    // S1R
+            .addImm(1)                    // S1V (absent)
+            .addImm(0)                    // SrcTile0
+            .addImm(DstID)                // SrcTile1 (dst tile reg id)
+            .addImm(Size)                 // SizeCode (imm5)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2347,8 +2364,7 @@ public:
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
-            .addImm(0);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
             .addReg(LinxISA::R0)
@@ -2371,25 +2387,38 @@ public:
         break;
       }
 
-      case LinxISA::PSEUDO_TMA_TLOAD_DESC: {
+      case LinxISA::PSEUDO_TMA_TLOAD_DESC:
+      case LinxISA::PSEUDO_TMA_TLOAD_SHAPE: {
+        const bool IsShape =
+            PseudoMI->getOpcode() == LinxISA::PSEUDO_TMA_TLOAD_SHAPE;
         const Register Dst = PseudoMI->getOperand(0).getReg();
         const Register Base = PseudoMI->getOperand(1).getReg();
         const int64_t DType = PseudoMI->getOperand(2).getImm();
         const int64_t Layout = PseudoMI->getOperand(3).getImm();
-        const int64_t LB0 = PseudoMI->getOperand(4).getImm();
-        const int64_t LB1 = PseudoMI->getOperand(5).getImm();
-        const int64_t Size = PseudoMI->getOperand(6).getImm();
-        const Register StrideReg = PseudoMI->getOperand(7).getReg();
+        const int64_t LB0 = IsShape ? 0 : PseudoMI->getOperand(4).getImm();
+        const int64_t LB1 = IsShape ? 0 : PseudoMI->getOperand(5).getImm();
+        const Register LB0Reg =
+            IsShape ? PseudoMI->getOperand(4).getReg() : Register();
+        const Register LB1Reg =
+            IsShape ? PseudoMI->getOperand(5).getReg() : Register();
+        const Register LB2Reg =
+            IsShape ? PseudoMI->getOperand(6).getReg() : Register();
+        const int64_t Size = PseudoMI->getOperand(IsShape ? 7 : 6).getImm();
+        const Register StrideReg =
+            PseudoMI->getOperand(IsShape ? 8 : 7).getReg();
         if (DType < 0 || DType > 31)
           report_fatal_error("Linx: TMA.TLOAD dtype must fit u5");
         validateStrictTileSizeCode(Size, "TMA.TLOAD");
-        const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TMA.TLOAD");
-        const uint64_t Dim1 = requirePositiveDimImm(LB1, "lb1", "TMA.TLOAD");
-        validateTileByteBudget("TMA.TLOAD", Dim0, Dim1, /*dim2=*/1u,
-                               dtypeElementBitsForTileCheck(DType),
-                               static_cast<uint64_t>(Size));
+        if (!IsShape) {
+          const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TMA.TLOAD");
+          const uint64_t Dim1 = requirePositiveDimImm(LB1, "lb1", "TMA.TLOAD");
+          validateTileByteBudget("TMA.TLOAD", Dim0, Dim1, /*dim2=*/1u,
+                                 dtypeElementBitsForTileCheck(DType),
+                                 static_cast<uint64_t>(Size));
+        }
         if (!StrideReg)
-          report_fatal_error("Linx: TMA.TLOAD requires stride register binding");
+          report_fatal_error(
+              "Linx: TMA.TLOAD requires stride register binding");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID >= 16)
@@ -2398,8 +2427,14 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
             .addImm(DType)
             .addImm(TMA_TLOAD);
-        emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
-        emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        if (IsShape) {
+          emitDimReg(MBB, InsertPt, 0, LB0Reg);
+          emitDimReg(MBB, InsertPt, 1, LB1Reg);
+          emitDimReg(MBB, InsertPt, 2, LB2Reg);
+        } else {
+          emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
+          emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        }
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
@@ -2441,21 +2476,22 @@ public:
         //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOT.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG))
-            .addImm(0);
+        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
-            .addReg(LinxISA::R0) // RegDst: valid mask / flags (default 0)
-            .addReg(LinxISA::R0) // RegSrc0: stride bytes (default 0)
-            .addReg(Base)        // RegSrc1: base pointer
-            .addReg(LinxISA::R0);// RegSrc2: aux/layout source (default 0)
+            .addReg(LinxISA::R0)  // RegDst: valid mask / flags (default 0)
+            .addReg(LinxISA::R0)  // RegSrc0: stride bytes (default 0)
+            .addReg(Base)         // RegSrc1: base pointer
+            .addReg(LinxISA::R0); // RegSrc2: aux/layout source (default 0)
 
-        // Store: encode the source tile in SrcTile0 and mark it present (S0V=0).
+        // Store: encode the source tile in SrcTile0 and mark it present
+        // (S0V=0).
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(SrcID))) // destination hand
-            .addImm(SrcReuse ? 1 : 0) // S0R
-            .addImm(0)      // S0V (present)
-            .addImm(0)      // S1R
-            .addImm(1)      // S1V (absent)
+            .addImm(dstTileFieldFromRelRef(
+                tileRelRefFromId(SrcID))) // destination hand
+            .addImm(SrcReuse ? 1 : 0)     // S0R
+            .addImm(0)                    // S0V (present)
+            .addImm(0)                    // S1R
+            .addImm(1)                    // S1V (absent)
             .addImm(EncSrc) // SrcTile0 (architectural relative rank)
             .addImm(0)      // SrcTile1 (unused)
             .addImm(Size)   // SizeCode (imm5)
@@ -2466,25 +2502,38 @@ public:
         break;
       }
 
-      case LinxISA::PSEUDO_TMA_TSTORE_DESC: {
+      case LinxISA::PSEUDO_TMA_TSTORE_DESC:
+      case LinxISA::PSEUDO_TMA_TSTORE_SHAPE: {
+        const bool IsShape =
+            PseudoMI->getOpcode() == LinxISA::PSEUDO_TMA_TSTORE_SHAPE;
         const Register Base = PseudoMI->getOperand(0).getReg();
         const Register Src = PseudoMI->getOperand(1).getReg();
         const int64_t DType = PseudoMI->getOperand(2).getImm();
         const int64_t Layout = PseudoMI->getOperand(3).getImm();
-        const int64_t LB0 = PseudoMI->getOperand(4).getImm();
-        const int64_t LB1 = PseudoMI->getOperand(5).getImm();
-        const int64_t Size = PseudoMI->getOperand(6).getImm();
-        const Register StrideReg = PseudoMI->getOperand(7).getReg();
+        const int64_t LB0 = IsShape ? 0 : PseudoMI->getOperand(4).getImm();
+        const int64_t LB1 = IsShape ? 0 : PseudoMI->getOperand(5).getImm();
+        const Register LB0Reg =
+            IsShape ? PseudoMI->getOperand(4).getReg() : Register();
+        const Register LB1Reg =
+            IsShape ? PseudoMI->getOperand(5).getReg() : Register();
+        const Register LB2Reg =
+            IsShape ? PseudoMI->getOperand(6).getReg() : Register();
+        const int64_t Size = PseudoMI->getOperand(IsShape ? 7 : 6).getImm();
+        const Register StrideReg =
+            PseudoMI->getOperand(IsShape ? 8 : 7).getReg();
         if (DType < 0 || DType > 31)
           report_fatal_error("Linx: TMA.TSTORE dtype must fit u5");
         validateStrictTileSizeCode(Size, "TMA.TSTORE");
-        const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TMA.TSTORE");
-        const uint64_t Dim1 = requirePositiveDimImm(LB1, "lb1", "TMA.TSTORE");
-        validateTileByteBudget("TMA.TSTORE", Dim0, Dim1, /*dim2=*/1u,
-                               dtypeElementBitsForTileCheck(DType),
-                               static_cast<uint64_t>(Size));
+        if (!IsShape) {
+          const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TMA.TSTORE");
+          const uint64_t Dim1 = requirePositiveDimImm(LB1, "lb1", "TMA.TSTORE");
+          validateTileByteBudget("TMA.TSTORE", Dim0, Dim1, /*dim2=*/1u,
+                                 dtypeElementBitsForTileCheck(DType),
+                                 static_cast<uint64_t>(Size));
+        }
         if (!StrideReg)
-          report_fatal_error("Linx: TMA.TSTORE requires stride register binding");
+          report_fatal_error(
+              "Linx: TMA.TSTORE requires stride register binding");
         const unsigned SrcID = tileRegIdFromReg(TRI, Src);
         const unsigned EncSrc = TileSourceCodes.lookup(PseudoMI).front();
         const bool SrcReuse = !PseudoMI->getOperand(1).isKill();
@@ -2492,8 +2541,14 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
             .addImm(DType)
             .addImm(TMA_TSTORE);
-        emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
-        emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        if (IsShape) {
+          emitDimReg(MBB, InsertPt, 0, LB0Reg);
+          emitDimReg(MBB, InsertPt, 1, LB1Reg);
+          emitDimReg(MBB, InsertPt, 2, LB2Reg);
+        } else {
+          emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
+          emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        }
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
@@ -2522,8 +2577,10 @@ public:
         const Register Src = PseudoMI->getOperand(1).getReg();
 
         TileMeta Meta;
-        Meta.SizeCode = static_cast<uint8_t>(PseudoMI->getOperand(2).getImm() & 0x1f);
-        Meta.DataType = static_cast<uint8_t>(PseudoMI->getOperand(3).getImm() & 0x1f);
+        Meta.SizeCode =
+            static_cast<uint8_t>(PseudoMI->getOperand(2).getImm() & 0x1f);
+        Meta.DataType =
+            static_cast<uint8_t>(PseudoMI->getOperand(3).getImm() & 0x1f);
         Meta.Layout = PseudoMI->getOperand(4).getImm();
         Meta.HasLayout = (PseudoMI->getOperand(5).getImm() & 1) != 0;
         validateStrictTileSizeCode(Meta.SizeCode, "TMOV");
@@ -2607,12 +2664,11 @@ public:
         validateCubeDimImm(M, "m", "CUBE.MAMULB");
         validateCubeDimImm(N, "n", "CUBE.MAMULB");
         validateCubeDimImm(K, "k", "CUBE.MAMULB");
-        validateTileByteBudget("CUBE.MAMULB",
-                               requirePositiveDimImm(M, "m", "CUBE.MAMULB"),
-                               requirePositiveDimImm(N, "n", "CUBE.MAMULB"),
-                               requirePositiveDimImm(K, "k", "CUBE.MAMULB"),
-                               dtypeElementBitsForTileCheck(DType_I32),
-                               std::nullopt);
+        validateTileByteBudget(
+            "CUBE.MAMULB", requirePositiveDimImm(M, "m", "CUBE.MAMULB"),
+            requirePositiveDimImm(N, "n", "CUBE.MAMULB"),
+            requirePositiveDimImm(K, "k", "CUBE.MAMULB"),
+            dtypeElementBitsForTileCheck(DType_I32), std::nullopt);
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID < 16)
@@ -2636,14 +2692,14 @@ public:
         emitDim(MBB, InsertPt, /*LoopNest=*/2, K);
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(4)    // DstTile (acc)
+            .addImm(4)              // DstTile (acc)
             .addImm(ReuseA ? 1 : 0) // S0R
-            .addImm(0)    // S0V (present)
+            .addImm(0)              // S0V (present)
             .addImm(ReuseB ? 1 : 0) // S1R
-            .addImm(0)    // S1V (present)
-            .addImm(EncA) // SrcTile0 (architectural relative rank)
-            .addImm(EncB) // SrcTile1 (architectural relative rank)
-            .addImm(8)    // SizeCode (bring-up: 4KiB accumulator)
+            .addImm(0)              // S1V (present)
+            .addImm(EncA)           // SrcTile0 (architectural relative rank)
+            .addImm(EncB)           // SrcTile1 (architectural relative rank)
+            .addImm(8)              // SizeCode (bring-up: 4KiB accumulator)
             .addReg(SrcA, RegState::Implicit)
             .addReg(SrcB, RegState::Implicit);
 
@@ -2658,17 +2714,17 @@ public:
             .addImm(DType_I32)
             .addImm(CUBE_ACCCVT);
 
-        const unsigned DstKind =
-            dstTileFieldFromRelRef(tileRelRefFromId(Depth | (Group << 3) | 16u));
+        const unsigned DstKind = dstTileFieldFromRelRef(
+            tileRelRefFromId(Depth | (Group << 3) | 16u));
         BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
-            .addImm(0)       // S0R
-            .addImm(1)       // S0V (absent)
-            .addImm(0)       // S1R
-            .addImm(1)       // S1V (absent)
-            .addImm(0)       // SrcTile0 (unused)
+            .addImm(0)                          // S0R
+            .addImm(1)                          // S0V (absent)
+            .addImm(0)                          // S1R
+            .addImm(1)                          // S1V (absent)
+            .addImm(0)                          // SrcTile0 (unused)
             .addImm(16u | (Group << 3) | Depth) // SrcTile1 (dst tile reg id)
-            .addImm(8)       // SizeCode (bring-up: 4KiB)
+            .addImm(8)                          // SizeCode (bring-up: 4KiB)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2695,8 +2751,7 @@ public:
         validateCubeDimImm(N, "n", "CUBE.MAMULB.ACC");
         validateCubeDimImm(K, "k", "CUBE.MAMULB.ACC");
         validateTileByteBudget(
-            "CUBE.MAMULB.ACC",
-            requirePositiveDimImm(M, "m", "CUBE.MAMULB.ACC"),
+            "CUBE.MAMULB.ACC", requirePositiveDimImm(M, "m", "CUBE.MAMULB.ACC"),
             requirePositiveDimImm(N, "n", "CUBE.MAMULB.ACC"),
             requirePositiveDimImm(K, "k", "CUBE.MAMULB.ACC"),
             dtypeElementBitsForTileCheck(DType_I32), std::nullopt);
@@ -2723,14 +2778,14 @@ public:
         emitDim(MBB, InsertPt, /*LoopNest=*/2, K);
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(4)    // DstTile (acc)
+            .addImm(4)              // DstTile (acc)
             .addImm(ReuseA ? 1 : 0) // S0R
-            .addImm(0)    // S0V (present)
+            .addImm(0)              // S0V (present)
             .addImm(ReuseB ? 1 : 0) // S1R
-            .addImm(0)    // S1V (present)
-            .addImm(EncA) // SrcTile0 (architectural relative rank)
-            .addImm(EncB) // SrcTile1 (architectural relative rank)
-            .addImm(8)    // SizeCode (bring-up: 4KiB accumulator)
+            .addImm(0)              // S1V (present)
+            .addImm(EncA)           // SrcTile0 (architectural relative rank)
+            .addImm(EncB)           // SrcTile1 (architectural relative rank)
+            .addImm(8)              // SizeCode (bring-up: 4KiB accumulator)
             .addReg(SrcA, RegState::Implicit)
             .addReg(SrcB, RegState::Implicit)
             .addReg(Acc, RegState::Implicit);
@@ -2746,17 +2801,17 @@ public:
             .addImm(DType_I32)
             .addImm(CUBE_ACCCVT);
 
-        const unsigned DstKind =
-            dstTileFieldFromRelRef(tileRelRefFromId(Depth | (Group << 3) | 16u));
+        const unsigned DstKind = dstTileFieldFromRelRef(
+            tileRelRefFromId(Depth | (Group << 3) | 16u));
         BuildMI(*AccBB, AccBB->end(), DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
-            .addImm(0)       // S0R
-            .addImm(1)       // S0V (absent)
-            .addImm(0)       // S1R
-            .addImm(1)       // S1V (absent)
-            .addImm(0)       // SrcTile0 (unused)
+            .addImm(0)                          // S0R
+            .addImm(1)                          // S0V (absent)
+            .addImm(0)                          // S1R
+            .addImm(1)                          // S1V (absent)
+            .addImm(0)                          // SrcTile0 (unused)
             .addImm(16u | (Group << 3) | Depth) // SrcTile1 (dst tile reg id)
-            .addImm(8)       // SizeCode (bring-up: 4KiB)
+            .addImm(8)                          // SizeCode (bring-up: 4KiB)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2795,13 +2850,13 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(QArg0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
-            .addImm(0)       // S0R
-            .addImm(1)       // S0V (absent)
-            .addImm(0)       // S1R
-            .addImm(1)       // S1V (absent)
-            .addImm(0)       // SrcTile0 (unused)
-            .addImm(DstID)   // SrcTile1 (dst tile id)
-            .addImm(Size)    // SizeCode
+            .addImm(0)     // S0R
+            .addImm(1)     // S0V (absent)
+            .addImm(0)     // S1R
+            .addImm(1)     // S1V (absent)
+            .addImm(0)     // SrcTile0 (unused)
+            .addImm(DstID) // SrcTile1 (dst tile id)
+            .addImm(Size)  // SizeCode
             .addReg(Acc, RegState::Implicit)
             .addReg(Dst, RegState::Define | RegState::Implicit);
 
@@ -2813,48 +2868,78 @@ public:
       case LinxISA::PSEUDO_TEPL_UNARY:
       case LinxISA::PSEUDO_TEPL_BINARY:
       case LinxISA::PSEUDO_TEPL_BINARY_SCALAR:
-      case LinxISA::PSEUDO_TEPL_SPLAT: {
+      case LinxISA::PSEUDO_TEPL_SPLAT:
+      case LinxISA::PSEUDO_TEPL_UNARY_SHAPE:
+      case LinxISA::PSEUDO_TEPL_BINARY_SHAPE:
+      case LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE:
+      case LinxISA::PSEUDO_TEPL_SPLAT_SHAPE: {
         const unsigned Opc = PseudoMI->getOpcode();
-        const bool IsUnary = Opc == LinxISA::PSEUDO_TEPL_UNARY;
-        const bool IsBinary = Opc == LinxISA::PSEUDO_TEPL_BINARY;
-        const bool IsBinaryScalar = Opc == LinxISA::PSEUDO_TEPL_BINARY_SCALAR;
-        const bool IsSplat = Opc == LinxISA::PSEUDO_TEPL_SPLAT;
-        const char *Ctx = IsUnary
-                              ? "TEPL.UNARY"
-                              : (IsBinary ? "TEPL.BINARY"
-                                          : (IsBinaryScalar ? "TEPL.BINARY.SCALAR"
-                                                            : "TEPL.SPLAT"));
+        const bool IsShape = Opc == LinxISA::PSEUDO_TEPL_UNARY_SHAPE ||
+                             Opc == LinxISA::PSEUDO_TEPL_BINARY_SHAPE ||
+                             Opc == LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE ||
+                             Opc == LinxISA::PSEUDO_TEPL_SPLAT_SHAPE;
+        const bool IsUnary = Opc == LinxISA::PSEUDO_TEPL_UNARY ||
+                             Opc == LinxISA::PSEUDO_TEPL_UNARY_SHAPE;
+        const bool IsBinary = Opc == LinxISA::PSEUDO_TEPL_BINARY ||
+                              Opc == LinxISA::PSEUDO_TEPL_BINARY_SHAPE;
+        const bool IsBinaryScalar =
+            Opc == LinxISA::PSEUDO_TEPL_BINARY_SCALAR ||
+            Opc == LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE;
+        const bool IsSplat = Opc == LinxISA::PSEUDO_TEPL_SPLAT ||
+                             Opc == LinxISA::PSEUDO_TEPL_SPLAT_SHAPE;
+        const char *Ctx =
+            IsUnary ? "TEPL.UNARY"
+                    : (IsBinary ? "TEPL.BINARY"
+                                : (IsBinaryScalar ? "TEPL.BINARY.SCALAR"
+                                                  : "TEPL.SPLAT"));
 
         const Register Dst = PseudoMI->getOperand(0).getReg();
         const Register SrcA = (IsUnary || IsBinary || IsBinaryScalar)
                                   ? PseudoMI->getOperand(1).getReg()
                                   : Register();
-        const Register SrcB = IsBinary ? PseudoMI->getOperand(2).getReg() : Register();
-        const Register SrcS = IsBinaryScalar
-                                  ? PseudoMI->getOperand(2).getReg()
-                                  : (IsSplat ? PseudoMI->getOperand(1).getReg()
-                                             : Register());
+        const Register SrcB =
+            IsBinary ? PseudoMI->getOperand(2).getReg() : Register();
+        const Register SrcS =
+            IsBinaryScalar
+                ? PseudoMI->getOperand(2).getReg()
+                : (IsSplat ? PseudoMI->getOperand(1).getReg() : Register());
         const int64_t TileOpcode =
-            PseudoMI->getOperand(IsUnary ? 2 : (IsBinary ? 3 : (IsBinaryScalar ? 3 : 2)))
+            PseudoMI
+                ->getOperand(
+                    IsUnary ? 2 : (IsBinary ? 3 : (IsBinaryScalar ? 3 : 2)))
                 .getImm();
         const int64_t Size =
-            PseudoMI->getOperand(IsUnary ? 3 : (IsBinary ? 4 : (IsBinaryScalar ? 4 : 3)))
+            PseudoMI
+                ->getOperand(
+                    IsUnary ? 3 : (IsBinary ? 4 : (IsBinaryScalar ? 4 : 3)))
                 .getImm();
         const int64_t DType =
-            PseudoMI->getOperand(IsUnary ? 4 : (IsBinary ? 5 : (IsBinaryScalar ? 5 : 4)))
+            PseudoMI
+                ->getOperand(
+                    IsUnary ? 4 : (IsBinary ? 5 : (IsBinaryScalar ? 5 : 4)))
                 .getImm();
         const int64_t Mode =
-            IsBinaryScalar
-                ? PseudoMI->getOperand(6).getImm()
-                : (IsSplat ? PseudoMI->getOperand(5).getImm()
-                           : static_cast<int64_t>(TEPLMode::VV));
+            IsBinaryScalar ? PseudoMI->getOperand(6).getImm()
+                           : (IsSplat ? PseudoMI->getOperand(5).getImm()
+                                      : static_cast<int64_t>(TEPLMode::VV));
+        const unsigned ShapeBase =
+            IsUnary ? 5u : (IsBinary ? 6u : (IsBinaryScalar ? 7u : 6u));
+        const Register ValidColReg =
+            IsShape ? PseudoMI->getOperand(ShapeBase).getReg() : Register();
+        const Register ValidRowReg =
+            IsShape ? PseudoMI->getOperand(ShapeBase + 1u).getReg()
+                    : Register();
+        const Register PhysicalColReg =
+            IsShape ? PseudoMI->getOperand(ShapeBase + 2u).getReg()
+                    : Register();
 
         validateWhitelistedTEPLTileOpcode(TileOpcode, Ctx);
         validateStrictTileSizeCode(Size, Ctx);
         if (DType < 0 || DType > 31)
           report_fatal_error(Twine("Linx: ") + Ctx + " dtype must fit u5");
         if (Mode < 0 || Mode > 2)
-          report_fatal_error(Twine("Linx: ") + Ctx + " mode must be in range 0..2");
+          report_fatal_error(Twine("Linx: ") + Ctx +
+                             " mode must be in range 0..2");
         if (IsBinaryScalar && Mode != static_cast<int64_t>(TEPLMode::VS))
           report_fatal_error("Linx: TEPL.BINARY.SCALAR requires mode=1 (VS)");
         if (IsSplat && Mode != static_cast<int64_t>(TEPLMode::SV))
@@ -2875,26 +2960,34 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TEPL))
             .addImm(DType)
             .addImm(TileOpcode);
-        // Legacy TEPL builtins carry the tile byte size and dtype but not an
-        // explicit logical shape.  Canonical v0.57 TEPL reductions, expands,
-        // transpose, sort, gather, and scatter require B.DIM metadata, so
-        // materialize the full-tile profile used by the public PTO wrappers.
-        //
-        // Keep LB0 at 32 lanes when possible and derive LB1 from the active
-        // element count.  This yields 32x32 for the 4 KiB FP32/S32 profile and
-        // 32x128 for the 4 KiB S8/U8 profile.  A future shape-carrying
-        // intrinsic may override this compatibility profile explicitly.
-        const unsigned ElemBits = dtypeElementBitsForTileCheck(DType);
-        const uint64_t TileBytes = uint64_t{1} << (Size + 4);
-        const uint64_t TileElems =
-            ElemBits == 0 ? 0 : (TileBytes * 8u) / ElemBits;
-        uint64_t LB0 = (TileElems % 32u) == 0u ? 32u : 1u;
-        uint64_t LB1 = LB0 == 0 ? 0 : TileElems / LB0;
-        if (LB0 > 0 && LB0 <= 255 && LB1 > 0 && LB1 <= 255) {
-          emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
-          emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+        if (IsShape) {
+          emitDimReg(MBB, InsertPt, /*LoopNest=*/0, ValidColReg);
+          emitDimReg(MBB, InsertPt, /*LoopNest=*/1, ValidRowReg);
+          emitDimReg(MBB, InsertPt, /*LoopNest=*/2, PhysicalColReg);
         } else {
-          report_fatal_error("Linx: TEPL full-tile profile does not fit B.DIM");
+          // Shape-less LLVM TEPL intrinsics carry the tile byte size and dtype
+          // but not an explicit logical shape.  Canonical v0.57 TEPL
+          // reductions, expands, transpose, sort, gather, and scatter require
+          // B.DIM metadata, so materialize the full-tile profile used by the
+          // public PTO wrappers.
+          //
+          // Keep LB0 at 32 lanes when possible and derive LB1 from the active
+          // element count.  This yields 32x32 for the 4 KiB FP32/S32 profile
+          // and 32x128 for the 4 KiB S8/U8 profile.  A future shape-carrying
+          // intrinsic may override this compatibility profile explicitly.
+          const unsigned ElemBits = dtypeElementBitsForTileCheck(DType);
+          const uint64_t TileBytes = uint64_t{1} << (Size + 4);
+          const uint64_t TileElems =
+              ElemBits == 0 ? 0 : (TileBytes * 8u) / ElemBits;
+          uint64_t LB0 = (TileElems % 32u) == 0u ? 32u : 1u;
+          uint64_t LB1 = LB0 == 0 ? 0 : TileElems / LB0;
+          if (LB0 > 0 && LB0 <= 255 && LB1 > 0 && LB1 <= 255) {
+            emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
+            emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
+          } else {
+            report_fatal_error(
+                "Linx: TEPL full-tile profile does not fit B.DIM");
+          }
         }
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
         if (IsBinaryScalar || IsSplat) {
@@ -2910,15 +3003,16 @@ public:
         // One last-marked descriptor binds the input ranks and publishes the
         // output hand; a second source-less descriptor would publish a second
         // unwritten output.
-        auto Desc = BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-                        .addImm(dstTileFieldFromRelRef(DstRef)) // destination hand
-                        .addImm(ReuseA ? 1 : 0)                 // S0R
-                        .addImm(HasS0Tile ? 0 : 1)              // S0V
-                        .addImm(ReuseB ? 1 : 0)                 // S1R
-                        .addImm(HasS1Tile ? 0 : 1)              // S1V
-                        .addImm(EncA)                           // SrcTile0
-                        .addImm(EncB)                           // SrcTile1
-                        .addImm(Size);                          // SizeCode
+        auto Desc =
+            BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
+                .addImm(dstTileFieldFromRelRef(DstRef)) // destination hand
+                .addImm(ReuseA ? 1 : 0)                 // S0R
+                .addImm(HasS0Tile ? 0 : 1)              // S0V
+                .addImm(ReuseB ? 1 : 0)                 // S1R
+                .addImm(HasS1Tile ? 0 : 1)              // S1V
+                .addImm(EncA)                           // SrcTile0
+                .addImm(EncB)                           // SrcTile1
+                .addImm(Size);                          // SizeCode
         if (HasS0Tile)
           Desc.addReg(SrcA, RegState::Implicit);
         if (HasS1Tile)
@@ -2974,27 +3068,29 @@ public:
         }
         if (Bytes == 0 || (Bytes & 3u) != 0 || Bytes > 4096u ||
             (Bytes % 256u) != 0) {
-          report_fatal_error("Linx: VPAR tile binop requires 256B-aligned tile size <=4KB");
+          report_fatal_error(
+              "Linx: VPAR tile binop requires 256B-aligned tile size <=4KB");
         }
         const int64_t LB0 = 64;
         const int64_t LB1 = static_cast<int64_t>(Bytes / 256u);
 
-        MCSymbol *BodySym = IsAdd ? getOrCreateVTileAddBodySym()
-                                  : getOrCreateVTileSubBodySym();
+        MCSymbol *BodySym =
+            IsAdd ? getOrCreateVTileAddBodySym() : getOrCreateVTileSubBodySym();
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_VPAR)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_TEXT)).addSym(BodySym);
 
         // Bind TA/TB and TO in one canonical, last-marked descriptor.
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(DstID))) // destination hand
-            .addImm(ReuseA ? 1 : 0)        // S0R
-            .addImm(0)                     // S0V (present)
-            .addImm(ReuseB ? 1 : 0)        // S1R
-            .addImm(0)                     // S1V (present)
-            .addImm(EncA)                  // SrcTile0 (TA relative rank)
-            .addImm(EncB)                  // SrcTile1 (TB relative rank)
-            .addImm(Size)                  // SizeCode
+            .addImm(dstTileFieldFromRelRef(
+                tileRelRefFromId(DstID))) // destination hand
+            .addImm(ReuseA ? 1 : 0)       // S0R
+            .addImm(0)                    // S0V (present)
+            .addImm(ReuseB ? 1 : 0)       // S1R
+            .addImm(0)                    // S1V (present)
+            .addImm(EncA)                 // SrcTile0 (TA relative rank)
+            .addImm(EncB)                 // SrcTile1 (TB relative rank)
+            .addImm(Size)                 // SizeCode
             .addReg(SrcA, RegState::Implicit)
             .addReg(SrcB, RegState::Implicit)
             .addReg(Dst, RegState::Define | RegState::Implicit);
@@ -3017,8 +3113,8 @@ public:
         const int64_t VKind = PseudoMI->getOperand(0).getImm();
         const int64_t Dim0 = PseudoMI->getOperand(1).getImm();
         const int64_t Dim1Imm = DynDim1 ? 0 : PseudoMI->getOperand(2).getImm();
-        const Register Dim1Reg = DynDim1 ? PseudoMI->getOperand(2).getReg()
-                                         : Register();
+        const Register Dim1Reg =
+            DynDim1 ? PseudoMI->getOperand(2).getReg() : Register();
         const int64_t Dim2 = PseudoMI->getOperand(3).getImm();
         const int64_t AttrBits = PseudoMI->getOperand(4).getImm();
 
@@ -3036,14 +3132,14 @@ public:
         const Register Bind11 = PseudoMI->getOperand(16).getReg();
 
         const unsigned Mode = 0; // bring-up default
-        const unsigned BStartOpc =
-            (VKind == 0)   ? LinxISA::BSTART_MSEQ
-            : (VKind == 1) ? LinxISA::BSTART_MPAR
-            : (VKind == 2) ? LinxISA::BSTART_VSEQ
-            : (VKind == 3) ? LinxISA::BSTART_VPAR
-                           : 0;
+        const unsigned BStartOpc = (VKind == 0)   ? LinxISA::BSTART_MSEQ
+                                   : (VKind == 1) ? LinxISA::BSTART_MPAR
+                                   : (VKind == 2) ? LinxISA::BSTART_VSEQ
+                                   : (VKind == 3) ? LinxISA::BSTART_VPAR
+                                                  : 0;
         if (!BStartOpc)
-          report_fatal_error("Linx: vblock.launch vkind must be 0(MSEQ), 1(MPAR), 2(VSEQ), or 3(VPAR)");
+          report_fatal_error("Linx: vblock.launch vkind must be 0(MSEQ), "
+                             "1(MPAR), 2(VSEQ), or 3(VPAR)");
 
         BuildMI(MBB, InsertPt, DL, TII.get(BStartOpc)).addImm(Mode);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_TEXT))
@@ -3066,22 +3162,22 @@ public:
           if (ScratchBytes != 0) {
             auto SizeCode = tileBytesToSizeCode(ScratchBytes);
             if (!SizeCode) {
-              report_fatal_error(
-                  "Linx: linx-vblock-ts-bytes must be a power-of-two byte size in [16,4096]");
+              report_fatal_error("Linx: linx-vblock-ts-bytes must be a "
+                                 "power-of-two byte size in [16,4096]");
             }
             EmitLocalScratch = true;
             LocalScratchSizeCode = *SizeCode;
           }
         }
         if ((Attr & ~AttrAQRLMask) != 0u) {
-          report_fatal_error(
-              "Linx: vblock.launch only supports aq/rl B.CATR bits in canonical v0.57");
+          report_fatal_error("Linx: vblock.launch only supports aq/rl B.CATR "
+                             "bits in canonical v0.57");
         }
         if (Attr != 0u) {
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_CATR))
               .addImm(0)                    // trap
               .addImm(0)                    // DR
-              .addImm((Attr >> 18) & 0x1u) // aq
+              .addImm((Attr >> 18) & 0x1u)  // aq
               .addImm(0)                    // atom
               .addImm(0)                    // far
               .addImm((Attr >> 21) & 0x1u); // rl
@@ -3156,7 +3252,8 @@ public:
     // an unrecognized def.
     SmallVector<DenseMap<Register, int64_t>, 0> EntryConstRegs;
 
-    auto tryGetConstDef = [&](const MachineInstr &MI) -> std::optional<int64_t> {
+    auto tryGetConstDef =
+        [&](const MachineInstr &MI) -> std::optional<int64_t> {
       auto isFromZero = [&](unsigned OpNo) -> bool {
         if (OpNo >= MI.getNumOperands())
           return false;
@@ -3206,7 +3303,8 @@ public:
       // Intersect with remaining preds.
       for (auto PI = std::next(MBB.pred_begin()), PE = MBB.pred_end(); PI != PE;
            ++PI) {
-        const DenseMap<Register, int64_t> &POut = ExitConstRegs[(*PI)->getNumber()];
+        const DenseMap<Register, int64_t> &POut =
+            ExitConstRegs[(*PI)->getNumber()];
         SmallVector<Register, 16> ToErase;
         for (auto &KV : Out) {
           auto It = POut.find(KV.first);
@@ -3218,58 +3316,60 @@ public:
       }
     };
 
-	    auto transferBlock = [&](const MachineBasicBlock &MBB,
-	                             const DenseMap<Register, int64_t> &In,
-	                             DenseMap<Register, int64_t> &Out) -> void {
-	      Out = In;
-	      for (const MachineInstr &MI : MBB) {
-	        if (MI.isDebugInstr() || MI.isCFIInstruction() || isMarkerInstr(MI))
-	          continue;
-	        for (const MachineOperand &MO : MI.operands()) {
-	          if (!MO.isReg() || !MO.isDef() || MO.isImplicit())
-	            continue;
-	          Register Reg = MO.getReg();
-	          if (!Reg.isPhysical())
-	            continue;
-	          if (Reserved.test(Reg))
-	            continue;
-	          if (auto V = tryGetConstDef(MI)) {
-	            Out[Reg] = *V;
-	            continue;
-	          }
+    auto transferBlock = [&](const MachineBasicBlock &MBB,
+                             const DenseMap<Register, int64_t> &In,
+                             DenseMap<Register, int64_t> &Out) -> void {
+      Out = In;
+      for (const MachineInstr &MI : MBB) {
+        if (MI.isDebugInstr() || MI.isCFIInstruction() || isMarkerInstr(MI))
+          continue;
+        for (const MachineOperand &MO : MI.operands()) {
+          if (!MO.isReg() || !MO.isDef() || MO.isImplicit())
+            continue;
+          Register Reg = MO.getReg();
+          if (!Reg.isPhysical())
+            continue;
+          if (Reserved.test(Reg))
+            continue;
+          if (auto V = tryGetConstDef(MI)) {
+            Out[Reg] = *V;
+            continue;
+          }
 
-	          auto tryGetCopyConst = [&](const MachineInstr &MI) -> std::optional<int64_t> {
-	            const unsigned Opc = MI.getOpcode();
-	            const bool IsAddCopy = (Opc == LinxISA::ADDrr || Opc == LinxISA::ADDWrr);
-	            if (!IsAddCopy)
-	              return std::nullopt;
-	            if (MI.getNumOperands() < 3 || !MI.getOperand(1).isReg() ||
-	                !MI.getOperand(2).isReg())
-	              return std::nullopt;
-	            const Register A = MI.getOperand(1).getReg();
-	            const Register B = MI.getOperand(2).getReg();
-	            if (A == LinxISA::R0) {
-	              auto It = Out.find(B);
-	              if (It != Out.end())
-	                return It->second;
-	            }
-	            if (B == LinxISA::R0) {
-	              auto It = Out.find(A);
-	              if (It != Out.end())
-	                return It->second;
-	            }
-	            return std::nullopt;
-	          };
+          auto tryGetCopyConst =
+              [&](const MachineInstr &MI) -> std::optional<int64_t> {
+            const unsigned Opc = MI.getOpcode();
+            const bool IsAddCopy =
+                (Opc == LinxISA::ADDrr || Opc == LinxISA::ADDWrr);
+            if (!IsAddCopy)
+              return std::nullopt;
+            if (MI.getNumOperands() < 3 || !MI.getOperand(1).isReg() ||
+                !MI.getOperand(2).isReg())
+              return std::nullopt;
+            const Register A = MI.getOperand(1).getReg();
+            const Register B = MI.getOperand(2).getReg();
+            if (A == LinxISA::R0) {
+              auto It = Out.find(B);
+              if (It != Out.end())
+                return It->second;
+            }
+            if (B == LinxISA::R0) {
+              auto It = Out.find(A);
+              if (It != Out.end())
+                return It->second;
+            }
+            return std::nullopt;
+          };
 
-	          if (auto V = tryGetCopyConst(MI)) {
-	            Out[Reg] = *V;
-	            continue;
-	          }
+          if (auto V = tryGetCopyConst(MI)) {
+            Out[Reg] = *V;
+            continue;
+          }
 
-	          Out.erase(Reg);
-	        }
-	      }
-	    };
+          Out.erase(Reg);
+        }
+      }
+    };
 
     // Worklist solver.
     SmallVector<const MachineBasicBlock *, 64> Worklist;
@@ -3304,8 +3404,8 @@ public:
     }
 
     auto findSetcInsertPt = [&](MachineBasicBlock &MBB, MachineInstr &Anchor,
-                                Register LHS, Register RHS)
-        -> MachineBasicBlock::iterator {
+                                Register LHS,
+                                Register RHS) -> MachineBasicBlock::iterator {
       MachineInstr *InsertAfter = nullptr;
       for (MachineInstr &MI : MBB) {
         if (&MI == &Anchor)
@@ -3343,18 +3443,18 @@ public:
       // blocks in LinxISA: they already contain the required block markers and
       // micro-ops for stack/register management. Do not surround them with
       // BSTART/BSTOP or attempt to rewrite their control-flow.
-		      if (isStandaloneFrameMacroBlock(MBB)) {
-		        // If the pass runs twice, strip any stale explicit markers.
-		        for (auto It = MBB.begin(); It != MBB.end();) {
-		          if (isMarkerInstr(*It)) {
-		            It = MBB.erase(It);
-		            Changed = true;
-		            continue;
-		          }
-		          ++It;
-		        }
-		        continue;
-		      }
+      if (isStandaloneFrameMacroBlock(MBB)) {
+        // If the pass runs twice, strip any stale explicit markers.
+        for (auto It = MBB.begin(); It != MBB.end();) {
+          if (isMarkerInstr(*It)) {
+            It = MBB.erase(It);
+            Changed = true;
+            continue;
+          }
+          ++It;
+        }
+        continue;
+      }
 
       // Tile blocks (TAU) have their own named-TMA/BSTART.CUBE headers and
       // must not be wrapped by standard BSTART.STD or have T/U-hand queue
@@ -3387,488 +3487,496 @@ public:
         break;
       }
 
-			      auto isPhysRegLiveOutOfBlock = [&](Register Reg) -> bool {
-		        // Physical register live-in sets only track "use before def" within a
-		        // block, so a reg that is merely live-through a successor (not used
-	        // until later) may not appear as live-in to an immediate successor.
-	        // Conservatively walk successors and detect any reachable use of Reg
-	        // before it is redefined.
-	        SmallVector<const MachineBasicBlock *, 8> Worklist;
-	        SmallPtrSet<const MachineBasicBlock *, 16> Visited;
+      auto isPhysRegLiveOutOfBlock = [&](Register Reg) -> bool {
+        // Physical register live-in sets only track "use before def" within a
+        // block, so a reg that is merely live-through a successor (not used
+        // until later) may not appear as live-in to an immediate successor.
+        // Conservatively walk successors and detect any reachable use of Reg
+        // before it is redefined.
+        SmallVector<const MachineBasicBlock *, 8> Worklist;
+        SmallPtrSet<const MachineBasicBlock *, 16> Visited;
 
-	        for (const MachineBasicBlock *Succ : MBB.successors()) {
-	          if (Succ)
-	            Worklist.push_back(Succ);
-	        }
+        for (const MachineBasicBlock *Succ : MBB.successors()) {
+          if (Succ)
+            Worklist.push_back(Succ);
+        }
 
-	        while (!Worklist.empty()) {
-	          const MachineBasicBlock *Succ = Worklist.pop_back_val();
-	          if (!Visited.insert(Succ).second)
-	            continue;
+        while (!Worklist.empty()) {
+          const MachineBasicBlock *Succ = Worklist.pop_back_val();
+          if (!Visited.insert(Succ).second)
+            continue;
 
-	          // If the successor explicitly records Reg as live-in, we are done.
-	          if (Succ->isLiveIn(Reg))
-	            return true;
+          // If the successor explicitly records Reg as live-in, we are done.
+          if (Succ->isLiveIn(Reg))
+            return true;
 
-	          bool DefinedInSucc = false;
-	          for (const MachineInstr &MI : *Succ) {
-	            if (MI.isDebugInstr() || MI.isCFIInstruction() ||
-	                isMarkerInstr(MI))
-	              continue;
+          bool DefinedInSucc = false;
+          for (const MachineInstr &MI : *Succ) {
+            if (MI.isDebugInstr() || MI.isCFIInstruction() || isMarkerInstr(MI))
+              continue;
 
-	            if (MI.readsRegister(Reg, &TRI))
-	              return true;
+            if (MI.readsRegister(Reg, &TRI))
+              return true;
 
-	            if (MI.definesRegister(Reg, &TRI)) {
-	              DefinedInSucc = true;
-	              break;
-	            }
-	          }
+            if (MI.definesRegister(Reg, &TRI)) {
+              DefinedInSucc = true;
+              break;
+            }
+          }
 
-	          // No read and no def: Reg is live-through this successor, so keep
-	          // searching down the CFG.
-	          if (!DefinedInSucc) {
-	            for (const MachineBasicBlock *Succ2 : Succ->successors()) {
-	              if (Succ2)
-	                Worklist.push_back(Succ2);
-	            }
-	          }
-	        }
+          // No read and no def: Reg is live-through this successor, so keep
+          // searching down the CFG.
+          if (!DefinedInSucc) {
+            for (const MachineBasicBlock *Succ2 : Succ->successors()) {
+              if (Succ2)
+                Worklist.push_back(Succ2);
+            }
+          }
+        }
 
-		        return false;
-		      };
+        return false;
+      };
 
-	      auto hasSingleNonDbgUseInMBB =
-	          [&](Register Reg, const MachineInstr *UserMI,
-	              const MachineInstr *IgnoreMI) -> bool {
-	        // Cross-block users are not visible in the local MBB scan below.
-	        // Guard virtual registers up front so we never fold a producer that
-	        // still has uses in successor blocks.
-	        if (Reg.isVirtual() && !MRI.hasOneNonDBGUse(Reg))
-	          return false;
-	        // After regalloc, physical registers may also have cross-block users.
-	        // Be conservative: if the physreg is live-out of this block, don't
-	        // claim it has a single use based on the local scan.
-	        if (Reg.isPhysical() && isPhysRegLiveOutOfBlock(Reg))
-	          return false;
+      auto hasSingleNonDbgUseInMBB = [&](Register Reg,
+                                         const MachineInstr *UserMI,
+                                         const MachineInstr *IgnoreMI) -> bool {
+        // Cross-block users are not visible in the local MBB scan below.
+        // Guard virtual registers up front so we never fold a producer that
+        // still has uses in successor blocks.
+        if (Reg.isVirtual() && !MRI.hasOneNonDBGUse(Reg))
+          return false;
+        // After regalloc, physical registers may also have cross-block users.
+        // Be conservative: if the physreg is live-out of this block, don't
+        // claim it has a single use based on the local scan.
+        if (Reg.isPhysical() && isPhysRegLiveOutOfBlock(Reg))
+          return false;
 
-	        unsigned Count = 0;
-	        for (const MachineInstr &MI : MBB) {
-	          if (MI.isDebugInstr() || isMarkerInstr(MI))
-	            continue;
-	          if (&MI == IgnoreMI)
-	            continue;
-	          for (const MachineOperand &MO : MI.operands()) {
-	            if (!MO.isReg() || MO.isDef())
-	              continue;
-	            if (MO.getReg() != Reg)
-	              continue;
-	            ++Count;
-	            if (&MI != UserMI || Count > 1)
-	              return false;
-	          }
-	        }
-	        return Count == 1;
-	      };
+        unsigned Count = 0;
+        for (const MachineInstr &MI : MBB) {
+          if (MI.isDebugInstr() || isMarkerInstr(MI))
+            continue;
+          if (&MI == IgnoreMI)
+            continue;
+          for (const MachineOperand &MO : MI.operands()) {
+            if (!MO.isReg() || MO.isDef())
+              continue;
+            if (MO.getReg() != Reg)
+              continue;
+            ++Count;
+            if (&MI != UserMI || Count > 1)
+              return false;
+          }
+        }
+        return Count == 1;
+      };
 
-	      auto getPhysRegConstAtMBBEntry = [&](Register Reg) -> std::optional<int64_t> {
-	        if (!Reg || !Reg.isPhysical())
-	          return std::nullopt;
-	        auto &Map = EntryConstRegs[MBB.getNumber()];
-	        auto It = Map.find(Reg);
-	        if (It == Map.end())
-	          return std::nullopt;
-	        return It->second;
-	      };
+      auto getPhysRegConstAtMBBEntry =
+          [&](Register Reg) -> std::optional<int64_t> {
+        if (!Reg || !Reg.isPhysical())
+          return std::nullopt;
+        auto &Map = EntryConstRegs[MBB.getNumber()];
+        auto It = Map.find(Reg);
+        if (It == Map.end())
+          return std::nullopt;
+        return It->second;
+      };
 
-	      // Match a 32-bit zero-extend implemented as a shift pair:
-	      //   tmp1 = sll x, shamt
-	      //   tmp2 = srl tmp1, shamt
-	      // with shamt == 32 (constant). Returns the original (pre-zext) source.
-	      auto matchZextWByShiftPair =
-	          [&](MachineInstr &UseMI, Register ZextReg, Register &OrigSrc,
-	              MachineInstr *&SllMIOut, MachineInstr *&SrlMIOut) -> bool {
-	        OrigSrc = Register();
-	        SllMIOut = nullptr;
-	        SrlMIOut = nullptr;
-	        if (!ZextReg)
-	          return false;
+      // Match a 32-bit zero-extend implemented as a shift pair:
+      //   tmp1 = sll x, shamt
+      //   tmp2 = srl tmp1, shamt
+      // with shamt == 32 (constant). Returns the original (pre-zext) source.
+      auto matchZextWByShiftPair =
+          [&](MachineInstr &UseMI, Register ZextReg, Register &OrigSrc,
+              MachineInstr *&SllMIOut, MachineInstr *&SrlMIOut) -> bool {
+        OrigSrc = Register();
+        SllMIOut = nullptr;
+        SrlMIOut = nullptr;
+        if (!ZextReg)
+          return false;
 
-	        // Find defining SRLrr in this block.
-	        MachineInstr *SrlMI = nullptr;
-	        for (auto It = UseMI.getIterator(); It != MBB.begin();) {
-	          --It;
-	          MachineInstr &MI = *It;
-	          if (MI.isDebugInstr() || isMarkerInstr(MI))
-	            continue;
-	          if (!MI.definesRegister(ZextReg, &TRI))
-	            continue;
-	          if (MI.getOpcode() != LinxISA::SRLrr || MI.getNumOperands() < 3 ||
-	              !MI.getOperand(1).isReg() || !MI.getOperand(2).isReg())
-	            return false;
-	          SrlMI = &MI;
-	          break;
-	        }
-	        if (!SrlMI)
-	          return false;
+        // Find defining SRLrr in this block.
+        MachineInstr *SrlMI = nullptr;
+        for (auto It = UseMI.getIterator(); It != MBB.begin();) {
+          --It;
+          MachineInstr &MI = *It;
+          if (MI.isDebugInstr() || isMarkerInstr(MI))
+            continue;
+          if (!MI.definesRegister(ZextReg, &TRI))
+            continue;
+          if (MI.getOpcode() != LinxISA::SRLrr || MI.getNumOperands() < 3 ||
+              !MI.getOperand(1).isReg() || !MI.getOperand(2).isReg())
+            return false;
+          SrlMI = &MI;
+          break;
+        }
+        if (!SrlMI)
+          return false;
 
-	        const Register Tmp1 = SrlMI->getOperand(1).getReg();
-	        const Register ShAmtReg = SrlMI->getOperand(2).getReg();
-	        if (!Tmp1 || !ShAmtReg)
-	          return false;
+        const Register Tmp1 = SrlMI->getOperand(1).getReg();
+        const Register ShAmtReg = SrlMI->getOperand(2).getReg();
+        if (!Tmp1 || !ShAmtReg)
+          return false;
 
-	        // Resolve constant shift amount (local def in block; else function-constant).
-	        auto getConstShiftAmt = [&](MachineInstr &Anchor) -> std::optional<int64_t> {
-	          for (auto DI = Anchor.getIterator(); DI != MBB.begin();) {
-	            --DI;
-	            MachineInstr &DefMI = *DI;
-	            if (DefMI.isDebugInstr() || isMarkerInstr(DefMI))
-	              continue;
-	            if (!DefMI.definesRegister(ShAmtReg, &TRI))
-	              continue;
-	            if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(1).isReg() ||
-	                DefMI.getOperand(1).getReg() != LinxISA::R0 ||
-	                !DefMI.getOperand(2).isImm())
-	              break;
-	            switch (DefMI.getOpcode()) {
-	            case LinxISA::ADDIri:
-	            case LinxISA::ADDIWri:
-	              return DefMI.getOperand(2).getImm();
-	            default:
-	              break;
-	            }
-	            break;
-	          }
-	          if (ShAmtReg.isPhysical())
-	            return getPhysRegConstAtMBBEntry(ShAmtReg);
-	          return std::nullopt;
-	        };
+        // Resolve constant shift amount (local def in block; else
+        // function-constant).
+        auto getConstShiftAmt =
+            [&](MachineInstr &Anchor) -> std::optional<int64_t> {
+          for (auto DI = Anchor.getIterator(); DI != MBB.begin();) {
+            --DI;
+            MachineInstr &DefMI = *DI;
+            if (DefMI.isDebugInstr() || isMarkerInstr(DefMI))
+              continue;
+            if (!DefMI.definesRegister(ShAmtReg, &TRI))
+              continue;
+            if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(1).isReg() ||
+                DefMI.getOperand(1).getReg() != LinxISA::R0 ||
+                !DefMI.getOperand(2).isImm())
+              break;
+            switch (DefMI.getOpcode()) {
+            case LinxISA::ADDIri:
+            case LinxISA::ADDIWri:
+              return DefMI.getOperand(2).getImm();
+            default:
+              break;
+            }
+            break;
+          }
+          if (ShAmtReg.isPhysical())
+            return getPhysRegConstAtMBBEntry(ShAmtReg);
+          return std::nullopt;
+        };
 
-	        auto ShAmtC = getConstShiftAmt(*SrlMI);
-	        if (!ShAmtC || *ShAmtC != 32)
-	          return false;
+        auto ShAmtC = getConstShiftAmt(*SrlMI);
+        if (!ShAmtC || *ShAmtC != 32)
+          return false;
 
-	        // Find defining SLLrr of Tmp1.
-	        MachineInstr *SllMI = nullptr;
-	        for (auto It = SrlMI->getIterator(); It != MBB.begin();) {
-	          --It;
-	          MachineInstr &MI = *It;
-	          if (MI.isDebugInstr() || isMarkerInstr(MI))
-	            continue;
-	          if (!MI.definesRegister(Tmp1, &TRI))
-	            continue;
-	          if (MI.getOpcode() != LinxISA::SLLrr || MI.getNumOperands() < 3 ||
-	              !MI.getOperand(1).isReg() || !MI.getOperand(2).isReg())
-	            return false;
-	          if (MI.getOperand(2).getReg() != ShAmtReg)
-	            return false;
-	          SllMI = &MI;
-	          break;
-	        }
-	        if (!SllMI)
-	          return false;
+        // Find defining SLLrr of Tmp1.
+        MachineInstr *SllMI = nullptr;
+        for (auto It = SrlMI->getIterator(); It != MBB.begin();) {
+          --It;
+          MachineInstr &MI = *It;
+          if (MI.isDebugInstr() || isMarkerInstr(MI))
+            continue;
+          if (!MI.definesRegister(Tmp1, &TRI))
+            continue;
+          if (MI.getOpcode() != LinxISA::SLLrr || MI.getNumOperands() < 3 ||
+              !MI.getOperand(1).isReg() || !MI.getOperand(2).isReg())
+            return false;
+          if (MI.getOperand(2).getReg() != ShAmtReg)
+            return false;
+          SllMI = &MI;
+          break;
+        }
+        if (!SllMI)
+          return false;
 
-	        const Register Src = SllMI->getOperand(1).getReg();
-	        if (!Src)
-	          return false;
+        const Register Src = SllMI->getOperand(1).getReg();
+        if (!Src)
+          return false;
 
-	        if (!hasSingleNonDbgUseInMBB(Tmp1, SrlMI, SllMI))
-	          return false;
-	        if (!hasSingleNonDbgUseInMBB(ZextReg, &UseMI, SrlMI))
-	          return false;
-	        if ((Tmp1.isPhysical() && isPhysRegLiveOutOfBlock(Tmp1)) ||
-	            (ZextReg.isPhysical() && isPhysRegLiveOutOfBlock(ZextReg)))
-	          return false;
+        if (!hasSingleNonDbgUseInMBB(Tmp1, SrlMI, SllMI))
+          return false;
+        if (!hasSingleNonDbgUseInMBB(ZextReg, &UseMI, SrlMI))
+          return false;
+        if ((Tmp1.isPhysical() && isPhysRegLiveOutOfBlock(Tmp1)) ||
+            (ZextReg.isPhysical() && isPhysRegLiveOutOfBlock(ZextReg)))
+          return false;
 
-	        OrigSrc = Src;
-	        SllMIOut = SllMI;
-	        SrlMIOut = SrlMI;
-	        return true;
-	      };
+        OrigSrc = Src;
+        SllMIOut = SllMI;
+        SrlMIOut = SrlMI;
+        return true;
+      };
 
-	      // Pre-blockify peepholes (run before inserting block markers and T/U
-	      // remapping).
-	      //
-	      // Fold `and/or` feeding a nonzero compare into CMP.AND/CMP.OR:
-	      //   tmp = and/or x, y
-	      //   tmp2 = addw tmp, zero        (optional)
-	      //   dst = cmp.nei tmp2, 0
-	      // =>
-	      //   dst = cmp.and/or x, y
-	      //
-		      // and similarly for immediate ANDI/ORI.
-		      for (auto It = MBB.begin(); It != MBB.end();) {
-		        MachineInstr &LogicMI = *It;
-	        if (LogicMI.isDebugInstr() || isMarkerInstr(LogicMI)) {
-	          ++It;
-	          continue;
-	        }
+      // Pre-blockify peepholes (run before inserting block markers and T/U
+      // remapping).
+      //
+      // Fold `and/or` feeding a nonzero compare into CMP.AND/CMP.OR:
+      //   tmp = and/or x, y
+      //   tmp2 = addw tmp, zero        (optional)
+      //   dst = cmp.nei tmp2, 0
+      // =>
+      //   dst = cmp.and/or x, y
+      //
+      // and similarly for immediate ANDI/ORI.
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &LogicMI = *It;
+        if (LogicMI.isDebugInstr() || isMarkerInstr(LogicMI)) {
+          ++It;
+          continue;
+        }
 
-	        const unsigned LogicOpc = LogicMI.getOpcode();
-	        const bool IsAnd =
-	            (LogicOpc == LinxISA::ANDrr || LogicOpc == LinxISA::ANDWrr ||
-	             LogicOpc == LinxISA::ANDIri || LogicOpc == LinxISA::ANDIWri ||
-	             LogicOpc == LinxISA::HLANDIri || LogicOpc == LinxISA::HLANDIWri);
-	        const bool IsOr =
-	            (LogicOpc == LinxISA::ORrr || LogicOpc == LinxISA::ORWrr ||
-	             LogicOpc == LinxISA::ORIri || LogicOpc == LinxISA::ORIWri ||
-	             LogicOpc == LinxISA::HLORIri || LogicOpc == LinxISA::HLORIWri);
-	        if (!IsAnd && !IsOr) {
-	          ++It;
-	          continue;
-	        }
-	        if (LogicMI.getNumOperands() < 3 || !LogicMI.getOperand(0).isReg() ||
-	            !LogicMI.getOperand(0).isDef()) {
-	          ++It;
-	          continue;
-	        }
+        const unsigned LogicOpc = LogicMI.getOpcode();
+        const bool IsAnd =
+            (LogicOpc == LinxISA::ANDrr || LogicOpc == LinxISA::ANDWrr ||
+             LogicOpc == LinxISA::ANDIri || LogicOpc == LinxISA::ANDIWri ||
+             LogicOpc == LinxISA::HLANDIri || LogicOpc == LinxISA::HLANDIWri);
+        const bool IsOr =
+            (LogicOpc == LinxISA::ORrr || LogicOpc == LinxISA::ORWrr ||
+             LogicOpc == LinxISA::ORIri || LogicOpc == LinxISA::ORIWri ||
+             LogicOpc == LinxISA::HLORIri || LogicOpc == LinxISA::HLORIWri);
+        if (!IsAnd && !IsOr) {
+          ++It;
+          continue;
+        }
+        if (LogicMI.getNumOperands() < 3 || !LogicMI.getOperand(0).isReg() ||
+            !LogicMI.getOperand(0).isDef()) {
+          ++It;
+          continue;
+        }
 
-	        const Register Tmp = LogicMI.getOperand(0).getReg();
-	        if (!Tmp || !Tmp.isPhysical()) {
-	          ++It;
-	          continue;
-	        }
+        const Register Tmp = LogicMI.getOperand(0).getReg();
+        if (!Tmp || !Tmp.isPhysical()) {
+          ++It;
+          continue;
+        }
 
-	        auto nextNonMarker = [&](MachineBasicBlock::iterator Pos)
-	            -> MachineBasicBlock::iterator {
-	          auto NI = Pos;
-	          while (NI != MBB.end() && (NI->isDebugInstr() || isMarkerInstr(*NI)))
-	            ++NI;
-	          return NI;
-	        };
+        auto nextNonMarker = [&](MachineBasicBlock::iterator Pos)
+            -> MachineBasicBlock::iterator {
+          auto NI = Pos;
+          while (NI != MBB.end() && (NI->isDebugInstr() || isMarkerInstr(*NI)))
+            ++NI;
+          return NI;
+        };
 
-	        MachineInstr *CopyMI = nullptr;
-	        Register CmpSrc = Tmp;
-	        bool InPlaceCopy = false;
+        MachineInstr *CopyMI = nullptr;
+        Register CmpSrc = Tmp;
+        bool InPlaceCopy = false;
 
-	        auto NI = nextNonMarker(std::next(It));
-	        if (NI == MBB.end()) {
-	          ++It;
-	          continue;
-	        }
+        auto NI = nextNonMarker(std::next(It));
+        if (NI == MBB.end()) {
+          ++It;
+          continue;
+        }
 
-	        if (NI->getOpcode() == LinxISA::ADDWrr && NI->getNumOperands() >= 3 &&
-	            NI->getOperand(0).isReg() && NI->getOperand(0).isDef() &&
-	            NI->getOperand(1).isReg() && NI->getOperand(2).isReg()) {
-	          const Register CDst = NI->getOperand(0).getReg();
-	          const Register A = NI->getOperand(1).getReg();
-	          const Register B = NI->getOperand(2).getReg();
-	          if (CDst && CDst.isPhysical() &&
-	              ((A == Tmp && B == LinxISA::R0) ||
-	               (B == Tmp && A == LinxISA::R0))) {
-	            CopyMI = &*NI;
-	            InPlaceCopy = (CDst == Tmp);
-	            if (!InPlaceCopy)
-	              CmpSrc = CDst;
-	            NI = nextNonMarker(std::next(NI));
-	            if (NI == MBB.end()) {
-	              ++It;
-	              continue;
-	            }
-	          }
-	        }
+        if (NI->getOpcode() == LinxISA::ADDWrr && NI->getNumOperands() >= 3 &&
+            NI->getOperand(0).isReg() && NI->getOperand(0).isDef() &&
+            NI->getOperand(1).isReg() && NI->getOperand(2).isReg()) {
+          const Register CDst = NI->getOperand(0).getReg();
+          const Register A = NI->getOperand(1).getReg();
+          const Register B = NI->getOperand(2).getReg();
+          if (CDst && CDst.isPhysical() &&
+              ((A == Tmp && B == LinxISA::R0) ||
+               (B == Tmp && A == LinxISA::R0))) {
+            CopyMI = &*NI;
+            InPlaceCopy = (CDst == Tmp);
+            if (!InPlaceCopy)
+              CmpSrc = CDst;
+            NI = nextNonMarker(std::next(NI));
+            if (NI == MBB.end()) {
+              ++It;
+              continue;
+            }
+          }
+        }
 
-	        MachineInstr &CmpMI = *NI;
-	        if (CmpMI.getOpcode() != LinxISA::CMPNEI || CmpMI.getNumOperands() < 3 ||
-	            !CmpMI.getOperand(1).isReg() || CmpMI.getOperand(1).getReg() != CmpSrc ||
-	            !CmpMI.getOperand(2).isImm() || CmpMI.getOperand(2).getImm() != 0) {
-	          ++It;
-	          continue;
-	        }
+        MachineInstr &CmpMI = *NI;
+        if (CmpMI.getOpcode() != LinxISA::CMPNEI ||
+            CmpMI.getNumOperands() < 3 || !CmpMI.getOperand(1).isReg() ||
+            CmpMI.getOperand(1).getReg() != CmpSrc ||
+            !CmpMI.getOperand(2).isImm() || CmpMI.getOperand(2).getImm() != 0) {
+          ++It;
+          continue;
+        }
 
-	        auto onlyUsedBy = [&](Register Reg, const MachineInstr *MI1,
-	                              const MachineInstr *MI2,
-	                              const MachineInstr *IgnoreMI) -> bool {
-	          for (const MachineInstr &MI : MBB) {
-	            if (MI.isDebugInstr() || isMarkerInstr(MI))
-	              continue;
-	            if (&MI == IgnoreMI)
-	              continue;
-	            for (const MachineOperand &MO : MI.operands()) {
-	              if (!MO.isReg() || MO.isImplicit() || MO.isDef())
-	                continue;
-	              if (MO.getReg() != Reg)
-	                continue;
-	              if (&MI != MI1 && &MI != MI2)
-	                return false;
-	            }
-	          }
-	          return true;
-	        };
+        auto onlyUsedBy = [&](Register Reg, const MachineInstr *MI1,
+                              const MachineInstr *MI2,
+                              const MachineInstr *IgnoreMI) -> bool {
+          for (const MachineInstr &MI : MBB) {
+            if (MI.isDebugInstr() || isMarkerInstr(MI))
+              continue;
+            if (&MI == IgnoreMI)
+              continue;
+            for (const MachineOperand &MO : MI.operands()) {
+              if (!MO.isReg() || MO.isImplicit() || MO.isDef())
+                continue;
+              if (MO.getReg() != Reg)
+                continue;
+              if (&MI != MI1 && &MI != MI2)
+                return false;
+            }
+          }
+          return true;
+        };
 
-	        if (CopyMI && InPlaceCopy) {
-	          // tmp is used by both the in-place ADDW and the compare.
-	          if (!onlyUsedBy(Tmp, CopyMI, &CmpMI, &LogicMI)) {
-	            ++It;
-	            continue;
-	          }
-	        } else {
-	          if (!hasSingleNonDbgUseInMBB(CmpSrc, &CmpMI,
-	                                       CopyMI ? CopyMI : &LogicMI)) {
-	            ++It;
-	            continue;
-	          }
-	          if (!hasSingleNonDbgUseInMBB(Tmp, CopyMI ? CopyMI : &CmpMI, &LogicMI)) {
-	            ++It;
-	            continue;
-	          }
-	        }
+        if (CopyMI && InPlaceCopy) {
+          // tmp is used by both the in-place ADDW and the compare.
+          if (!onlyUsedBy(Tmp, CopyMI, &CmpMI, &LogicMI)) {
+            ++It;
+            continue;
+          }
+        } else {
+          if (!hasSingleNonDbgUseInMBB(CmpSrc, &CmpMI,
+                                       CopyMI ? CopyMI : &LogicMI)) {
+            ++It;
+            continue;
+          }
+          if (!hasSingleNonDbgUseInMBB(Tmp, CopyMI ? CopyMI : &CmpMI,
+                                       &LogicMI)) {
+            ++It;
+            continue;
+          }
+        }
 
-	        const Register Dst = CmpMI.getOperand(0).getReg();
-	        unsigned NewOpc = 0;
-	        if (LogicOpc == LinxISA::ANDrr || LogicOpc == LinxISA::ANDWrr)
-	          NewOpc = LinxISA::CMPAND;
-	        else if (LogicOpc == LinxISA::ORrr || LogicOpc == LinxISA::ORWrr)
-	          NewOpc = LinxISA::CMPOR;
-	        else if (LogicOpc == LinxISA::ANDIri || LogicOpc == LinxISA::ANDIWri)
-	          NewOpc = LinxISA::CMPANDI;
-	        else if (LogicOpc == LinxISA::ORIri || LogicOpc == LinxISA::ORIWri)
-	          NewOpc = LinxISA::CMPORI;
-	        else if (LogicOpc == LinxISA::HLANDIri || LogicOpc == LinxISA::HLANDIWri)
-	          NewOpc = LinxISA::HLCMPANDI;
-	        else if (LogicOpc == LinxISA::HLORIri || LogicOpc == LinxISA::HLORIWri)
-	          NewOpc = LinxISA::HLCMPORI;
-	        else {
-	          ++It;
-	          continue;
-	        }
+        const Register Dst = CmpMI.getOperand(0).getReg();
+        unsigned NewOpc = 0;
+        if (LogicOpc == LinxISA::ANDrr || LogicOpc == LinxISA::ANDWrr)
+          NewOpc = LinxISA::CMPAND;
+        else if (LogicOpc == LinxISA::ORrr || LogicOpc == LinxISA::ORWrr)
+          NewOpc = LinxISA::CMPOR;
+        else if (LogicOpc == LinxISA::ANDIri || LogicOpc == LinxISA::ANDIWri)
+          NewOpc = LinxISA::CMPANDI;
+        else if (LogicOpc == LinxISA::ORIri || LogicOpc == LinxISA::ORIWri)
+          NewOpc = LinxISA::CMPORI;
+        else if (LogicOpc == LinxISA::HLANDIri ||
+                 LogicOpc == LinxISA::HLANDIWri)
+          NewOpc = LinxISA::HLCMPANDI;
+        else if (LogicOpc == LinxISA::HLORIri || LogicOpc == LinxISA::HLORIWri)
+          NewOpc = LinxISA::HLCMPORI;
+        else {
+          ++It;
+          continue;
+        }
 
-	        if (NewOpc == LinxISA::CMPAND || NewOpc == LinxISA::CMPOR) {
-	          BuildMI(MBB, CmpMI.getIterator(), CmpMI.getDebugLoc(), TII.get(NewOpc), Dst)
-	              .addReg(LogicMI.getOperand(1).getReg())
-	              .addReg(LogicMI.getOperand(2).getReg());
-	        } else {
-	          if (!LogicMI.getOperand(2).isImm()) {
-	            ++It;
-	            continue;
-	          }
-	          BuildMI(MBB, CmpMI.getIterator(), CmpMI.getDebugLoc(), TII.get(NewOpc), Dst)
-	              .addReg(LogicMI.getOperand(1).getReg())
-	              .addImm(LogicMI.getOperand(2).getImm());
-	        }
+        if (NewOpc == LinxISA::CMPAND || NewOpc == LinxISA::CMPOR) {
+          BuildMI(MBB, CmpMI.getIterator(), CmpMI.getDebugLoc(),
+                  TII.get(NewOpc), Dst)
+              .addReg(LogicMI.getOperand(1).getReg())
+              .addReg(LogicMI.getOperand(2).getReg());
+        } else {
+          if (!LogicMI.getOperand(2).isImm()) {
+            ++It;
+            continue;
+          }
+          BuildMI(MBB, CmpMI.getIterator(), CmpMI.getDebugLoc(),
+                  TII.get(NewOpc), Dst)
+              .addReg(LogicMI.getOperand(1).getReg())
+              .addImm(LogicMI.getOperand(2).getImm());
+        }
 
-	        CmpMI.eraseFromParent();
-	        if (CopyMI)
-	          CopyMI->eraseFromParent();
-	        LogicMI.eraseFromParent();
-		        Changed = true;
-		        It = MBB.begin();
-		      }
+        CmpMI.eraseFromParent();
+        if (CopyMI)
+          CopyMI->eraseFromParent();
+        LogicMI.eraseFromParent();
+        Changed = true;
+        It = MBB.begin();
+      }
 
-		      // Pre-blockify peephole: fold a local `sext.w` legalization feeding a
-		      // compressed commit condition into a single 32-bit SETC with a SrcR
-		      // modifier. This reduces dynamic instruction count while keeping code
-		      // size roughly flat (16b+16b -> 32b).
-		      //
-		      // Pattern (common in Linux):
-		      //   tmp = addw src, zero    ; sext.w(src)
-		      //   c.setc.{eq,ne} tmp, zero
-		      // =>
-		      //   setc.{eq,ne} zero, src.sw
-		      for (auto It = MBB.begin(); It != MBB.end();) {
-		        MachineInstr &SetcMI = *It;
-		        if (SetcMI.isDebugInstr() || isMarkerInstr(SetcMI)) {
-		          ++It;
-		          continue;
-		        }
-		        const unsigned Opc = SetcMI.getOpcode();
-			        if ((Opc != LinxISA::CSETC_EQ && Opc != LinxISA::CSETC_NE) ||
-			            SetcMI.getNumOperands() < 2 || !SetcMI.getOperand(0).isReg() ||
-			            !SetcMI.getOperand(1).isReg()) {
-			          ++It;
-			          continue;
-			        }
-			        if (!linxEnableSetcSrcRTypeFlags()) {
-			          ++It;
-			          continue;
-			        }
+      // Pre-blockify peephole: fold a local `sext.w` legalization feeding a
+      // compressed commit condition into a single 32-bit SETC with a SrcR
+      // modifier. This reduces dynamic instruction count while keeping code
+      // size roughly flat (16b+16b -> 32b).
+      //
+      // Pattern (common in Linux):
+      //   tmp = addw src, zero    ; sext.w(src)
+      //   c.setc.{eq,ne} tmp, zero
+      // =>
+      //   setc.{eq,ne} zero, src.sw
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &SetcMI = *It;
+        if (SetcMI.isDebugInstr() || isMarkerInstr(SetcMI)) {
+          ++It;
+          continue;
+        }
+        const unsigned Opc = SetcMI.getOpcode();
+        if ((Opc != LinxISA::CSETC_EQ && Opc != LinxISA::CSETC_NE) ||
+            SetcMI.getNumOperands() < 2 || !SetcMI.getOperand(0).isReg() ||
+            !SetcMI.getOperand(1).isReg()) {
+          ++It;
+          continue;
+        }
+        if (!linxEnableSetcSrcRTypeFlags()) {
+          ++It;
+          continue;
+        }
 
-		        const Register A = SetcMI.getOperand(0).getReg();
-		        const Register B = SetcMI.getOperand(1).getReg();
-		        const bool AIsZero = (A == LinxISA::R0);
-		        const bool BIsZero = (B == LinxISA::R0);
-		        if (AIsZero == BIsZero) { // require exactly one side is zero
-		          ++It;
-		          continue;
-		        }
+        const Register A = SetcMI.getOperand(0).getReg();
+        const Register B = SetcMI.getOperand(1).getReg();
+        const bool AIsZero = (A == LinxISA::R0);
+        const bool BIsZero = (B == LinxISA::R0);
+        if (AIsZero == BIsZero) { // require exactly one side is zero
+          ++It;
+          continue;
+        }
 
-		        const Register SextReg = AIsZero ? B : A;
+        const Register SextReg = AIsZero ? B : A;
 
-		        auto matchSextWByAddwZero =
-		            [&](Register Reg, Register &OrigSrc,
-		                MachineInstr *&DefMIOut) -> bool {
-		          OrigSrc = Register();
-		          DefMIOut = nullptr;
-		          if (!Reg)
-		            return false;
+        auto matchSextWByAddwZero = [&](Register Reg, Register &OrigSrc,
+                                        MachineInstr *&DefMIOut) -> bool {
+          OrigSrc = Register();
+          DefMIOut = nullptr;
+          if (!Reg)
+            return false;
 
-		          // Find defining ADDWrr in this block.
-		          MachineInstr *DefMI = nullptr;
-		          for (auto DI = SetcMI.getIterator(); DI != MBB.begin();) {
-		            --DI;
-		            MachineInstr &MI = *DI;
-		            if (MI.isDebugInstr() || isMarkerInstr(MI))
-		              continue;
-		            if (!MI.definesRegister(Reg, &TRI))
-		              continue;
-		            DefMI = &MI;
-		            break;
-		          }
-		          if (!DefMI)
-		            return false;
-		          if (DefMI->getOpcode() != LinxISA::ADDWrr ||
-		              DefMI->getNumOperands() < 3 || !DefMI->getOperand(1).isReg() ||
-		              !DefMI->getOperand(2).isReg())
-		            return false;
+          // Find defining ADDWrr in this block.
+          MachineInstr *DefMI = nullptr;
+          for (auto DI = SetcMI.getIterator(); DI != MBB.begin();) {
+            --DI;
+            MachineInstr &MI = *DI;
+            if (MI.isDebugInstr() || isMarkerInstr(MI))
+              continue;
+            if (!MI.definesRegister(Reg, &TRI))
+              continue;
+            DefMI = &MI;
+            break;
+          }
+          if (!DefMI)
+            return false;
+          if (DefMI->getOpcode() != LinxISA::ADDWrr ||
+              DefMI->getNumOperands() < 3 || !DefMI->getOperand(1).isReg() ||
+              !DefMI->getOperand(2).isReg())
+            return false;
 
-		          const Register X = DefMI->getOperand(1).getReg();
-		          const Register Y = DefMI->getOperand(2).getReg();
-		          if (X == LinxISA::R0 && Y != LinxISA::R0)
-		            OrigSrc = Y;
-		          else if (Y == LinxISA::R0 && X != LinxISA::R0)
-		            OrigSrc = X;
-		          else
-		            return false;
+          const Register X = DefMI->getOperand(1).getReg();
+          const Register Y = DefMI->getOperand(2).getReg();
+          if (X == LinxISA::R0 && Y != LinxISA::R0)
+            OrigSrc = Y;
+          else if (Y == LinxISA::R0 && X != LinxISA::R0)
+            OrigSrc = X;
+          else
+            return false;
 
-		          if (!hasSingleNonDbgUseInMBB(Reg, &SetcMI, DefMI))
-		            return false;
-		          if (Reg.isPhysical() && isPhysRegLiveOutOfBlock(Reg))
-		            return false;
+          if (!hasSingleNonDbgUseInMBB(Reg, &SetcMI, DefMI))
+            return false;
+          if (Reg.isPhysical() && isPhysRegLiveOutOfBlock(Reg))
+            return false;
 
-		          DefMIOut = DefMI;
-		          return true;
-		        };
+          DefMIOut = DefMI;
+          return true;
+        };
 
-		        Register OrigSrc = Register();
-		        MachineInstr *AddwMI = nullptr;
-		        if (!matchSextWByAddwZero(SextReg, OrigSrc, AddwMI)) {
-		          ++It;
-		          continue;
-		        }
+        Register OrigSrc = Register();
+        MachineInstr *AddwMI = nullptr;
+        if (!matchSextWByAddwZero(SextReg, OrigSrc, AddwMI)) {
+          ++It;
+          continue;
+        }
 
-		        const unsigned NewSetcOpc =
-		            (Opc == LinxISA::CSETC_EQ) ? LinxISA::SETC_EQ : LinxISA::SETC_NE;
+        const unsigned NewSetcOpc =
+            (Opc == LinxISA::CSETC_EQ) ? LinxISA::SETC_EQ : LinxISA::SETC_NE;
 
-		        MachineInstr *NewMI =
-		            BuildMI(MBB, It, SetcMI.getDebugLoc(), TII.get(NewSetcOpc))
-		                .addReg(LinxISA::R0)
-		                .addReg(OrigSrc)
-		                .getInstr();
-		        (void)NewMI;
+        MachineInstr *NewMI =
+            BuildMI(MBB, It, SetcMI.getDebugLoc(), TII.get(NewSetcOpc))
+                .addReg(LinxISA::R0)
+                .addReg(OrigSrc)
+                .getInstr();
+        (void)NewMI;
 
-		        auto NextIt = std::next(It);
-		        SetcMI.eraseFromParent();
-		        AddwMI->eraseFromParent();
-		        Changed = true;
-		        It = NextIt;
-		      }
+        auto NextIt = std::next(It);
+        SetcMI.eraseFromParent();
+        AddwMI->eraseFromParent();
+        Changed = true;
+        It = NextIt;
+      }
 
-		      ExitKind Kind = ExitKind::Fall;
-		      MachineBasicBlock *TargetBB = nullptr;   // DIRECT/COND
-		      MachineBasicBlock *ReturnBB = nullptr;   // CALL (return target)
-	      std::optional<MachineOperand> CallTargetOp; // CALL (callee)
-		      std::optional<Register> HeaderSetcTgtReg;   // inserted immediately after BSTART
-		      std::optional<Register> ICallSetcTgtReg;    // inserted after callee is computed (ICALL)
+      ExitKind Kind = ExitKind::Fall;
+      MachineBasicBlock *TargetBB = nullptr;      // DIRECT/COND
+      MachineBasicBlock *ReturnBB = nullptr;      // CALL (return target)
+      std::optional<MachineOperand> CallTargetOp; // CALL (callee)
+      std::optional<Register>
+          HeaderSetcTgtReg; // inserted immediately after BSTART
+      std::optional<Register>
+          ICallSetcTgtReg; // inserted after callee is computed (ICALL)
 
       // Identify the last two non-debug, non-marker instructions.
       MachineInstr *Last = nullptr;
@@ -3884,21 +3992,21 @@ public:
         break;
       }
 
-	      // Recognize exit shape from the end of the block.
-	      if (Last) {
-	        switch (Last->getOpcode()) {
-	        case LinxISA::PSEUDO_TAILCALL: {
-	          CallTargetOp = Last->getOperand(0);
-	          if (CallTargetOp->isReg()) {
-	            Kind = ExitKind::Ind;
-	            ICallSetcTgtReg = CallTargetOp->getReg();
-	          } else {
-	            Kind = ExitKind::Direct;
-	          }
-	          Last->eraseFromParent();
-	          Changed = true;
-	          break;
-	        }
+      // Recognize exit shape from the end of the block.
+      if (Last) {
+        switch (Last->getOpcode()) {
+        case LinxISA::PSEUDO_TAILCALL: {
+          CallTargetOp = Last->getOperand(0);
+          if (CallTargetOp->isReg()) {
+            Kind = ExitKind::Ind;
+            ICallSetcTgtReg = CallTargetOp->getReg();
+          } else {
+            Kind = ExitKind::Direct;
+          }
+          Last->eraseFromParent();
+          Changed = true;
+          break;
+        }
         case LinxISA::PSEUDO_TAILICALL: {
           CallTargetOp = Last->getOperand(0);
           Kind = ExitKind::Ind;
@@ -3907,22 +4015,23 @@ public:
           Changed = true;
           break;
         }
-		        case LinxISA::PSEUDO_CALL: {
-		          CallTargetOp = Last->getOperand(0);
-		          if (CallTargetOp->isReg()) {
-		            Kind = ExitKind::ICall;
-		            ICallSetcTgtReg = CallTargetOp->getReg();
-	          } else {
-	            Kind = ExitKind::Call;
-	          }
+        case LinxISA::PSEUDO_CALL: {
+          CallTargetOp = Last->getOperand(0);
+          if (CallTargetOp->isReg()) {
+            Kind = ExitKind::ICall;
+            ICallSetcTgtReg = CallTargetOp->getReg();
+          } else {
+            Kind = ExitKind::Call;
+          }
           /*
            * CALL/ICALL blocks must always carry an adjacent SETRET target under
            * the strict call/ret contract. For no-successor (noreturn) blocks,
-           * prefer the physical next block; if that is unavailable (or points at
-           * the internal empty-body stub), fall back to this block's own label.
-           * A true noreturn callee should never consume the return target, but a
-           * concrete marker keeps the header encoding and emulator checks valid.
-          */
+           * prefer the physical next block; if that is unavailable (or points
+           * at the internal empty-body stub), fall back to this block's own
+           * label. A true noreturn callee should never consume the return
+           * target, but a concrete marker keeps the header encoding and
+           * emulator checks valid.
+           */
           if (!MBB.succ_empty())
             ReturnBB = *MBB.succ_begin();
           if (ReturnBB && DecoupledBodyBBs.contains(ReturnBB))
@@ -3983,12 +4092,14 @@ public:
             MachineBasicBlock *BrTargetBB = Prev->getOperand(2).getMBB();
             MachineBasicBlock *JumpTargetBB = Last->getOperand(0).getMBB();
             MachineBasicBlock *FallthroughBB = MBB.getNextNode();
-            auto makeTrampoline = [&](MachineBasicBlock *Target) -> MachineBasicBlock * {
+            auto makeTrampoline =
+                [&](MachineBasicBlock *Target) -> MachineBasicBlock * {
               MachineFunction &MF = *MBB.getParent();
               auto *TrampBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
               MF.insert(std::next(MBB.getIterator()), TrampBB);
               TrampBB->addSuccessor(Target);
-              BuildMI(*TrampBB, TrampBB->end(), DebugLoc(), TII.get(LinxISA::JUMP))
+              BuildMI(*TrampBB, TrampBB->end(), DebugLoc(),
+                      TII.get(LinxISA::JUMP))
                   .addMBB(Target);
               return TrampBB;
             };
@@ -4014,8 +4125,8 @@ public:
                 llvm_unreachable("Unexpected branch opcode");
               }
             };
-	            auto invertBranch = [&](unsigned BrOpc) -> unsigned {
-	              switch (BrOpc) {
+            auto invertBranch = [&](unsigned BrOpc) -> unsigned {
+              switch (BrOpc) {
               case LinxISA::BEQ:
                 return LinxISA::BNE;
               case LinxISA::BNE:
@@ -4030,87 +4141,87 @@ public:
                 return LinxISA::BLTU;
               default:
                 llvm_unreachable("Unexpected branch opcode");
-	              }
-	            };
+              }
+            };
 
-	            auto pickSetcImm = [&](unsigned BrOpc) -> unsigned {
-	              switch (BrOpc) {
-	              case LinxISA::BEQ:
-	                return LinxISA::SETC_EQI;
-	              case LinxISA::BNE:
-	                return LinxISA::SETC_NEI;
-	              case LinxISA::BLT:
-	                return LinxISA::SETC_LTI;
-	              case LinxISA::BGE:
-	                return LinxISA::SETC_GEI;
-	              case LinxISA::BLTU:
-	                return LinxISA::SETC_LTUI;
-	              case LinxISA::BGEU:
-	                return LinxISA::SETC_GEUI;
-	              default:
-	                llvm_unreachable("Unexpected branch opcode");
-	              }
-	            };
+            auto pickSetcImm = [&](unsigned BrOpc) -> unsigned {
+              switch (BrOpc) {
+              case LinxISA::BEQ:
+                return LinxISA::SETC_EQI;
+              case LinxISA::BNE:
+                return LinxISA::SETC_NEI;
+              case LinxISA::BLT:
+                return LinxISA::SETC_LTI;
+              case LinxISA::BGE:
+                return LinxISA::SETC_GEI;
+              case LinxISA::BLTU:
+                return LinxISA::SETC_LTUI;
+              case LinxISA::BGEU:
+                return LinxISA::SETC_GEUI;
+              default:
+                llvm_unreachable("Unexpected branch opcode");
+              }
+            };
 
-	            auto getSingleUseImmFromZero = [&](MachineInstr &UseMI, Register Reg,
-	                                               MachineInstr *&DefMIOut)
-	                -> std::optional<int64_t> {
-	              DefMIOut = nullptr;
-	              if (!Reg || !Reg.isPhysical())
-	                return std::nullopt;
+            auto getSingleUseImmFromZero =
+                [&](MachineInstr &UseMI, Register Reg,
+                    MachineInstr *&DefMIOut) -> std::optional<int64_t> {
+              DefMIOut = nullptr;
+              if (!Reg || !Reg.isPhysical())
+                return std::nullopt;
 
-	              for (auto It = UseMI.getIterator(); It != MBB.begin();) {
-	                --It;
-	                MachineInstr &MI = *It;
-	                if (MI.isDebugInstr() || isMarkerInstr(MI))
-	                  continue;
-	                if (!MI.definesRegister(Reg, &TRI))
-	                  continue;
-	                DefMIOut = &MI;
-	                break;
-	              }
-	              if (!DefMIOut)
-	                return std::nullopt;
+              for (auto It = UseMI.getIterator(); It != MBB.begin();) {
+                --It;
+                MachineInstr &MI = *It;
+                if (MI.isDebugInstr() || isMarkerInstr(MI))
+                  continue;
+                if (!MI.definesRegister(Reg, &TRI))
+                  continue;
+                DefMIOut = &MI;
+                break;
+              }
+              if (!DefMIOut)
+                return std::nullopt;
 
-	              MachineInstr &DefMI = *DefMIOut;
-	              auto isFromZero = [&](unsigned BaseOpNo) -> bool {
-	                if (BaseOpNo >= DefMI.getNumOperands())
-	                  return false;
-	                const MachineOperand &MO = DefMI.getOperand(BaseOpNo);
-	                return MO.isReg() && MO.getReg() == LinxISA::R0;
-	              };
+              MachineInstr &DefMI = *DefMIOut;
+              auto isFromZero = [&](unsigned BaseOpNo) -> bool {
+                if (BaseOpNo >= DefMI.getNumOperands())
+                  return false;
+                const MachineOperand &MO = DefMI.getOperand(BaseOpNo);
+                return MO.isReg() && MO.getReg() == LinxISA::R0;
+              };
 
-	              int64_t Val = 0;
-	              switch (DefMI.getOpcode()) {
-	              case LinxISA::ADDIri:
-	              case LinxISA::ADDIWri:
-	                if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
-	                    !DefMI.getOperand(2).isImm())
-	                  return std::nullopt;
-	                Val = DefMI.getOperand(2).getImm();
-	                break;
-	              case LinxISA::SUBIri:
-	              case LinxISA::SUBIWri:
-	                if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
-	                    !DefMI.getOperand(2).isImm())
-	                  return std::nullopt;
-	                Val = -DefMI.getOperand(2).getImm();
-	                break;
-	              case LinxISA::LUI:
-	                if (DefMI.getNumOperands() < 2 || !DefMI.getOperand(1).isImm())
-	                  return std::nullopt;
-	                Val = DefMI.getOperand(1).getImm() << 12;
-	                break;
-		              default:
-		                return std::nullopt;
-		              }
+              int64_t Val = 0;
+              switch (DefMI.getOpcode()) {
+              case LinxISA::ADDIri:
+              case LinxISA::ADDIWri:
+                if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
+                    !DefMI.getOperand(2).isImm())
+                  return std::nullopt;
+                Val = DefMI.getOperand(2).getImm();
+                break;
+              case LinxISA::SUBIri:
+              case LinxISA::SUBIWri:
+                if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
+                    !DefMI.getOperand(2).isImm())
+                  return std::nullopt;
+                Val = -DefMI.getOperand(2).getImm();
+                break;
+              case LinxISA::LUI:
+                if (DefMI.getNumOperands() < 2 || !DefMI.getOperand(1).isImm())
+                  return std::nullopt;
+                Val = DefMI.getOperand(1).getImm() << 12;
+                break;
+              default:
+                return std::nullopt;
+              }
 
-		              if (!hasSingleNonDbgUseInMBB(Reg, &UseMI, &DefMI))
-		                return std::nullopt;
-		              if (isPhysRegLiveOutOfBlock(Reg))
-		                return std::nullopt;
-		              return Val;
-		            };
+              if (!hasSingleNonDbgUseInMBB(Reg, &UseMI, &DefMI))
+                return std::nullopt;
+              if (isPhysRegLiveOutOfBlock(Reg))
+                return std::nullopt;
+              return Val;
+            };
 
             // Prefer using the already-laid-out next block as fallthrough.
             unsigned BrOpcForSetc = Prev->getOpcode();
@@ -4154,280 +4265,286 @@ public:
               SetcOpc = pickSetc(BrOpcForSetc);
             }
 
-	            bool EmittedImmSetc = false;
-	            auto tryEmitSetcImm = [&](unsigned BrOpc, Register SrcReg,
-	                                      int64_t ImmVal, MachineInstr *DefMI) -> bool {
-	              unsigned ImmOpc = pickSetcImm(BrOpc);
-	              const bool UnsignedImm =
-	                  (ImmOpc == LinxISA::SETC_LTUI) || (ImmOpc == LinxISA::SETC_GEUI);
-	              if (UnsignedImm) {
-	                if (!canEncodeShiftedUnsignedImm(ImmVal, /*BaseBits=*/12))
-	                  return false;
-	              } else {
-	                if (!canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
-	                  return false;
-	              }
+            bool EmittedImmSetc = false;
+            auto tryEmitSetcImm = [&](unsigned BrOpc, Register SrcReg,
+                                      int64_t ImmVal,
+                                      MachineInstr *DefMI) -> bool {
+              unsigned ImmOpc = pickSetcImm(BrOpc);
+              const bool UnsignedImm = (ImmOpc == LinxISA::SETC_LTUI) ||
+                                       (ImmOpc == LinxISA::SETC_GEUI);
+              if (UnsignedImm) {
+                if (!canEncodeShiftedUnsignedImm(ImmVal, /*BaseBits=*/12))
+                  return false;
+              } else {
+                if (!canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
+                  return false;
+              }
 
-	              auto SetcIt = findSetcInsertPt(MBB, *Prev, SrcReg, Register());
-	              BuildMI(MBB, SetcIt, DebugLoc(), TII.get(ImmOpc))
-	                  .addReg(SrcReg)
-	                  .addImm(ImmVal);
-	              if (DefMI)
-	                DefMI->eraseFromParent();
-	              return true;
-	            };
+              auto SetcIt = findSetcInsertPt(MBB, *Prev, SrcReg, Register());
+              BuildMI(MBB, SetcIt, DebugLoc(), TII.get(ImmOpc))
+                  .addReg(SrcReg)
+                  .addImm(ImmVal);
+              if (DefMI)
+                DefMI->eraseFromParent();
+              return true;
+            };
 
-	            MachineInstr *RHSDefMI = nullptr;
-	            if (auto Imm = getSingleUseImmFromZero(*Prev, RHSReg, RHSDefMI)) {
-	              EmittedImmSetc =
-	                  tryEmitSetcImm(BrOpcForSetc, /*SrcReg=*/LHSReg, *Imm, RHSDefMI);
-	            } else {
-	              MachineInstr *LHSDefMI = nullptr;
-	              if (auto Imm = getSingleUseImmFromZero(*Prev, LHSReg, LHSDefMI)) {
-	                // If the constant is on the LHS, rewrite to keep the variable
-	                // operand as SrcL for the immediate SETC forms.
-	                const int64_t C = *Imm;
-	                switch (BrOpcForSetc) {
-	                case LinxISA::BEQ:
-	                case LinxISA::BNE:
-	                  EmittedImmSetc = tryEmitSetcImm(BrOpcForSetc, /*SrcReg=*/RHSReg,
-	                                                  C, LHSDefMI);
-	                  break;
-	                case LinxISA::BLT:
-	                  if (C != std::numeric_limits<int64_t>::max())
-	                    EmittedImmSetc =
-	                        tryEmitSetcImm(LinxISA::BGE, /*SrcReg=*/RHSReg, C + 1,
-	                                       LHSDefMI);
-	                  break;
-	                case LinxISA::BGE:
-	                  if (C != std::numeric_limits<int64_t>::max())
-	                    EmittedImmSetc =
-	                        tryEmitSetcImm(LinxISA::BLT, /*SrcReg=*/RHSReg, C + 1,
-	                                       LHSDefMI);
-	                  break;
-	                case LinxISA::BLTU: {
-	                  const uint64_t CU = static_cast<uint64_t>(C);
-	                  if (CU != std::numeric_limits<uint64_t>::max())
-	                    EmittedImmSetc = tryEmitSetcImm(LinxISA::BGEU,
-	                                                    /*SrcReg=*/RHSReg,
-	                                                    static_cast<int64_t>(CU + 1),
-	                                                    LHSDefMI);
-	                  break;
-	                }
-	                case LinxISA::BGEU: {
-	                  const uint64_t CU = static_cast<uint64_t>(C);
-	                  if (CU != std::numeric_limits<uint64_t>::max())
-	                    EmittedImmSetc = tryEmitSetcImm(LinxISA::BLTU,
-	                                                    /*SrcReg=*/RHSReg,
-	                                                    static_cast<int64_t>(CU + 1),
-	                                                    LHSDefMI);
-	                  break;
-	                }
-	                default:
-	                  break;
-	                }
-	              }
-		            }
+            MachineInstr *RHSDefMI = nullptr;
+            if (auto Imm = getSingleUseImmFromZero(*Prev, RHSReg, RHSDefMI)) {
+              EmittedImmSetc = tryEmitSetcImm(BrOpcForSetc, /*SrcReg=*/LHSReg,
+                                              *Imm, RHSDefMI);
+            } else {
+              MachineInstr *LHSDefMI = nullptr;
+              if (auto Imm = getSingleUseImmFromZero(*Prev, LHSReg, LHSDefMI)) {
+                // If the constant is on the LHS, rewrite to keep the variable
+                // operand as SrcL for the immediate SETC forms.
+                const int64_t C = *Imm;
+                switch (BrOpcForSetc) {
+                case LinxISA::BEQ:
+                case LinxISA::BNE:
+                  EmittedImmSetc = tryEmitSetcImm(
+                      BrOpcForSetc, /*SrcReg=*/RHSReg, C, LHSDefMI);
+                  break;
+                case LinxISA::BLT:
+                  if (C != std::numeric_limits<int64_t>::max())
+                    EmittedImmSetc = tryEmitSetcImm(
+                        LinxISA::BGE, /*SrcReg=*/RHSReg, C + 1, LHSDefMI);
+                  break;
+                case LinxISA::BGE:
+                  if (C != std::numeric_limits<int64_t>::max())
+                    EmittedImmSetc = tryEmitSetcImm(
+                        LinxISA::BLT, /*SrcReg=*/RHSReg, C + 1, LHSDefMI);
+                  break;
+                case LinxISA::BLTU: {
+                  const uint64_t CU = static_cast<uint64_t>(C);
+                  if (CU != std::numeric_limits<uint64_t>::max())
+                    EmittedImmSetc =
+                        tryEmitSetcImm(LinxISA::BGEU,
+                                       /*SrcReg=*/RHSReg,
+                                       static_cast<int64_t>(CU + 1), LHSDefMI);
+                  break;
+                }
+                case LinxISA::BGEU: {
+                  const uint64_t CU = static_cast<uint64_t>(C);
+                  if (CU != std::numeric_limits<uint64_t>::max())
+                    EmittedImmSetc =
+                        tryEmitSetcImm(LinxISA::BLTU,
+                                       /*SrcReg=*/RHSReg,
+                                       static_cast<int64_t>(CU + 1), LHSDefMI);
+                  break;
+                }
+                default:
+                  break;
+                }
+              }
+            }
 
-			            if (!EmittedImmSetc) {
-				              auto tryEmitZextWSetcUW = [&]() -> bool {
-				                if (!linxEnableSetcSrcRTypeFlags())
-				                  return false;
-				                if (BrOpcForSetc != LinxISA::BEQ && BrOpcForSetc != LinxISA::BNE)
-				                  return false;
-			                if ((LHSReg == LinxISA::R0) == (RHSReg == LinxISA::R0))
-			                  return false;
+            if (!EmittedImmSetc) {
+              auto tryEmitZextWSetcUW = [&]() -> bool {
+                if (!linxEnableSetcSrcRTypeFlags())
+                  return false;
+                if (BrOpcForSetc != LinxISA::BEQ &&
+                    BrOpcForSetc != LinxISA::BNE)
+                  return false;
+                if ((LHSReg == LinxISA::R0) == (RHSReg == LinxISA::R0))
+                  return false;
 
-			                const Register ZextReg =
-			                    (LHSReg == LinxISA::R0) ? RHSReg : LHSReg;
-			                Register OrigSrc;
-			                MachineInstr *SllMI = nullptr;
-			                MachineInstr *SrlMI = nullptr;
-			                if (!matchZextWByShiftPair(*Prev, ZextReg, OrigSrc, SllMI, SrlMI))
-			                  return false;
+                const Register ZextReg =
+                    (LHSReg == LinxISA::R0) ? RHSReg : LHSReg;
+                Register OrigSrc;
+                MachineInstr *SllMI = nullptr;
+                MachineInstr *SrlMI = nullptr;
+                if (!matchZextWByShiftPair(*Prev, ZextReg, OrigSrc, SllMI,
+                                           SrlMI))
+                  return false;
 
-			                const unsigned NewSetcOpc =
-			                    (BrOpcForSetc == LinxISA::BEQ) ? LinxISA::SETC_EQ
-			                                                  : LinxISA::SETC_NE;
-			                auto SetcIt = findSetcInsertPt(MBB, *Prev, LinxISA::R0, OrigSrc);
-		                MachineInstr *NewMI =
-		                    BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
-		                        .addReg(LinxISA::R0)
-		                        .addReg(OrigSrc)
-		                        .getInstr();
-		                (void)NewMI;
+                const unsigned NewSetcOpc = (BrOpcForSetc == LinxISA::BEQ)
+                                                ? LinxISA::SETC_EQ
+                                                : LinxISA::SETC_NE;
+                auto SetcIt =
+                    findSetcInsertPt(MBB, *Prev, LinxISA::R0, OrigSrc);
+                MachineInstr *NewMI =
+                    BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
+                        .addReg(LinxISA::R0)
+                        .addReg(OrigSrc)
+                        .getInstr();
+                (void)NewMI;
 
-			                SrlMI->eraseFromParent();
-			                SllMI->eraseFromParent();
-			                return true;
-			              };
+                SrlMI->eraseFromParent();
+                SllMI->eraseFromParent();
+                return true;
+              };
 
-			              if (tryEmitZextWSetcUW()) {
-			                EmittedImmSetc = true;
-			              }
+              if (tryEmitZextWSetcUW()) {
+                EmittedImmSetc = true;
+              }
 
-			              // Peephole: `and/or` feeding a branch against zero:
-			              //   tmp = and/or x, y
-			              //   {bne,beq} tmp, zero, label
-			              // =>
-			              //   setc.and/or x, y
-			              //
-			              // and similarly for immediate ANDI/ORI:
-			              //   tmp = andi/ori x, imm
-			              //   {bne,beq} tmp, zero, label
-			              // =>
-			              //   setc.andi/ori x, imm
-		              auto tryEmitLogicSetcMask = [&]() -> bool {
-		                if (!linxEnableMaskSetcFold())
-		                  return false;
-		                if (BrOpcForSetc != LinxISA::BNE && BrOpcForSetc != LinxISA::BEQ)
-		                  return false;
+              // Peephole: `and/or` feeding a branch against zero:
+              //   tmp = and/or x, y
+              //   {bne,beq} tmp, zero, label
+              // =>
+              //   setc.and/or x, y
+              //
+              // and similarly for immediate ANDI/ORI:
+              //   tmp = andi/ori x, imm
+              //   {bne,beq} tmp, zero, label
+              // =>
+              //   setc.andi/ori x, imm
+              auto tryEmitLogicSetcMask = [&]() -> bool {
+                if (!linxEnableMaskSetcFold())
+                  return false;
+                if (BrOpcForSetc != LinxISA::BNE &&
+                    BrOpcForSetc != LinxISA::BEQ)
+                  return false;
 
-		                Register ValSide = Register();
-		                MachineInstr *ZeroDefMI = nullptr;
-		                if (LHSReg == LinxISA::R0 && RHSReg != LinxISA::R0)
-		                  ValSide = RHSReg;
-		                else if (RHSReg == LinxISA::R0 && LHSReg != LinxISA::R0)
-		                  ValSide = LHSReg;
-		                else {
-		                  auto isZeroFromR0 = [&](Register Reg,
-		                                          MachineInstr *&DefMIOut) -> bool {
-		                    if (!Reg)
-		                      return false;
-		                    if (auto Imm =
-		                            getSingleUseImmFromZero(*Prev, Reg, DefMIOut))
-		                      return *Imm == 0;
-		                    return false;
-		                  };
+                Register ValSide = Register();
+                MachineInstr *ZeroDefMI = nullptr;
+                if (LHSReg == LinxISA::R0 && RHSReg != LinxISA::R0)
+                  ValSide = RHSReg;
+                else if (RHSReg == LinxISA::R0 && LHSReg != LinxISA::R0)
+                  ValSide = LHSReg;
+                else {
+                  auto isZeroFromR0 = [&](Register Reg,
+                                          MachineInstr *&DefMIOut) -> bool {
+                    if (!Reg)
+                      return false;
+                    if (auto Imm =
+                            getSingleUseImmFromZero(*Prev, Reg, DefMIOut))
+                      return *Imm == 0;
+                    return false;
+                  };
 
-		                  MachineInstr *LZeroDefMI = nullptr;
-		                  MachineInstr *RZeroDefMI = nullptr;
-		                  const bool LZero = isZeroFromR0(LHSReg, LZeroDefMI);
-		                  const bool RZero = isZeroFromR0(RHSReg, RZeroDefMI);
-		                  if (LZero == RZero)
-		                    return false;
-		                  if (LZero) {
-		                    ValSide = RHSReg;
-		                    ZeroDefMI = LZeroDefMI;
-		                  } else {
-		                    ValSide = LHSReg;
-		                    ZeroDefMI = RZeroDefMI;
-		                  }
-		                }
+                  MachineInstr *LZeroDefMI = nullptr;
+                  MachineInstr *RZeroDefMI = nullptr;
+                  const bool LZero = isZeroFromR0(LHSReg, LZeroDefMI);
+                  const bool RZero = isZeroFromR0(RHSReg, RZeroDefMI);
+                  if (LZero == RZero)
+                    return false;
+                  if (LZero) {
+                    ValSide = RHSReg;
+                    ZeroDefMI = LZeroDefMI;
+                  } else {
+                    ValSide = LHSReg;
+                    ZeroDefMI = RZeroDefMI;
+                  }
+                }
 
-		                const bool NeedsInvert = (BrOpcForSetc == LinxISA::BEQ);
-		                if (NeedsInvert && !CondFallthroughBB)
-		                  return false;
+                const bool NeedsInvert = (BrOpcForSetc == LinxISA::BEQ);
+                if (NeedsInvert && !CondFallthroughBB)
+                  return false;
 
-		                // Find defining instruction of ValSide (nearest preceding def).
-		                MachineInstr *DefMI = nullptr;
-		                for (auto It = Prev->getIterator(); It != MBB.begin();) {
-		                  --It;
-		                  MachineInstr &MI = *It;
-		                  if (MI.isDebugInstr() || isMarkerInstr(MI))
-		                    continue;
-		                  if (MI.definesRegister(ValSide, &TRI)) {
-		                    DefMI = &MI;
-		                    break;
-		                  }
-		                }
-		                if (!DefMI)
-		                  return false;
-		                if (isPhysRegLiveOutOfBlock(ValSide))
-		                  return false;
+                // Find defining instruction of ValSide (nearest preceding def).
+                MachineInstr *DefMI = nullptr;
+                for (auto It = Prev->getIterator(); It != MBB.begin();) {
+                  --It;
+                  MachineInstr &MI = *It;
+                  if (MI.isDebugInstr() || isMarkerInstr(MI))
+                    continue;
+                  if (MI.definesRegister(ValSide, &TRI)) {
+                    DefMI = &MI;
+                    break;
+                  }
+                }
+                if (!DefMI)
+                  return false;
+                if (isPhysRegLiveOutOfBlock(ValSide))
+                  return false;
 
-		                unsigned NewSetcOpc = 0;
-		                Register SrcA = Register(), SrcB = Register();
-		                int64_t ImmVal = 0;
-		                bool IsImm = false;
+                unsigned NewSetcOpc = 0;
+                Register SrcA = Register(), SrcB = Register();
+                int64_t ImmVal = 0;
+                bool IsImm = false;
 
-		                switch (DefMI->getOpcode()) {
-		                case LinxISA::ANDrr:
-		                case LinxISA::ANDWrr:
-		                  if (DefMI->getNumOperands() < 3)
-		                    return false;
-		                  NewSetcOpc = LinxISA::SETC_AND;
-		                  SrcA = DefMI->getOperand(1).getReg();
-		                  SrcB = DefMI->getOperand(2).getReg();
-		                  break;
-		                case LinxISA::ORrr:
-		                case LinxISA::ORWrr:
-		                  if (DefMI->getNumOperands() < 3)
-		                    return false;
-		                  NewSetcOpc = LinxISA::SETC_OR;
-		                  SrcA = DefMI->getOperand(1).getReg();
-		                  SrcB = DefMI->getOperand(2).getReg();
-		                  break;
-		                case LinxISA::ANDIri:
-		                case LinxISA::ANDIWri:
-		                case LinxISA::HLANDIri:
-		                case LinxISA::HLANDIWri:
-		                  if (DefMI->getNumOperands() < 3 || !DefMI->getOperand(2).isImm())
-		                    return false;
-		                  SrcA = DefMI->getOperand(1).getReg();
-		                  ImmVal = DefMI->getOperand(2).getImm();
-		                  if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
-		                    NewSetcOpc = LinxISA::SETC_ANDI;
-		                  else
-		                    NewSetcOpc = LinxISA::HLSETC_ANDI;
-		                  IsImm = true;
-		                  break;
-		                case LinxISA::ORIri:
-		                case LinxISA::ORIWri:
-		                case LinxISA::HLORIri:
-		                case LinxISA::HLORIWri:
-		                  if (DefMI->getNumOperands() < 3 || !DefMI->getOperand(2).isImm())
-		                    return false;
-		                  SrcA = DefMI->getOperand(1).getReg();
-		                  ImmVal = DefMI->getOperand(2).getImm();
-		                  if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
-		                    NewSetcOpc = LinxISA::SETC_ORI;
-		                  else
-		                    NewSetcOpc = LinxISA::HLSETC_ORI;
-		                  IsImm = true;
-		                  break;
-		                default:
-		                  return false;
-		                }
+                switch (DefMI->getOpcode()) {
+                case LinxISA::ANDrr:
+                case LinxISA::ANDWrr:
+                  if (DefMI->getNumOperands() < 3)
+                    return false;
+                  NewSetcOpc = LinxISA::SETC_AND;
+                  SrcA = DefMI->getOperand(1).getReg();
+                  SrcB = DefMI->getOperand(2).getReg();
+                  break;
+                case LinxISA::ORrr:
+                case LinxISA::ORWrr:
+                  if (DefMI->getNumOperands() < 3)
+                    return false;
+                  NewSetcOpc = LinxISA::SETC_OR;
+                  SrcA = DefMI->getOperand(1).getReg();
+                  SrcB = DefMI->getOperand(2).getReg();
+                  break;
+                case LinxISA::ANDIri:
+                case LinxISA::ANDIWri:
+                case LinxISA::HLANDIri:
+                case LinxISA::HLANDIWri:
+                  if (DefMI->getNumOperands() < 3 ||
+                      !DefMI->getOperand(2).isImm())
+                    return false;
+                  SrcA = DefMI->getOperand(1).getReg();
+                  ImmVal = DefMI->getOperand(2).getImm();
+                  if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
+                    NewSetcOpc = LinxISA::SETC_ANDI;
+                  else
+                    NewSetcOpc = LinxISA::HLSETC_ANDI;
+                  IsImm = true;
+                  break;
+                case LinxISA::ORIri:
+                case LinxISA::ORIWri:
+                case LinxISA::HLORIri:
+                case LinxISA::HLORIWri:
+                  if (DefMI->getNumOperands() < 3 ||
+                      !DefMI->getOperand(2).isImm())
+                    return false;
+                  SrcA = DefMI->getOperand(1).getReg();
+                  ImmVal = DefMI->getOperand(2).getImm();
+                  if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
+                    NewSetcOpc = LinxISA::SETC_ORI;
+                  else
+                    NewSetcOpc = LinxISA::HLSETC_ORI;
+                  IsImm = true;
+                  break;
+                default:
+                  return false;
+                }
 
-		                if (!hasSingleNonDbgUseInMBB(ValSide, Prev, DefMI))
-		                  return false;
+                if (!hasSingleNonDbgUseInMBB(ValSide, Prev, DefMI))
+                  return false;
 
-		                if (NeedsInvert) {
-		                  BrOpcForSetc = LinxISA::BNE;
-		                  SetcOpc = pickSetc(BrOpcForSetc);
-		                  TargetBB = CondFallthroughBB;
-		                }
+                if (NeedsInvert) {
+                  BrOpcForSetc = LinxISA::BNE;
+                  SetcOpc = pickSetc(BrOpcForSetc);
+                  TargetBB = CondFallthroughBB;
+                }
 
-		                auto SetcIt = findSetcInsertPt(MBB, *Prev, SrcA, IsImm ? Register() : SrcB);
-		                if (IsImm) {
-		                  BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
-		                      .addReg(SrcA)
-		                      .addImm(ImmVal);
-		                } else {
-		                  BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
-		                      .addReg(SrcA)
-		                      .addReg(SrcB);
-		                }
-		                if (ZeroDefMI)
-		                  ZeroDefMI->eraseFromParent();
-		                DefMI->eraseFromParent();
-		                EmittedImmSetc = true;
-		                return true;
-		              };
+                auto SetcIt = findSetcInsertPt(MBB, *Prev, SrcA,
+                                               IsImm ? Register() : SrcB);
+                if (IsImm) {
+                  BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
+                      .addReg(SrcA)
+                      .addImm(ImmVal);
+                } else {
+                  BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
+                      .addReg(SrcA)
+                      .addReg(SrcB);
+                }
+                if (ZeroDefMI)
+                  ZeroDefMI->eraseFromParent();
+                DefMI->eraseFromParent();
+                EmittedImmSetc = true;
+                return true;
+              };
 
-			              if (!EmittedImmSetc && !tryEmitLogicSetcMask()) {
-			                auto SetcIt = findSetcInsertPt(MBB, *Prev, LHSReg, RHSReg);
-			                BuildMI(MBB, SetcIt, DebugLoc(), TII.get(SetcOpc))
-			                    .addReg(LHSReg)
-			                    .addReg(RHSReg);
-			              }
-			            }
-	            Prev->eraseFromParent();
-	            Last->eraseFromParent();
-	            Changed = true;
-	            break;
-	          }
+              if (!EmittedImmSetc && !tryEmitLogicSetcMask()) {
+                auto SetcIt = findSetcInsertPt(MBB, *Prev, LHSReg, RHSReg);
+                BuildMI(MBB, SetcIt, DebugLoc(), TII.get(SetcOpc))
+                    .addReg(LHSReg)
+                    .addReg(RHSReg);
+              }
+            }
+            Prev->eraseFromParent();
+            Last->eraseFromParent();
+            Changed = true;
+            break;
+          }
 
           Kind = ExitKind::Direct;
           TargetBB = Last->getOperand(0).getMBB();
@@ -4468,1028 +4585,1036 @@ public:
             llvm_unreachable("Unexpected branch opcode");
           }
 
-	          Register LHSReg = Last->getOperand(0).getReg();
-	          Register RHSReg = Last->getOperand(1).getReg();
-	          bool EmittedImmSetc = false;
-	          auto pickSetcImm = [&](unsigned BrOpc) -> unsigned {
-	            switch (BrOpc) {
-	            case LinxISA::BEQ:
-	              return LinxISA::SETC_EQI;
-	            case LinxISA::BNE:
-	              return LinxISA::SETC_NEI;
-	            case LinxISA::BLT:
-	              return LinxISA::SETC_LTI;
-	            case LinxISA::BGE:
-	              return LinxISA::SETC_GEI;
-	            case LinxISA::BLTU:
-	              return LinxISA::SETC_LTUI;
-	            case LinxISA::BGEU:
-	              return LinxISA::SETC_GEUI;
-	            default:
-	              llvm_unreachable("Unexpected branch opcode");
-	            }
-	          };
-
-	          auto getSingleUseImmFromZero = [&](MachineInstr &UseMI, Register Reg,
-	                                             MachineInstr *&DefMIOut)
-	              -> std::optional<int64_t> {
-	            DefMIOut = nullptr;
-	            if (!Reg || !Reg.isPhysical())
-	              return std::nullopt;
-
-	            for (auto It = UseMI.getIterator(); It != MBB.begin();) {
-	              --It;
-	              MachineInstr &MI = *It;
-	              if (MI.isDebugInstr() || isMarkerInstr(MI))
-	                continue;
-	              if (!MI.definesRegister(Reg, &TRI))
-	                continue;
-	              DefMIOut = &MI;
-	              break;
-	            }
-	            if (!DefMIOut)
-	              return std::nullopt;
-
-	            MachineInstr &DefMI = *DefMIOut;
-	            auto isFromZero = [&](unsigned BaseOpNo) -> bool {
-	              if (BaseOpNo >= DefMI.getNumOperands())
-	                return false;
-	              const MachineOperand &MO = DefMI.getOperand(BaseOpNo);
-	              return MO.isReg() && MO.getReg() == LinxISA::R0;
-	            };
-
-	            int64_t Val = 0;
-	            switch (DefMI.getOpcode()) {
-	            case LinxISA::ADDIri:
-	            case LinxISA::ADDIWri:
-	              if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
-	                  !DefMI.getOperand(2).isImm())
-	                return std::nullopt;
-	              Val = DefMI.getOperand(2).getImm();
-	              break;
-	            case LinxISA::SUBIri:
-	            case LinxISA::SUBIWri:
-	              if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
-	                  !DefMI.getOperand(2).isImm())
-	                return std::nullopt;
-	              Val = -DefMI.getOperand(2).getImm();
-	              break;
-	            case LinxISA::LUI:
-	              if (DefMI.getNumOperands() < 2 || !DefMI.getOperand(1).isImm())
-	                return std::nullopt;
-	              Val = DefMI.getOperand(1).getImm() << 12;
-	              break;
-		            default:
-		              return std::nullopt;
-		            }
-
-		            if (!hasSingleNonDbgUseInMBB(Reg, &UseMI, &DefMI))
-		              return std::nullopt;
-		            if (isPhysRegLiveOutOfBlock(Reg))
-		              return std::nullopt;
-		            return Val;
-		          };
-
-	          auto tryEmitSetcImm = [&](unsigned BrOpc, Register SrcReg, int64_t ImmVal,
-	                                    MachineInstr *DefMI) -> bool {
-	            unsigned ImmOpc = pickSetcImm(BrOpc);
-	            const bool UnsignedImm =
-	                (ImmOpc == LinxISA::SETC_LTUI) || (ImmOpc == LinxISA::SETC_GEUI);
-	            if (UnsignedImm) {
-	              if (!canEncodeShiftedUnsignedImm(ImmVal, /*BaseBits=*/12))
-	                return false;
-	            } else {
-	              if (!canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
-	                return false;
-	            }
-
-	            auto SetcIt = findSetcInsertPt(MBB, *Last, SrcReg, Register());
-	            BuildMI(MBB, SetcIt, DebugLoc(), TII.get(ImmOpc))
-	                .addReg(SrcReg)
-	                .addImm(ImmVal);
-	            if (DefMI)
-	              DefMI->eraseFromParent();
-	            return true;
-	          };
-
-	          MachineInstr *RHSDefMI = nullptr;
-	          if (auto Imm = getSingleUseImmFromZero(*Last, RHSReg, RHSDefMI)) {
-	            EmittedImmSetc =
-	                tryEmitSetcImm(Last->getOpcode(), /*SrcReg=*/LHSReg, *Imm, RHSDefMI);
-	          } else {
-	            MachineInstr *LHSDefMI = nullptr;
-	            if (auto Imm = getSingleUseImmFromZero(*Last, LHSReg, LHSDefMI)) {
-	              const int64_t C = *Imm;
-	              switch (Last->getOpcode()) {
-	              case LinxISA::BEQ:
-	              case LinxISA::BNE:
-	                EmittedImmSetc =
-	                    tryEmitSetcImm(Last->getOpcode(), /*SrcReg=*/RHSReg, C, LHSDefMI);
-	                break;
-	              case LinxISA::BLT:
-	                if (C != std::numeric_limits<int64_t>::max())
-	                  EmittedImmSetc = tryEmitSetcImm(
-	                      LinxISA::BGE, /*SrcReg=*/RHSReg, C + 1, LHSDefMI);
-	                break;
-	              case LinxISA::BGE:
-	                if (C != std::numeric_limits<int64_t>::max())
-	                  EmittedImmSetc = tryEmitSetcImm(
-	                      LinxISA::BLT, /*SrcReg=*/RHSReg, C + 1, LHSDefMI);
-	                break;
-	              case LinxISA::BLTU: {
-	                const uint64_t CU = static_cast<uint64_t>(C);
-	                if (CU != std::numeric_limits<uint64_t>::max())
-	                  EmittedImmSetc = tryEmitSetcImm(
-	                      LinxISA::BGEU, /*SrcReg=*/RHSReg,
-	                      static_cast<int64_t>(CU + 1), LHSDefMI);
-	                break;
-	              }
-	              case LinxISA::BGEU: {
-	                const uint64_t CU = static_cast<uint64_t>(C);
-	                if (CU != std::numeric_limits<uint64_t>::max())
-	                  EmittedImmSetc = tryEmitSetcImm(
-	                      LinxISA::BLTU, /*SrcReg=*/RHSReg,
-	                      static_cast<int64_t>(CU + 1), LHSDefMI);
-	                break;
-	              }
-	              default:
-	                break;
-	              }
-	            }
-	          }
-
-			          if (!EmittedImmSetc) {
-				            auto tryEmitZextWSetcUW = [&]() -> bool {
-				              if (!linxEnableSetcSrcRTypeFlags())
-				                return false;
-				              if (Last->getOpcode() != LinxISA::BEQ &&
-				                  Last->getOpcode() != LinxISA::BNE)
-				                return false;
-			              if ((LHSReg == LinxISA::R0) == (RHSReg == LinxISA::R0))
-			                return false;
-
-			              const Register ZextReg =
-			                  (LHSReg == LinxISA::R0) ? RHSReg : LHSReg;
-			              Register OrigSrc;
-			              MachineInstr *SllMI = nullptr;
-			              MachineInstr *SrlMI = nullptr;
-			              if (!matchZextWByShiftPair(*Last, ZextReg, OrigSrc, SllMI, SrlMI))
-			                return false;
-
-			              const unsigned NewSetcOpc =
-			                  (Last->getOpcode() == LinxISA::BEQ) ? LinxISA::SETC_EQ
-			                                                     : LinxISA::SETC_NE;
-			              auto SetcIt = findSetcInsertPt(MBB, *Last, LinxISA::R0, OrigSrc);
-				              MachineInstr *NewMI =
-				                  BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
-				                      .addReg(LinxISA::R0)
-				                      .addReg(OrigSrc)
-				                      .getInstr();
-				              (void)NewMI;
-
-			              SrlMI->eraseFromParent();
-			              SllMI->eraseFromParent();
-			              return true;
-			            };
-
-			            if (tryEmitZextWSetcUW())
-			              EmittedImmSetc = true;
-
-			            auto tryEmitLogicSetcMask = [&]() -> bool {
-		              if (!linxEnableMaskSetcFold())
-			                return false;
-		              if (Last->getOpcode() != LinxISA::BNE)
-			                return false;
-
-		              Register ValSide = Register();
-		              MachineInstr *ZeroDefMI = nullptr;
-		              if (LHSReg == LinxISA::R0 && RHSReg != LinxISA::R0)
-		                ValSide = RHSReg;
-		              else if (RHSReg == LinxISA::R0 && LHSReg != LinxISA::R0)
-		                ValSide = LHSReg;
-		              else {
-		                auto isZeroFromR0 = [&](Register Reg,
-		                                        MachineInstr *&DefMIOut) -> bool {
-		                  if (!Reg)
-		                    return false;
-		                  if (auto Imm =
-		                          getSingleUseImmFromZero(*Last, Reg, DefMIOut))
-		                    return *Imm == 0;
-		                  return false;
-		                };
-		                MachineInstr *LZeroDefMI = nullptr;
-		                MachineInstr *RZeroDefMI = nullptr;
-		                const bool LZero = isZeroFromR0(LHSReg, LZeroDefMI);
-		                const bool RZero = isZeroFromR0(RHSReg, RZeroDefMI);
-		                if (LZero == RZero)
-		                  return false;
-		                if (LZero) {
-		                  ValSide = RHSReg;
-		                  ZeroDefMI = LZeroDefMI;
-		                } else {
-		                  ValSide = LHSReg;
-		                  ZeroDefMI = RZeroDefMI;
-		                }
-		              }
-
-		              MachineInstr *DefMI = nullptr;
-		              for (auto It = Last->getIterator(); It != MBB.begin();) {
-		                --It;
-		                MachineInstr &MI = *It;
-		                if (MI.isDebugInstr() || isMarkerInstr(MI))
-		                  continue;
-		                if (MI.definesRegister(ValSide, &TRI)) {
-		                  DefMI = &MI;
-		                  break;
-		                }
-		              }
-		              if (!DefMI)
-		                return false;
-		              if (!hasSingleNonDbgUseInMBB(ValSide, Last, DefMI))
-		                return false;
-		              if (isPhysRegLiveOutOfBlock(ValSide))
-		                return false;
-
-		              unsigned NewSetcOpc = 0;
-		              Register SrcA = Register(), SrcB = Register();
-		              int64_t ImmVal = 0;
-		              bool IsImm = false;
-
-		              switch (DefMI->getOpcode()) {
-		              case LinxISA::ANDrr:
-		              case LinxISA::ANDWrr:
-		                NewSetcOpc = LinxISA::SETC_AND;
-		                SrcA = DefMI->getOperand(1).getReg();
-		                SrcB = DefMI->getOperand(2).getReg();
-		                break;
-		              case LinxISA::ORrr:
-		              case LinxISA::ORWrr:
-		                NewSetcOpc = LinxISA::SETC_OR;
-		                SrcA = DefMI->getOperand(1).getReg();
-		                SrcB = DefMI->getOperand(2).getReg();
-		                break;
-		              case LinxISA::ANDIri:
-		              case LinxISA::ANDIWri:
-		              case LinxISA::HLANDIri:
-		              case LinxISA::HLANDIWri:
-		                if (!DefMI->getOperand(2).isImm())
-		                  return false;
-		                SrcA = DefMI->getOperand(1).getReg();
-		                ImmVal = DefMI->getOperand(2).getImm();
-		                if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
-		                  NewSetcOpc = LinxISA::SETC_ANDI;
-		                else
-		                  NewSetcOpc = LinxISA::HLSETC_ANDI;
-		                IsImm = true;
-		                break;
-		              case LinxISA::ORIri:
-		              case LinxISA::ORIWri:
-		              case LinxISA::HLORIri:
-		              case LinxISA::HLORIWri:
-		                if (!DefMI->getOperand(2).isImm())
-		                  return false;
-		                SrcA = DefMI->getOperand(1).getReg();
-		                ImmVal = DefMI->getOperand(2).getImm();
-		                if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
-		                  NewSetcOpc = LinxISA::SETC_ORI;
-		                else
-		                  NewSetcOpc = LinxISA::HLSETC_ORI;
-		                IsImm = true;
-		                break;
-		              default:
-		                return false;
-		              }
-
-		              auto SetcIt =
-		                  findSetcInsertPt(MBB, *Last, SrcA, IsImm ? Register() : SrcB);
-		              if (IsImm) {
-		                BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
-		                    .addReg(SrcA)
-		                    .addImm(ImmVal);
-		              } else {
-		                BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
-		                    .addReg(SrcA)
-		                    .addReg(SrcB);
-		              }
-		              if (ZeroDefMI)
-		                ZeroDefMI->eraseFromParent();
-		              DefMI->eraseFromParent();
-		              return true;
-		            };
-
-			            if (!EmittedImmSetc && !tryEmitLogicSetcMask()) {
-			              auto SetcIt = findSetcInsertPt(MBB, *Last, LHSReg, RHSReg);
-			              BuildMI(MBB, SetcIt, DebugLoc(), TII.get(SetcOpc))
-			                  .addReg(LHSReg)
-			                  .addReg(RHSReg);
-			            }
-			          }
-	          Last->eraseFromParent();
-	          Changed = true;
-	          break;
-	        }
-	        default:
-	          break;
-	        }
-		      }
-
-	      auto isAbiTransferReg = [&](Register Reg) -> bool {
-	        switch (Reg) {
-	        case LinxISA::R2:
-	        case LinxISA::R3:
-	        case LinxISA::R4:
-	        case LinxISA::R5:
-	        case LinxISA::R6:
-	        case LinxISA::R7:
-	        case LinxISA::R8:
-	        case LinxISA::R9:
-	          return true;
-	        default:
-	          return false;
-	        }
-	      };
-
-	      const bool ExitMayUseAbiRegs =
-	          Kind == ExitKind::Call || Kind == ExitKind::ICall ||
-	          Kind == ExitKind::Ret ||
-	          ((Kind == ExitKind::Direct || Kind == ExitKind::Ind) && CallTargetOp);
-
-	      auto isImplicitAbiUseAtExit = [&](Register Reg) -> bool {
-	        return ExitMayUseAbiRegs && isAbiTransferReg(Reg);
-	      };
-
-	      // Peephole after BlockISA exit lowering (but before inserting block
-	      // markers and T/U remapping): fold a word zero-extend shift-pair
-	      // feeding a compare against zero into a SrcR `.uw` conversion
-	      // modifier. The ISA only supports conversions on the right operand,
-		      // so we flip operands when needed:
-		      //
-		      //   tmp1 = sll x, 32
-			      //   tmp2 = srl tmp1, 32
-			      //   c.setc.ne tmp2, zero
-			      // =>
-			      //   setc.ne zero, x<.uw>
-			      auto prevNonMarkerMI = [&](MachineBasicBlock::iterator Pos) -> MachineInstr * {
-			        auto It = Pos;
-			        while (It != MBB.begin()) {
-			          --It;
-			          if (It->isDebugInstr() || isMarkerInstr(*It))
-			            continue;
-			          return &*It;
-			        }
-			        return nullptr;
-			      };
-
-			      auto hasUseBeforeDefFrom = [&](Register Reg,
-			                                    MachineBasicBlock::iterator Start) -> bool {
-			        if (!Reg)
-			          return false;
-			        for (auto It = Start; It != MBB.end(); ++It) {
-			          MachineInstr &MI = *It;
-			          if (MI.isDebugInstr() || isMarkerInstr(MI))
-			            continue;
-			          if (MI.definesRegister(Reg, &TRI))
-			            return false;
-			          for (const MachineOperand &MO : MI.operands()) {
-			            if (!MO.isReg() || MO.isImplicit() || MO.isDef())
-			              continue;
-			            if (MO.getReg() == Reg)
-			              return true;
-			          }
-			        }
-			        return false;
-			      };
-
-			      auto matchAdjacentZextWByShiftPair =
-			          [&](MachineInstr &UseMI, Register ZextReg, Register &OrigSrc,
-			              MachineInstr *&SllMIOut, MachineInstr *&SrlMIOut) -> bool {
-			        OrigSrc = Register();
-			        SllMIOut = nullptr;
-			        SrlMIOut = nullptr;
-			        if (!ZextReg)
-			          return false;
-
-			        MachineInstr *SrlMI = prevNonMarkerMI(UseMI.getIterator());
-			        if (!SrlMI || SrlMI->getOpcode() != LinxISA::SRLrr ||
-			            SrlMI->getNumOperands() < 3 || !SrlMI->getOperand(1).isReg() ||
-			            !SrlMI->getOperand(2).isReg())
-			          return false;
-			        if (!SrlMI->definesRegister(ZextReg, &TRI))
-			          return false;
-
-			        const Register Tmp1 = SrlMI->getOperand(1).getReg();
-			        const Register ShAmtReg = SrlMI->getOperand(2).getReg();
-			        if (!Tmp1 || !ShAmtReg)
-			          return false;
-
-			        MachineInstr *SllMI = prevNonMarkerMI(SrlMI->getIterator());
-			        if (!SllMI || SllMI->getOpcode() != LinxISA::SLLrr ||
-			            SllMI->getNumOperands() < 3 || !SllMI->getOperand(1).isReg() ||
-			            !SllMI->getOperand(2).isReg())
-			          return false;
-			        if (!SllMI->definesRegister(Tmp1, &TRI))
-			          return false;
-			        if (SllMI->getOperand(2).getReg() != ShAmtReg)
-			          return false;
-
-			        auto getConstShiftAmt = [&](MachineInstr &Anchor) -> std::optional<int64_t> {
-			          for (auto DI = Anchor.getIterator(); DI != MBB.begin();) {
-			            --DI;
-			            MachineInstr &DefMI = *DI;
-			            if (DefMI.isDebugInstr() || isMarkerInstr(DefMI))
-			              continue;
-			            if (!DefMI.definesRegister(ShAmtReg, &TRI))
-			              continue;
-			            if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(1).isReg() ||
-			                DefMI.getOperand(1).getReg() != LinxISA::R0 ||
-			                !DefMI.getOperand(2).isImm())
-			              return std::nullopt;
-			            switch (DefMI.getOpcode()) {
-			            case LinxISA::ADDIri:
-			            case LinxISA::ADDIWri:
-			              return DefMI.getOperand(2).getImm();
-			            default:
-			              return std::nullopt;
-			            }
-			          }
-			          if (ShAmtReg.isPhysical())
-			            return getPhysRegConstAtMBBEntry(ShAmtReg);
-			          return std::nullopt;
-			        };
-
-			        auto ShAmtC = getConstShiftAmt(*SrlMI);
-			        if (!ShAmtC || *ShAmtC != 32)
-			          return false;
-
-			        const Register Src = SllMI->getOperand(1).getReg();
-			        if (!Src)
-			          return false;
-
-			        // Ensure the shift results are not used later (otherwise removing
-			        // the shifts would break the block).
-			        if (hasUseBeforeDefFrom(ZextReg, std::next(UseMI.getIterator())))
-			          return false;
-			        if (hasUseBeforeDefFrom(Tmp1, std::next(SrlMI->getIterator())))
-			          return false;
-
-			        OrigSrc = Src;
-			        SllMIOut = SllMI;
-			        SrlMIOut = SrlMI;
-			        return true;
-			      };
-
-			      for (auto It = MBB.begin(); It != MBB.end();) {
-			        MachineInstr &MI = *It;
-			        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
-			          ++It;
-		          continue;
-		        }
-
-		        const unsigned Opc = MI.getOpcode();
-		        const bool IsEq =
-		            (Opc == LinxISA::CSETC_EQ || Opc == LinxISA::SETC_EQ);
-		        const bool IsNe =
-		            (Opc == LinxISA::CSETC_NE || Opc == LinxISA::SETC_NE);
-			        if (!IsEq && !IsNe) {
-			          ++It;
-			          continue;
-			        }
-			        if (!linxEnableSetcSrcRTypeFlags()) {
-			          ++It;
-			          continue;
-			        }
-
-		        if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
-		            !MI.getOperand(1).isReg()) {
-		          ++It;
-		          continue;
-		        }
-
-		        const Register A = MI.getOperand(0).getReg();
-		        const Register B = MI.getOperand(1).getReg();
-		        if (!A || !B) {
-		          ++It;
-		          continue;
-		        }
-			        if (A != LinxISA::R0 && B != LinxISA::R0) {
-			          ++It;
-			          continue;
-			        }
-
-			        const Register ZextReg = (A == LinxISA::R0) ? B : A;
-			        Register OrigSrc;
-			        MachineInstr *SllMI = nullptr;
-			        MachineInstr *SrlMI = nullptr;
-			        if (!matchAdjacentZextWByShiftPair(MI, ZextReg, OrigSrc, SllMI, SrlMI)) {
-			          ++It;
-			          continue;
-			        }
-
-		        const unsigned NewOpc = IsEq ? LinxISA::SETC_EQ : LinxISA::SETC_NE;
-		        MachineInstr *NewMI =
-		            BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(), TII.get(NewOpc))
-		                .addReg(LinxISA::R0)
-		                .addReg(OrigSrc)
-		                .getInstr();
-		        (void)NewMI;
-
-		        auto NextIt = std::next(It);
-		        MI.eraseFromParent();
-		        SrlMI->eraseFromParent();
-		        SllMI->eraseFromParent();
-		        Changed = true;
-		        It = NextIt;
-		      }
-
-		      for (auto It = MBB.begin(); It != MBB.end();) {
-		        MachineInstr &MI = *It;
-		        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
-		          ++It;
-		          continue;
-		        }
-
-		        const unsigned Opc = MI.getOpcode();
-			        const bool IsEq = (Opc == LinxISA::CMPEQ);
-			        const bool IsNe = (Opc == LinxISA::CMPNE);
-			        if (!IsEq && !IsNe) {
-			          ++It;
-			          continue;
-			        }
-			        if (!linxEnableSetcSrcRTypeFlags()) {
-			          ++It;
-			          continue;
-			        }
-
-		        if (MI.getNumOperands() < 3 || !MI.getOperand(1).isReg() ||
-		            !MI.getOperand(2).isReg()) {
-		          ++It;
-		          continue;
-		        }
-
-		        const Register SrcL = MI.getOperand(1).getReg();
-		        const Register SrcR = MI.getOperand(2).getReg();
-		        if (!SrcL || !SrcR) {
-		          ++It;
-		          continue;
-		        }
-		        if (SrcL != LinxISA::R0 && SrcR != LinxISA::R0) {
-		          ++It;
-		          continue;
-		        }
-
-			        const Register ZextReg = (SrcL == LinxISA::R0) ? SrcR : SrcL;
-			        Register OrigSrc;
-			        MachineInstr *SllMI = nullptr;
-			        MachineInstr *SrlMI = nullptr;
-			        if (!matchAdjacentZextWByShiftPair(MI, ZextReg, OrigSrc, SllMI, SrlMI)) {
-			          ++It;
-			          continue;
-			        }
-
-		        MI.getOperand(1).setReg(LinxISA::R0);
-		        MI.getOperand(2).setReg(OrigSrc);
-
-		        auto NextIt = std::next(It);
-		        SrlMI->eraseFromParent();
-		        SllMI->eraseFromParent();
-		        Changed = true;
-		        It = NextIt;
-		      }
-
-		      // Pre-blockify peephole: fuse MUL + ADD into MADD when the MUL result
-		      // is single-use in the block.
-		      //
-		      //   tmp = mul  a, b
-	      //   dst = add  tmp, c
-	      // =>
-	      //   dst = madd a, b, c
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &MulMI = *It;
-	        if (MulMI.isDebugInstr() || isMarkerInstr(MulMI)) {
-	          ++It;
-	          continue;
-	        }
-
-	        const unsigned MulOpc = MulMI.getOpcode();
-	        const bool IsMul64 = (MulOpc == LinxISA::MULrr);
-	        const bool IsMul32 = (MulOpc == LinxISA::MULWrr);
-	        if (!IsMul64 && !IsMul32) {
-	          ++It;
-	          continue;
-	        }
-
-	        if (MulMI.getNumOperands() < 3 || !MulMI.getOperand(0).isReg() ||
-	            !MulMI.getOperand(0).isDef() || !MulMI.getOperand(1).isReg() ||
-	            !MulMI.getOperand(2).isReg()) {
-	          ++It;
-	          continue;
-	        }
-
-	        const Register Tmp = MulMI.getOperand(0).getReg();
-	        const Register A = MulMI.getOperand(1).getReg();
-	        const Register B = MulMI.getOperand(2).getReg();
-	        if (!Tmp.isPhysical() || !A.isPhysical() || !B.isPhysical()) {
-	          ++It;
-	          continue;
-	        }
-	        if (isPhysRegLiveOutOfBlock(Tmp)) {
-	          ++It;
-	          continue;
-	        }
-
-	        // Find the next real instruction that reads Tmp and try to match ADD.
-	        auto NextIt = std::next(It);
-	        while (NextIt != MBB.end() &&
-	               (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
-	          ++NextIt;
-	        if (NextIt == MBB.end()) {
-	          ++It;
-	          continue;
-	        }
-
-	        MachineInstr &AddMI = *NextIt;
-	        const unsigned AddOpc = AddMI.getOpcode();
-	        const bool IsAdd64 = (AddOpc == LinxISA::ADDrr);
-	        const bool IsAdd32 = (AddOpc == LinxISA::ADDWrr);
-	        if (!((IsMul64 && IsAdd64) || (IsMul32 && IsAdd32))) {
-	          ++It;
-	          continue;
-	        }
-
-	        if (AddMI.getNumOperands() < 3 || !AddMI.getOperand(0).isReg() ||
-	            !AddMI.getOperand(0).isDef() || !AddMI.getOperand(1).isReg() ||
-	            !AddMI.getOperand(2).isReg()) {
-	          ++It;
-	          continue;
-	        }
-
-	        const Register Dst = AddMI.getOperand(0).getReg();
-	        if (!Dst.isPhysical()) {
-	          ++It;
-	          continue;
-	        }
-
-	        const Register Op1 = AddMI.getOperand(1).getReg();
-	        const Register Op2 = AddMI.getOperand(2).getReg();
-	        Register C = Register();
-	        if (Op1 == Tmp && Op2.isPhysical())
-	          C = Op2;
-	        else if (Op2 == Tmp && Op1.isPhysical())
-	          C = Op1;
-	        else {
-	          ++It;
-	          continue;
-	        }
-
-	        if (!hasSingleNonDbgUseInMBB(Tmp, &AddMI, &MulMI)) {
-	          ++It;
-	          continue;
-	        }
-
-	        const unsigned MaddOpc = IsMul64 ? LinxISA::MADD : LinxISA::MADDW;
-	        MachineInstr *NewMI =
-	            BuildMI(MBB, AddMI.getIterator(), AddMI.getDebugLoc(),
-	                    TII.get(MaddOpc), Dst)
-	                .addReg(A)
-	                .addReg(B)
-	                .addReg(C)
-	                .getInstr();
-
-	        AddMI.eraseFromParent();
-	        MulMI.eraseFromParent();
-	        It = std::next(NewMI->getIterator());
-	        Changed = true;
-	      }
-
-	      // Peephole: sink simple address calculations into immediate-offset
-	      // loads/stores when the combined offset fits the instruction encoding.
-	      //
-	      // This favors using complex addressing modes over sharing an AGEN
-	      // temporary across multiple memory ops:
-	      //   addi tmp, base, C
-	      //   lw   rd, [tmp + off]
-	      // =>
-	      //   lw   rd, [base + (C+off)]
-	      //
-	      // When all uses of `tmp` in the block are foldable, the AGEN is removed.
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &DefMI = *It;
-	        if (DefMI.isDebugInstr() || isMarkerInstr(DefMI)) {
-	          ++It;
-	          continue;
-	        }
-
-	        const unsigned DefOpc = DefMI.getOpcode();
-	        const bool IsAddI = (DefOpc == LinxISA::ADDIri || DefOpc == LinxISA::ADDIWri);
-	        const bool IsSubI = (DefOpc == LinxISA::SUBIri || DefOpc == LinxISA::SUBIWri);
-	        if (!IsAddI && !IsSubI) {
-	          ++It;
-	          continue;
-	        }
-	        if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(0).isReg() ||
-	            !DefMI.getOperand(0).isDef() || !DefMI.getOperand(1).isReg() ||
-	            !DefMI.getOperand(2).isImm()) {
-	          ++It;
-	          continue;
-	        }
-
-	        const Register Tmp = DefMI.getOperand(0).getReg();
-	        const Register Base = DefMI.getOperand(1).getReg();
-	        const int64_t Addend = IsSubI ? -DefMI.getOperand(2).getImm()
-	                                      : DefMI.getOperand(2).getImm();
-	        if (!Tmp || !Tmp.isPhysical() || !Base || !Base.isPhysical()) {
-	          ++It;
-	          continue;
-	        }
-	        // This peephole is intended for the "address-generation temporary"
-	        // shape `addi tmp, base, C` where `tmp` is a distinct register. If we
-	        // try to fold an in-place update (tmp == base), we would need to
-	        // *remove* the defining instruction to preserve semantics; doing so
-	        // is generally not possible for reserved/live-out regs like `sp`.
-	        if (Tmp == Base) {
-	          ++It;
-	          continue;
-	        }
-	        const bool CanEraseDef = !isPhysRegLiveOutOfBlock(Tmp);
-
-	        struct UseRef {
-	          MachineInstr *MI;
-	          unsigned BaseOpNo;
-	          unsigned OffOpNo;
-	        };
-	        SmallVector<UseRef, 4> Uses;
-
-	        auto isFoldableMem = [&](MachineInstr &MI, unsigned &BaseOpNo,
-	                                 unsigned &OffOpNo) -> bool {
-	          const unsigned Opc = MI.getOpcode();
-	          switch (Opc) {
-	          case LinxISA::LBI:
-	          case LinxISA::LBUI:
-	          case LinxISA::LHI:
-	          case LinxISA::LHUI:
-	          case LinxISA::LWI:
-	          case LinxISA::LWUI:
-	          case LinxISA::LDI:
-	          case LinxISA::SBI:
-	          case LinxISA::SHI:
-	          case LinxISA::SWI:
-	          case LinxISA::SDI:
-	            BaseOpNo = 1;
-	            OffOpNo = 2;
-	            return true;
-	          default:
-	            return false;
-	          }
-	        };
-	        auto memImmScale = [&](unsigned Opc) -> int64_t {
-	          switch (Opc) {
-	          case LinxISA::LBI:
-	          case LinxISA::LBUI:
-	          case LinxISA::SBI:
-	            return 1;
-	          case LinxISA::LHI:
-	          case LinxISA::LHUI:
-	          case LinxISA::SHI:
-	            return 2;
-	          case LinxISA::LWI:
-	          case LinxISA::LWUI:
-	          case LinxISA::SWI:
-	            return 4;
-	          case LinxISA::LDI:
-	          case LinxISA::SDI:
-	            return 8;
-	          default:
-	            return 1;
-	          }
-	        };
-
-	        // Collect all uses from DefMI onwards until Tmp is redefined.
-	        bool Bad = false;
-	        bool StoppedByBaseDef = false;
-	        for (auto UI = std::next(It), UE = MBB.end(); UI != UE; ++UI) {
-	          MachineInstr &MI = *UI;
-	          if (MI.isDebugInstr() || isMarkerInstr(MI))
-	            continue;
-	          if (MI.definesRegister(Tmp, &TRI))
-	            break;
-	          // Folding `tmp = base + C` into uses of `tmp` requires that `base`
-	          // still holds the same value. If `base` is redefined, stop
-	          // collecting fold candidates to avoid rewriting memory ops to use
-	          // an updated base.
-	          if (MI.definesRegister(Base, &TRI)) {
-	            StoppedByBaseDef = true;
-	            break;
-	          }
-
-	          unsigned BaseOpNo = 0, OffOpNo = 0;
-	          if (!isFoldableMem(MI, BaseOpNo, OffOpNo)) {
-	            if (MI.readsRegister(Tmp, &TRI)) {
-	              Bad = true;
-	              break;
-	            }
-	            continue;
-	          }
-
-	          if (BaseOpNo >= MI.getNumOperands() || OffOpNo >= MI.getNumOperands()) {
-	            Bad = true;
-	            break;
-	          }
-	          MachineOperand &BaseMO = MI.getOperand(BaseOpNo);
-	          MachineOperand &OffMO = MI.getOperand(OffOpNo);
-	          if (!BaseMO.isReg() || BaseMO.getReg() != Tmp) {
-	            if (MI.readsRegister(Tmp, &TRI)) {
-	              Bad = true;
-	              break;
-	            }
-	            continue;
-	          }
-	          if (!OffMO.isImm()) {
-	            Bad = true;
-	            break;
-	          }
-
-	          const int64_t OldOff = OffMO.getImm();
-	          // The machine-level mem-immediate is in *scaled units* (AArch64
-	          // style): the final byte offset is `imm * access_size`. Convert the
-	          // address-generation addend (bytes) into the same unit system.
-	          const int64_t Scale = memImmScale(MI.getOpcode());
-	          if (Scale <= 0 || (Addend % Scale) != 0) {
-	            Bad = true;
-	            break;
-	          }
-	          const int64_t NewOff = OldOff + (Addend / Scale);
-	          if (!isInt<12>(NewOff)) {
-	            Bad = true;
-	            break;
-	          }
-
-	          Uses.push_back(UseRef{&MI, BaseOpNo, OffOpNo});
-	        }
-
-	        if (Bad || Uses.empty()) {
-	          ++It;
-	          continue;
-	        }
-
-	        for (const UseRef &U : Uses) {
-	          U.MI->getOperand(U.BaseOpNo).setReg(Base);
-	          const int64_t OldOff = U.MI->getOperand(U.OffOpNo).getImm();
-	          const int64_t Scale = memImmScale(U.MI->getOpcode());
-	          U.MI->getOperand(U.OffOpNo).setImm(OldOff + (Addend / Scale));
-	        }
-
-	        auto Next = std::next(It);
-	        if (CanEraseDef && !StoppedByBaseDef) {
-	          DefMI.eraseFromParent();
-	          It = Next;
-	        } else {
-	          It = Next;
-	        }
-	        Changed = true;
-	      }
-
-	      // Peephole: fold `slli tmp, x, k; add dst, base, tmp` into
-	      // `add base, x<<k, ->dst` (uses the ISA shamt field).
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &ShiftMI = *It;
-	        if (ShiftMI.isDebugInstr() || isMarkerInstr(ShiftMI)) {
-	          ++It;
-	          continue;
-	        }
-
-	        const unsigned ShiftOpc = ShiftMI.getOpcode();
-
-	        // Peephole: fold `sll tmp, x, sh; srl/sra dst, tmp, sh` into
-	        // `bxu/bxs x, M=0, N=<width>`.
-	        if (ShiftOpc == LinxISA::SLLrr && ShiftMI.getNumOperands() >= 3 &&
-	            ShiftMI.getOperand(2).isReg()) {
-	          const Register ShDst = ShiftMI.getOperand(0).getReg();
-	          const Register ShSrc = ShiftMI.getOperand(1).getReg();
-	          const Register ShAmtReg = ShiftMI.getOperand(2).getReg();
-
-	          auto NextIt = std::next(It);
-	          while (NextIt != MBB.end() &&
-	                 (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
-	            ++NextIt;
-	          if (NextIt == MBB.end()) {
-	            ++It;
-	            continue;
-	          }
-
-	          MachineInstr &ShrMI = *NextIt;
-	          const unsigned ShrOpc = ShrMI.getOpcode();
-	          const bool IsShiftR = (ShrOpc == LinxISA::SRLrr || ShrOpc == LinxISA::SRArr);
-	          if (!IsShiftR || ShrMI.getNumOperands() < 3) {
-	            ++It;
-	            continue;
-	          }
-
-	          if (ShrMI.getOperand(1).getReg() != ShDst ||
-	              !ShrMI.getOperand(2).isReg() ||
-	              ShrMI.getOperand(2).getReg() != ShAmtReg) {
-	            ++It;
-	            continue;
-	          }
-
-	          // The shifted temporary must be single-use.
-	          if (isImplicitAbiUseAtExit(ShDst) ||
-	              !hasSingleNonDbgUseInMBB(ShDst, &ShrMI, &ShiftMI)) {
-	            ++It;
-	            continue;
-	          }
-
-	          // Recover the constant shift amount from its defining instruction.
-	          MachineInstr *ShAmtDefMI = nullptr;
-	          auto getConstShiftAmt = [&](MachineInstr &UseMI) -> std::optional<int64_t> {
-	            if (!ShAmtReg || !ShAmtReg.isPhysical())
-	              return std::nullopt;
-	            for (auto DI = UseMI.getIterator(); DI != MBB.begin();) {
-	              --DI;
-	              MachineInstr &DefMI = *DI;
-	              if (DefMI.isDebugInstr() || isMarkerInstr(DefMI))
-	                continue;
-	              if (!DefMI.definesRegister(ShAmtReg, &TRI))
-	                continue;
-	              ShAmtDefMI = &DefMI;
-	              break;
-	            }
-	            if (!ShAmtDefMI)
-	              return std::nullopt;
-
-	            MachineInstr &DefMI = *ShAmtDefMI;
-	            if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(1).isReg() ||
-	                DefMI.getOperand(1).getReg() != LinxISA::R0 ||
-	                !DefMI.getOperand(2).isImm())
-	              return std::nullopt;
-	            switch (DefMI.getOpcode()) {
-	            case LinxISA::ADDIri:
-	            case LinxISA::ADDIWri:
-	              return DefMI.getOperand(2).getImm();
-	            default:
-	              return std::nullopt;
-	            }
-	          };
-
-	          auto ShAmtC = getConstShiftAmt(ShiftMI);
-	          if (!ShAmtC) {
-	            ++It;
-	            continue;
-	          }
-	          const int64_t ShAmt = *ShAmtC;
-	          if (ShAmt <= 0 || ShAmt >= 64) {
-	            ++It;
-	            continue;
-	          }
-
-	          const int64_t Width = 64 - ShAmt;
-	          const int64_t Imml = Width - 1; // N-1
-	          const int64_t Imms = 0;         // M=0
-	          if (!isUInt<6>(static_cast<uint64_t>(Imml))) {
-	            ++It;
-	            continue;
-	          }
-
-	          const Register ShrDst = ShrMI.getOperand(0).getReg();
-	          const unsigned NewOpc = (ShrOpc == LinxISA::SRArr) ? LinxISA::BXS
-	                                                             : LinxISA::BXU;
-	          MachineInstr *NewMI =
-	              BuildMI(MBB, ShrMI.getIterator(), ShrMI.getDebugLoc(),
-	                      TII.get(NewOpc), ShrDst)
-	                  .addReg(ShSrc)
-	                  .addImm(Imml)
-	                  .addImm(Imms)
-	                  .getInstr();
-
-	          // Remove the original two shifts.
-	          ShrMI.eraseFromParent();
-	          ShiftMI.eraseFromParent();
-
-	          // If the shift-amount materialization is now dead and not live-out,
-	          // remove it too.
-	          if (ShAmtDefMI && !isPhysRegLiveOutOfBlock(ShAmtReg)) {
-	            bool AnyUse = false;
-	            for (const MachineInstr &MI : MBB) {
-	              if (MI.isDebugInstr() || isMarkerInstr(MI))
-	                continue;
-	              if (MI.readsRegister(ShAmtReg, &TRI)) {
-	                AnyUse = true;
-	                break;
-	              }
-	            }
-	            if (!AnyUse)
-	              ShAmtDefMI->eraseFromParent();
-	          }
-
-	          Changed = true;
-	          It = std::next(NewMI->getIterator());
-	          continue;
-	        }
-
-	        const bool IsSLLI =
-	            (ShiftOpc == LinxISA::SLLIri || ShiftOpc == LinxISA::SLLIWri);
-	        if (!IsSLLI || ShiftMI.getNumOperands() < 3 || !ShiftMI.getOperand(2).isImm()) {
-	          ++It;
-	          continue;
+          Register LHSReg = Last->getOperand(0).getReg();
+          Register RHSReg = Last->getOperand(1).getReg();
+          bool EmittedImmSetc = false;
+          auto pickSetcImm = [&](unsigned BrOpc) -> unsigned {
+            switch (BrOpc) {
+            case LinxISA::BEQ:
+              return LinxISA::SETC_EQI;
+            case LinxISA::BNE:
+              return LinxISA::SETC_NEI;
+            case LinxISA::BLT:
+              return LinxISA::SETC_LTI;
+            case LinxISA::BGE:
+              return LinxISA::SETC_GEI;
+            case LinxISA::BLTU:
+              return LinxISA::SETC_LTUI;
+            case LinxISA::BGEU:
+              return LinxISA::SETC_GEUI;
+            default:
+              llvm_unreachable("Unexpected branch opcode");
+            }
+          };
+
+          auto getSingleUseImmFromZero =
+              [&](MachineInstr &UseMI, Register Reg,
+                  MachineInstr *&DefMIOut) -> std::optional<int64_t> {
+            DefMIOut = nullptr;
+            if (!Reg || !Reg.isPhysical())
+              return std::nullopt;
+
+            for (auto It = UseMI.getIterator(); It != MBB.begin();) {
+              --It;
+              MachineInstr &MI = *It;
+              if (MI.isDebugInstr() || isMarkerInstr(MI))
+                continue;
+              if (!MI.definesRegister(Reg, &TRI))
+                continue;
+              DefMIOut = &MI;
+              break;
+            }
+            if (!DefMIOut)
+              return std::nullopt;
+
+            MachineInstr &DefMI = *DefMIOut;
+            auto isFromZero = [&](unsigned BaseOpNo) -> bool {
+              if (BaseOpNo >= DefMI.getNumOperands())
+                return false;
+              const MachineOperand &MO = DefMI.getOperand(BaseOpNo);
+              return MO.isReg() && MO.getReg() == LinxISA::R0;
+            };
+
+            int64_t Val = 0;
+            switch (DefMI.getOpcode()) {
+            case LinxISA::ADDIri:
+            case LinxISA::ADDIWri:
+              if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
+                  !DefMI.getOperand(2).isImm())
+                return std::nullopt;
+              Val = DefMI.getOperand(2).getImm();
+              break;
+            case LinxISA::SUBIri:
+            case LinxISA::SUBIWri:
+              if (!isFromZero(/*BaseOpNo=*/1) || DefMI.getNumOperands() < 3 ||
+                  !DefMI.getOperand(2).isImm())
+                return std::nullopt;
+              Val = -DefMI.getOperand(2).getImm();
+              break;
+            case LinxISA::LUI:
+              if (DefMI.getNumOperands() < 2 || !DefMI.getOperand(1).isImm())
+                return std::nullopt;
+              Val = DefMI.getOperand(1).getImm() << 12;
+              break;
+            default:
+              return std::nullopt;
+            }
+
+            if (!hasSingleNonDbgUseInMBB(Reg, &UseMI, &DefMI))
+              return std::nullopt;
+            if (isPhysRegLiveOutOfBlock(Reg))
+              return std::nullopt;
+            return Val;
+          };
+
+          auto tryEmitSetcImm = [&](unsigned BrOpc, Register SrcReg,
+                                    int64_t ImmVal,
+                                    MachineInstr *DefMI) -> bool {
+            unsigned ImmOpc = pickSetcImm(BrOpc);
+            const bool UnsignedImm = (ImmOpc == LinxISA::SETC_LTUI) ||
+                                     (ImmOpc == LinxISA::SETC_GEUI);
+            if (UnsignedImm) {
+              if (!canEncodeShiftedUnsignedImm(ImmVal, /*BaseBits=*/12))
+                return false;
+            } else {
+              if (!canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
+                return false;
+            }
+
+            auto SetcIt = findSetcInsertPt(MBB, *Last, SrcReg, Register());
+            BuildMI(MBB, SetcIt, DebugLoc(), TII.get(ImmOpc))
+                .addReg(SrcReg)
+                .addImm(ImmVal);
+            if (DefMI)
+              DefMI->eraseFromParent();
+            return true;
+          };
+
+          MachineInstr *RHSDefMI = nullptr;
+          if (auto Imm = getSingleUseImmFromZero(*Last, RHSReg, RHSDefMI)) {
+            EmittedImmSetc = tryEmitSetcImm(Last->getOpcode(),
+                                            /*SrcReg=*/LHSReg, *Imm, RHSDefMI);
+          } else {
+            MachineInstr *LHSDefMI = nullptr;
+            if (auto Imm = getSingleUseImmFromZero(*Last, LHSReg, LHSDefMI)) {
+              const int64_t C = *Imm;
+              switch (Last->getOpcode()) {
+              case LinxISA::BEQ:
+              case LinxISA::BNE:
+                EmittedImmSetc = tryEmitSetcImm(Last->getOpcode(),
+                                                /*SrcReg=*/RHSReg, C, LHSDefMI);
+                break;
+              case LinxISA::BLT:
+                if (C != std::numeric_limits<int64_t>::max())
+                  EmittedImmSetc = tryEmitSetcImm(
+                      LinxISA::BGE, /*SrcReg=*/RHSReg, C + 1, LHSDefMI);
+                break;
+              case LinxISA::BGE:
+                if (C != std::numeric_limits<int64_t>::max())
+                  EmittedImmSetc = tryEmitSetcImm(
+                      LinxISA::BLT, /*SrcReg=*/RHSReg, C + 1, LHSDefMI);
+                break;
+              case LinxISA::BLTU: {
+                const uint64_t CU = static_cast<uint64_t>(C);
+                if (CU != std::numeric_limits<uint64_t>::max())
+                  EmittedImmSetc =
+                      tryEmitSetcImm(LinxISA::BGEU, /*SrcReg=*/RHSReg,
+                                     static_cast<int64_t>(CU + 1), LHSDefMI);
+                break;
+              }
+              case LinxISA::BGEU: {
+                const uint64_t CU = static_cast<uint64_t>(C);
+                if (CU != std::numeric_limits<uint64_t>::max())
+                  EmittedImmSetc =
+                      tryEmitSetcImm(LinxISA::BLTU, /*SrcReg=*/RHSReg,
+                                     static_cast<int64_t>(CU + 1), LHSDefMI);
+                break;
+              }
+              default:
+                break;
+              }
+            }
+          }
+
+          if (!EmittedImmSetc) {
+            auto tryEmitZextWSetcUW = [&]() -> bool {
+              if (!linxEnableSetcSrcRTypeFlags())
+                return false;
+              if (Last->getOpcode() != LinxISA::BEQ &&
+                  Last->getOpcode() != LinxISA::BNE)
+                return false;
+              if ((LHSReg == LinxISA::R0) == (RHSReg == LinxISA::R0))
+                return false;
+
+              const Register ZextReg =
+                  (LHSReg == LinxISA::R0) ? RHSReg : LHSReg;
+              Register OrigSrc;
+              MachineInstr *SllMI = nullptr;
+              MachineInstr *SrlMI = nullptr;
+              if (!matchZextWByShiftPair(*Last, ZextReg, OrigSrc, SllMI, SrlMI))
+                return false;
+
+              const unsigned NewSetcOpc = (Last->getOpcode() == LinxISA::BEQ)
+                                              ? LinxISA::SETC_EQ
+                                              : LinxISA::SETC_NE;
+              auto SetcIt = findSetcInsertPt(MBB, *Last, LinxISA::R0, OrigSrc);
+              MachineInstr *NewMI =
+                  BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
+                      .addReg(LinxISA::R0)
+                      .addReg(OrigSrc)
+                      .getInstr();
+              (void)NewMI;
+
+              SrlMI->eraseFromParent();
+              SllMI->eraseFromParent();
+              return true;
+            };
+
+            if (tryEmitZextWSetcUW())
+              EmittedImmSetc = true;
+
+            auto tryEmitLogicSetcMask = [&]() -> bool {
+              if (!linxEnableMaskSetcFold())
+                return false;
+              if (Last->getOpcode() != LinxISA::BNE)
+                return false;
+
+              Register ValSide = Register();
+              MachineInstr *ZeroDefMI = nullptr;
+              if (LHSReg == LinxISA::R0 && RHSReg != LinxISA::R0)
+                ValSide = RHSReg;
+              else if (RHSReg == LinxISA::R0 && LHSReg != LinxISA::R0)
+                ValSide = LHSReg;
+              else {
+                auto isZeroFromR0 = [&](Register Reg,
+                                        MachineInstr *&DefMIOut) -> bool {
+                  if (!Reg)
+                    return false;
+                  if (auto Imm = getSingleUseImmFromZero(*Last, Reg, DefMIOut))
+                    return *Imm == 0;
+                  return false;
+                };
+                MachineInstr *LZeroDefMI = nullptr;
+                MachineInstr *RZeroDefMI = nullptr;
+                const bool LZero = isZeroFromR0(LHSReg, LZeroDefMI);
+                const bool RZero = isZeroFromR0(RHSReg, RZeroDefMI);
+                if (LZero == RZero)
+                  return false;
+                if (LZero) {
+                  ValSide = RHSReg;
+                  ZeroDefMI = LZeroDefMI;
+                } else {
+                  ValSide = LHSReg;
+                  ZeroDefMI = RZeroDefMI;
+                }
+              }
+
+              MachineInstr *DefMI = nullptr;
+              for (auto It = Last->getIterator(); It != MBB.begin();) {
+                --It;
+                MachineInstr &MI = *It;
+                if (MI.isDebugInstr() || isMarkerInstr(MI))
+                  continue;
+                if (MI.definesRegister(ValSide, &TRI)) {
+                  DefMI = &MI;
+                  break;
+                }
+              }
+              if (!DefMI)
+                return false;
+              if (!hasSingleNonDbgUseInMBB(ValSide, Last, DefMI))
+                return false;
+              if (isPhysRegLiveOutOfBlock(ValSide))
+                return false;
+
+              unsigned NewSetcOpc = 0;
+              Register SrcA = Register(), SrcB = Register();
+              int64_t ImmVal = 0;
+              bool IsImm = false;
+
+              switch (DefMI->getOpcode()) {
+              case LinxISA::ANDrr:
+              case LinxISA::ANDWrr:
+                NewSetcOpc = LinxISA::SETC_AND;
+                SrcA = DefMI->getOperand(1).getReg();
+                SrcB = DefMI->getOperand(2).getReg();
+                break;
+              case LinxISA::ORrr:
+              case LinxISA::ORWrr:
+                NewSetcOpc = LinxISA::SETC_OR;
+                SrcA = DefMI->getOperand(1).getReg();
+                SrcB = DefMI->getOperand(2).getReg();
+                break;
+              case LinxISA::ANDIri:
+              case LinxISA::ANDIWri:
+              case LinxISA::HLANDIri:
+              case LinxISA::HLANDIWri:
+                if (!DefMI->getOperand(2).isImm())
+                  return false;
+                SrcA = DefMI->getOperand(1).getReg();
+                ImmVal = DefMI->getOperand(2).getImm();
+                if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
+                  NewSetcOpc = LinxISA::SETC_ANDI;
+                else
+                  NewSetcOpc = LinxISA::HLSETC_ANDI;
+                IsImm = true;
+                break;
+              case LinxISA::ORIri:
+              case LinxISA::ORIWri:
+              case LinxISA::HLORIri:
+              case LinxISA::HLORIWri:
+                if (!DefMI->getOperand(2).isImm())
+                  return false;
+                SrcA = DefMI->getOperand(1).getReg();
+                ImmVal = DefMI->getOperand(2).getImm();
+                if (canEncodeShiftedSignedImm(ImmVal, /*BaseBits=*/12))
+                  NewSetcOpc = LinxISA::SETC_ORI;
+                else
+                  NewSetcOpc = LinxISA::HLSETC_ORI;
+                IsImm = true;
+                break;
+              default:
+                return false;
+              }
+
+              auto SetcIt =
+                  findSetcInsertPt(MBB, *Last, SrcA, IsImm ? Register() : SrcB);
+              if (IsImm) {
+                BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
+                    .addReg(SrcA)
+                    .addImm(ImmVal);
+              } else {
+                BuildMI(MBB, SetcIt, DebugLoc(), TII.get(NewSetcOpc))
+                    .addReg(SrcA)
+                    .addReg(SrcB);
+              }
+              if (ZeroDefMI)
+                ZeroDefMI->eraseFromParent();
+              DefMI->eraseFromParent();
+              return true;
+            };
+
+            if (!EmittedImmSetc && !tryEmitLogicSetcMask()) {
+              auto SetcIt = findSetcInsertPt(MBB, *Last, LHSReg, RHSReg);
+              BuildMI(MBB, SetcIt, DebugLoc(), TII.get(SetcOpc))
+                  .addReg(LHSReg)
+                  .addReg(RHSReg);
+            }
+          }
+          Last->eraseFromParent();
+          Changed = true;
+          break;
+        }
+        default:
+          break;
+        }
+      }
+
+      auto isAbiTransferReg = [&](Register Reg) -> bool {
+        switch (Reg) {
+        case LinxISA::R2:
+        case LinxISA::R3:
+        case LinxISA::R4:
+        case LinxISA::R5:
+        case LinxISA::R6:
+        case LinxISA::R7:
+        case LinxISA::R8:
+        case LinxISA::R9:
+          return true;
+        default:
+          return false;
+        }
+      };
+
+      const bool ExitMayUseAbiRegs =
+          Kind == ExitKind::Call || Kind == ExitKind::ICall ||
+          Kind == ExitKind::Ret ||
+          ((Kind == ExitKind::Direct || Kind == ExitKind::Ind) && CallTargetOp);
+
+      auto isImplicitAbiUseAtExit = [&](Register Reg) -> bool {
+        return ExitMayUseAbiRegs && isAbiTransferReg(Reg);
+      };
+
+      // Peephole after BlockISA exit lowering (but before inserting block
+      // markers and T/U remapping): fold a word zero-extend shift-pair
+      // feeding a compare against zero into a SrcR `.uw` conversion
+      // modifier. The ISA only supports conversions on the right operand,
+      // so we flip operands when needed:
+      //
+      //   tmp1 = sll x, 32
+      //   tmp2 = srl tmp1, 32
+      //   c.setc.ne tmp2, zero
+      // =>
+      //   setc.ne zero, x<.uw>
+      auto prevNonMarkerMI =
+          [&](MachineBasicBlock::iterator Pos) -> MachineInstr * {
+        auto It = Pos;
+        while (It != MBB.begin()) {
+          --It;
+          if (It->isDebugInstr() || isMarkerInstr(*It))
+            continue;
+          return &*It;
+        }
+        return nullptr;
+      };
+
+      auto hasUseBeforeDefFrom =
+          [&](Register Reg, MachineBasicBlock::iterator Start) -> bool {
+        if (!Reg)
+          return false;
+        for (auto It = Start; It != MBB.end(); ++It) {
+          MachineInstr &MI = *It;
+          if (MI.isDebugInstr() || isMarkerInstr(MI))
+            continue;
+          if (MI.definesRegister(Reg, &TRI))
+            return false;
+          for (const MachineOperand &MO : MI.operands()) {
+            if (!MO.isReg() || MO.isImplicit() || MO.isDef())
+              continue;
+            if (MO.getReg() == Reg)
+              return true;
+          }
+        }
+        return false;
+      };
+
+      auto matchAdjacentZextWByShiftPair =
+          [&](MachineInstr &UseMI, Register ZextReg, Register &OrigSrc,
+              MachineInstr *&SllMIOut, MachineInstr *&SrlMIOut) -> bool {
+        OrigSrc = Register();
+        SllMIOut = nullptr;
+        SrlMIOut = nullptr;
+        if (!ZextReg)
+          return false;
+
+        MachineInstr *SrlMI = prevNonMarkerMI(UseMI.getIterator());
+        if (!SrlMI || SrlMI->getOpcode() != LinxISA::SRLrr ||
+            SrlMI->getNumOperands() < 3 || !SrlMI->getOperand(1).isReg() ||
+            !SrlMI->getOperand(2).isReg())
+          return false;
+        if (!SrlMI->definesRegister(ZextReg, &TRI))
+          return false;
+
+        const Register Tmp1 = SrlMI->getOperand(1).getReg();
+        const Register ShAmtReg = SrlMI->getOperand(2).getReg();
+        if (!Tmp1 || !ShAmtReg)
+          return false;
+
+        MachineInstr *SllMI = prevNonMarkerMI(SrlMI->getIterator());
+        if (!SllMI || SllMI->getOpcode() != LinxISA::SLLrr ||
+            SllMI->getNumOperands() < 3 || !SllMI->getOperand(1).isReg() ||
+            !SllMI->getOperand(2).isReg())
+          return false;
+        if (!SllMI->definesRegister(Tmp1, &TRI))
+          return false;
+        if (SllMI->getOperand(2).getReg() != ShAmtReg)
+          return false;
+
+        auto getConstShiftAmt =
+            [&](MachineInstr &Anchor) -> std::optional<int64_t> {
+          for (auto DI = Anchor.getIterator(); DI != MBB.begin();) {
+            --DI;
+            MachineInstr &DefMI = *DI;
+            if (DefMI.isDebugInstr() || isMarkerInstr(DefMI))
+              continue;
+            if (!DefMI.definesRegister(ShAmtReg, &TRI))
+              continue;
+            if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(1).isReg() ||
+                DefMI.getOperand(1).getReg() != LinxISA::R0 ||
+                !DefMI.getOperand(2).isImm())
+              return std::nullopt;
+            switch (DefMI.getOpcode()) {
+            case LinxISA::ADDIri:
+            case LinxISA::ADDIWri:
+              return DefMI.getOperand(2).getImm();
+            default:
+              return std::nullopt;
+            }
+          }
+          if (ShAmtReg.isPhysical())
+            return getPhysRegConstAtMBBEntry(ShAmtReg);
+          return std::nullopt;
+        };
+
+        auto ShAmtC = getConstShiftAmt(*SrlMI);
+        if (!ShAmtC || *ShAmtC != 32)
+          return false;
+
+        const Register Src = SllMI->getOperand(1).getReg();
+        if (!Src)
+          return false;
+
+        // Ensure the shift results are not used later (otherwise removing
+        // the shifts would break the block).
+        if (hasUseBeforeDefFrom(ZextReg, std::next(UseMI.getIterator())))
+          return false;
+        if (hasUseBeforeDefFrom(Tmp1, std::next(SrlMI->getIterator())))
+          return false;
+
+        OrigSrc = Src;
+        SllMIOut = SllMI;
+        SrlMIOut = SrlMI;
+        return true;
+      };
+
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &MI = *It;
+        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned Opc = MI.getOpcode();
+        const bool IsEq = (Opc == LinxISA::CSETC_EQ || Opc == LinxISA::SETC_EQ);
+        const bool IsNe = (Opc == LinxISA::CSETC_NE || Opc == LinxISA::SETC_NE);
+        if (!IsEq && !IsNe) {
+          ++It;
+          continue;
+        }
+        if (!linxEnableSetcSrcRTypeFlags()) {
+          ++It;
+          continue;
+        }
+
+        if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
+            !MI.getOperand(1).isReg()) {
+          ++It;
+          continue;
+        }
+
+        const Register A = MI.getOperand(0).getReg();
+        const Register B = MI.getOperand(1).getReg();
+        if (!A || !B) {
+          ++It;
+          continue;
+        }
+        if (A != LinxISA::R0 && B != LinxISA::R0) {
+          ++It;
+          continue;
+        }
+
+        const Register ZextReg = (A == LinxISA::R0) ? B : A;
+        Register OrigSrc;
+        MachineInstr *SllMI = nullptr;
+        MachineInstr *SrlMI = nullptr;
+        if (!matchAdjacentZextWByShiftPair(MI, ZextReg, OrigSrc, SllMI,
+                                           SrlMI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned NewOpc = IsEq ? LinxISA::SETC_EQ : LinxISA::SETC_NE;
+        MachineInstr *NewMI =
+            BuildMI(MBB, MI.getIterator(), MI.getDebugLoc(), TII.get(NewOpc))
+                .addReg(LinxISA::R0)
+                .addReg(OrigSrc)
+                .getInstr();
+        (void)NewMI;
+
+        auto NextIt = std::next(It);
+        MI.eraseFromParent();
+        SrlMI->eraseFromParent();
+        SllMI->eraseFromParent();
+        Changed = true;
+        It = NextIt;
+      }
+
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &MI = *It;
+        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned Opc = MI.getOpcode();
+        const bool IsEq = (Opc == LinxISA::CMPEQ);
+        const bool IsNe = (Opc == LinxISA::CMPNE);
+        if (!IsEq && !IsNe) {
+          ++It;
+          continue;
+        }
+        if (!linxEnableSetcSrcRTypeFlags()) {
+          ++It;
+          continue;
+        }
+
+        if (MI.getNumOperands() < 3 || !MI.getOperand(1).isReg() ||
+            !MI.getOperand(2).isReg()) {
+          ++It;
+          continue;
+        }
+
+        const Register SrcL = MI.getOperand(1).getReg();
+        const Register SrcR = MI.getOperand(2).getReg();
+        if (!SrcL || !SrcR) {
+          ++It;
+          continue;
+        }
+        if (SrcL != LinxISA::R0 && SrcR != LinxISA::R0) {
+          ++It;
+          continue;
+        }
+
+        const Register ZextReg = (SrcL == LinxISA::R0) ? SrcR : SrcL;
+        Register OrigSrc;
+        MachineInstr *SllMI = nullptr;
+        MachineInstr *SrlMI = nullptr;
+        if (!matchAdjacentZextWByShiftPair(MI, ZextReg, OrigSrc, SllMI,
+                                           SrlMI)) {
+          ++It;
+          continue;
+        }
+
+        MI.getOperand(1).setReg(LinxISA::R0);
+        MI.getOperand(2).setReg(OrigSrc);
+
+        auto NextIt = std::next(It);
+        SrlMI->eraseFromParent();
+        SllMI->eraseFromParent();
+        Changed = true;
+        It = NextIt;
+      }
+
+      // Pre-blockify peephole: fuse MUL + ADD into MADD when the MUL result
+      // is single-use in the block.
+      //
+      //   tmp = mul  a, b
+      //   dst = add  tmp, c
+      // =>
+      //   dst = madd a, b, c
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &MulMI = *It;
+        if (MulMI.isDebugInstr() || isMarkerInstr(MulMI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned MulOpc = MulMI.getOpcode();
+        const bool IsMul64 = (MulOpc == LinxISA::MULrr);
+        const bool IsMul32 = (MulOpc == LinxISA::MULWrr);
+        if (!IsMul64 && !IsMul32) {
+          ++It;
+          continue;
+        }
+
+        if (MulMI.getNumOperands() < 3 || !MulMI.getOperand(0).isReg() ||
+            !MulMI.getOperand(0).isDef() || !MulMI.getOperand(1).isReg() ||
+            !MulMI.getOperand(2).isReg()) {
+          ++It;
+          continue;
+        }
+
+        const Register Tmp = MulMI.getOperand(0).getReg();
+        const Register A = MulMI.getOperand(1).getReg();
+        const Register B = MulMI.getOperand(2).getReg();
+        if (!Tmp.isPhysical() || !A.isPhysical() || !B.isPhysical()) {
+          ++It;
+          continue;
+        }
+        if (isPhysRegLiveOutOfBlock(Tmp)) {
+          ++It;
+          continue;
+        }
+
+        // Find the next real instruction that reads Tmp and try to match ADD.
+        auto NextIt = std::next(It);
+        while (NextIt != MBB.end() &&
+               (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
+          ++NextIt;
+        if (NextIt == MBB.end()) {
+          ++It;
+          continue;
+        }
+
+        MachineInstr &AddMI = *NextIt;
+        const unsigned AddOpc = AddMI.getOpcode();
+        const bool IsAdd64 = (AddOpc == LinxISA::ADDrr);
+        const bool IsAdd32 = (AddOpc == LinxISA::ADDWrr);
+        if (!((IsMul64 && IsAdd64) || (IsMul32 && IsAdd32))) {
+          ++It;
+          continue;
+        }
+
+        if (AddMI.getNumOperands() < 3 || !AddMI.getOperand(0).isReg() ||
+            !AddMI.getOperand(0).isDef() || !AddMI.getOperand(1).isReg() ||
+            !AddMI.getOperand(2).isReg()) {
+          ++It;
+          continue;
+        }
+
+        const Register Dst = AddMI.getOperand(0).getReg();
+        if (!Dst.isPhysical()) {
+          ++It;
+          continue;
+        }
+
+        const Register Op1 = AddMI.getOperand(1).getReg();
+        const Register Op2 = AddMI.getOperand(2).getReg();
+        Register C = Register();
+        if (Op1 == Tmp && Op2.isPhysical())
+          C = Op2;
+        else if (Op2 == Tmp && Op1.isPhysical())
+          C = Op1;
+        else {
+          ++It;
+          continue;
+        }
+
+        if (!hasSingleNonDbgUseInMBB(Tmp, &AddMI, &MulMI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned MaddOpc = IsMul64 ? LinxISA::MADD : LinxISA::MADDW;
+        MachineInstr *NewMI =
+            BuildMI(MBB, AddMI.getIterator(), AddMI.getDebugLoc(),
+                    TII.get(MaddOpc), Dst)
+                .addReg(A)
+                .addReg(B)
+                .addReg(C)
+                .getInstr();
+
+        AddMI.eraseFromParent();
+        MulMI.eraseFromParent();
+        It = std::next(NewMI->getIterator());
+        Changed = true;
+      }
+
+      // Peephole: sink simple address calculations into immediate-offset
+      // loads/stores when the combined offset fits the instruction encoding.
+      //
+      // This favors using complex addressing modes over sharing an AGEN
+      // temporary across multiple memory ops:
+      //   addi tmp, base, C
+      //   lw   rd, [tmp + off]
+      // =>
+      //   lw   rd, [base + (C+off)]
+      //
+      // When all uses of `tmp` in the block are foldable, the AGEN is removed.
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &DefMI = *It;
+        if (DefMI.isDebugInstr() || isMarkerInstr(DefMI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned DefOpc = DefMI.getOpcode();
+        const bool IsAddI =
+            (DefOpc == LinxISA::ADDIri || DefOpc == LinxISA::ADDIWri);
+        const bool IsSubI =
+            (DefOpc == LinxISA::SUBIri || DefOpc == LinxISA::SUBIWri);
+        if (!IsAddI && !IsSubI) {
+          ++It;
+          continue;
+        }
+        if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(0).isReg() ||
+            !DefMI.getOperand(0).isDef() || !DefMI.getOperand(1).isReg() ||
+            !DefMI.getOperand(2).isImm()) {
+          ++It;
+          continue;
+        }
+
+        const Register Tmp = DefMI.getOperand(0).getReg();
+        const Register Base = DefMI.getOperand(1).getReg();
+        const int64_t Addend = IsSubI ? -DefMI.getOperand(2).getImm()
+                                      : DefMI.getOperand(2).getImm();
+        if (!Tmp || !Tmp.isPhysical() || !Base || !Base.isPhysical()) {
+          ++It;
+          continue;
+        }
+        // This peephole is intended for the "address-generation temporary"
+        // shape `addi tmp, base, C` where `tmp` is a distinct register. If we
+        // try to fold an in-place update (tmp == base), we would need to
+        // *remove* the defining instruction to preserve semantics; doing so
+        // is generally not possible for reserved/live-out regs like `sp`.
+        if (Tmp == Base) {
+          ++It;
+          continue;
+        }
+        const bool CanEraseDef = !isPhysRegLiveOutOfBlock(Tmp);
+
+        struct UseRef {
+          MachineInstr *MI;
+          unsigned BaseOpNo;
+          unsigned OffOpNo;
+        };
+        SmallVector<UseRef, 4> Uses;
+
+        auto isFoldableMem = [&](MachineInstr &MI, unsigned &BaseOpNo,
+                                 unsigned &OffOpNo) -> bool {
+          const unsigned Opc = MI.getOpcode();
+          switch (Opc) {
+          case LinxISA::LBI:
+          case LinxISA::LBUI:
+          case LinxISA::LHI:
+          case LinxISA::LHUI:
+          case LinxISA::LWI:
+          case LinxISA::LWUI:
+          case LinxISA::LDI:
+          case LinxISA::SBI:
+          case LinxISA::SHI:
+          case LinxISA::SWI:
+          case LinxISA::SDI:
+            BaseOpNo = 1;
+            OffOpNo = 2;
+            return true;
+          default:
+            return false;
+          }
+        };
+        auto memImmScale = [&](unsigned Opc) -> int64_t {
+          switch (Opc) {
+          case LinxISA::LBI:
+          case LinxISA::LBUI:
+          case LinxISA::SBI:
+            return 1;
+          case LinxISA::LHI:
+          case LinxISA::LHUI:
+          case LinxISA::SHI:
+            return 2;
+          case LinxISA::LWI:
+          case LinxISA::LWUI:
+          case LinxISA::SWI:
+            return 4;
+          case LinxISA::LDI:
+          case LinxISA::SDI:
+            return 8;
+          default:
+            return 1;
+          }
+        };
+
+        // Collect all uses from DefMI onwards until Tmp is redefined.
+        bool Bad = false;
+        bool StoppedByBaseDef = false;
+        for (auto UI = std::next(It), UE = MBB.end(); UI != UE; ++UI) {
+          MachineInstr &MI = *UI;
+          if (MI.isDebugInstr() || isMarkerInstr(MI))
+            continue;
+          if (MI.definesRegister(Tmp, &TRI))
+            break;
+          // Folding `tmp = base + C` into uses of `tmp` requires that `base`
+          // still holds the same value. If `base` is redefined, stop
+          // collecting fold candidates to avoid rewriting memory ops to use
+          // an updated base.
+          if (MI.definesRegister(Base, &TRI)) {
+            StoppedByBaseDef = true;
+            break;
+          }
+
+          unsigned BaseOpNo = 0, OffOpNo = 0;
+          if (!isFoldableMem(MI, BaseOpNo, OffOpNo)) {
+            if (MI.readsRegister(Tmp, &TRI)) {
+              Bad = true;
+              break;
+            }
+            continue;
+          }
+
+          if (BaseOpNo >= MI.getNumOperands() ||
+              OffOpNo >= MI.getNumOperands()) {
+            Bad = true;
+            break;
+          }
+          MachineOperand &BaseMO = MI.getOperand(BaseOpNo);
+          MachineOperand &OffMO = MI.getOperand(OffOpNo);
+          if (!BaseMO.isReg() || BaseMO.getReg() != Tmp) {
+            if (MI.readsRegister(Tmp, &TRI)) {
+              Bad = true;
+              break;
+            }
+            continue;
+          }
+          if (!OffMO.isImm()) {
+            Bad = true;
+            break;
+          }
+
+          const int64_t OldOff = OffMO.getImm();
+          // The machine-level mem-immediate is in *scaled units* (AArch64
+          // style): the final byte offset is `imm * access_size`. Convert the
+          // address-generation addend (bytes) into the same unit system.
+          const int64_t Scale = memImmScale(MI.getOpcode());
+          if (Scale <= 0 || (Addend % Scale) != 0) {
+            Bad = true;
+            break;
+          }
+          const int64_t NewOff = OldOff + (Addend / Scale);
+          if (!isInt<12>(NewOff)) {
+            Bad = true;
+            break;
+          }
+
+          Uses.push_back(UseRef{&MI, BaseOpNo, OffOpNo});
+        }
+
+        if (Bad || Uses.empty()) {
+          ++It;
+          continue;
+        }
+
+        for (const UseRef &U : Uses) {
+          U.MI->getOperand(U.BaseOpNo).setReg(Base);
+          const int64_t OldOff = U.MI->getOperand(U.OffOpNo).getImm();
+          const int64_t Scale = memImmScale(U.MI->getOpcode());
+          U.MI->getOperand(U.OffOpNo).setImm(OldOff + (Addend / Scale));
+        }
+
+        auto Next = std::next(It);
+        if (CanEraseDef && !StoppedByBaseDef) {
+          DefMI.eraseFromParent();
+          It = Next;
+        } else {
+          It = Next;
+        }
+        Changed = true;
+      }
+
+      // Peephole: fold `slli tmp, x, k; add dst, base, tmp` into
+      // `add base, x<<k, ->dst` (uses the ISA shamt field).
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &ShiftMI = *It;
+        if (ShiftMI.isDebugInstr() || isMarkerInstr(ShiftMI)) {
+          ++It;
+          continue;
+        }
+
+        const unsigned ShiftOpc = ShiftMI.getOpcode();
+
+        // Peephole: fold `sll tmp, x, sh; srl/sra dst, tmp, sh` into
+        // `bxu/bxs x, M=0, N=<width>`.
+        if (ShiftOpc == LinxISA::SLLrr && ShiftMI.getNumOperands() >= 3 &&
+            ShiftMI.getOperand(2).isReg()) {
+          const Register ShDst = ShiftMI.getOperand(0).getReg();
+          const Register ShSrc = ShiftMI.getOperand(1).getReg();
+          const Register ShAmtReg = ShiftMI.getOperand(2).getReg();
+
+          auto NextIt = std::next(It);
+          while (NextIt != MBB.end() &&
+                 (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
+            ++NextIt;
+          if (NextIt == MBB.end()) {
+            ++It;
+            continue;
+          }
+
+          MachineInstr &ShrMI = *NextIt;
+          const unsigned ShrOpc = ShrMI.getOpcode();
+          const bool IsShiftR =
+              (ShrOpc == LinxISA::SRLrr || ShrOpc == LinxISA::SRArr);
+          if (!IsShiftR || ShrMI.getNumOperands() < 3) {
+            ++It;
+            continue;
+          }
+
+          if (ShrMI.getOperand(1).getReg() != ShDst ||
+              !ShrMI.getOperand(2).isReg() ||
+              ShrMI.getOperand(2).getReg() != ShAmtReg) {
+            ++It;
+            continue;
+          }
+
+          // The shifted temporary must be single-use.
+          if (isImplicitAbiUseAtExit(ShDst) ||
+              !hasSingleNonDbgUseInMBB(ShDst, &ShrMI, &ShiftMI)) {
+            ++It;
+            continue;
+          }
+
+          // Recover the constant shift amount from its defining instruction.
+          MachineInstr *ShAmtDefMI = nullptr;
+          auto getConstShiftAmt =
+              [&](MachineInstr &UseMI) -> std::optional<int64_t> {
+            if (!ShAmtReg || !ShAmtReg.isPhysical())
+              return std::nullopt;
+            for (auto DI = UseMI.getIterator(); DI != MBB.begin();) {
+              --DI;
+              MachineInstr &DefMI = *DI;
+              if (DefMI.isDebugInstr() || isMarkerInstr(DefMI))
+                continue;
+              if (!DefMI.definesRegister(ShAmtReg, &TRI))
+                continue;
+              ShAmtDefMI = &DefMI;
+              break;
+            }
+            if (!ShAmtDefMI)
+              return std::nullopt;
+
+            MachineInstr &DefMI = *ShAmtDefMI;
+            if (DefMI.getNumOperands() < 3 || !DefMI.getOperand(1).isReg() ||
+                DefMI.getOperand(1).getReg() != LinxISA::R0 ||
+                !DefMI.getOperand(2).isImm())
+              return std::nullopt;
+            switch (DefMI.getOpcode()) {
+            case LinxISA::ADDIri:
+            case LinxISA::ADDIWri:
+              return DefMI.getOperand(2).getImm();
+            default:
+              return std::nullopt;
+            }
+          };
+
+          auto ShAmtC = getConstShiftAmt(ShiftMI);
+          if (!ShAmtC) {
+            ++It;
+            continue;
+          }
+          const int64_t ShAmt = *ShAmtC;
+          if (ShAmt <= 0 || ShAmt >= 64) {
+            ++It;
+            continue;
+          }
+
+          const int64_t Width = 64 - ShAmt;
+          const int64_t Imml = Width - 1; // N-1
+          const int64_t Imms = 0;         // M=0
+          if (!isUInt<6>(static_cast<uint64_t>(Imml))) {
+            ++It;
+            continue;
+          }
+
+          const Register ShrDst = ShrMI.getOperand(0).getReg();
+          const unsigned NewOpc =
+              (ShrOpc == LinxISA::SRArr) ? LinxISA::BXS : LinxISA::BXU;
+          MachineInstr *NewMI =
+              BuildMI(MBB, ShrMI.getIterator(), ShrMI.getDebugLoc(),
+                      TII.get(NewOpc), ShrDst)
+                  .addReg(ShSrc)
+                  .addImm(Imml)
+                  .addImm(Imms)
+                  .getInstr();
+
+          // Remove the original two shifts.
+          ShrMI.eraseFromParent();
+          ShiftMI.eraseFromParent();
+
+          // If the shift-amount materialization is now dead and not live-out,
+          // remove it too.
+          if (ShAmtDefMI && !isPhysRegLiveOutOfBlock(ShAmtReg)) {
+            bool AnyUse = false;
+            for (const MachineInstr &MI : MBB) {
+              if (MI.isDebugInstr() || isMarkerInstr(MI))
+                continue;
+              if (MI.readsRegister(ShAmtReg, &TRI)) {
+                AnyUse = true;
+                break;
+              }
+            }
+            if (!AnyUse)
+              ShAmtDefMI->eraseFromParent();
+          }
+
+          Changed = true;
+          It = std::next(NewMI->getIterator());
+          continue;
+        }
+
+        const bool IsSLLI =
+            (ShiftOpc == LinxISA::SLLIri || ShiftOpc == LinxISA::SLLIWri);
+        if (!IsSLLI || ShiftMI.getNumOperands() < 3 ||
+            !ShiftMI.getOperand(2).isImm()) {
+          ++It;
+          continue;
         }
 
         const Register ShDst = ShiftMI.getOperand(0).getReg();
@@ -5500,48 +5625,49 @@ public:
           continue;
         }
 
-	        auto NextIt = std::next(It);
-	        while (NextIt != MBB.end() &&
-	               (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
-	          ++NextIt;
+        auto NextIt = std::next(It);
+        while (NextIt != MBB.end() &&
+               (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
+          ++NextIt;
         if (NextIt == MBB.end()) {
           ++It;
           continue;
         }
 
-	        MachineInstr &BinMI = *NextIt;
-	        const unsigned BinOpc = BinMI.getOpcode();
+        MachineInstr &BinMI = *NextIt;
+        const unsigned BinOpc = BinMI.getOpcode();
 
-	        // Peephole: fold `slli tmp, x, k; srli/srai dst, tmp, k` into BXU/BXS.
-	        if (ShiftOpc == LinxISA::SLLIri &&
-	            (BinOpc == LinxISA::SRLIri || BinOpc == LinxISA::SRAIri) &&
-	            BinMI.getNumOperands() >= 3 && BinMI.getOperand(2).isImm() &&
-	            BinMI.getOperand(1).isReg() && BinMI.getOperand(1).getReg() == ShDst &&
-	            BinMI.getOperand(2).getImm() == ShAmt) {
-	          if (hasSingleNonDbgUseInMBB(ShDst, &BinMI, &ShiftMI)) {
-	            const int64_t Width = 64 - ShAmt;
-	            const int64_t Imml = Width - 1;
-	            const int64_t Imms = 0;
-	            if (ShAmt > 0 && ShAmt < 64 &&
-	                isUInt<6>(static_cast<uint64_t>(Imml))) {
-	              const Register Dst = BinMI.getOperand(0).getReg();
-	              const unsigned NewOpc = (BinOpc == LinxISA::SRAIri) ? LinxISA::BXS
-	                                                                  : LinxISA::BXU;
-	              MachineInstr *NewMI =
-	                  BuildMI(MBB, BinMI.getIterator(), BinMI.getDebugLoc(),
-	                          TII.get(NewOpc), Dst)
-	                      .addReg(ShSrc)
-	                      .addImm(Imml)
-	                      .addImm(Imms)
-	                      .getInstr();
-	              BinMI.eraseFromParent();
-	              ShiftMI.eraseFromParent();
-	              Changed = true;
-	              It = std::next(NewMI->getIterator());
-	              continue;
-	            }
-	          }
-	        }
+        // Peephole: fold `slli tmp, x, k; srli/srai dst, tmp, k` into BXU/BXS.
+        if (ShiftOpc == LinxISA::SLLIri &&
+            (BinOpc == LinxISA::SRLIri || BinOpc == LinxISA::SRAIri) &&
+            BinMI.getNumOperands() >= 3 && BinMI.getOperand(2).isImm() &&
+            BinMI.getOperand(1).isReg() &&
+            BinMI.getOperand(1).getReg() == ShDst &&
+            BinMI.getOperand(2).getImm() == ShAmt) {
+          if (hasSingleNonDbgUseInMBB(ShDst, &BinMI, &ShiftMI)) {
+            const int64_t Width = 64 - ShAmt;
+            const int64_t Imml = Width - 1;
+            const int64_t Imms = 0;
+            if (ShAmt > 0 && ShAmt < 64 &&
+                isUInt<6>(static_cast<uint64_t>(Imml))) {
+              const Register Dst = BinMI.getOperand(0).getReg();
+              const unsigned NewOpc =
+                  (BinOpc == LinxISA::SRAIri) ? LinxISA::BXS : LinxISA::BXU;
+              MachineInstr *NewMI =
+                  BuildMI(MBB, BinMI.getIterator(), BinMI.getDebugLoc(),
+                          TII.get(NewOpc), Dst)
+                      .addReg(ShSrc)
+                      .addImm(Imml)
+                      .addImm(Imms)
+                      .getInstr();
+              BinMI.eraseFromParent();
+              ShiftMI.eraseFromParent();
+              Changed = true;
+              It = std::next(NewMI->getIterator());
+              continue;
+            }
+          }
+        }
         unsigned NewOpc = 0;
 
         if (ShiftOpc == LinxISA::SLLIri) {
@@ -5615,8 +5741,8 @@ public:
 
         // Ignore ShiftMI itself: register allocation may legally coalesce
         // `tmp` with `x`, yielding an in-place shift (e.g. `r3 = slli r3, k`).
-	        if (isImplicitAbiUseAtExit(ShDst) ||
-	            !hasSingleNonDbgUseInMBB(ShDst, &BinMI, &ShiftMI)) {
+        if (isImplicitAbiUseAtExit(ShDst) ||
+            !hasSingleNonDbgUseInMBB(ShDst, &BinMI, &ShiftMI)) {
           ++It;
           continue;
         }
@@ -5645,175 +5771,175 @@ public:
           Changed = true;
         }
       } else {
-	      // Insert `BSTART.STD <kind>` after PHIs.
-	      auto InsertBStart = MBB.begin();
-	      while (InsertBStart != MBB.end() && InsertBStart->isPHI())
-	        ++InsertBStart;
+        // Insert `BSTART.STD <kind>` after PHIs.
+        auto InsertBStart = MBB.begin();
+        while (InsertBStart != MBB.end() && InsertBStart->isPHI())
+          ++InsertBStart;
 
-      // Remove any existing start marker (in case the pass runs twice).
-      if (InsertBStart != MBB.end() &&
-          (InsertBStart->getOpcode() == LinxISA::CBSTART_STD ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_FALL ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_DIRECT ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_COND ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_CALL ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_IND ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_ICALL ||
-           InsertBStart->getOpcode() == LinxISA::BSTART_STD_RET)) {
-        InsertBStart = MBB.erase(InsertBStart);
-        Changed = true;
-      }
+        // Remove any existing start marker (in case the pass runs twice).
+        if (InsertBStart != MBB.end() &&
+            (InsertBStart->getOpcode() == LinxISA::CBSTART_STD ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_FALL ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_DIRECT ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_COND ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_CALL ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_IND ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_ICALL ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_STD_RET)) {
+          InsertBStart = MBB.erase(InsertBStart);
+          Changed = true;
+        }
 
-	      MachineInstr *BStartMI = nullptr;
-	      MachineInstr *SetRetMI = nullptr;
-	      switch (Kind) {
-      case ExitKind::Fall:
-        // Prefer the compressed BrType marker: C.BSTART (FALL).
-        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::CBSTART_STD))
-                       .addImm(1) // BrType = FALL
-                       .getInstr();
-        break;
-      case ExitKind::Direct:
-        if (CallTargetOp) {
+        MachineInstr *BStartMI = nullptr;
+        MachineInstr *SetRetMI = nullptr;
+        switch (Kind) {
+        case ExitKind::Fall:
+          // Prefer the compressed BrType marker: C.BSTART (FALL).
           BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                             TII.get(LinxISA::BSTART_STD_DIRECT))
-                         .add(*CallTargetOp)
+                             TII.get(LinxISA::CBSTART_STD))
+                         .addImm(1) // BrType = FALL
                          .getInstr();
-        } else {
-          if (!TargetBB)
-            report_fatal_error("Linx: missing direct branch target");
-          TargetBB->setLabelMustBeEmitted();
+          break;
+        case ExitKind::Direct:
+          if (CallTargetOp) {
+            BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
+                               TII.get(LinxISA::BSTART_STD_DIRECT))
+                           .add(*CallTargetOp)
+                           .getInstr();
+          } else {
+            if (!TargetBB)
+              report_fatal_error("Linx: missing direct branch target");
+            TargetBB->setLabelMustBeEmitted();
+            BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
+                               TII.get(LinxISA::BSTART_STD_DIRECT))
+                           .addMBB(TargetBB)
+                           .getInstr();
+          }
+          break;
+        case ExitKind::Cond:
+          if (TargetBB)
+            TargetBB->setLabelMustBeEmitted();
           BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                             TII.get(LinxISA::BSTART_STD_DIRECT))
+                             TII.get(LinxISA::BSTART_STD_COND))
                          .addMBB(TargetBB)
                          .getInstr();
+          break;
+        case ExitKind::Call: {
+          if (!CallTargetOp)
+            report_fatal_error("Linx: missing call target operand");
+          BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
+                             TII.get(LinxISA::BSTART_STD_CALL))
+                         .add(*CallTargetOp)
+                         .getInstr();
+          // Set return target for the call (ra = PC + imm20<<1). The ISA
+          // requires SETRET to be immediately after the CALL BSTART header.
+          if (ReturnBB) {
+            ReturnBB->setLabelMustBeEmitted();
+            auto InsertSetRet = std::next(BStartMI->getIterator());
+            SetRetMI =
+                BuildMI(MBB, InsertSetRet, DebugLoc(), TII.get(LinxISA::SETRET))
+                    .addMBB(ReturnBB)
+                    .getInstr();
+          }
+          break;
         }
-        break;
-      case ExitKind::Cond:
-        if (TargetBB)
-          TargetBB->setLabelMustBeEmitted();
-        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::BSTART_STD_COND))
-                       .addMBB(TargetBB)
-                       .getInstr();
-        break;
-	      case ExitKind::Call: {
-	        if (!CallTargetOp)
-	          report_fatal_error("Linx: missing call target operand");
-	        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-	                           TII.get(LinxISA::BSTART_STD_CALL))
-	                       .add(*CallTargetOp)
-	                       .getInstr();
-	        // Set return target for the call (ra = PC + imm20<<1). The ISA
-	        // requires SETRET to be immediately after the CALL BSTART header.
-	        if (ReturnBB) {
-	          ReturnBB->setLabelMustBeEmitted();
-	          auto InsertSetRet = std::next(BStartMI->getIterator());
-	          SetRetMI =
-	              BuildMI(MBB, InsertSetRet, DebugLoc(), TII.get(LinxISA::SETRET))
-	                  .addMBB(ReturnBB)
-	                  .getInstr();
-	        }
-	        break;
-	      }
-      case ExitKind::Ret:
-        // Prefer the compressed BrType marker: C.BSTART (RET).
-        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::CBSTART_STD))
-                       .addImm(7) // BrType = RET
-                       .getInstr();
-        break;
-      case ExitKind::Ind:
-        // Prefer the compressed BrType marker: C.BSTART (IND).
-        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                           TII.get(LinxISA::CBSTART_STD))
-                       .addImm(5) // BrType = IND
-                       .getInstr();
-        break;
-	      case ExitKind::ICall:
-	        // Prefer the compressed BrType marker: C.BSTART (ICALL).
-	        BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-	                           TII.get(LinxISA::CBSTART_STD))
-	                       .addImm(6) // BrType = ICALL
-	                       .getInstr();
-	        // Indirect calls behave like CALL blocks but select the callee via
-	        // SETC.TGT. Emit SETRET so the continuation block is reachable after
-	        // the callee returns. SETRET must be immediately after the BSTART
-	        // header.
-	        if (ReturnBB) {
-	          ReturnBB->setLabelMustBeEmitted();
-	          auto InsertSetRet = std::next(BStartMI->getIterator());
-	          SetRetMI =
-	              BuildMI(MBB, InsertSetRet, DebugLoc(), TII.get(LinxISA::SETRET))
-	                  .addMBB(ReturnBB)
-	                  .getInstr();
-	        }
-	        break;
-	      }
-      Changed = true;
+        case ExitKind::Ret:
+          // Prefer the compressed BrType marker: C.BSTART (RET).
+          BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
+                             TII.get(LinxISA::CBSTART_STD))
+                         .addImm(7) // BrType = RET
+                         .getInstr();
+          break;
+        case ExitKind::Ind:
+          // Prefer the compressed BrType marker: C.BSTART (IND).
+          BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
+                             TII.get(LinxISA::CBSTART_STD))
+                         .addImm(5) // BrType = IND
+                         .getInstr();
+          break;
+        case ExitKind::ICall:
+          // Prefer the compressed BrType marker: C.BSTART (ICALL).
+          BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
+                             TII.get(LinxISA::CBSTART_STD))
+                         .addImm(6) // BrType = ICALL
+                         .getInstr();
+          // Indirect calls behave like CALL blocks but select the callee via
+          // SETC.TGT. Emit SETRET so the continuation block is reachable after
+          // the callee returns. SETRET must be immediately after the BSTART
+          // header.
+          if (ReturnBB) {
+            ReturnBB->setLabelMustBeEmitted();
+            auto InsertSetRet = std::next(BStartMI->getIterator());
+            SetRetMI =
+                BuildMI(MBB, InsertSetRet, DebugLoc(), TII.get(LinxISA::SETRET))
+                    .addMBB(ReturnBB)
+                    .getInstr();
+          }
+          break;
+        }
+        Changed = true;
 
-		      if (HeaderSetcTgtReg) {
-		        auto InsertSetcTgt = std::next(BStartMI->getIterator());
-		        if (SetRetMI)
-		          InsertSetcTgt = std::next(SetRetMI->getIterator());
-		        BuildMI(MBB, InsertSetcTgt, DebugLoc(), TII.get(LinxISA::CSETC_TGT))
-		            .addReg(*HeaderSetcTgtReg);
-		        Changed = true;
-		      }
+        if (HeaderSetcTgtReg) {
+          auto InsertSetcTgt = std::next(BStartMI->getIterator());
+          if (SetRetMI)
+            InsertSetcTgt = std::next(SetRetMI->getIterator());
+          BuildMI(MBB, InsertSetcTgt, DebugLoc(), TII.get(LinxISA::CSETC_TGT))
+              .addReg(*HeaderSetcTgtReg);
+          Changed = true;
+        }
 
-		      if (ICallSetcTgtReg) {
-		        auto InsertSetcTgt = std::next(BStartMI->getIterator());
-		        if (SetRetMI)
-		          InsertSetcTgt = std::next(SetRetMI->getIterator());
+        if (ICallSetcTgtReg) {
+          auto InsertSetcTgt = std::next(BStartMI->getIterator());
+          if (SetRetMI)
+            InsertSetcTgt = std::next(SetRetMI->getIterator());
 
-		        auto InsertAfterCalleeDef = InsertSetcTgt;
-		        for (auto It = InsertSetcTgt, E = MBB.instr_end(); It != E; ++It) {
-		          if (It->isDebugInstr() || isMarkerInstr(*It))
-		            continue;
-		          if (It->modifiesRegister(*ICallSetcTgtReg, &TRI)) {
-		            InsertAfterCalleeDef = std::next(It);
-		          }
-		        }
+          auto InsertAfterCalleeDef = InsertSetcTgt;
+          for (auto It = InsertSetcTgt, E = MBB.instr_end(); It != E; ++It) {
+            if (It->isDebugInstr() || isMarkerInstr(*It))
+              continue;
+            if (It->modifiesRegister(*ICallSetcTgtReg, &TRI)) {
+              InsertAfterCalleeDef = std::next(It);
+            }
+          }
 
-		        BuildMI(MBB, InsertAfterCalleeDef, DebugLoc(),
-		                TII.get(LinxISA::CSETC_TGT))
-		            .addReg(*ICallSetcTgtReg);
-		        Changed = true;
-		      }
+          BuildMI(MBB, InsertAfterCalleeDef, DebugLoc(),
+                  TII.get(LinxISA::CSETC_TGT))
+              .addReg(*ICallSetcTgtReg);
+          Changed = true;
+        }
 
-	      // Assign block-local values to the hand queues.
-	      //
-	      // Hardware semantics: every definition to `t` shifts older values into
-	      // `t#1..t#4` (similarly for `u` -> `u#1..u#4`). We only rewrite values
-	      // whose uses occur within the next 4 queued defs for a chosen hand.
-	      //
-	      // Peepholes:
-	      // - Remove redundant `addw X, zero, ->Y` when Y is used only by an
-	      //   immediate SETC operation. This keeps the compare closer to the
-	      //   original producer (often a 32-bit load), and exposes more values
-	      //   as candidates for T/U-hand remapping.
-	      struct UseSite {
-	        MachineInstr *MI = nullptr;
-	        unsigned OpNo = 0;
-	        unsigned UseIdx = 0;
-	      };
-	      struct Segment {
-	        Register Reg;
-	        MachineInstr *DefMI = nullptr;
-	        unsigned DefOpNo = 0;
-	        unsigned DefIdx = 0;
-	        SmallVector<UseSite, 4> Uses;
-	        bool ClosedByRedef = false;
-	        bool TouchesInlineAsm = false;
-	      };
+        // Assign block-local values to the hand queues.
+        //
+        // Hardware semantics: every definition to `t` shifts older values into
+        // `t#1..t#4` (similarly for `u` -> `u#1..u#4`). We only rewrite values
+        // whose uses occur within the next 4 queued defs for a chosen hand.
+        //
+        // Peepholes:
+        // - Remove redundant `addw X, zero, ->Y` when Y is used only by an
+        //   immediate SETC operation. This keeps the compare closer to the
+        //   original producer (often a 32-bit load), and exposes more values
+        //   as candidates for T/U-hand remapping.
+        struct UseSite {
+          MachineInstr *MI = nullptr;
+          unsigned OpNo = 0;
+          unsigned UseIdx = 0;
+        };
+        struct Segment {
+          Register Reg;
+          MachineInstr *DefMI = nullptr;
+          unsigned DefOpNo = 0;
+          unsigned DefIdx = 0;
+          SmallVector<UseSite, 4> Uses;
+          bool ClosedByRedef = false;
+          bool TouchesInlineAsm = false;
+        };
 
-      SmallVector<Segment, 32> Segs;
-      DenseMap<unsigned, unsigned> ActiveSeg; // PhysReg.id() -> Segs index
-	      unsigned InstIdx = 0;
+        SmallVector<Segment, 32> Segs;
+        DenseMap<unsigned, unsigned> ActiveSeg; // PhysReg.id() -> Segs index
+        unsigned InstIdx = 0;
 
-        auto getNextNonMarker = [&](MachineBasicBlock::iterator It)
-            -> MachineBasicBlock::iterator {
+        auto getNextNonMarker =
+            [&](MachineBasicBlock::iterator It) -> MachineBasicBlock::iterator {
           auto E = MBB.end();
           while (It != E) {
             if (!It->isDebugInstr() && !isMarkerInstr(*It))
@@ -5837,8 +5963,8 @@ public:
           }
         };
 
-        auto hasAnyUseAfter = [&](Register Reg, MachineBasicBlock::iterator From)
-            -> bool {
+        auto hasAnyUseAfter = [&](Register Reg,
+                                  MachineBasicBlock::iterator From) -> bool {
           for (auto It = From, E = MBB.end(); It != E; ++It) {
             MachineInstr &MI = *It;
             if (MI.isDebugInstr() || isMarkerInstr(MI))
@@ -5864,7 +5990,8 @@ public:
         // instructions, not just the first header.
         auto markerHasImplicitAbiUses = [&](const MachineInstr &MI) -> bool {
           const unsigned Opc = MI.getOpcode();
-          if (Opc == LinxISA::BSTART_STD_CALL || Opc == LinxISA::BSTART_STD_ICALL ||
+          if (Opc == LinxISA::BSTART_STD_CALL ||
+              Opc == LinxISA::BSTART_STD_ICALL ||
               Opc == LinxISA::BSTART_STD_RET) {
             return true;
           }
@@ -5887,7 +6014,8 @@ public:
           }
         }
 
-        // Peephole: ADDWrr dst, src, zero; SETC_*I dst, imm  ==> SETC_*I src, imm
+        // Peephole: ADDWrr dst, src, zero; SETC_*I dst, imm  ==> SETC_*I src,
+        // imm
         for (auto It = MBB.begin(), E = MBB.end(); It != E;) {
           MachineInstr &MI = *It;
           ++It;
@@ -6039,7 +6167,8 @@ public:
                 SrcRegs.push_back(R);
             }
 
-            for (auto It = std::next(DefMI.getIterator()); &*It != &UseMI; ++It) {
+            for (auto It = std::next(DefMI.getIterator()); &*It != &UseMI;
+                 ++It) {
               MachineInstr &Mid = *It;
               if (Mid.isDebugInstr() || Mid.isCFIInstruction())
                 continue;
@@ -6049,7 +6178,8 @@ public:
                 return false;
               if (Mid.mayLoadOrStore() || Mid.hasUnmodeledSideEffects())
                 return false;
-              if (Mid.readsRegister(DefReg, &TRI) || Mid.definesRegister(DefReg, &TRI))
+              if (Mid.readsRegister(DefReg, &TRI) ||
+                  Mid.definesRegister(DefReg, &TRI))
                 return false;
               for (Register SrcReg : SrcRegs)
                 if (SrcReg && Mid.definesRegister(SrcReg, &TRI))
@@ -6083,541 +6213,545 @@ public:
           }
         }
 
-		      auto isCandidatePhysReg = [&](Register Reg) -> bool {
-		        if (!Reg || !Reg.isPhysical())
-		          return false;
-            // Only remap architectural GPR values. Never rewrite non-GPR
-            // physical registers (e.g. tile regs) into the T/U hand queues.
-            if (!LinxISA::GPRRegClass.contains(Reg))
+        auto isCandidatePhysReg = [&](Register Reg) -> bool {
+          if (!Reg || !Reg.isPhysical())
+            return false;
+          // Only remap architectural GPR values. Never rewrite non-GPR
+          // physical registers (e.g. tile regs) into the T/U hand queues.
+          if (!LinxISA::GPRRegClass.contains(Reg))
+            return false;
+          if (Reg.id() >= Reserved.size())
+            return false;
+          if (Reserved.test(Reg.id()))
+            return false;
+          // The a0-a7 argument registers are ABI-visible at CALL/ICALL/RET
+          // boundaries. Only allow remapping them inside blocks that do not
+          // implicitly consume ABI regs.
+          if (BlockHasImplicitAbiUses) {
+            switch (Reg) {
+            case LinxISA::R2:
+            case LinxISA::R3:
+            case LinxISA::R4:
+            case LinxISA::R5:
+            case LinxISA::R6:
+            case LinxISA::R7:
+            case LinxISA::R8:
+            case LinxISA::R9:
               return false;
-		        if (Reg.id() >= Reserved.size())
-	          return false;
-		        if (Reserved.test(Reg.id()))
-		          return false;
-	        // The a0-a7 argument registers are ABI-visible at CALL/ICALL/RET
-	        // boundaries. Only allow remapping them inside blocks that do not
-	        // implicitly consume ABI regs.
-	        if (BlockHasImplicitAbiUses) {
-	          switch (Reg) {
-	          case LinxISA::R2:
-	          case LinxISA::R3:
-	          case LinxISA::R4:
-	          case LinxISA::R5:
-	          case LinxISA::R6:
-	          case LinxISA::R7:
-	          case LinxISA::R8:
-	          case LinxISA::R9:
-	            return false;
-	          default:
-	            break;
-	          }
-	        }
-	        return true;
-	      };
-
-      for (MachineInstr &MI : MBB) {
-        if (MI.isDebugInstr() || isMarkerInstr(MI))
-          continue;
-
-        // Process uses before defs to handle read-modify-write forms.
-        for (unsigned OpNo = 0; OpNo < MI.getNumOperands(); ++OpNo) {
-          MachineOperand &MO = MI.getOperand(OpNo);
-          if (!MO.isReg() || MO.isImplicit() || MO.isDef())
-            continue;
-
-          Register Reg = MO.getReg();
-          if (!isCandidatePhysReg(Reg))
-            continue;
-
-          auto It = ActiveSeg.find(Reg.id());
-          if (It == ActiveSeg.end())
-            continue;
-
-	          Segment &S = Segs[It->second];
-	          S.Uses.push_back(UseSite{&MI, OpNo, InstIdx});
-	          if (MI.isInlineAsm())
-	            S.TouchesInlineAsm = true;
-	        }
-
-        for (unsigned OpNo = 0; OpNo < MI.getNumOperands(); ++OpNo) {
-          MachineOperand &MO = MI.getOperand(OpNo);
-          if (!MO.isReg() || MO.isImplicit() || !MO.isDef())
-            continue;
-
-          Register Reg = MO.getReg();
-          if (!isCandidatePhysReg(Reg))
-            continue;
-
-          // Close the previous segment (if any) for this physical register.
-          auto It = ActiveSeg.find(Reg.id());
-          if (It != ActiveSeg.end()) {
-            Segs[It->second].ClosedByRedef = true;
-            ActiveSeg.erase(It);
+            default:
+              break;
+            }
           }
-
-          Segment S;
-          S.Reg = Reg;
-          S.DefMI = &MI;
-          S.DefOpNo = OpNo;
-          S.DefIdx = InstIdx;
-          S.TouchesInlineAsm = MI.isInlineAsm();
-          ActiveSeg[Reg.id()] = Segs.size();
-          Segs.push_back(S);
-        }
-
-        ++InstIdx;
-      }
-
-	      SmallVector<unsigned, 32> CandidateSegs;
-	      CandidateSegs.reserve(Segs.size());
-	      for (unsigned I = 0; I < Segs.size(); ++I) {
-	        const Segment &S = Segs[I];
-	        if (!S.DefMI || S.Uses.empty())
-	          continue;
-	        // Never remap values that touch inline asm. Inline asm operand
-	        // constraints expect architectural registers; rewriting defs/uses to
-	        // the T/U hand queues breaks the ABI-visible semantics (notably
-	        // syscall/ACR entry/exit sequences).
-	        if (S.TouchesInlineAsm)
-	          continue;
-	        unsigned LastUseIdx = 0;
-	        for (const UseSite &U : S.Uses)
-	          LastUseIdx = std::max(LastUseIdx, U.UseIdx);
-	        if (LastUseIdx <= S.DefIdx)
-	          continue;
-	        // If the value is live-out, we can't remap it to the hand queue.
-	        if (!S.ClosedByRedef && isPhysRegLiveOutOfBlock(S.Reg))
-	          continue;
-	        CandidateSegs.push_back(I);
-	      }
-
-      if (!CandidateSegs.empty()) {
-        enum class Hand : uint8_t { None, T, U };
-
-        auto isTCompressibleDef = [&](const MachineInstr &MI) -> bool {
-          switch (MI.getOpcode()) {
-          case LinxISA::ADDrr:
-          case LinxISA::SUBrr:
-          case LinxISA::ANDrr:
-          case LinxISA::ORrr:
-            return true;
-          case LinxISA::ADDIri:
-          case LinxISA::SUBIri: {
-            if (MI.getNumOperands() >= 3 && MI.getOperand(2).isImm())
-              return isInt<5>(MI.getOperand(2).getImm());
-            return false;
-          }
-          case LinxISA::LWI:
-          case LinxISA::LDI: {
-            if (MI.getNumOperands() >= 3 && MI.getOperand(2).isImm())
-              return isInt<5>(MI.getOperand(2).getImm());
-            return false;
-          }
-          case LinxISA::SLLIri:
-          case LinxISA::SRLIri:
-            if (!linxEnableCShift16())
-              return false;
-            if (MI.getNumOperands() >= 3 && MI.getOperand(2).isImm())
-              return isUInt<5>(MI.getOperand(2).getImm());
-            return false;
-          default:
-            return false;
-          }
+          return true;
         };
 
-        // Greedy assignment in reverse def order. For each candidate, choose a
-        // hand where the value is still within the 4-deep queue at its use.
-        SmallVector<unsigned, 32> Sorted = CandidateSegs;
-        llvm::sort(Sorted, [&](unsigned A, unsigned B) {
-          if (Segs[A].DefIdx != Segs[B].DefIdx)
-            return Segs[A].DefIdx > Segs[B].DefIdx;
-          // Visit the shallowest result first: later def operands are pushed
-          // later and therefore sit nearer the top of the LIFO hand queue.
-          return Segs[A].DefOpNo > Segs[B].DefOpNo;
-        });
+        for (MachineInstr &MI : MBB) {
+          if (MI.isDebugInstr() || isMarkerInstr(MI))
+            continue;
 
-	        SmallVector<unsigned, 32> AssignedT;
-	        SmallVector<unsigned, 32> AssignedU;
-	        SmallVector<Hand, 32> AssignedHand(Segs.size(), Hand::None);
-	        DenseMap<const MachineInstr *, unsigned> UsedHandReads; // bit0=T, bit1=U
-	
-	        auto countBetweenAt = [&](ArrayRef<unsigned> Assigned,
-	                                  const Segment &S, unsigned UseIdx) {
-	          unsigned Between = 0;
-	          for (unsigned J : Assigned) {
-	            const Segment &B = Segs[J];
-	            // Multi-def instructions push results in operand order. A later
-	            // def operand from the same instruction therefore occupies a
-	            // shallower queue slot and must count just like a later
-	            // instruction definition.
-	            const bool PushedAfter =
-	                B.DefIdx > S.DefIdx ||
-	                (B.DefIdx == S.DefIdx && B.DefOpNo > S.DefOpNo);
-	            if (PushedAfter && B.DefIdx < UseIdx)
-	              ++Between;
-	          }
-	          return Between;
-	        };
-	
-	        auto getLastUseIdx = [&](const Segment &S) -> unsigned {
-	          unsigned LastUseIdx = 0;
-	          for (const UseSite &U : S.Uses)
-	            LastUseIdx = std::max(LastUseIdx, U.UseIdx);
-	          return LastUseIdx;
-	        };
-	
-	        auto hasMultiUseInSameMI = [&](const Segment &S) -> bool {
-	          SmallPtrSet<const MachineInstr *, 4> Seen;
-	          for (const UseSite &U : S.Uses) {
-	            if (!Seen.insert(U.MI).second)
-	              return true;
-	          }
-	          return false;
-	        };
-	
-	        auto canReadHandInAllUses = [&](Hand H, const Segment &S) -> bool {
-	          const unsigned Bit = (H == Hand::T) ? 0x1u : 0x2u;
-	          for (const UseSite &U : S.Uses) {
-	            const unsigned Mask = UsedHandReads.lookup(U.MI);
-	            if ((Mask & Bit) != 0)
-	              return false;
-	          }
-	          return true;
-	        };
-	
-	        for (unsigned I : Sorted) {
-	          const Segment &S = Segs[I];
-	          const unsigned LastUseIdx = getLastUseIdx(S);
-	          unsigned BetweenT = countBetweenAt(AssignedT, S, LastUseIdx);
-	          unsigned BetweenU = countBetweenAt(AssignedU, S, LastUseIdx);
-	
-	          // Per-queue port rule: at most one T read and one U read per
-	          // instruction. Avoid mapping multiple operands in the same MI to the
-	          // same hand (even if they are the same physical register).
-	          if (hasMultiUseInSameMI(S))
-	            continue;
-	
-	          const bool CanT = BetweenT <= 3 && canReadHandInAllUses(Hand::T, S);
-	          const bool CanU = BetweenU <= 3 && canReadHandInAllUses(Hand::U, S);
-	          if (!CanT && !CanU)
-	            continue;
-	
-	          Hand H = Hand::None;
+          // Process uses before defs to handle read-modify-write forms.
+          for (unsigned OpNo = 0; OpNo < MI.getNumOperands(); ++OpNo) {
+            MachineOperand &MO = MI.getOperand(OpNo);
+            if (!MO.isReg() || MO.isImplicit() || MO.isDef())
+              continue;
 
-	          // Prefer mapping defs that can become 16-bit ops to the T-hand.
-	          const bool PreferT = isTCompressibleDef(*S.DefMI);
+            Register Reg = MO.getReg();
+            if (!isCandidatePhysReg(Reg))
+              continue;
 
-	          if (PreferT && CanT) {
-	            H = Hand::T;
-	          } else if (CanT && CanU) {
-	            H = (BetweenT <= BetweenU) ? Hand::T : Hand::U;
-	          } else if (CanT) {
-	            H = Hand::T;
-	          } else {
-	            H = Hand::U;
-	          }
-	
-	          AssignedHand[I] = H;
-	          if (H == Hand::T)
-	            AssignedT.push_back(I);
-	          else if (H == Hand::U)
-	            AssignedU.push_back(I);
-	
-	          const unsigned Bit = (H == Hand::T) ? 0x1u : 0x2u;
-	          for (const UseSite &U : S.Uses)
-	            UsedHandReads[U.MI] |= Bit;
-	        }
-	
-	        for (unsigned I : Sorted) {
-	          const Segment &S = Segs[I];
-	          Hand H = AssignedHand[I];
-	          if (H == Hand::None)
-	            continue;
-	
-	          MachineOperand &DefMO = S.DefMI->getOperand(S.DefOpNo);
-	          DefMO.setReg(H == Hand::T ? LinxISA::U4 : LinxISA::U3); // "->t"/"->u"
-	
-		          for (const UseSite &U : S.Uses) {
-		            const unsigned Between = (H == Hand::T)
-		                                         ? countBetweenAt(AssignedT, S, U.UseIdx)
-		                                         : countBetweenAt(AssignedU, S, U.UseIdx);
-		            const unsigned Index = Between + 1;
-		            Register UseReg = (H == Hand::T) ? getTQueueUseReg(Index)
-		                                             : getUQueueUseReg(Index);
-		            if (!UseReg)
-		              continue;
-		            MachineOperand &UseMO = U.MI->getOperand(U.OpNo);
-		            UseMO.setReg(UseReg); // "t#k"/"u#k"
-		          }
-		          Changed = true;
-		        }
-			      }
-	      } // end !IsTileBlock
+            auto It = ActiveSeg.find(Reg.id());
+            if (It == ActiveSeg.end())
+              continue;
 
-	      // Post-remap peephole: use block-private T-hand for simple SETC
-	      // conditions that consume a single-use PC-relative load result.
-	      //
-	      // This improves code size and scheduling by keeping the loaded value in
-	      // the block-private queue:
-	      //   lw.pcr [sym], ->aX
-	      //   setc.*i aX, imm
-	      // =>
-	      //   lw.pcr [sym], ->t
-	      //   setc.*i t#1, imm
-	      auto isPcrLoadOpc = [&](unsigned Opc) -> bool {
-	        switch (Opc) {
-	        case LinxISA::LB_PCR:
-	        case LinxISA::LBU_PCR:
-	        case LinxISA::LH_PCR:
-	        case LinxISA::LHU_PCR:
-	        case LinxISA::LW_PCR:
-	        case LinxISA::LWU_PCR:
-	        case LinxISA::LD_PCR:
-	        case LinxISA::HL_LB_PCR:
-	        case LinxISA::HL_LBU_PCR:
-	        case LinxISA::HL_LH_PCR:
-	        case LinxISA::HL_LHU_PCR:
-	        case LinxISA::HL_LW_PCR:
-	        case LinxISA::HL_LWU_PCR:
-	        case LinxISA::HL_LD_PCR:
-	          return true;
-	        default:
-	          return false;
-	        }
-	      };
-	      auto isSetcImmOpcode = [&](unsigned Opc) -> bool {
-	        switch (Opc) {
-	        case LinxISA::SETC_EQI:
-	        case LinxISA::SETC_NEI:
-	        case LinxISA::SETC_LTI:
-	        case LinxISA::SETC_GEI:
-	        case LinxISA::SETC_LTUI:
-	        case LinxISA::SETC_GEUI:
-	        case LinxISA::SETC_ANDI:
-	        case LinxISA::SETC_ORI:
-	        case LinxISA::HLSETC_ANDI:
-	        case LinxISA::HLSETC_ORI:
-	          return true;
-	        default:
-	          return false;
-	        }
-	      };
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &LdMI = *It;
-	        if (LdMI.isDebugInstr() || isMarkerInstr(LdMI)) {
-	          ++It;
-	          continue;
-	        }
-	        if (!isPcrLoadOpc(LdMI.getOpcode()) || LdMI.getNumOperands() < 2 ||
-	            !LdMI.getOperand(0).isReg() || !LdMI.getOperand(0).isDef()) {
-	          ++It;
-	          continue;
-	        }
-	        const Register Dst = LdMI.getOperand(0).getReg();
-	        if (!Dst.isPhysical() || Dst == LinxISA::U4 || Dst == LinxISA::U3) {
-	          ++It;
-	          continue;
-	        }
-	        auto NextIt = std::next(It);
-	        while (NextIt != MBB.end() &&
-	               (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
-	          ++NextIt;
-	        if (NextIt == MBB.end()) {
-	          ++It;
-	          continue;
-	        }
-	        MachineInstr &SetcMI = *NextIt;
-	        if (!isSetcImmOpcode(SetcMI.getOpcode()) || SetcMI.getNumOperands() < 2 ||
-	            !SetcMI.getOperand(0).isReg() || SetcMI.getOperand(0).getReg() != Dst) {
-	          ++It;
-	          continue;
-	        }
+            Segment &S = Segs[It->second];
+            S.Uses.push_back(UseSite{&MI, OpNo, InstIdx});
+            if (MI.isInlineAsm())
+              S.TouchesInlineAsm = true;
+          }
 
-	        if (!hasSingleNonDbgUseInMBB(Dst, &SetcMI, &LdMI)) {
-	          ++It;
-	          continue;
-	        }
-	        // The T/U hand queues are block-private: values pushed into the queue
-	        // do not survive control-flow edges. Only rewrite when the loaded
-	        // value is guaranteed not to be live-out of this MachineBasicBlock.
-	        if (isPhysRegLiveOutOfBlock(Dst)) {
-	          ++It;
-	          continue;
-	        }
+          for (unsigned OpNo = 0; OpNo < MI.getNumOperands(); ++OpNo) {
+            MachineOperand &MO = MI.getOperand(OpNo);
+            if (!MO.isReg() || MO.isImplicit() || !MO.isDef())
+              continue;
 
-	        LdMI.getOperand(0).setReg(LinxISA::U4);   // "->t"
-	        SetcMI.getOperand(0).setReg(LinxISA::T1); // "t#1"
-	        Changed = true;
-	        It = std::next(SetcMI.getIterator());
-	      }
+            Register Reg = MO.getReg();
+            if (!isCandidatePhysReg(Reg))
+              continue;
 
-	      // Post-remap peephole: use 16-bit C.ZEXT.* when extracting low bits into
-	      // the T-hand implicit destination.
-	      //
-	      // The earlier shift-folding peephole produces `BXU src, M=0, N=<width>`.
-	      // When the result is block-private (`->t`), we can encode common widths
-	      // with compressed zext forms.
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &MI = *It;
-	        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
-	          ++It;
-	          continue;
-	        }
-	        if (MI.getOpcode() != LinxISA::BXU || MI.getNumOperands() < 4) {
-	          ++It;
-	          continue;
-	        }
-	        if (!MI.getOperand(0).isReg() || !MI.getOperand(0).isDef() ||
-	            !MI.getOperand(1).isReg() || !MI.getOperand(2).isImm() ||
-	            !MI.getOperand(3).isImm()) {
-	          ++It;
-	          continue;
-	        }
+            // Close the previous segment (if any) for this physical register.
+            auto It = ActiveSeg.find(Reg.id());
+            if (It != ActiveSeg.end()) {
+              Segs[It->second].ClosedByRedef = true;
+              ActiveSeg.erase(It);
+            }
 
-	        const Register Dst = MI.getOperand(0).getReg();
-	        if (Dst != LinxISA::U4) { // compressed form writes implicit `->t`
-	          ++It;
-	          continue;
-	        }
+            Segment S;
+            S.Reg = Reg;
+            S.DefMI = &MI;
+            S.DefOpNo = OpNo;
+            S.DefIdx = InstIdx;
+            S.TouchesInlineAsm = MI.isInlineAsm();
+            ActiveSeg[Reg.id()] = Segs.size();
+            Segs.push_back(S);
+          }
 
-	        const Register Src = MI.getOperand(1).getReg();
-	        const int64_t Imml = MI.getOperand(2).getImm();
-	        const int64_t Imms = MI.getOperand(3).getImm();
-	        if (Imms != 0) {
-	          ++It;
-	          continue;
-	        }
+          ++InstIdx;
+        }
 
-	        unsigned NewOpc = 0;
-	        if (Imml == 7)
-	          NewOpc = LinxISA::C_ZEXT_B;
-	        else if (Imml == 15)
-	          NewOpc = LinxISA::C_ZEXT_H;
-	        else if (Imml == 31)
-	          NewOpc = LinxISA::C_ZEXT_W;
-	        else {
-	          ++It;
-	          continue;
-	        }
+        SmallVector<unsigned, 32> CandidateSegs;
+        CandidateSegs.reserve(Segs.size());
+        for (unsigned I = 0; I < Segs.size(); ++I) {
+          const Segment &S = Segs[I];
+          if (!S.DefMI || S.Uses.empty())
+            continue;
+          // Never remap values that touch inline asm. Inline asm operand
+          // constraints expect architectural registers; rewriting defs/uses to
+          // the T/U hand queues breaks the ABI-visible semantics (notably
+          // syscall/ACR entry/exit sequences).
+          if (S.TouchesInlineAsm)
+            continue;
+          unsigned LastUseIdx = 0;
+          for (const UseSite &U : S.Uses)
+            LastUseIdx = std::max(LastUseIdx, U.UseIdx);
+          if (LastUseIdx <= S.DefIdx)
+            continue;
+          // If the value is live-out, we can't remap it to the hand queue.
+          if (!S.ClosedByRedef && isPhysRegLiveOutOfBlock(S.Reg))
+            continue;
+          CandidateSegs.push_back(I);
+        }
 
-	        MachineInstr *NewMI =
-	            BuildMI(MBB, It, MI.getDebugLoc(), TII.get(NewOpc), Dst)
-	                .addReg(Src)
-	                .getInstr();
-	        MI.eraseFromParent();
-	        It = std::next(NewMI->getIterator());
-	        Changed = true;
-	      }
+        if (!CandidateSegs.empty()) {
+          enum class Hand : uint8_t { None, T, U };
 
-	      // Post-remap peephole: compress common 32->64 sign-extends into C.SEXT.W
-	      // when the destination is the T-hand implicit register.
-	      //
-	      // `addw src, zero, ->t` is a common legalization pattern for `sext.w`
-	      // (truncate to 32 and sign-extend back to 64). Prefer the 16-bit
-	      // encoding when block-private.
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &MI = *It;
-	        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
-	          ++It;
-	          continue;
-	        }
-	        if (MI.getOpcode() != LinxISA::ADDWrr || MI.getNumOperands() < 3) {
-	          ++It;
-	          continue;
-	        }
-	        if (!MI.getOperand(0).isReg() || !MI.getOperand(0).isDef() ||
-	            !MI.getOperand(1).isReg() || !MI.getOperand(2).isReg()) {
-	          ++It;
-	          continue;
-	        }
-	        const Register Dst = MI.getOperand(0).getReg();
-	        if (Dst != LinxISA::U4) {
-	          ++It;
-	          continue;
-	        }
-	        Register Src = Register();
-	        const Register A = MI.getOperand(1).getReg();
-	        const Register B = MI.getOperand(2).getReg();
-	        if (A == LinxISA::R0 && B != LinxISA::R0)
-	          Src = B;
-	        else if (B == LinxISA::R0 && A != LinxISA::R0)
-	          Src = A;
-	        else {
-	          ++It;
-	          continue;
-	        }
+          auto isTCompressibleDef = [&](const MachineInstr &MI) -> bool {
+            switch (MI.getOpcode()) {
+            case LinxISA::ADDrr:
+            case LinxISA::SUBrr:
+            case LinxISA::ANDrr:
+            case LinxISA::ORrr:
+              return true;
+            case LinxISA::ADDIri:
+            case LinxISA::SUBIri: {
+              if (MI.getNumOperands() >= 3 && MI.getOperand(2).isImm())
+                return isInt<5>(MI.getOperand(2).getImm());
+              return false;
+            }
+            case LinxISA::LWI:
+            case LinxISA::LDI: {
+              if (MI.getNumOperands() >= 3 && MI.getOperand(2).isImm())
+                return isInt<5>(MI.getOperand(2).getImm());
+              return false;
+            }
+            case LinxISA::SLLIri:
+            case LinxISA::SRLIri:
+              if (!linxEnableCShift16())
+                return false;
+              if (MI.getNumOperands() >= 3 && MI.getOperand(2).isImm())
+                return isUInt<5>(MI.getOperand(2).getImm());
+              return false;
+            default:
+              return false;
+            }
+          };
 
-	        MachineInstr *NewMI =
-	            BuildMI(MBB, It, MI.getDebugLoc(), TII.get(LinxISA::C_SEXT_W), Dst)
-	                .addReg(Src)
-	                .getInstr();
-	        MI.eraseFromParent();
-	        It = std::next(NewMI->getIterator());
-	        Changed = true;
-	      }
+          // Greedy assignment in reverse def order. For each candidate, choose
+          // a hand where the value is still within the 4-deep queue at its use.
+          SmallVector<unsigned, 32> Sorted = CandidateSegs;
+          llvm::sort(Sorted, [&](unsigned A, unsigned B) {
+            if (Segs[A].DefIdx != Segs[B].DefIdx)
+              return Segs[A].DefIdx > Segs[B].DefIdx;
+            // Visit the shallowest result first: later def operands are pushed
+            // later and therefore sit nearer the top of the LIFO hand queue.
+            return Segs[A].DefOpNo > Segs[B].DefOpNo;
+          });
 
-	      // Post-remap peephole: use 16-bit C.SEXT.* when sign-extending low bits
-	      // into the T-hand implicit destination.
-	      //
-	      // The earlier shift-folding peephole may produce `BXS src, M=0, N=<width>`.
-	      // When the result is block-private (`->t`), we can encode common widths
-	      // with compressed sext forms.
-	      for (auto It = MBB.begin(); It != MBB.end();) {
-	        MachineInstr &MI = *It;
-	        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
-	          ++It;
-	          continue;
-	        }
-	        if (MI.getOpcode() != LinxISA::BXS || MI.getNumOperands() < 4) {
-	          ++It;
-	          continue;
-	        }
-	        if (!MI.getOperand(0).isReg() || !MI.getOperand(0).isDef() ||
-	            !MI.getOperand(1).isReg() || !MI.getOperand(2).isImm() ||
-	            !MI.getOperand(3).isImm()) {
-	          ++It;
-	          continue;
-	        }
+          SmallVector<unsigned, 32> AssignedT;
+          SmallVector<unsigned, 32> AssignedU;
+          SmallVector<Hand, 32> AssignedHand(Segs.size(), Hand::None);
+          DenseMap<const MachineInstr *, unsigned>
+              UsedHandReads; // bit0=T, bit1=U
 
-	        const Register Dst = MI.getOperand(0).getReg();
-	        if (Dst != LinxISA::U4) { // compressed form writes implicit `->t`
-	          ++It;
-	          continue;
-	        }
+          auto countBetweenAt = [&](ArrayRef<unsigned> Assigned,
+                                    const Segment &S, unsigned UseIdx) {
+            unsigned Between = 0;
+            for (unsigned J : Assigned) {
+              const Segment &B = Segs[J];
+              // Multi-def instructions push results in operand order. A later
+              // def operand from the same instruction therefore occupies a
+              // shallower queue slot and must count just like a later
+              // instruction definition.
+              const bool PushedAfter =
+                  B.DefIdx > S.DefIdx ||
+                  (B.DefIdx == S.DefIdx && B.DefOpNo > S.DefOpNo);
+              if (PushedAfter && B.DefIdx < UseIdx)
+                ++Between;
+            }
+            return Between;
+          };
 
-	        const Register Src = MI.getOperand(1).getReg();
-	        const int64_t Imml = MI.getOperand(2).getImm();
-	        const int64_t Imms = MI.getOperand(3).getImm();
-	        if (Imms != 0) {
-	          ++It;
-	          continue;
-	        }
+          auto getLastUseIdx = [&](const Segment &S) -> unsigned {
+            unsigned LastUseIdx = 0;
+            for (const UseSite &U : S.Uses)
+              LastUseIdx = std::max(LastUseIdx, U.UseIdx);
+            return LastUseIdx;
+          };
 
-	        unsigned NewOpc = 0;
-	        if (Imml == 7)
-	          NewOpc = LinxISA::C_SEXT_B;
-	        else if (Imml == 15)
-	          NewOpc = LinxISA::C_SEXT_H;
-	        else if (Imml == 31)
-	          NewOpc = LinxISA::C_SEXT_W;
-	        else {
-	          ++It;
-	          continue;
-	        }
+          auto hasMultiUseInSameMI = [&](const Segment &S) -> bool {
+            SmallPtrSet<const MachineInstr *, 4> Seen;
+            for (const UseSite &U : S.Uses) {
+              if (!Seen.insert(U.MI).second)
+                return true;
+            }
+            return false;
+          };
 
-	        MachineInstr *NewMI =
-	            BuildMI(MBB, It, MI.getDebugLoc(), TII.get(NewOpc), Dst)
-	                .addReg(Src)
-	                .getInstr();
-	        MI.eraseFromParent();
-	        It = std::next(NewMI->getIterator());
-	        Changed = true;
-	      }
+          auto canReadHandInAllUses = [&](Hand H, const Segment &S) -> bool {
+            const unsigned Bit = (H == Hand::T) ? 0x1u : 0x2u;
+            for (const UseSite &U : S.Uses) {
+              const unsigned Mask = UsedHandReads.lookup(U.MI);
+              if ((Mask & Bit) != 0)
+                return false;
+            }
+            return true;
+          };
 
-	      // Insert `BSTOP` only for the final laid-out block. When a `BSTART.*`
-	      // follows, it already terminates the previous block.
-	      auto InsertBStop = MBB.end();
-      while (InsertBStop != MBB.begin() && std::prev(InsertBStop)->isDebugInstr())
+          for (unsigned I : Sorted) {
+            const Segment &S = Segs[I];
+            const unsigned LastUseIdx = getLastUseIdx(S);
+            unsigned BetweenT = countBetweenAt(AssignedT, S, LastUseIdx);
+            unsigned BetweenU = countBetweenAt(AssignedU, S, LastUseIdx);
+
+            // Per-queue port rule: at most one T read and one U read per
+            // instruction. Avoid mapping multiple operands in the same MI to
+            // the same hand (even if they are the same physical register).
+            if (hasMultiUseInSameMI(S))
+              continue;
+
+            const bool CanT = BetweenT <= 3 && canReadHandInAllUses(Hand::T, S);
+            const bool CanU = BetweenU <= 3 && canReadHandInAllUses(Hand::U, S);
+            if (!CanT && !CanU)
+              continue;
+
+            Hand H = Hand::None;
+
+            // Prefer mapping defs that can become 16-bit ops to the T-hand.
+            const bool PreferT = isTCompressibleDef(*S.DefMI);
+
+            if (PreferT && CanT) {
+              H = Hand::T;
+            } else if (CanT && CanU) {
+              H = (BetweenT <= BetweenU) ? Hand::T : Hand::U;
+            } else if (CanT) {
+              H = Hand::T;
+            } else {
+              H = Hand::U;
+            }
+
+            AssignedHand[I] = H;
+            if (H == Hand::T)
+              AssignedT.push_back(I);
+            else if (H == Hand::U)
+              AssignedU.push_back(I);
+
+            const unsigned Bit = (H == Hand::T) ? 0x1u : 0x2u;
+            for (const UseSite &U : S.Uses)
+              UsedHandReads[U.MI] |= Bit;
+          }
+
+          for (unsigned I : Sorted) {
+            const Segment &S = Segs[I];
+            Hand H = AssignedHand[I];
+            if (H == Hand::None)
+              continue;
+
+            MachineOperand &DefMO = S.DefMI->getOperand(S.DefOpNo);
+            DefMO.setReg(H == Hand::T ? LinxISA::U4
+                                      : LinxISA::U3); // "->t"/"->u"
+
+            for (const UseSite &U : S.Uses) {
+              const unsigned Between =
+                  (H == Hand::T) ? countBetweenAt(AssignedT, S, U.UseIdx)
+                                 : countBetweenAt(AssignedU, S, U.UseIdx);
+              const unsigned Index = Between + 1;
+              Register UseReg = (H == Hand::T) ? getTQueueUseReg(Index)
+                                               : getUQueueUseReg(Index);
+              if (!UseReg)
+                continue;
+              MachineOperand &UseMO = U.MI->getOperand(U.OpNo);
+              UseMO.setReg(UseReg); // "t#k"/"u#k"
+            }
+            Changed = true;
+          }
+        }
+      } // end !IsTileBlock
+
+      // Post-remap peephole: use block-private T-hand for simple SETC
+      // conditions that consume a single-use PC-relative load result.
+      //
+      // This improves code size and scheduling by keeping the loaded value in
+      // the block-private queue:
+      //   lw.pcr [sym], ->aX
+      //   setc.*i aX, imm
+      // =>
+      //   lw.pcr [sym], ->t
+      //   setc.*i t#1, imm
+      auto isPcrLoadOpc = [&](unsigned Opc) -> bool {
+        switch (Opc) {
+        case LinxISA::LB_PCR:
+        case LinxISA::LBU_PCR:
+        case LinxISA::LH_PCR:
+        case LinxISA::LHU_PCR:
+        case LinxISA::LW_PCR:
+        case LinxISA::LWU_PCR:
+        case LinxISA::LD_PCR:
+        case LinxISA::HL_LB_PCR:
+        case LinxISA::HL_LBU_PCR:
+        case LinxISA::HL_LH_PCR:
+        case LinxISA::HL_LHU_PCR:
+        case LinxISA::HL_LW_PCR:
+        case LinxISA::HL_LWU_PCR:
+        case LinxISA::HL_LD_PCR:
+          return true;
+        default:
+          return false;
+        }
+      };
+      auto isSetcImmOpcode = [&](unsigned Opc) -> bool {
+        switch (Opc) {
+        case LinxISA::SETC_EQI:
+        case LinxISA::SETC_NEI:
+        case LinxISA::SETC_LTI:
+        case LinxISA::SETC_GEI:
+        case LinxISA::SETC_LTUI:
+        case LinxISA::SETC_GEUI:
+        case LinxISA::SETC_ANDI:
+        case LinxISA::SETC_ORI:
+        case LinxISA::HLSETC_ANDI:
+        case LinxISA::HLSETC_ORI:
+          return true;
+        default:
+          return false;
+        }
+      };
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &LdMI = *It;
+        if (LdMI.isDebugInstr() || isMarkerInstr(LdMI)) {
+          ++It;
+          continue;
+        }
+        if (!isPcrLoadOpc(LdMI.getOpcode()) || LdMI.getNumOperands() < 2 ||
+            !LdMI.getOperand(0).isReg() || !LdMI.getOperand(0).isDef()) {
+          ++It;
+          continue;
+        }
+        const Register Dst = LdMI.getOperand(0).getReg();
+        if (!Dst.isPhysical() || Dst == LinxISA::U4 || Dst == LinxISA::U3) {
+          ++It;
+          continue;
+        }
+        auto NextIt = std::next(It);
+        while (NextIt != MBB.end() &&
+               (NextIt->isDebugInstr() || isMarkerInstr(*NextIt)))
+          ++NextIt;
+        if (NextIt == MBB.end()) {
+          ++It;
+          continue;
+        }
+        MachineInstr &SetcMI = *NextIt;
+        if (!isSetcImmOpcode(SetcMI.getOpcode()) ||
+            SetcMI.getNumOperands() < 2 || !SetcMI.getOperand(0).isReg() ||
+            SetcMI.getOperand(0).getReg() != Dst) {
+          ++It;
+          continue;
+        }
+
+        if (!hasSingleNonDbgUseInMBB(Dst, &SetcMI, &LdMI)) {
+          ++It;
+          continue;
+        }
+        // The T/U hand queues are block-private: values pushed into the queue
+        // do not survive control-flow edges. Only rewrite when the loaded
+        // value is guaranteed not to be live-out of this MachineBasicBlock.
+        if (isPhysRegLiveOutOfBlock(Dst)) {
+          ++It;
+          continue;
+        }
+
+        LdMI.getOperand(0).setReg(LinxISA::U4);   // "->t"
+        SetcMI.getOperand(0).setReg(LinxISA::T1); // "t#1"
+        Changed = true;
+        It = std::next(SetcMI.getIterator());
+      }
+
+      // Post-remap peephole: use 16-bit C.ZEXT.* when extracting low bits into
+      // the T-hand implicit destination.
+      //
+      // The earlier shift-folding peephole produces `BXU src, M=0, N=<width>`.
+      // When the result is block-private (`->t`), we can encode common widths
+      // with compressed zext forms.
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &MI = *It;
+        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
+          ++It;
+          continue;
+        }
+        if (MI.getOpcode() != LinxISA::BXU || MI.getNumOperands() < 4) {
+          ++It;
+          continue;
+        }
+        if (!MI.getOperand(0).isReg() || !MI.getOperand(0).isDef() ||
+            !MI.getOperand(1).isReg() || !MI.getOperand(2).isImm() ||
+            !MI.getOperand(3).isImm()) {
+          ++It;
+          continue;
+        }
+
+        const Register Dst = MI.getOperand(0).getReg();
+        if (Dst != LinxISA::U4) { // compressed form writes implicit `->t`
+          ++It;
+          continue;
+        }
+
+        const Register Src = MI.getOperand(1).getReg();
+        const int64_t Imml = MI.getOperand(2).getImm();
+        const int64_t Imms = MI.getOperand(3).getImm();
+        if (Imms != 0) {
+          ++It;
+          continue;
+        }
+
+        unsigned NewOpc = 0;
+        if (Imml == 7)
+          NewOpc = LinxISA::C_ZEXT_B;
+        else if (Imml == 15)
+          NewOpc = LinxISA::C_ZEXT_H;
+        else if (Imml == 31)
+          NewOpc = LinxISA::C_ZEXT_W;
+        else {
+          ++It;
+          continue;
+        }
+
+        MachineInstr *NewMI =
+            BuildMI(MBB, It, MI.getDebugLoc(), TII.get(NewOpc), Dst)
+                .addReg(Src)
+                .getInstr();
+        MI.eraseFromParent();
+        It = std::next(NewMI->getIterator());
+        Changed = true;
+      }
+
+      // Post-remap peephole: compress common 32->64 sign-extends into C.SEXT.W
+      // when the destination is the T-hand implicit register.
+      //
+      // `addw src, zero, ->t` is a common legalization pattern for `sext.w`
+      // (truncate to 32 and sign-extend back to 64). Prefer the 16-bit
+      // encoding when block-private.
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &MI = *It;
+        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
+          ++It;
+          continue;
+        }
+        if (MI.getOpcode() != LinxISA::ADDWrr || MI.getNumOperands() < 3) {
+          ++It;
+          continue;
+        }
+        if (!MI.getOperand(0).isReg() || !MI.getOperand(0).isDef() ||
+            !MI.getOperand(1).isReg() || !MI.getOperand(2).isReg()) {
+          ++It;
+          continue;
+        }
+        const Register Dst = MI.getOperand(0).getReg();
+        if (Dst != LinxISA::U4) {
+          ++It;
+          continue;
+        }
+        Register Src = Register();
+        const Register A = MI.getOperand(1).getReg();
+        const Register B = MI.getOperand(2).getReg();
+        if (A == LinxISA::R0 && B != LinxISA::R0)
+          Src = B;
+        else if (B == LinxISA::R0 && A != LinxISA::R0)
+          Src = A;
+        else {
+          ++It;
+          continue;
+        }
+
+        MachineInstr *NewMI =
+            BuildMI(MBB, It, MI.getDebugLoc(), TII.get(LinxISA::C_SEXT_W), Dst)
+                .addReg(Src)
+                .getInstr();
+        MI.eraseFromParent();
+        It = std::next(NewMI->getIterator());
+        Changed = true;
+      }
+
+      // Post-remap peephole: use 16-bit C.SEXT.* when sign-extending low bits
+      // into the T-hand implicit destination.
+      //
+      // The earlier shift-folding peephole may produce `BXS src, M=0,
+      // N=<width>`. When the result is block-private (`->t`), we can encode
+      // common widths with compressed sext forms.
+      for (auto It = MBB.begin(); It != MBB.end();) {
+        MachineInstr &MI = *It;
+        if (MI.isDebugInstr() || isMarkerInstr(MI)) {
+          ++It;
+          continue;
+        }
+        if (MI.getOpcode() != LinxISA::BXS || MI.getNumOperands() < 4) {
+          ++It;
+          continue;
+        }
+        if (!MI.getOperand(0).isReg() || !MI.getOperand(0).isDef() ||
+            !MI.getOperand(1).isReg() || !MI.getOperand(2).isImm() ||
+            !MI.getOperand(3).isImm()) {
+          ++It;
+          continue;
+        }
+
+        const Register Dst = MI.getOperand(0).getReg();
+        if (Dst != LinxISA::U4) { // compressed form writes implicit `->t`
+          ++It;
+          continue;
+        }
+
+        const Register Src = MI.getOperand(1).getReg();
+        const int64_t Imml = MI.getOperand(2).getImm();
+        const int64_t Imms = MI.getOperand(3).getImm();
+        if (Imms != 0) {
+          ++It;
+          continue;
+        }
+
+        unsigned NewOpc = 0;
+        if (Imml == 7)
+          NewOpc = LinxISA::C_SEXT_B;
+        else if (Imml == 15)
+          NewOpc = LinxISA::C_SEXT_H;
+        else if (Imml == 31)
+          NewOpc = LinxISA::C_SEXT_W;
+        else {
+          ++It;
+          continue;
+        }
+
+        MachineInstr *NewMI =
+            BuildMI(MBB, It, MI.getDebugLoc(), TII.get(NewOpc), Dst)
+                .addReg(Src)
+                .getInstr();
+        MI.eraseFromParent();
+        It = std::next(NewMI->getIterator());
+        Changed = true;
+      }
+
+      // Insert `BSTOP` only for the final laid-out block. When a `BSTART.*`
+      // follows, it already terminates the previous block.
+      auto InsertBStop = MBB.end();
+      while (InsertBStop != MBB.begin() &&
+             std::prev(InsertBStop)->isDebugInstr())
         --InsertBStop;
 
       if (MBB.getNextNode()) {
@@ -6687,7 +6821,8 @@ public:
 
 char LinxISABlockify::ID = 0;
 
-INITIALIZE_PASS(LinxISABlockify, "linx-blockify", "Linx Blockify", false,
-                false)
+INITIALIZE_PASS(LinxISABlockify, "linx-blockify", "Linx Blockify", false, false)
 
-FunctionPass *llvm::createLinxISABlockifyPass() { return new LinxISABlockify(); }
+FunctionPass *llvm::createLinxISABlockifyPass() {
+  return new LinxISABlockify();
+}

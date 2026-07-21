@@ -285,6 +285,24 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<5>>, ImmArg<ArgIndex<6>>,
                  ImmArg<ArgIndex<7>>]>;
 
+  // Canonical v0.57 dynamic transfer shape bridges.  LB0/LB1 are the valid
+  // GM rectangle and LB2 is the physical tile column count.
+  def int_linx_tma_tload_shape :
+      Intrinsic<[llvm_anyvector_ty],
+                [llvm_ptr_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty,
+                 llvm_i64_ty, llvm_i64_ty, llvm_i32_ty, llvm_i64_ty],
+                [IntrReadMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>,
+                 ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
+                 ImmArg<ArgIndex<6>>]>;
+  def int_linx_tma_tstore_shape :
+      Intrinsic<[],
+                [llvm_ptr_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty,
+                 llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i32_ty,
+                 llvm_i64_ty],
+                [IntrWriteMem, IntrArgMemOnly, NoCapture<ArgIndex<0>>,
+                 ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
+                 ImmArg<ArgIndex<7>>]>;
+
   // Legacy vector TMOV bridge.
   def int_linx_tile_tmov_legacy :
       Intrinsic<[llvm_anyvector_ty],
@@ -318,31 +336,34 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
 
-  // Legacy TEPL forms.
-  def int_linx_tepl_unary_legacy :
+  // Canonical v0.57 frontend vector bridges.  The final three operands are
+  // LB0=ValidCol, LB1=ValidRow, and LB2=physical Col and may be dynamic.
+  def int_linx_tepl_unary_shape :
       Intrinsic<[llvm_anyvector_ty],
-                [LLVMMatchType<0>, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+                [LLVMMatchType<0>, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
+                 llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
                  ImmArg<ArgIndex<3>>]>;
-  def int_linx_tepl_binary_legacy :
+  def int_linx_tepl_binary_shape :
       Intrinsic<[llvm_anyvector_ty],
                 [LLVMMatchType<0>, LLVMMatchType<0>, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty],
+                 llvm_i32_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
                  ImmArg<ArgIndex<4>>]>;
-  def int_linx_tepl_binary_scalar_legacy :
+  def int_linx_tepl_binary_scalar_shape :
       Intrinsic<[llvm_anyvector_ty],
                 [LLVMMatchType<0>, llvm_i64_ty, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty, llvm_i32_ty],
+                 llvm_i32_ty, llvm_i32_ty, llvm_i64_ty, llvm_i64_ty,
+                 llvm_i64_ty],
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
                  ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
-  def int_linx_tepl_splat_legacy :
+  def int_linx_tepl_splat_shape :
       Intrinsic<[llvm_anyvector_ty],
                 [llvm_i64_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty,
-                 llvm_i32_ty],
+                 llvm_i32_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
