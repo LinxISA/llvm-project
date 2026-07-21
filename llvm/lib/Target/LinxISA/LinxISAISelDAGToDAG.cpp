@@ -2071,6 +2071,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
                                                         : LinxISA::LB_PCR;
         break;
       case MVT::i16:
+      case MVT::f16:
+      case MVT::bf16:
         Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LHU_PCR
                                                         : LinxISA::LH_PCR;
         break;
@@ -2111,6 +2113,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
                                                         : LinxISA::LB;
         break;
       case MVT::i16:
+      case MVT::f16:
+      case MVT::bf16:
         Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LHU
                                                         : LinxISA::LH;
         break;
@@ -2155,6 +2159,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
                                                       : LinxISA::LBI;
       break;
     case MVT::i16:
+    case MVT::f16:
+    case MVT::bf16:
       Opc = (LD->getExtensionType() == ISD::ZEXTLOAD) ? LinxISA::LHUI
                                                       : LinxISA::LHI;
       break;
@@ -2209,6 +2215,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
         Opc = LinxISA::SB_PCR;
         break;
       case MVT::i16:
+      case MVT::f16:
+      case MVT::bf16:
         Opc = LinxISA::SH_PCR;
         break;
       case MVT::i32:
@@ -2245,6 +2253,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
         Opc = LinxISA::SB;
         break;
       case MVT::i16:
+      case MVT::f16:
+      case MVT::bf16:
         ExpectedShift = 1;
         Opc = LinxISA::SH;
         break;
@@ -2287,6 +2297,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       Opc = LinxISA::SBI;
       break;
     case MVT::i16:
+    case MVT::f16:
+    case MVT::bf16:
       Opc = LinxISA::SHI;
       break;
     case MVT::i32:
@@ -2301,8 +2313,12 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     case MVT::f64:
       Opc = LinxISA::SDI;
       break;
-    default:
-      report_fatal_error("Linx: unsupported store type");
+    default: {
+      std::string TypeName;
+      raw_string_ostream OS(TypeName);
+      MemVT.print(OS);
+      report_fatal_error(Twine("Linx: unsupported store type ") + OS.str());
+    }
     }
 
     SDValue Base, Off;
