@@ -193,14 +193,7 @@ static DecodeStatus DecodeSIMT_SRCRegisterClass(MCInst &Inst, uint64_t RegNo,
     Reg = LinxV5::SIMT_P;
   else if (RegNo == 95)
     Reg = LinxV5::R0;
-  else if (RegNo >= 96 && RegNo <= 99)
-    Reg = LinxV5::SIMT_OSVT1_RU + RegNo - 96;
-  else if (RegNo >= 104 && RegNo <= 107)
-    Reg = LinxV5::SIMT_OSVU1_RU + RegNo - 104;
-  else if (RegNo >= 112 && RegNo <= 115)
-    Reg = LinxV5::SIMT_OSVM1_RU + RegNo - 112;
-  else if (RegNo >= 120 && RegNo <= 123)
-    Reg = LinxV5::SIMT_OSVN1_RU + RegNo - 120;
+  // v5: SIMT source reuse registers (extenc=11, RegNo 96-123) removed.
   else
     return MCDisassembler::Fail;
 
@@ -271,23 +264,24 @@ static DecodeStatus DecodeTILE_SRCRegisterClass(MCInst &Inst, uint64_t RegNo,
                                                 const MCDisassembler *Decoder) {
   if (RegNo >= 128)
     return MCDisassembler::Fail;
+  // v5: source reuse bit{6} removed. Ignore the former reuse bit.
   bool isKill = RegNo >= 0b1000000;
   if (isKill) {
     RegNo -= 0b1000000;
   }
   MCRegister Reg;
   if (RegNo <= 15) {
-    // t#{1-16}<.reuse> start from 0
-    Reg = RegNo + (isKill ? LinxV5::Tile_TOS1_RU : LinxV5::Tile_TOS1);
+    // t#{1-16} start from 0
+    Reg = RegNo + LinxV5::Tile_TOS1;
   } else if (RegNo <= 31) {
-    // u#{1-16}<.reuse> start from 0b010000
-    Reg = RegNo - 16 + (isKill ? LinxV5::Tile_UOS1_RU : LinxV5::Tile_UOS1);
+    // u#{1-16} start from 0b010000
+    Reg = RegNo - 16 + LinxV5::Tile_UOS1;
   } else if (RegNo <= 47) {
-    // m#{1-16}<.reuse> start from 0b100000
-    Reg = RegNo - 32 + (isKill ? LinxV5::Tile_MOS1_RU : LinxV5::Tile_MOS1);
+    // m#{1-16} start from 0b100000
+    Reg = RegNo - 32 + LinxV5::Tile_MOS1;
   } else {
-    // n#{1-16}<.reuse> start from 0b110000
-    Reg = RegNo - 48 + (isKill ? LinxV5::Tile_NOS1_RU : LinxV5::Tile_NOS1);
+    // n#{1-16} start from 0b110000
+    Reg = RegNo - 48 + LinxV5::Tile_NOS1;
   }
   Inst.addOperand(MCOperand::createReg(Reg));
   return MCDisassembler::Success;

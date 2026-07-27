@@ -50,26 +50,6 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def SIMT_OSVN3  :  V5SIMTReg<0, 26, "vn#3",  ["vn#3"]>, DwarfRegNum<[100]>;
   def SIMT_OSVN4  :  V5SIMTReg<0, 27, "vn#4",  ["vn#4"]>, DwarfRegNum<[100]>;
 
-  def SIMT_OSVT1_RU  :  V5SIMTReg<3,  0, "vt#1.reuse",  ["vt#1.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVT2_RU  :  V5SIMTReg<3,  1, "vt#2.reuse",  ["vt#2.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVT3_RU  :  V5SIMTReg<3,  2, "vt#3.reuse",  ["vt#3.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVT4_RU  :  V5SIMTReg<3,  3, "vt#4.reuse",  ["vt#4.reuse"]>, DwarfRegNum<[100]>;
-
-  def SIMT_OSVU1_RU  :  V5SIMTReg<3,  8, "vu#1.reuse",  ["vu#1.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVU2_RU  :  V5SIMTReg<3,  9, "vu#2.reuse",  ["vu#2.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVU3_RU  :  V5SIMTReg<3, 10, "vu#3.reuse",  ["vu#3.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVU4_RU  :  V5SIMTReg<3, 11, "vu#4.reuse",  ["vu#4.reuse"]>, DwarfRegNum<[100]>;
-
-  def SIMT_OSVM1_RU  :  V5SIMTReg<3, 16, "vm#1.reuse",  ["vm#1.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVM2_RU  :  V5SIMTReg<3, 17, "vm#2.reuse",  ["vm#2.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVM3_RU  :  V5SIMTReg<3, 18, "vm#3.reuse",  ["vm#3.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVM4_RU  :  V5SIMTReg<3, 19, "vm#4.reuse",  ["vm#4.reuse"]>, DwarfRegNum<[100]>;
-
-  def SIMT_OSVN1_RU  :  V5SIMTReg<3, 24, "vn#1.reuse",  ["vn#1.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVN2_RU  :  V5SIMTReg<3, 25, "vn#2.reuse",  ["vn#2.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVN3_RU  :  V5SIMTReg<3, 26, "vn#3.reuse",  ["vn#3.reuse"]>, DwarfRegNum<[100]>;
-  def SIMT_OSVN4_RU  :  V5SIMTReg<3, 27, "vn#4.reuse",  ["vn#4.reuse"]>, DwarfRegNum<[100]>;
-
   def SIMT_OST1  :  V5SIMTReg<1, 24, "t#1",  ["t#1"]>, DwarfRegNum<[100]>;
   def SIMT_OST2  :  V5SIMTReg<1, 25, "t#2",  ["t#2"]>, DwarfRegNum<[100]>;
   def SIMT_OST3  :  V5SIMTReg<1, 26, "t#3",  ["t#3"]>, DwarfRegNum<[100]>;
@@ -200,10 +180,7 @@ def SIMT_OSVR : RegisterClass<"LinxV5", [i64], 64, (add
 
 let isAllocatable = 0 in
 def SIMT_OSVKR : RegisterClass<"LinxV5", [i64], 64, (add
-  (sequence "SIMT_OSVT%u_RU", 1, 4),
-  (sequence "SIMT_OSVU%u_RU", 1, 4),
-  (sequence "SIMT_OSVM%u_RU", 1, 4),
-  (sequence "SIMT_OSVN%u_RU", 1, 4)
+
 )> {
   let isAllocatable = 0;
 }

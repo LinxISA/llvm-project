@@ -44,7 +44,6 @@ def VBXTR : RegisterClass<"LinxV5", [i64, f64, f32, f16], 64, (add
     (sequence "VBXT%u", 0, 7)
   )>;
 
-
 let Namespace = "LinxV5" in {
 class LinxV5Reg<bits<5> Enc, string n, list<string> alt = []> : Register<n> {
   let HWEncoding{4-0} = Enc;
@@ -216,15 +215,13 @@ def MCDstNoRA : RegisterClass<"LinxV5", [i64, f64, f32, f16], 64, (add
 )>;
 
 let Namespace = "LinxV5" in {
-class LinxV5TileRegBase<bits<6> Enc, bit KillFlag, string n, list<string> alt = []> : Register<n> {
-  let HWEncoding{6} = KillFlag;
+class LinxV5TileRegBase<bits<6> Enc, string n, list<string> alt = []> : Register<n> {
+  // v5: source reuse (KillFlag) removed. HWEncoding is 6-bit only.
   let HWEncoding{5-0} = Enc;
   let AltNames = alt;
 }
 
-class LinxV5TileReg<bits<6> Enc, string n, list<string> alt = []> : LinxV5TileRegBase<Enc, 0, n, alt>;
-
-class LinxV5TileKillReg<bits<6> Enc, string n, list<string> alt = []> : LinxV5TileRegBase<Enc, 1, n, alt>;
+class LinxV5TileReg<bits<6> Enc, string n, list<string> alt = []> : LinxV5TileRegBase<Enc, n, alt>;
 
 class LinxV5TileDstReg<bits<3> Enc, string n, list<string> alt = []> : Register<n> {
   let HWEncoding{2-0} = Enc;
@@ -291,7 +288,6 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def Tile_M15  :  LinxV5TileReg<46, "tile_m15", ["tile_m15"]>,      DwarfRegNum<[100]>;
   def Tile_M16  :  LinxV5TileReg<47, "tile_m16", ["tile_m16"]>,      DwarfRegNum<[100]>;
 
-
   def Tile_N1   :  LinxV5TileReg<48,  "tile_n1",  ["tile_n1"]>,      DwarfRegNum<[100]>;
   def Tile_N2   :  LinxV5TileReg<49,  "tile_n2",  ["tile_n2"]>,      DwarfRegNum<[100]>;
   def Tile_N3   :  LinxV5TileReg<50,  "tile_n3",  ["tile_n3"]>,      DwarfRegNum<[100]>;
@@ -308,7 +304,6 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def Tile_N14  :  LinxV5TileReg<61, "tile_n14", ["tile_n14"]>,      DwarfRegNum<[100]>;
   def Tile_N15  :  LinxV5TileReg<62, "tile_n15", ["tile_n15"]>,      DwarfRegNum<[100]>;
   def Tile_N16  :  LinxV5TileReg<63, "tile_n16", ["tile_n16"]>,      DwarfRegNum<[100]>;
-
 
   def Tile_ACC1 :  LinxV5TileDstReg<4, "acc1",  ["acc1"]>, DwarfRegNum<[100]>;
 
@@ -381,76 +376,7 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def Tile_NOS15  :  LinxV5TileReg<62, "n#15",  ["n#15"]>,     DwarfRegNum<[100]>;
   def Tile_NOS16  :  LinxV5TileReg<63, "n#16",  ["n#16"]>,     DwarfRegNum<[100]>;
 
-  def Tile_TOS1_RU   :  LinxV5TileKillReg<0,  "t#1.reuse",  ["t#1.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS2_RU   :  LinxV5TileKillReg<1,  "t#2.reuse",  ["t#2.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS3_RU   :  LinxV5TileKillReg<2,  "t#3.reuse",  ["t#3.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS4_RU   :  LinxV5TileKillReg<3,  "t#4.reuse",  ["t#4.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS5_RU   :  LinxV5TileKillReg<4,  "t#5.reuse",  ["t#5.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS6_RU   :  LinxV5TileKillReg<5,  "t#6.reuse",  ["t#6.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS7_RU   :  LinxV5TileKillReg<6,  "t#7.reuse",  ["t#7.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS8_RU   :  LinxV5TileKillReg<7,  "t#8.reuse",  ["t#8.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_TOS9_RU   :  LinxV5TileKillReg<8,  "t#9.reuse",   ["t#9.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_TOS10_RU  :  LinxV5TileKillReg<9,  "t#10.reuse",  ["t#10.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_TOS11_RU  :  LinxV5TileKillReg<10, "t#11.reuse",  ["t#11.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_TOS12_RU  :  LinxV5TileKillReg<11, "t#12.reuse",  ["t#12.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_TOS13_RU  :  LinxV5TileKillReg<12, "t#13.reuse",  ["t#13.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_TOS14_RU  :  LinxV5TileKillReg<13, "t#14.reuse",  ["t#14.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_TOS15_RU  :  LinxV5TileKillReg<14, "t#15.reuse",  ["t#15.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_TOS16_RU  :  LinxV5TileKillReg<15, "t#16.reuse",  ["t#16.reuse"]>,    DwarfRegNum<[100]>;
-
-  def Tile_UOS1_RU   :  LinxV5TileKillReg<16, "u#1.reuse",  ["u#1.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS2_RU   :  LinxV5TileKillReg<17, "u#2.reuse",  ["u#2.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS3_RU   :  LinxV5TileKillReg<18, "u#3.reuse",  ["u#3.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS4_RU   :  LinxV5TileKillReg<19, "u#4.reuse",  ["u#4.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS5_RU   :  LinxV5TileKillReg<20, "u#5.reuse",  ["u#5.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS6_RU   :  LinxV5TileKillReg<21, "u#6.reuse",  ["u#6.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS7_RU   :  LinxV5TileKillReg<22, "u#7.reuse",  ["u#7.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS8_RU   :  LinxV5TileKillReg<23, "u#8.reuse",  ["u#8.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_UOS9_RU   :  LinxV5TileKillReg<24, "u#9.reuse",   ["u#9.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_UOS10_RU  :  LinxV5TileKillReg<25, "u#10.reuse",  ["u#10.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_UOS11_RU  :  LinxV5TileKillReg<26, "u#11.reuse",  ["u#11.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_UOS12_RU  :  LinxV5TileKillReg<27, "u#12.reuse",  ["u#12.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_UOS13_RU  :  LinxV5TileKillReg<28, "u#13.reuse",  ["u#13.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_UOS14_RU  :  LinxV5TileKillReg<29, "u#14.reuse",  ["u#14.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_UOS15_RU  :  LinxV5TileKillReg<30, "u#15.reuse",  ["u#15.reuse"]>,    DwarfRegNum<[100]>;
-  def Tile_UOS16_RU  :  LinxV5TileKillReg<31, "u#16.reuse",  ["u#16.reuse"]>,    DwarfRegNum<[100]>;
-
-  def Tile_MOS1_RU   :  LinxV5TileKillReg<32,  "m#1.reuse",  ["m#1.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS2_RU   :  LinxV5TileKillReg<33,  "m#2.reuse",  ["m#2.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS3_RU   :  LinxV5TileKillReg<34,  "m#3.reuse",  ["m#3.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS4_RU   :  LinxV5TileKillReg<35,  "m#4.reuse",  ["m#4.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS5_RU   :  LinxV5TileKillReg<36,  "m#5.reuse",  ["m#5.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS6_RU   :  LinxV5TileKillReg<37,  "m#6.reuse",  ["m#6.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS7_RU   :  LinxV5TileKillReg<38,  "m#7.reuse",  ["m#7.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS8_RU   :  LinxV5TileKillReg<39,  "m#8.reuse",  ["m#8.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS9_RU   :  LinxV5TileKillReg<40, "m#9.reuse",   ["m#9.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_MOS10_RU  :  LinxV5TileKillReg<41, "m#10.reuse",  ["m#10.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_MOS11_RU  :  LinxV5TileKillReg<42, "m#11.reuse",  ["m#11.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_MOS12_RU  :  LinxV5TileKillReg<43, "m#12.reuse",  ["m#12.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_MOS13_RU  :  LinxV5TileKillReg<44, "m#13.reuse",  ["m#13.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_MOS14_RU  :  LinxV5TileKillReg<45, "m#14.reuse",  ["m#14.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_MOS15_RU  :  LinxV5TileKillReg<46, "m#15.reuse",  ["m#15.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_MOS16_RU  :  LinxV5TileKillReg<47, "m#16.reuse",  ["m#16.reuse"]>,     DwarfRegNum<[100]>;
-
-  def Tile_NOS1_RU   :  LinxV5TileKillReg<48,  "n#1.reuse",  ["n#1.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS2_RU   :  LinxV5TileKillReg<49,  "n#2.reuse",  ["n#2.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS3_RU   :  LinxV5TileKillReg<50,  "n#3.reuse",  ["n#3.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS4_RU   :  LinxV5TileKillReg<51,  "n#4.reuse",  ["n#4.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS5_RU   :  LinxV5TileKillReg<52,  "n#5.reuse",  ["n#5.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS6_RU   :  LinxV5TileKillReg<53,  "n#6.reuse",  ["n#6.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS7_RU   :  LinxV5TileKillReg<54,  "n#7.reuse",  ["n#7.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS8_RU   :  LinxV5TileKillReg<55,  "n#8.reuse",  ["n#8.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS9_RU   :  LinxV5TileKillReg<56, "n#9.reuse",   ["n#9.reuse"]>,      DwarfRegNum<[100]>;
-  def Tile_NOS10_RU  :  LinxV5TileKillReg<57, "n#10.reuse",  ["n#10.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_NOS11_RU  :  LinxV5TileKillReg<58, "n#11.reuse",  ["n#11.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_NOS12_RU  :  LinxV5TileKillReg<59, "n#12.reuse",  ["n#12.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_NOS13_RU  :  LinxV5TileKillReg<60, "n#13.reuse",  ["n#13.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_NOS14_RU  :  LinxV5TileKillReg<61, "n#14.reuse",  ["n#14.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_NOS15_RU  :  LinxV5TileKillReg<62, "n#15.reuse",  ["n#15.reuse"]>,     DwarfRegNum<[100]>;
-  def Tile_NOS16_RU  :  LinxV5TileKillReg<63, "n#16.reuse",  ["n#16.reuse"]>,     DwarfRegNum<[100]>;
-
-
-  def Tile_ACCOS1   :  LinxV5TileKillReg<31,  "acc#1",  ["acc#1"]>,      DwarfRegNum<[100]>;
+  def Tile_ACCOS1   :  LinxV5TileReg<31,  "acc#1",  ["acc#1"]>,      DwarfRegNum<[100]>;
 
   def Tile_T   :  LinxV5TileDstReg<0, "t",  ["t"]>, DwarfRegNum<[100]>;
   def Tile_U   :  LinxV5TileDstReg<1, "u",  ["u"]>, DwarfRegNum<[100]>;
@@ -564,11 +490,7 @@ def TILE_SRC : RegisterClass<"LinxV5", [vAny], 64, (add
   (sequence "Tile_TOS%u", 1, 16),
   (sequence "Tile_UOS%u", 1, 16),
   (sequence "Tile_MOS%u", 1, 16),
-  (sequence "Tile_NOS%u", 1, 16),
-  (sequence "Tile_TOS%u_RU", 1, 16),
-  (sequence "Tile_UOS%u_RU", 1, 16),
-  (sequence "Tile_MOS%u_RU", 1, 16),
-  (sequence "Tile_NOS%u_RU", 1, 16)
+  (sequence "Tile_NOS%u", 1, 16)
 )> {
   let Size = 64;
   let isAllocatable = 0;
@@ -581,11 +503,7 @@ def TILE_SRC_MMA : RegisterClass<"LinxV5", [vAny], 64, (add
   (sequence "Tile_TOS%u", 1, 16),
   (sequence "Tile_UOS%u", 1, 16),
   (sequence "Tile_MOS%u", 1, 16),
-  (sequence "Tile_NOS%u", 1, 16),
-  (sequence "Tile_TOS%u_RU", 1, 16),
-  (sequence "Tile_UOS%u_RU", 1, 16),
-  (sequence "Tile_MOS%u_RU", 1, 16),
-  (sequence "Tile_NOS%u_RU", 1, 16)
+  (sequence "Tile_NOS%u", 1, 16)
 )> {
   let Size = 64;
   let isAllocatable = 0;

@@ -1506,70 +1506,69 @@ static unsigned MatchLinxV5TileRegisteName(StringRef Name) {
       .Case("n#14", LinxV5::Tile_NOS14)
       .Case("n#15", LinxV5::Tile_NOS15)
       .Case("n#16", LinxV5::Tile_NOS16)
-      .Case("t#1.reuse", LinxV5::Tile_TOS1_RU)
-      .Case("t#2.reuse", LinxV5::Tile_TOS2_RU)
-      .Case("t#3.reuse", LinxV5::Tile_TOS3_RU)
-      .Case("t#4.reuse", LinxV5::Tile_TOS4_RU)
-      .Case("t#5.reuse", LinxV5::Tile_TOS5_RU)
-      .Case("t#6.reuse", LinxV5::Tile_TOS6_RU)
-      .Case("t#7.reuse", LinxV5::Tile_TOS7_RU)
-      .Case("t#8.reuse", LinxV5::Tile_TOS8_RU)
-      .Case("t#9.reuse", LinxV5::Tile_TOS9_RU)
-      .Case("t#10.reuse", LinxV5::Tile_TOS10_RU)
-      .Case("t#11.reuse", LinxV5::Tile_TOS11_RU)
-      .Case("t#12.reuse", LinxV5::Tile_TOS12_RU)
-      .Case("t#13.reuse", LinxV5::Tile_TOS13_RU)
-      .Case("t#14.reuse", LinxV5::Tile_TOS14_RU)
-      .Case("t#15.reuse", LinxV5::Tile_TOS15_RU)
-      .Case("t#16.reuse", LinxV5::Tile_TOS16_RU)
-      .Case("u#1.reuse", LinxV5::Tile_UOS1_RU)
-      .Case("u#2.reuse", LinxV5::Tile_UOS2_RU)
-      .Case("u#3.reuse", LinxV5::Tile_UOS3_RU)
-      .Case("u#4.reuse", LinxV5::Tile_UOS4_RU)
-      .Case("u#5.reuse", LinxV5::Tile_UOS5_RU)
-      .Case("u#6.reuse", LinxV5::Tile_UOS6_RU)
-      .Case("u#7.reuse", LinxV5::Tile_UOS7_RU)
-      .Case("u#8.reuse", LinxV5::Tile_UOS8_RU)
-      .Case("u#9.reuse", LinxV5::Tile_UOS9_RU)
-      .Case("u#10.reuse", LinxV5::Tile_UOS10_RU)
-      .Case("u#11.reuse", LinxV5::Tile_UOS11_RU)
-      .Case("u#12.reuse", LinxV5::Tile_UOS12_RU)
-      .Case("u#13.reuse", LinxV5::Tile_UOS13_RU)
-      .Case("u#14.reuse", LinxV5::Tile_UOS14_RU)
-      .Case("u#15.reuse", LinxV5::Tile_UOS15_RU)
-      .Case("u#16.reuse", LinxV5::Tile_UOS16_RU)
-      .Case("m#1.reuse", LinxV5::Tile_MOS1_RU)
-      .Case("m#2.reuse", LinxV5::Tile_MOS2_RU)
-      .Case("m#3.reuse", LinxV5::Tile_MOS3_RU)
-      .Case("m#4.reuse", LinxV5::Tile_MOS4_RU)
-      .Case("m#5.reuse", LinxV5::Tile_MOS5_RU)
-      .Case("m#6.reuse", LinxV5::Tile_MOS6_RU)
-      .Case("m#7.reuse", LinxV5::Tile_MOS7_RU)
-      .Case("m#8.reuse", LinxV5::Tile_MOS8_RU)
-      .Case("m#9.reuse", LinxV5::Tile_MOS9_RU)
-      .Case("m#10.reuse", LinxV5::Tile_MOS10_RU)
-      .Case("m#11.reuse", LinxV5::Tile_MOS11_RU)
-      .Case("m#12.reuse", LinxV5::Tile_MOS12_RU)
-      .Case("m#13.reuse", LinxV5::Tile_MOS13_RU)
-      .Case("m#14.reuse", LinxV5::Tile_MOS14_RU)
-      .Case("m#15.reuse", LinxV5::Tile_MOS15_RU)
-      .Case("m#16.reuse", LinxV5::Tile_MOS16_RU)
-      .Case("n#1.reuse", LinxV5::Tile_NOS1_RU)
-      .Case("n#2.reuse", LinxV5::Tile_NOS2_RU)
-      .Case("n#3.reuse", LinxV5::Tile_NOS3_RU)
-      .Case("n#4.reuse", LinxV5::Tile_NOS4_RU)
-      .Case("n#5.reuse", LinxV5::Tile_NOS5_RU)
-      .Case("n#6.reuse", LinxV5::Tile_NOS6_RU)
-      .Case("n#7.reuse", LinxV5::Tile_NOS7_RU)
-      .Case("n#8.reuse", LinxV5::Tile_NOS8_RU)
-      .Case("n#9.reuse", LinxV5::Tile_NOS9_RU)
-      .Case("n#10.reuse", LinxV5::Tile_NOS10_RU)
-      .Case("n#11.reuse", LinxV5::Tile_NOS11_RU)
-      .Case("n#12.reuse", LinxV5::Tile_NOS12_RU)
-      .Case("n#13.reuse", LinxV5::Tile_NOS13_RU)
-      .Case("n#14.reuse", LinxV5::Tile_NOS14_RU)
-      .Case("n#15.reuse", LinxV5::Tile_NOS15_RU)
-      .Case("n#16.reuse", LinxV5::Tile_NOS16_RU)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       .Case("t", LinxV5::Tile_T)
       .Case("u", LinxV5::Tile_U)
       .Case("m", LinxV5::Tile_M)
@@ -1625,22 +1624,21 @@ static unsigned MatchLinxV5SIMTRegisterName(StringRef Name) {
       .Case("vn#2", LinxV5::SIMT_OSVN2)
       .Case("vn#3", LinxV5::SIMT_OSVN3)
       .Case("vn#4", LinxV5::SIMT_OSVN4)
-      .Case("vt#1.reuse", LinxV5::SIMT_OSVT1_RU)
-      .Case("vt#2.reuse", LinxV5::SIMT_OSVT2_RU)
-      .Case("vt#3.reuse", LinxV5::SIMT_OSVT3_RU)
-      .Case("vt#4.reuse", LinxV5::SIMT_OSVT4_RU)
-      .Case("vu#1.reuse", LinxV5::SIMT_OSVU1_RU)
-      .Case("vu#2.reuse", LinxV5::SIMT_OSVU2_RU)
-      .Case("vu#3.reuse", LinxV5::SIMT_OSVU3_RU)
-      .Case("vu#4.reuse", LinxV5::SIMT_OSVU4_RU)
-      .Case("vm#1.reuse", LinxV5::SIMT_OSVM1_RU)
-      .Case("vm#2.reuse", LinxV5::SIMT_OSVM2_RU)
-      .Case("vm#3.reuse", LinxV5::SIMT_OSVM3_RU)
-      .Case("vm#4.reuse", LinxV5::SIMT_OSVM4_RU)
-      .Case("vn#1.reuse", LinxV5::SIMT_OSVN1_RU)
-      .Case("vn#2.reuse", LinxV5::SIMT_OSVN2_RU)
-      .Case("vn#3.reuse", LinxV5::SIMT_OSVN3_RU)
-      .Case("vn#4.reuse", LinxV5::SIMT_OSVN4_RU)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       .Case("vt", LinxV5::SIMT_VT)
       .Case("vu", LinxV5::SIMT_VU)
       .Case("vm", LinxV5::SIMT_VM)

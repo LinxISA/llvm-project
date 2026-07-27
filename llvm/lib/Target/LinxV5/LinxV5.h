@@ -62,9 +62,6 @@ void initializeLinxV5LoadStoreOptPass(PassRegistry &);
 FunctionPass *createLinxV5TRegToOffsetOptPass();
 void initializeLinxV5TRegToOffsetOptPass(PassRegistry &);
 
-FunctionPass *createLinxV5RegReuseMarkerPass();
-void initializeLinxV5RegReuseMarkerPass(PassRegistry &);
-
 FunctionPass *createLinxV5RegisterCanonicalizationPass();
 void initializeLinxV5RegisterCanonicalizationPass(PassRegistry &);
 
