@@ -1746,28 +1746,21 @@ SDValue LinxV5TargetLowering::lowerShiftLeftParts(SDValue Op,
 
 SDValue LinxV5TargetLowering::lowerGetThreadID(SDValue Op,
                                                SelectionDAG &DAG) const {
+  // Temporary: lower get_thread_id to an SSR_GET (ssrget) machine node so the
+  // result is selected to the scalar register domain, not the 64-lane SIMT
+  // vector domain (which is what CopyFromReg(SIMT_LC0) produced and caused a
+  // cross-pool COPY -> "no registers from class available" regalloc fatal).
+  // We borrow SSR-ID 16 as a placeholder; the real 4-PE model needs a proper
+  // PE-id SSR once the ISA assigns one. This mirrors lowerSysGet's SSR_GET
+  // emit pattern.
   assert(DAG.getSubtarget<LinxV5Subtarget>().isSIMT());
   SDLoc DL(Op);
-  assert(Op->getNumOperands() == 3 &&
-         "Intrinsic Node must have Chain and Value Type.");
   SDValue Chain = Op.getOperand(0);
-  ConstantSDNode *CN = cast<ConstantSDNode>(Op->getOperand(2));
-  Register LCR = LinxV5::NoRegister;
-  switch (CN->getZExtValue()) {
-  case 0:
-    LCR = LinxV5::SIMT_LC0;
-    break;
-  case 1:
-    LCR = LinxV5::SIMT_LC1;
-    break;
-  case 2:
-    LCR = LinxV5::SIMT_LC2;
-    break;
-  default:
-    llvm_unreachable(
-        "int_linx_get_thread_id input layer number should be 0~2.");
-  }
-  return DAG.getCopyFromReg(Chain, DL, LCR, MVT::i64);
+  SDValue SSRId = DAG.getTargetConstant(16, DL, MVT::i64);
+  return SDValue(
+      DAG.getMachineNode(LinxV5::SSR_GET, DL, Op.getValueType(), MVT::Other,
+                        SSRId, Chain),
+      0);
 }
 
 SDValue LinxV5TargetLowering::lowerGetSIMTRet(SDValue Op,

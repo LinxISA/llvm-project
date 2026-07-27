@@ -453,6 +453,37 @@ void LinxV5InstPrinter::printTileSizeWithBracket(const MCInst *MI, unsigned OpNo
   }
 }
 
+void LinxV5InstPrinter::printPE_MASK(const MCInst *MI, unsigned OpNo,
+                    const MCSubtargetInfo &STI, raw_ostream &O) {
+  // v5 PE_MASK: 4-bit {PE0,PE1,PE2,PE3}, 1000=PE0..1111=all. Print as binary.
+  if (MI->getOperand(OpNo).isImm()) {
+    unsigned Imm = MI->getOperand(OpNo).getImm();
+    O << ((Imm >> 3) & 1) << ((Imm >> 2) & 1) << ((Imm >> 1) & 1) << (Imm & 1);
+  }
+}
+
+void LinxV5InstPrinter::printTSize(const MCInst *MI, unsigned OpNo,
+                    const MCSubtargetInfo &STI, raw_ostream &O) {
+  // v5 TSize: 3-bit, 000=IMPLICIT, 001=512B..111=32KB.
+  if (MI->getOperand(OpNo).isExpr()) {
+    const MCExpr *Expr = MI->getOperand(OpNo).getExpr();
+    O << "<"; Expr->print(O, &MAI); O << ">";
+    return;
+  }
+  unsigned Imm = MI->getOperand(OpNo).getImm();
+  switch (Imm) {
+    case 0: O << "<IMPLICIT>"; break;
+    case 1: O << "<512B>"; break;
+    case 2: O << "<1KB>"; break;
+    case 3: O << "<2KB>"; break;
+    case 4: O << "<4KB>"; break;
+    case 5: O << "<8KB>"; break;
+    case 6: O << "<16KB>"; break;
+    case 7: O << "<32KB>"; break;
+    default: return;
+  }
+}
+
 void LinxV5InstPrinter::printBStartWithoutTargetBrType(
     const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
     raw_ostream &O) {

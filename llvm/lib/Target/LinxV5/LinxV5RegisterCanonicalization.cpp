@@ -236,7 +236,11 @@ static DenseSet<const TargetRegisterClass *> KnownRCs = {
     &LinxV5::SIMTCGVRegClass,  // general vector and CopyFromReg(ri/tile/lc)
     &LinxV5::SIMTCGSLRegClass, // general scalar
     &LinxV5::SIMTCGSRegClass,  // general scalar and CopyFromReg(ri/tile/lc)
-    &LinxV5::CGSLRegClass      // 32-bits scalar: lui
+    &LinxV5::CGSLRegClass,     // 32-bits scalar: lui
+    // TableGen-generated intersection classes (e.g. from __mtc__ launch
+    // constraints). These are legitimate auto-generated RCs; the KnownRCs
+    // whitelist above was just not collecting them, tripping verifyRegClass.
+    &LinxV5::CGSL_and_GRRegClass
 };
 
 void verifyRegClass(MachineRegisterInfo *MRI) {

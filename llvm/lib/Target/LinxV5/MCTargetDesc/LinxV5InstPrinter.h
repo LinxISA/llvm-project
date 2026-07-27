@@ -74,6 +74,10 @@ public:
                     const MCSubtargetInfo &STI,raw_ostream &O);
   void printTileSizeWithBracket(const MCInst *MI, unsigned OpNo,
                     const MCSubtargetInfo &STI,raw_ostream &O);
+  void printPE_MASK(const MCInst *MI, unsigned OpNo,
+                    const MCSubtargetInfo &STI, raw_ostream &O);
+  void printTSize(const MCInst *MI, unsigned OpNo,
+                    const MCSubtargetInfo &STI, raw_ostream &O);
   void printGPRPlusImm(const MCInst *MI, unsigned OpNo,
                        const MCSubtargetInfo &STI, raw_ostream &O);
   void printDRImm(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,

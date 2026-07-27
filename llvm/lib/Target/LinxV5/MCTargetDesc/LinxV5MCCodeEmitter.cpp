@@ -114,6 +114,14 @@ public:
                                  SmallVectorImpl<MCFixup> &Fixups,
                                  const MCSubtargetInfo &STI) const;
 
+  unsigned getImmOpValuePE_MASK(const MCInst &MI, unsigned OpNo,
+                                SmallVectorImpl<MCFixup> &Fixups,
+                                const MCSubtargetInfo &STI) const;
+
+  unsigned getImmOpValueTSize(const MCInst &MI, unsigned OpNo,
+                              SmallVectorImpl<MCFixup> &Fixups,
+                              const MCSubtargetInfo &STI) const;
+
   unsigned getImmOpValueAsr1(const MCInst &MI, unsigned OpNo,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
@@ -545,6 +553,32 @@ LinxV5MCCodeEmitter::getImmOpValueTileSize(const MCInst &MI, unsigned OpNo,
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
 
+  return getImmOpValue(MI, OpNo, Fixups, STI);
+}
+
+unsigned
+LinxV5MCCodeEmitter::getImmOpValuePE_MASK(const MCInst &MI, unsigned OpNo,
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
+  // v5 PE_MASK: 4-bit immediate, same encoding path as TileSize.
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isReg())
+    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  if (MO.isImm())
+    return static_cast<unsigned>(MO.getImm());
+  return getImmOpValue(MI, OpNo, Fixups, STI);
+}
+
+unsigned
+LinxV5MCCodeEmitter::getImmOpValueTSize(const MCInst &MI, unsigned OpNo,
+                                         SmallVectorImpl<MCFixup> &Fixups,
+                                         const MCSubtargetInfo &STI) const {
+  // v5 TSize: 3-bit immediate, same encoding path.
+  const MCOperand &MO = MI.getOperand(OpNo);
+  if (MO.isReg())
+    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  if (MO.isImm())
+    return static_cast<unsigned>(MO.getImm());
   return getImmOpValue(MI, OpNo, Fixups, STI);
 }
 

@@ -19450,6 +19450,16 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   case LinxV5::BI__builtin_linx_get_system_reg:
       ID = Intrinsic::linx_get_sysreg;
       return EmitLinxV5GetSysReg(E, ID);
+  case LinxV5::BI__builtin_linx_get_thread_id: {
+      // Temporary shim: lower to int_linx_get_thread_id with layer=0 (x dim).
+      // The real 4-PE model needs a dedicated PE-id intrinsic; this reads the
+      // 64-lane SIMT_LC0 register and is enough to unblock the launch test.
+      ID = Intrinsic::linx_get_thread_id;
+      llvm::Function *F = CGM.getIntrinsic(ID, {});
+      llvm::Value *Layer = llvm::ConstantInt::get(CGM.Int64Ty, 0);
+      llvm::Value *Call = Builder.CreateCall(F, {Layer});
+      return Builder.CreateZExtOrTrunc(Call, CGM.Int32Ty);
+  }
   case LinxV5::BIblk_matmul:
       ID = Intrinsic::linx_blk_matmul;
       return EmitLinxV5BLK(E, ID, 2);
