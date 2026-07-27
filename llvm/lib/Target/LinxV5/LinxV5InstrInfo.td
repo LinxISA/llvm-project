@@ -2694,6 +2694,16 @@ def C_B_DIMI : BlockModifierBase {
 // it cannot execute alone — the next compatible B.IOT/B.IOR consumes it at
 // decode/rename. v4 C.B.DIMI (immediate) is kept; dynamic dimension uses
 // 32-bit B.DIM. (header/C.B.IOS.md)
+def SharedTIDAsmOperand : AsmOperandClass {
+  let Name = "SharedTID";
+  let ParserMethod = "parseSharedTID";
+  let RenderMethod = "addImmOperands";
+}
+def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
+  let ParserMatchClass = SharedTIDAsmOperand;
+  let PrintMethod = "printSharedTID";
+  let EncoderMethod = "getImmOpValueTSize"; // reuse simple imm encoding
+}
 def C_B_IOS : BlockModifierBase {
   field bits<16> SoftFail = 0;
   field bits<16> Inst;
@@ -2703,7 +2713,7 @@ def C_B_IOS : BlockModifierBase {
   bits<8> SharedTID;
 
   dag OutOperandList = (outs);
-  let InOperandList = (ins uimm8:$SharedTID);
+  let InOperandList = (ins SharedTIDOp:$SharedTID);
   let Inst{15-14} = 0b11;
   let Inst{13-6} = SharedTID;
   let Inst{5-4} = 0b11;

@@ -174,6 +174,8 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   OperandMatchResultTy parseLoopBDstRWithArrow(OperandVector &Operands);
   OperandMatchResultTy parseTileReg(OperandVector &Operands);
   OperandMatchResultTy parseTileRegWithArrow(OperandVector &Operands);
+  // v5: parse "S#n" Shared architectural ID (C.B.IOS binder).
+  OperandMatchResultTy parseSharedTID(OperandVector &Operands);
   OperandMatchResultTy parseGPRWithBracket(OperandVector &Operands);
   OperandMatchResultTy parseGPRPlusImm(OperandVector &Operands);
   OperandMatchResultTy parseDRImm(OperandVector &Operands);
@@ -531,6 +533,10 @@ public:
   }
 
   bool isGroupOp() const { return Kind == KindTy::GroupOp; }
+
+  // v5: SharedTID is parsed as a plain immediate ("S#n"), so isSharedTID
+  // just checks for an immediate operand.
+  bool isSharedTID() const { return isImm(); }
 
   bool isGPRWithBracket() const { return isReg(); }
 
@@ -2334,6 +2340,29 @@ OperandMatchResultTy LinxV5AsmParser::parseGroupOp(OperandVector &Operands) {
     return MatchOperand_NoMatch;
   }
   // all success
+  return MatchOperand_Success;
+}
+
+// v5: parse "S#n" Shared architectural ID (C.B.IOS binder operand).
+OperandMatchResultTy
+LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
+  SMLoc S = getLoc();
+  SMLoc E = SMLoc::getFromPointer(S.getPointer());
+  StringRef Str = getLexer().getTok().getString();
+  StringRef Lower = Str.lower();
+  if (!Lower.startswith("s#"))
+    return MatchOperand_NoMatch;
+  StringRef NumStr = Lower.substr(2);
+  if (NumStr.empty())
+    return MatchOperand_NoMatch;
+  unsigned TID;
+  if (NumStr.getAsInteger(10, TID))
+    return MatchOperand_NoMatch;
+  if (TID > 255)
+    return MatchOperand_NoMatch;
+  const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
+  Operands.push_back(LinxV5Operand::createImm(Val, S, E));
+  getLexer().Lex();  // consume 'S#n'
   return MatchOperand_Success;
 }
 
