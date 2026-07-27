@@ -2348,7 +2348,10 @@ OperandMatchResultTy
 LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
-  StringRef Str = getLexer().getTok().getString();
+  auto &Tok = getLexer().getTok();
+  StringRef Str = Tok.getString();
+  if (Str.empty())
+    Str = Tok.getIdentifier();
   StringRef Lower = Str.lower();
   if (!Lower.startswith("s#"))
     return MatchOperand_NoMatch;
