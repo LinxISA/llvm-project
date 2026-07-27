@@ -2607,6 +2607,13 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
                .Case("mscatter", TileOPTMA::MSCATTER)
                .Case("mgather.mask", TileOPTMA::MGATHER_MASK)
                .Case("mscatter.mask", TileOPTMA::MSCATTER_MASK)
+               // v5 TLSU Function 8-13 (header/BSTART.TLSU.md)
+               .Case("tmov.l2s.insert", TileOPTMA::TMOV_L2S_INSERT)
+               .Case("tmov.l2s.publish", TileOPTMA::TMOV_L2S_PUBLISH)
+               .Case("tmov.s2l.broadcast", TileOPTMA::TMOV_S2L_BROADCAST)
+               .Case("tmov.s2l.extract", TileOPTMA::TMOV_S2L_EXTRACT)
+               .Case("tstore.spart", TileOPTMA::TSTORE_SPART)
+               .Case("gmov", TileOPTMA::GMOV)
                .Default(TileOPTMA::EMPTY_TileOPTMA);
 
   if (TileOP == TileOPTMA::EMPTY_TileOPTMA) {
