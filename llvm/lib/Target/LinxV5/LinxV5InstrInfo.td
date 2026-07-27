@@ -2689,25 +2689,28 @@ def C_B_DIMI : BlockModifierBase {
   let AsmString = "C.B.DIMI" # "\t$imm8, $DstLoopReg";
 }
 
-def C_B_DIM : BlockModifierBase {
+// v5: C.B.IOS replaces v4 C.B.DIM RegSrc form. It is a 16-bit compressed
+// Shared operand binder carrying an 8-bit absolute Shared architectural ID;
+// it cannot execute alone — the next compatible B.IOT/B.IOR consumes it at
+// decode/rename. v4 C.B.DIMI (immediate) is kept; dynamic dimension uses
+// 32-bit B.DIM. (header/C.B.IOS.md)
+def C_B_IOS : BlockModifierBase {
   field bits<16> SoftFail = 0;
   field bits<16> Inst;
   let Size = 2;
   let isDisassembleOnly = 0;
 
-  bits<2> DstLoopReg;
-  bits<5> Src;
+  bits<8> SharedTID;
 
-  dag OutOperandList = (outs LoopBRegDst:$DstLoopReg);
-  dag InOperandList = (ins GPRSrc:$Src);
+  dag OutOperandList = (outs);
+  let InOperandList = (ins uimm8:$SharedTID);
   let Inst{15-14} = 0b11;
-  let Inst{13} = 0b0;
-  let Inst{12-11} = DstLoopReg;
-  let Inst{10-6} = Src;
+  let Inst{13-6} = SharedTID;
   let Inst{5-4} = 0b11;
-  let Inst{3-0} = 0b1100;
+  let Inst{3-1} = 0b110;
+  let Inst{0} = 0b0;
 
-  let AsmString = "C.B.DIM" # "\t$Src, $DstLoopReg";
+  let AsmString = "C.B.IOS" # "\t$SharedTID";
 }
 
 class B_IOT_Base<bits<3> Func, dag outs, dag ins, string opcodestr="", string argstr="">

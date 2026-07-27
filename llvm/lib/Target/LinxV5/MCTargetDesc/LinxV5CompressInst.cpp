@@ -361,12 +361,8 @@ bool LinxV5::tryCompressInst(MCInst &OutInst, const MCInst &MI,
       OutInst.addOperand(MI.getOperand(2));
       return true;
     }
-    if (MI.getOperand(2).getImm() == 0) {
-      OutInst.setOpcode(LinxV5::C_B_DIM);
-      OutInst.addOperand(MI.getOperand(0));
-      OutInst.addOperand(MI.getOperand(1));
-      return true;
-    }
+    // v5: C.B.DIM RegSrc compressed form removed; replaced by C.B.IOS Shared
+    // operand binder. The imm==0 -> C.B.DIM(RegSrc) compression is gone.
     break;
   }
   }

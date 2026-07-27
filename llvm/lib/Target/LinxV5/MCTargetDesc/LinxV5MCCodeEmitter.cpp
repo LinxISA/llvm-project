@@ -340,7 +340,7 @@ static bool isCompressedOpcode(unsigned Opcode) {
   case LinxV5::BSTART_AUX_WITHOUT_TARGET_16:
   case LinxV5::BSTART_FP_WITHOUT_TARGET_16:
 
-  case LinxV5::C_B_DIM:
+  case LinxV5::C_B_IOS:
   case LinxV5::C_B_DIMI:
     return true;
   }
