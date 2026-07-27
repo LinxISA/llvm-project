@@ -72,8 +72,6 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
   switch (Inst.getOpcode()) {
   default:
     break;
-  case LinxV5::PseudoACCCVT_SizeI:
-  case LinxV5::PseudoACCCVT_SizeR:
     MCVec.push_back(
         MCInstBuilder(LinxV5::BDATR)
             .addOperand(Inst.getOperand(8))
@@ -363,7 +361,6 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(9))
                         .addOperand(Inst.getOperand(12)));
     break;
-  case LinxV5::PseudoACCCVT_SizeI:
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
                         .addOperand(Inst.getOperand(0))
                         .addOperand(MCOperand::createImm(1))
@@ -492,8 +489,6 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
     return McVec;
   }
   switch (Inst.getOpcode()) {
-  case PseudoACCCVT_SizeI:
-  case PseudoACCCVT_SizeR:
   case PseudoTMOV_SizeI: {
     // ->lb0
     McVec.push_back(MCInstBuilder(LinxV5::B_DIM)
@@ -685,8 +680,6 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoTLOAD_Dsrc_Ddst, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_Dsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoMAMULBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULB_ACC},
-      {LinxV5::PseudoACCCVT_SizeI, LinxV5Op::TileOPCUBE::ACCCVT},
-      {LinxV5::PseudoACCCVT_SizeR, LinxV5Op::TileOPCUBE::ACCCVT},
       {LinxV5::PseudoESAVE, LinxV5Op::TileOPTEPL::ESAVE},
       {LinxV5::PseudoERCOV, LinxV5Op::TileOPTEPL::ERCOV}};
 

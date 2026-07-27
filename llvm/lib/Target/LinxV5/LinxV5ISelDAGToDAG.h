@@ -116,7 +116,6 @@ public:
   void selectTLoad(SDLoc &DL, SDNode *Node, unsigned Opc);
 
   void selectTStore(SDLoc &DL, SDNode *Node, unsigned Opc);
-  void selectACCCVT(SDLoc &DL, SDNode *Node);
 
   bool isWorthOpW(SDNode *Node) const;
   bool isWorthShlext(SDNode *Node) const;

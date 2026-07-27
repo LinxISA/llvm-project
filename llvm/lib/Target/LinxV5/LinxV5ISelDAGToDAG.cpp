@@ -506,34 +506,7 @@ void LinxV5DAGToDAGISel::selectTStore(SDLoc &DL, SDNode *Node, unsigned Opc) {
               CurDAG->getMachineNode(Opc, DL, Node->getValueType(0), Ops));
 }
 
-void LinxV5DAGToDAGISel::selectACCCVT(SDLoc &DL, SDNode *Node) {
-  SmallVector<SDValue> Ops;
-  selectDim(DL, Node->getOperand(1), Ops); // M
-  selectDim(DL, Node->getOperand(2), Ops); // N
-
-  Ops.push_back(CurDAG->getTargetConstant(
-      cast<ConstantSDNode>(Node->getOperand(3))->getZExtValue(), DL,
-      MVT::i64)); // SrcType
-  Ops.push_back(CurDAG->getTargetConstant(
-      cast<ConstantSDNode>(Node->getOperand(4))->getZExtValue(), DL,
-      MVT::i64)); // DstType
-  Ops.push_back(CurDAG->getTargetConstant(
-      cast<ConstantSDNode>(Node->getOperand(5))->getZExtValue(), DL,
-      MVT::i64)); // TileSize
-  Ops.push_back(CurDAG->getTargetConstant(
-      cast<ConstantSDNode>(Node->getOperand(6))->getZExtValue(), DL,
-      MVT::i64)); // Layout
-  Ops.push_back(CurDAG->getTargetConstant(
-      cast<ConstantSDNode>(Node->getOperand(7))->getZExtValue(), DL,
-      MVT::i64));                     // canon
-  Ops.push_back(Node->getOperand(8)); // acc tile
-
-  Ops.push_back(Node->getOperand(0)); // Chain
-
-  ReplaceNode(Node, CurDAG->getMachineNode(LinxV5::PseudoACCCVT_SizeI, DL,
-                                           Node->getValueType(0),
-                                           Node->getValueType(1), Ops));
-}
+// v5: ACCCVT removed (replaced by TMATMUL_ACC). selectACCCVT deleted.
 
 bool LinxV5DAGToDAGISel::calculateXDivergence(SDNode *N) {
   auto *LI = static_cast<const LinxV5TargetLowering *>(TLI);
@@ -1134,10 +1107,7 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
     selectTStore(DL, Node, LinxV5::PseudoTSTORE_noDsrc_noDdst);
     return;
   }
-  case LinxV5ISD::BLK_ACCCVT: {
-    selectACCCVT(DL, Node);
-    return;
-  }
+  // v5: BLK_ACCCVT removed (replaced by TMATMUL_ACC).
   case ISD::SDIV:
   case ISD::UDIV:
   case ISD::SREM:

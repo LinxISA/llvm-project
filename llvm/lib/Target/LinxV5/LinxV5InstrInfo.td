@@ -3169,23 +3169,13 @@ class PseudoCUBE_MAMULBMXBACC_Base_I<string TileOp> :
 
 def PseudoMAMULBMXBACC_SizeI : PseudoCUBE_MAMULBMXBACC_Base_I<"TMATMULMX.ACC">;
 
-class PseudoCUBE_ACCCVT_Base_I<string TileOp> :
-  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
-  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$SrcType, BstartDataType:$DstType,
-  TileSizeWithBracket:$TileSize, BArgFormat:$ArgFormat, Canon:$canon, ACC_TILE_SRC:$ACC)> {
-    let AsmString = TileOp # "\t$ArgFormat$canon, <Row: $RegM$immM, Col: $RegN$immN, ${SrcType}, ${DstType}>" #"\t$ACC, $DstTile$TileSize";
-}
-
-def PseudoACCCVT_SizeI : PseudoCUBE_ACCCVT_Base_I<"ACCCVT">;
-
-class PseudoCUBE_ACCCVT_Base_R<string TileOp> :
-  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
-  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$SrcType, BstartDataType:$DstType,
-  GPRWithBracket:$TileSize, BArgFormat:$ArgFormat, Canon:$canon, ACC_TILE_SRC:$ACC)> {
-    let AsmString = TileOp # "\t$ArgFormat$canon, <Row: $RegM$immM, Col: $RegN$immN, ${SrcType}, ${DstType}>" #"\t$ACC, $DstTile$TileSize";
-}
-
-def PseudoACCCVT_SizeR : PseudoCUBE_ACCCVT_Base_R<"ACCCVT">;
+// v5: ACCCVT is removed (status: "removed" in DavinciOO ISA; replaced by
+// TMATMUL_ACC). The PseudoACCCVT_SizeI/SizeR defs are deleted so they no
+// longer generate mnemonic-match entries in MatchTable0. Their presence at
+// the end of the sorted mnemonic table broke equal_range for nearby mnemonics
+// (e.g. c.b.ios). The base classes and linxv5_blk_acccvt SDNode are kept for
+// now (ISelLowering/ISelDAGToDAG still reference BLK_ACCCVT); full removal is
+// a subsequent cleanup.
 
 class PseudoCUBE_TMOV_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),

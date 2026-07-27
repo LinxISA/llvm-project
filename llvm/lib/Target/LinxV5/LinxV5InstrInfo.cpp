@@ -185,8 +185,6 @@ bool LinxV5::isTileOp(const MachineInstr &MI) {
 unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
   if (MI.getOpcode() == LinxV5::PseudoTCOPY) {
     return MI.getOperand(1).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoACCCVT_SizeI) {
-    return MI.getOperand(7).getImm();
   } else if (MI.isInlineAsm()) {
     LinxV5::SingleAsm SA = parseSingleAsm(&MI);
     for (int i = 0; i < SA.Defs.size(); ++i) {
