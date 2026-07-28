@@ -2857,57 +2857,67 @@ def TileSizeWithBracket : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]>
 
 // v5: PE_MASK (4-bit, {PE0,PE1,PE2,PE3}, 1000=PE0..1111=all) and TSize
 // (3-bit, 000=IMPLICIT, 001=512B..111=32KB). These replace the v4 imm4
-// TileSize field. For now both use the default immediate operand (no custom
-// AsmOperandClass / ParserMethod) — the asm syntax uses the printable form
-// "mask=1111, TSize=4KB" embedded in AsmString, so the operand itself is just
-// a raw imm matched by the generic imm parser.
+// TileSize field. Custom AsmOperandClass + ParserMethod so the asm syntax
+// "mask=N, TSize=N" is parsed as a whole token.
+def PE_MASKAsmOperand : AsmOperandClass {
+  let Name = "PE_MASK";
+  let ParserMethod = "parsePE_MASK";
+  let RenderMethod = "addImmOperands";
+}
 def PE_MASK_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]> {
+  let ParserMatchClass = PE_MASKAsmOperand;
   let PrintMethod = "printPE_MASK";
   let EncoderMethod = "getImmOpValuePE_MASK";
 }
+def TSizeAsmOperand : AsmOperandClass {
+  let Name = "TSize";
+  let ParserMethod = "parseTSize";
+  let RenderMethod = "addImmOperands";
+}
 def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
+  let ParserMatchClass = TSizeAsmOperand;
   let PrintMethod = "printTSize";
   let EncoderMethod = "getImmOpValueTSize";
 }
 
 def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
-        (ins GroupOp:$Last, PE_MASK_Op:$PE_MASK, TSize_Op:$TSize)> {
+        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last)> {
   let SrcTile0 = 0;
   let SrcTile1 = 0;
   let Format = InstFormat_STACK_SIZE;
-  let AsmString = "B.IOT" # "\t[], ${Last}mask=${PE_MASK}, TSize=${TSize}, ->$DstTile";
+  let AsmString = "B.IOT" # "\t${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
-def : InstAlias<"B.IOT\t[], $DstTile", (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, 0, 0b1111, 0), 0>;
+def : InstAlias<"B.IOT\t$DstTile", (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0), 0>;
 
 def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
-        (ins GroupOp:$Last, PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, TILE_Src_Reg:$SrcTile0)> {
+        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
   let SrcTile1 = 0;
   let Format = InstFormat_STACK_SIZE;
-  let AsmString = "B.IOT" # "\t[$SrcTile0], ${Last}mask=${PE_MASK}, TSize=${TSize}, ->$DstTile";
+  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
-def : InstAlias<"B.IOT\t[$SrcTile0], $DstTile", (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, 0, 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $DstTile", (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
 def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
-        (ins GroupOp:$Last, PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let Format = InstFormat_STACK_SIZE;
-  let AsmString = "B.IOT" # "\t[$SrcTile0, $SrcTile1], ${Last}mask=${PE_MASK}, TSize=${TSize}, ->$DstTile";
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
-def : InstAlias<"B.IOT\t[$SrcTile0, $SrcTile1], $DstTile", (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, 0, 0b1111, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $DstTile", (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 
-def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins GroupOp:$Last, PE_MASK_Op:$PE_MASK, TILE_Src_Reg:$SrcTile0)> {
+def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
   let SrcTile1 = 0;
   let DstTile = 0b00;
   let TSize = 0;
-  let AsmString = "B.IOT" # "\t[$SrcTile0], ${Last}mask=${PE_MASK}";
+  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
 }
-def : InstAlias<"B.IOT\t[$SrcTile0]", (B_IOT_OneSrc_NoDst 0, 0b1111, TILE_Src_Reg:$SrcTile0), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
-def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins GroupOp:$Last, PE_MASK_Op:$PE_MASK, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let DstTile = 0b00;
   let TSize = 0;
-  let AsmString = "B.IOT" # "\t[$SrcTile0, $SrcTile1], ${Last}mask=${PE_MASK}";
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
 }
-def : InstAlias<"B.IOT\t[$SrcTile0, $SrcTile1]", (B_IOT_TwoSrc_NoDst 0, 0b1111, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1", (B_IOT_TwoSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 
 // ===-------------------------- Tile Op -----------------------------===
 def GPRPlusImmAsmOperand : AsmOperandClass {

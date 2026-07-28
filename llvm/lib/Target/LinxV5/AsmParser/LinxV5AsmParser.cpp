@@ -176,6 +176,9 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   OperandMatchResultTy parseTileRegWithArrow(OperandVector &Operands);
   // v5: parse "S#n" Shared architectural ID (C.B.IOS binder).
   OperandMatchResultTy parseSharedTID(OperandVector &Operands);
+  // v5: parse "mask=N" PE_MASK and "TSize=N" TSize operands.
+  OperandMatchResultTy parsePE_MASK(OperandVector &Operands);
+  OperandMatchResultTy parseTSize(OperandVector &Operands);
   OperandMatchResultTy parseGPRWithBracket(OperandVector &Operands);
   OperandMatchResultTy parseGPRPlusImm(OperandVector &Operands);
   OperandMatchResultTy parseDRImm(OperandVector &Operands);
@@ -534,9 +537,10 @@ public:
 
   bool isGroupOp() const { return Kind == KindTy::GroupOp; }
 
-  // v5: SharedTID is parsed as a plain immediate ("S#n"), so isSharedTID
-  // just checks for an immediate operand.
+  // v5: SharedTID/PE_MASK/TSize are parsed as immediates.
   bool isSharedTID() const { return isImm(); }
+  bool isPE_MASK() const { return isImm(); }
+  bool isTSize() const { return isImm(); }
 
   bool isGPRWithBracket() const { return isReg(); }
 
@@ -2369,6 +2373,55 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   return MatchOperand_Success;
 }
 
+// v5: parse "mask=N" where N is a 4-bit decimal (0..15).
+OperandMatchResultTy
+LinxV5AsmParser::parsePE_MASK(OperandVector &Operands) {
+  SMLoc S = getLoc();
+  SMLoc E = SMLoc::getFromPointer(S.getPointer());
+  StringRef Str = getLexer().getTok().getString();
+  if (!Str.startswith_insensitive("mask"))
+    return MatchOperand_NoMatch;
+  // consume "mask"
+  getLexer().Lex();
+  // expect "="
+  if (getLexer().getTok().getKind() != AsmToken::Equal)
+    return MatchOperand_ParseFail;
+  getLexer().Lex(); // consume "="
+  // expect integer
+  if (getLexer().getTok().getKind() != AsmToken::Integer)
+    return MatchOperand_ParseFail;
+  unsigned Val = getLexer().getTok().getIntVal();
+  if (Val > 15)
+    return MatchOperand_ParseFail;
+  getLexer().Lex(); // consume integer
+  const MCExpr *Expr = MCConstantExpr::create(Val, getParser().getContext());
+  Operands.push_back(LinxV5Operand::createImm(Expr, S, E));
+  return MatchOperand_Success;
+}
+
+// v5: parse "TSize=N" where N is a 3-bit decimal (0..7).
+OperandMatchResultTy
+LinxV5AsmParser::parseTSize(OperandVector &Operands) {
+  SMLoc S = getLoc();
+  SMLoc E = SMLoc::getFromPointer(S.getPointer());
+  StringRef Str = getLexer().getTok().getString();
+  if (!Str.startswith_insensitive("tsize"))
+    return MatchOperand_NoMatch;
+  getLexer().Lex(); // consume "TSize"
+  if (getLexer().getTok().getKind() != AsmToken::Equal)
+    return MatchOperand_ParseFail;
+  getLexer().Lex(); // consume "="
+  if (getLexer().getTok().getKind() != AsmToken::Integer)
+    return MatchOperand_ParseFail;
+  unsigned Val = getLexer().getTok().getIntVal();
+  if (Val > 7)
+    return MatchOperand_ParseFail;
+  getLexer().Lex(); // consume integer
+  const MCExpr *Expr = MCConstantExpr::create(Val, getParser().getContext());
+  Operands.push_back(LinxV5Operand::createImm(Expr, S, E));
+  return MatchOperand_Success;
+}
+
 // E.g in "R1+32" / "R1" / "32"
 //    eat "R1+"   / "R1" / ""
 OperandMatchResultTy LinxV5AsmParser::parseGPRPlusImm(OperandVector &Operands) {
@@ -3446,10 +3499,16 @@ OperandMatchResultTy LinxV5AsmParser::parseGPRSrc(OperandVector &Operands) {
 OperandMatchResultTy
 LinxV5AsmParser::parseDstRWithArrow(OperandVector &Operands) {
   StringRef Name = getLexer().getTok().getString();
+  // v5: when AsmString has "->" as a literal before $DstTile, the "->"
+  // token is consumed by the matcher, so we may see the register directly.
   if (!Name.str().compare("->")) {
     Name = getLexer().peekTok().getIdentifier();
   } else {
-    return MatchOperand_NoMatch;
+    // v5: no "->" prefix (it was a literal consumed by AsmString).
+    // Try to match the current token as a register name directly.
+    Name = getLexer().getTok().getIdentifier();
+    if (Name.empty())
+      return MatchOperand_NoMatch;
   }
 
   size_t DotPosition = Name.find('.');
@@ -3464,7 +3523,9 @@ LinxV5AsmParser::parseDstRWithArrow(OperandVector &Operands) {
     SMLoc S = getLoc();
     SMLoc E = SMLoc::getFromPointer(S.getPointer());
     Operands.push_back(LinxV5Operand::createReg(RegNo, S, E));
-    getLexer().Lex();  // consume '->'
+    // Only consume '->' if we saw it.
+    if (!getLexer().getTok().getString().compare("->"))
+      getLexer().Lex();  // consume '->'
     getParser().Lex(); // Eat identifier token.
     return MatchOperand_Success;
   } else {
@@ -3682,6 +3743,20 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
   do {
     switch (getLexer().getKind()) {
     default: {
+      // v5: intercept "mask=" and "TSize=" before generic operand parse.
+      // These are multi-token sequences (identifier + '=' + integer) that
+      // the generic parser can't handle as a single operand.
+      if (getLexer().getTok().is(AsmToken::Identifier)) {
+        StringRef Id = getLexer().getTok().getIdentifier();
+        if (Id.startswith_insensitive("mask")) {
+          if (parsePE_MASK(Operands) == MatchOperand_Success)
+            continue;
+        }
+        if (Id.startswith_insensitive("tsize")) {
+          if (parseTSize(Operands) == MatchOperand_Success)
+            continue;
+        }
+      }
       if (parseOperand(Operands, Name))
         return false;
       else
