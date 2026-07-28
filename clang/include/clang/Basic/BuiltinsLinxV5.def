@@ -17,11 +17,10 @@
 
 BUILTIN(__builtin_linx_get_system_reg, "ULiULi", "n")
 
-// Returns the current PE's thread index (0..kThreadsPerBlock-1). The layer
-// operand of int_linx_get_thread_id is fixed to 0 (x dimension) here.
-// Temporary shim to unblock the 4-PE launch test; the real 4-PE model needs a
-// dedicated PE-id intrinsic, not the 64-lane SIMT_LC0 register.
-BUILTIN(__builtin_linx_get_thread_id, "Ui", "nc")
+// Returns the current PE's thread index (0..kThreadsPerBlock-1).
+// Aligned with website manual get_thread_idx(). Lowered to SSR_GET reading
+// a PE-id SSR (SSR-ID 16 placeholder, pending ISA assignment).
+BUILTIN(__builtin_linx_get_thread_idx, "Ui", "nc")
 
 BUILTIN(blkv_max,  "v.", "nt")
 BUILTIN(blkv_min, "v.", "nt")

@@ -857,8 +857,8 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       Op->print(errs(), &DAG);
       report_fatal_error("unimplemented Intrinsic operand");
     }
-    case Intrinsic::linx_get_thread_id:
-      return lowerGetThreadID(Op, DAG);
+    case Intrinsic::linx_get_thread_idx:
+      return lowerGetThreadIdx(Op, DAG);
     case Intrinsic::linx_get_simt_ret:
       return lowerGetSIMTRet(Op, DAG);
     case Intrinsic::linx_get_sysreg: {
@@ -1744,16 +1744,13 @@ SDValue LinxV5TargetLowering::lowerShiftLeftParts(SDValue Op,
   return DAG.getMergeValues(Parts, DL);
 }
 
-SDValue LinxV5TargetLowering::lowerGetThreadID(SDValue Op,
-                                               SelectionDAG &DAG) const {
-  // Temporary: lower get_thread_id to an SSR_GET (ssrget) machine node so the
-  // result is selected to the scalar register domain, not the 64-lane SIMT
-  // vector domain (which is what CopyFromReg(SIMT_LC0) produced and caused a
-  // cross-pool COPY -> "no registers from class available" regalloc fatal).
-  // We borrow SSR-ID 16 as a placeholder; the real 4-PE model needs a proper
-  // PE-id SSR once the ISA assigns one. This mirrors lowerSysGet's SSR_GET
-  // emit pattern.
-  assert(DAG.getSubtarget<LinxV5Subtarget>().isSIMT());
+SDValue LinxV5TargetLowering::lowerGetThreadIdx(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  // Aligned with website manual get_thread_idx(): returns PE thread index
+  // (0..kThreadsPerBlock-1). Lowered to SSR_GET reading PE-id SSR.
+  // SSR-ID 16 is a placeholder pending ISA assignment for SSR.THREAD_IDX.
+  // IntrNoMem (not IntrHasSideEffects) so CSE/DCE and best-effort tid==C
+  // folding can apply. Output lands in scalar GPR via DstRWithArrow.
   SDLoc DL(Op);
   SDValue Chain = Op.getOperand(0);
   SDValue SSRId = DAG.getTargetConstant(16, DL, MVT::i64);

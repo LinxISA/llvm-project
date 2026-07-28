@@ -19,7 +19,7 @@ def int_linx_get_sysreg : DefaultAttrsIntrinsic<[llvm_i64_ty],
                                                 [llvm_i64_ty],
                                                 [IntrHasSideEffects,]>;
 
-def int_linx_get_thread_id : Intrinsic<[llvm_i64_ty], [llvm_i64_ty], [IntrHasSideEffects,]>;
+def int_linx_get_thread_idx : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 
 def int_linx_set_loop_iterations : Intrinsic<[],
                                              [llvm_i64_ty, llvm_anyint_ty],

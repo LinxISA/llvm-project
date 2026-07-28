@@ -270,7 +270,7 @@ private:
   SDValue lowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShiftLeftParts(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShiftRightParts(SDValue Op, SelectionDAG &DAG, bool IsSRA) const;
-  SDValue lowerGetThreadID(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerGetThreadIdx(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSysGet(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerGetSIMTRet(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSetLoopIterations(SDValue Op, SelectionDAG &DAG) const;
