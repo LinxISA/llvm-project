@@ -865,6 +865,25 @@ void LinxV5InstPrinter::printTileOPTMA(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPTMA::MSCATTER_MASK:
     O << "MSCATTER.MASK";
     break;
+  // v5 TLSU Function 8-13 (header/BSTART.TLSU.md)
+  case LinxV5Op::TileOPTMA::TMOV_L2S_INSERT:
+    O << "TMOV.L2S.INSERT";
+    break;
+  case LinxV5Op::TileOPTMA::TMOV_L2S_PUBLISH:
+    O << "TMOV.L2S.PUBLISH";
+    break;
+  case LinxV5Op::TileOPTMA::TMOV_S2L_BROADCAST:
+    O << "TMOV.S2L.BROADCAST";
+    break;
+  case LinxV5Op::TileOPTMA::TMOV_S2L_EXTRACT:
+    O << "TMOV.S2L.EXTRACT";
+    break;
+  case LinxV5Op::TileOPTMA::TSTORE_SPART:
+    O << "TSTORE.SPART";
+    break;
+  case LinxV5Op::TileOPTMA::GMOV:
+    O << "GMOV";
+    break;
   default:
     O << Imm;
     break;
