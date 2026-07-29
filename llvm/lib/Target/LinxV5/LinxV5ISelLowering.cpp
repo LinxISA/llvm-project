@@ -954,6 +954,18 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
     case Intrinsic::blkv_get_index_z:
       return DAG.getCopyFromReg(DAG.getEntryNode(), DL, LinxV5::SIMT_LC2,
                                 MVT::i16);
+    case Intrinsic::linx_get_thread_idx: {
+      // Direct: lower to SSR_GET with Imm12=0xFFF (all-1s placeholder).
+      // SSR_GET outputs to DstRWithArrow (t/u/Rd — all allocatable GPR).
+      // No vreg cross-pool issue, no spill. IntrNoMem so no chain.
+      // Output only MVT::i64 (no MVT::Other chain — avoids creating a
+      // non-allocatable MCDst vreg for the chain result).
+      SDLoc DL(Op);
+      SDValue SSRId = DAG.getTargetConstant(0xFFF, DL, MVT::i64);
+      SDNode *N = DAG.getMachineNode(LinxV5::SSR_GET, DL, MVT::i64,
+                                     SSRId);
+      return SDValue(N, 0);
+    }
     }
   }
   case ISD::INTRINSIC_VOID: {
@@ -1749,10 +1761,10 @@ SDValue LinxV5TargetLowering::lowerGetThreadIdx(SDValue Op,
   // Aligned with website manual get_thread_idx(): returns PE thread index
   // (0..kThreadsPerBlock-1). Lowered to SSR_GET reading PE-id SSR.
   // SSR-ID 16 is a placeholder pending ISA assignment for SSR.THREAD_IDX.
-  // IntrNoMem (not IntrHasSideEffects) so CSE/DCE and best-effort tid==C
-  // folding can apply. Output lands in scalar GPR via DstRWithArrow.
+  // IntrNoMem, no operands (was IntrHasSideEffects + i64 layer param).
+  // IntrNoMem intrinsic has no chain operand; use the entry node.
   SDLoc DL(Op);
-  SDValue Chain = Op.getOperand(0);
+  SDValue Chain = DAG.getRoot();
   SDValue SSRId = DAG.getTargetConstant(16, DL, MVT::i64);
   return SDValue(
       DAG.getMachineNode(LinxV5::SSR_GET, DL, Op.getValueType(), MVT::Other,

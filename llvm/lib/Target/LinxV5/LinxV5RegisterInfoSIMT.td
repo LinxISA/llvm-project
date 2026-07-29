@@ -96,6 +96,7 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def SIMT_TO3 :   V5SIMTReg<2,  27, "to3",   ["to3"]>, DwarfRegNum<[100]>;
 
   def SIMT_P  :   V5SIMTReg<2,  28, "p",   ["p"]>, DwarfRegNum<[100]>;
+  def SIMT_TID :  V5SIMTReg<2,  29, "tid", ["tid"]>, DwarfRegNum<[100]>;
   def SIMT_ZERO : V5SIMTReg<2,  31, "zero", ["zero"]>, DwarfRegNum<[100]>;
 
   def SIMT_VT1  :  V5SIMTReg<0,  0, "vt1",  ["vt1"]>, DwarfRegNum<[100]>;
@@ -220,6 +221,7 @@ def SIMTCGS : RegisterClass<"LinxV5", [i64, i32, i16, i8, bf16, f16, f32, f64], 
   (sequence "SIMT_RI%u", 0, 11),
   LoopReg,
   SIMT_TileBase,
+  SIMT_TID,
   R0
 )>;
 

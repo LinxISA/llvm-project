@@ -108,11 +108,21 @@ parseTileDstWithSize(LinxV5::SingleAsm &SA, MachineInstr *MI, const char *p) {
   MachineOperand *Dst = nullptr;
   p = parseAsmOperand(MI, p, Dst);
 
-  if (!p)
-    return nullptr;
-  if (*p != '<')
+  if (!p || !Dst)
     return nullptr;
 
+  // v5: "->$N" without <size> — size is now TSize=%c[N] earlier in the
+  // string, not embedded in the dst operand. Record def with size=0
+  // (implicit/unknown); callers handle size=0 by falling back to other
+  // size sources (e.g. TileDType).
+  if (*p != '<') {
+    // v5 form: ->dst without <size>
+    SA.Defs.push_back(Dst);
+    SA.Sizes.push_back(0);
+    return p;
+  }
+
+  // v4 form: ->dst<size>
   MachineOperand *Size = nullptr;
   p = parseAsmOperand(MI, p + 1, Size);
 
