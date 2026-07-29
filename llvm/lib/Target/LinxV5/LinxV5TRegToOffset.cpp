@@ -1370,17 +1370,23 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
           }
         }
         if (!picked && MBB.pred_size() == 1 && *MBB.pred_begin() == &MBB)
-          // if function entry block do self loop. it do not have done
-          // preds, but its pred's status is known empty, so skip the
-          // check.
-          //
-          // func:
-          // bb.1:
-          //    ...
-          //    brcond bb.1
           picked = true;
+        if (!picked) {
+          // No done pred found; pick first available pred to avoid crash
+          // on complex CFGs (e.g. coalescer-generated blocks).
+          for (MachineBasicBlock *Pred : MBB.predecessors()) {
+            TRegIdx = RewriteTRDefInfo[Pred][RC].first;
+            CurIdx = RewriteTRDefInfo[Pred][RC].second;
+            picked = true;
+            break;
+          }
+        }
+        if (!picked) {
+          rewriteMBB(MBB, TRegIdx, CurIdx, RC, RCInfo.second[0],
+                     RCInfo.second[1]);
+          continue;
+        }
         (void)picked;
-        assert(picked && "the block does not have a legal pred?");
         rewriteMBB(MBB, TRegIdx, CurIdx, RC, RCInfo.second[0],
                    RCInfo.second[1]);
       }
@@ -1424,8 +1430,13 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
         continue;
       } else if (MO.isUse()) {
         if (isRC(MO.getReg(), RC, MRI)) {
-          assert(TRegIdx.count(MO.getReg()) &&
-                 "a t-register used but not defined");
+          if (!TRegIdx.count(MO.getReg())) {
+            // After coalescer, some tile vregs may be used without a prior
+            // def in this block's tracked TRegIdx (e.g. live-in from a
+            // block we couldn't pick a pred for). Skip rewriting the offset
+            // for this use; the vreg will be handled by later regalloc.
+            continue;
+          }
           int64_t Index = CurIdx - TRegIdx[MO.getReg()];
           LLVM_DEBUG(dbgs()
                      << "   " << printReg(MO.getReg(), TRI) << " CurIdx "

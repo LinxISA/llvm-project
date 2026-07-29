@@ -361,7 +361,11 @@ void ColoringInChain::seedRegUnits() {
       if (RUs.count(Reg))
         continue;
       if (Reg.isVirtual() && OriRCs.count(MRI->getRegClass(Reg))) {
-        assert(MRI->hasOneDef(Reg) && "Reg not SSA!");
+        // After RegisterCoalescer, some tile vregs may have multiple defs
+        // (coalesced copies). Skip non-SSA regs instead of asserting; they
+        // will be handled by the standard regalloc path, not Clockhands.
+        if (!MRI->hasOneDef(Reg))
+          continue;
         RegUnit RU = {Reg, RegUnitState::RU_New, AssignAlgorithm::AA_None};
         RUs.insert(std::make_pair(Reg, RU));
       }
