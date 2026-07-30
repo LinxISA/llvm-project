@@ -16,9 +16,10 @@ entry:
 
 ; CHECK-LABEL: tile_intrinsics_v2v:
 ; CHECK: BSTART.TLOAD
-; CHECK: B.ARG {{.*17}}
+; CHECK: B.DATR{{[[:space:]]+}}Layout17
 ; CHECK: BSTART.TSTORE
-; CHECK: B.ARG {{.*17}}
+; CHECK: B.DATR{{[[:space:]]+}}Layout17
+; CHECK-NOT: B.ARG
 
 define void @tile_intrinsics_a2v(ptr %src, ptr %dst) {
 entry:
@@ -30,6 +31,8 @@ entry:
 
 ; CHECK-LABEL: tile_intrinsics_a2v:
 ; CHECK: BSTART.TLOAD
-; CHECK: BSTART.TMOV
-; CHECK: B.ARG A2V
+; CHECK: BSTART.ACCCVT
 ; CHECK: BSTART.TSTORE
+; CHECK-NOT: B.ARG
+; CHECK-NOT: BSTART.CUBE
+; CHECK-NOT: BSTART.FIXP

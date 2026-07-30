@@ -16,10 +16,9 @@ entry:
 ; CHECK: BSTART.TLOAD{{[[:space:]]+}}
 ; CHECK: C.B.DIMI{{.*}}->lb0
 ; CHECK: C.B.DIMI{{.*}}->lb1
-; CHECK: B.ARG
 ; CHECK: B.IOR
 ; CHECK: B.IOT
 ; CHECK: BSTART.TSTORE{{[[:space:]]+}}
-; CHECK: B.ARG
 ; CHECK: B.IOR
 ; CHECK: B.IOT
+; CHECK-NOT: B.ARG

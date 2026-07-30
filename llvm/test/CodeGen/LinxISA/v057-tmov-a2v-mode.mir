@@ -1,9 +1,9 @@
 # RUN: llc -mtriple=linx64 -run-pass=linx-blockify -o - %s | FileCheck %s
 
 # CHECK-LABEL: name: tile_tmov_a2v
-# CHECK: BSTART_TMA 0, 2
-# CHECK-NEXT: B_ARG 1
+# CHECK: BSTART_CUBE 0, 8
 # CHECK: B_IOT_SIZE_G1 0, 0, 1, 0, 1, 0, 0, 8, implicit-def $tile0
+# CHECK-NOT: B_ARG
 
 --- |
   define i64 @tile_tmov_a2v(ptr %out) {

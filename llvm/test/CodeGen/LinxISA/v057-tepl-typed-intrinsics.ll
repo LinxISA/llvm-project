@@ -22,12 +22,10 @@ entry:
 ; CHECK: BSTART.TADD
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.ARG{{[[:space:]]+}}VV
 ; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1.reuse, last, ->t<4KB>
 ; CHECK: BSTART.TSUB
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.ARG{{[[:space:]]+}}VV
 ; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, t#2, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
 
@@ -43,6 +41,6 @@ entry:
 ; CHECK: BSTART.TROWMAX
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.ARG{{[[:space:]]+}}VV
 ; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
+; CHECK-NOT: B.ARG

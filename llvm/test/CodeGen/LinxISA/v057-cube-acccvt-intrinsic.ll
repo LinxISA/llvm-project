@@ -12,7 +12,7 @@ entry:
   %ta = call %linx.tile @llvm.linx.tile.tload(ptr %a, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
   %tb = call %linx.tile @llvm.linx.tile.tload(ptr %b, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
   %acc_seed = call %linx.tile @llvm.linx.cube.mamulb(%linx.tile %ta, %linx.tile %tb, i32 4, i32 4, i32 4)
-  %out = call %linx.tile @llvm.linx.cube.acccvt(%linx.tile %acc_seed, i32 8, i32 0, i64 7, i64 0)
+  %out = call %linx.tile @llvm.linx.cube.acccvt(%linx.tile %acc_seed, i32 8, i32 0, i64 0, i64 0)
   call void @llvm.linx.tile.tstore(ptr %dst, %linx.tile %out, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
   ret void
 }
@@ -23,5 +23,5 @@ entry:
 ; CHECK: BSTART.TMATMUL
 ; CHECK: BSTART.ACCCVT
 ; CHECK: BSTART.ACCCVT
-; CHECK: B.ARG{{.*}}7
 ; CHECK: BSTART.TSTORE
+; CHECK-NOT: B.ARG

@@ -45,7 +45,7 @@ body:             |
     $tile1 = PSEUDO_TMA_TLOAD $r3, 8
     $tile19 = PSEUDO_CUBE_MAMULB $tile0, $tile1, 4, 4, 4
     $tile16 = PSEUDO_CUBE_MAMULB killed $tile0, killed $tile1, 4, 4, 4
-    $tile17 = PSEUDO_CUBE_ACCCVT killed $tile16, 8, 0, 7, 0
+    $tile17 = PSEUDO_CUBE_ACCCVT killed $tile16, 8, 0, 0, 0
     PSEUDO_TMA_TSTORE $r4, killed $tile19, 8
     PSEUDO_TMA_TSTORE killed $r4, killed $tile17, 8
     PSEUDO_RET implicit $r10
