@@ -146,6 +146,11 @@ B.IOT mask=1111, TSize=<有效值>, last, ->D
 - `B.FPATR` 七字段 encoding
 - `TMATMUL_FIXP` 基础 Local form
 - `TMATMUL_ACC_FIXP` 基础 Local form及隐式 ACC dependency
+- `TMATMUL_BIAS_FIXP` 基础 Local form（2026-07-30 补齐）
+- `TMATMUL_MX_FIXP` 基础 Local form（2026-07-30 补齐）
+- `TMATMUL_MX_BIAS_FIXP` 基础 Local form（2026-07-30 补齐）
+- `TMATMUL_MX_ACC_FIXP` 基础 Local form（2026-07-30 补齐）
+- 全部 6 个 FIXP 变体（Function 9–14）完整编译链：builtin/intrinsic/ISD/pseudo/MC expand/API
 - v5 TSize：0 implicit，1–7 对应 512 B–32 KB
 - GMOV Function 13 基础 encoding和编译链
 - PEID SSR `0x0802`，`get_thread_id()` 和兼容 `get_thread_idx()`
@@ -155,12 +160,8 @@ B.IOT mask=1111, TSize=<有效值>, last, ->D
 
 ### 仍缺失
 
-- 完整 FIXP 编译链/API：
-  - `TMATMUL_BIAS_FIXP`
-  - `TMATMUL_MX_FIXP`
-  - `TMATMUL_MX_BIAS_FIXP`
-  - `TMATMUL_MX_ACC_FIXP`
-- FIXP 高级模式：
+- 完整 FIXP 高级模式（工作包 B，descriptor 设计）：
+  - PreQuantMode
   - PreQuantMode
   - PReLU/LReLU
   - Tile/GPR quant 参数
