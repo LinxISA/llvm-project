@@ -175,6 +175,14 @@ private:
   uint8_t *hashBuf;
 };
 
+// Canonical PTO ISA encoding identity emitted for every Linx output image.
+class PTOISAIdentitySection final : public SyntheticSection {
+public:
+  PTOISAIdentitySection(Ctx &);
+  void writeTo(uint8_t *buf) override;
+  size_t getSize() const override;
+};
+
 // BssSection is used to reserve space for copy relocations and common symbols.
 // We create three instances of this class for .bss, .bss.rel.ro and "COMMON",
 // that are used for writable symbols, read-only symbols and common symbols,
@@ -1494,6 +1502,7 @@ struct Partition {
 
   std::unique_ptr<ARMExidxSyntheticSection> armExidx;
   std::unique_ptr<BuildIdSection> buildId;
+  std::unique_ptr<PTOISAIdentitySection> ptoISAIdentity;
   std::unique_ptr<SyntheticSection> dynamic;
   std::unique_ptr<StringTableSection> dynStrTab;
   std::unique_ptr<SymbolTableBaseSection> dynSymTab;

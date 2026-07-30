@@ -142,6 +142,10 @@ def uimm6 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<6>(N->getZExtValue
   let ParserMatchClass = ImmAsmOperand;
 }
 
+def uimm7 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<7>(N->getZExtValue()); }]> {
+  let ParserMatchClass = ImmAsmOperand;
+}
+
 def uimm10 : Operand<i64>, PatLeaf<(i64 imm), [{ return isUInt<10>(N->getZExtValue()); }]> {
   let ParserMatchClass = ImmAsmOperand;
 }
@@ -851,7 +855,7 @@ let hasSideEffects = 1, Size = 2 in {
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   def BSTART_TMA  : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
   def BSTART_CUBE : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
-  def BSTART_TEPL : LinxISAInst<(outs), (ins uimm5:$dtype, uimm10:$tileop), "", []>;
+  def BSTART_TEPL : LinxISAInst<(outs), (ins uimm5:$dtype, uimm7:$tileop), "", []>;
 
   // Vector block start markers (decoupled headers).
   //
@@ -865,8 +869,6 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   // Decoupled-body pointer for tile/vector headers (see ISA manual: decoupled blocks).
   def B_TEXT : LinxISAInst<(outs), (ins BrTarget:$dst), "", []>;
 
-  def B_ARG : LinxISAInst<(outs), (ins i64imm:$format), "", []>;
-
   // Canonical v0.57 splits control and data attributes.  Keep these as
   // separate MachineInstrs so the backend cannot recreate the retired
   // canonical split B.CATR/B.DATR surface.
@@ -875,7 +877,8 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
                                        i64imm:$far, i64imm:$rl), "", []>;
   def B_DATR : LinxISAInst<(outs), (ins i64imm:$cmode, i64imm:$layout,
                                        i64imm:$dtype, i64imm:$pad,
-                                       i64imm:$rmode, i64imm:$sat), "", []>;
+                                       i64imm:$rmode, i64imm:$sat,
+                                       i64imm:$canonicalize), "", []>;
 
   def B_DIM_LB0 : LinxISAInst<(outs), (ins GPR_Arch:$reg, i64imm:$imm), "", []>;
   def B_DIM_LB1 : LinxISAInst<(outs), (ins GPR_Arch:$reg, i64imm:$imm), "", []>;

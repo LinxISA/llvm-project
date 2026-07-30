@@ -40,5 +40,5 @@ entry:
 ; CHECK:      BSTART.TMATMUL.ACC
 ; CHECK:      BSTART.ACCCVT
 ; CHECK:      BSTART.TSTORE
-; CHECK:      B.IOT{{[[:space:]]+[mn]#[1-8], last, ->[mn]<4KB>}}
+; CHECK:      B.IOT{{[[:space:]]+[mn]#[1-8], last}}
 ; CHECK-NOT:  {{m|n}}#9

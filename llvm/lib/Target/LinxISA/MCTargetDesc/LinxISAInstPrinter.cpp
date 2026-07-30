@@ -166,8 +166,8 @@ static StringRef cubeAliasMnemonic(unsigned Func) {
   }
 }
 
-static StringRef teplAliasMnemonic(unsigned TileOpcode) {
-  return LinxISA::canonicalTEPLAliasMnemonicV057(TileOpcode & 0x3ffu);
+static StringRef teplAliasMnemonic(unsigned Selector) {
+  return LinxISA::canonicalTEPLAliasMnemonicV057(Selector & 0x7fu);
 }
 
 static unsigned tmaStateOpFromFunction(unsigned Func) {
@@ -1062,13 +1062,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return;
     }
 
-    const unsigned TileOpcode =
-        static_cast<unsigned>(findFieldImm("TileOpcode").value_or(0)) & 0x3ffu;
-    ParStateOp = TileOpcode;
+    const unsigned Mode =
+        static_cast<unsigned>(findFieldImm("Mode").value_or(0)) & 0x3u;
+    const unsigned Function =
+        static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x1fu;
+    const unsigned Selector = (Mode << 5) | Function;
+    ParStateOp = Selector;
 
     StringRef Alias;
     if (IsTypedTEPL) {
-      Alias = teplAliasMnemonic(TileOpcode);
+      Alias = teplAliasMnemonic(Selector);
       LastTileHeader = LastTileHeaderKind::TEPL;
     }
 
@@ -1076,7 +1079,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       OS << Alias << "\t";
       printDataType();
     } else {
-      OS << "BSTART.TEPL\t" << utostr(TileOpcode) << ", ";
+      OS << "BSTART.TEPL\t" << utostr(Mode) << ", " << utostr(Function) << ", ";
       printDataType();
     }
 
@@ -1565,13 +1568,11 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     if (!First)
       OS << ", ";
 
-    static constexpr const char *DstKinds[] = {"t", "u", "m", "n", "acc"};
+    static constexpr const char *DstKinds[] = {"t", "u", "m", "n"};
     const char *DstKind = DstTile < std::size(DstKinds) ? DstKinds[DstTile] : "t";
     OS << "->" << DstKind << "<";
-    if (Size == 0u) {
-      OS << "0";
-    } else if (Size < 5u || Size > 8u) {
-      // Unit-qualified source syntax intentionally accepts only 512B..4KB.
+    if (Size < 3u || Size > 9u) {
+      // Preserve architecturally reserved raw values numerically in dumps.
       // Preserve other raw imm4 encodings as numeric size codes so objdump
       // output remains byte-stable when passed back through llvm-mc.
       OS << utostr(Size);
@@ -1704,19 +1705,27 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned CMode =
         static_cast<unsigned>(findFieldImm("CMode").value_or(0)) & 0x7u;
     const unsigned Layout =
-        static_cast<unsigned>(findFieldImm("DataLayout").value_or(0)) & 0x1fu;
+        static_cast<unsigned>(findFieldImm("Layout").value_or(0)) & 0x1fu;
     const unsigned DType =
         static_cast<unsigned>(findFieldImm("DataType").value_or(0)) & 0x1fu;
     const unsigned Pad =
-        static_cast<unsigned>(findFieldImm("PadValue").value_or(0)) & 0x1fu;
+        static_cast<unsigned>(findFieldImm("PadValueOrByteId").value_or(0)) &
+        0x3u;
     const unsigned RMode =
         static_cast<unsigned>(findFieldImm("RMode").value_or(0)) & 0x7u;
     const unsigned Sat =
         static_cast<unsigned>(findFieldImm("Sat").value_or(0)) & 0x1u;
+    const unsigned Canonicalize =
+        static_cast<unsigned>(findFieldImm("Canonicalize").value_or(0)) & 0x1u;
     const StringRef DTName = dtypeName(DType);
     const StringRef PadName = padValueName(Pad);
 
-    OS << "B.DATR\t" << ((Layout & 1u) ? "normal" : "canon") << ", ";
+    OS << "B.DATR\t";
+    if (StringRef LayoutName = layoutFormatName(Layout); !LayoutName.empty())
+      OS << LayoutName;
+    else
+      OS << "Layout" << utostr(Layout);
+    OS << ", ";
     if (!DTName.empty())
       OS << DTName;
     else
@@ -1729,6 +1738,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     OS << ", cmode" << CMode << ", rmode" << RMode;
     if (Sat)
       OS << ", sat";
+    if (Canonicalize)
+      OS << ", canonicalize";
     printAnnotation(OS, Annot);
     return;
   }

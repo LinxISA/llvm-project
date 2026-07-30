@@ -33,8 +33,8 @@ exit:
 ; AUTO-LABEL: search_store_index_grouped_boundary:
 ; AUTO: BSTART.MSEQ
 ; AUTO: B.TEXT
-; AUTO: B.IOT{{.*}}->t<0>
-; AUTO: B.IOT{{.*}}->u<5>
+; AUTO: B.IOT{{.*}}->t<128B>
+; AUTO: B.IOT{{.*}}->u<256B>
 ; AUTO: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
 ; AUTO: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
 ; AUTO: v.add{{[[:space:]]+}}lc0, lc1.uw<<5, ->vt#1
@@ -42,10 +42,9 @@ exit:
 ; AUTO: v.lw.brg.local{{.*}}[ts, lc0<<2, lc1<<7]
 ; AUTO: v.rdor
 ; AUTO: b.ne
-; AUTO: v.sw.brg.local{{.*}}[ts, lc0<<2,
+; AUTO: v.sw.brg{{[[:space:]]+}}vt#1,
 ; AUTO: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
-; AUTO: v.lw.brg.local{{.*}}[ts, lc0<<2,
-; AUTO: v.sw.brg
+; AUTO: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
 
 ; REMARK-AUTO: "function":"search_store_index_grouped_boundary"
 ; REMARK-AUTO: "status":"lowered"
@@ -56,16 +55,15 @@ exit:
 ; GROUPED-LABEL: search_store_index_grouped_boundary:
 ; GROUPED: BSTART.MSEQ
 ; GROUPED: B.TEXT
-; GROUPED: B.IOT{{.*}}->t<0>
-; GROUPED: B.IOT{{.*}}->u<5>
+; GROUPED: B.IOT{{.*}}->t<128B>
+; GROUPED: B.IOT{{.*}}->u<256B>
 ; GROUPED: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
 ; GROUPED: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
 ; GROUPED: v.sw.brg.local{{.*}}ri1, [ts, lc0<<2, lc1<<7]
 ; GROUPED: v.lw.brg.local{{.*}}[ts, lc0<<2, lc1<<7]
-; GROUPED: v.sw.brg.local{{.*}}[ts, lc0<<2,
+; GROUPED: v.sw.brg{{[[:space:]]+}}vt#1,
 ; GROUPED: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
-; GROUPED: v.lw.brg.local{{.*}}[ts, lc0<<2,
-; GROUPED: v.sw.brg
+; GROUPED: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
 
 ; REMARK-GROUPED: "function":"search_store_index_grouped_boundary"
 ; REMARK-GROUPED: "status":"lowered"

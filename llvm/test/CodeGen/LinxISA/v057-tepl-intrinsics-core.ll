@@ -25,7 +25,7 @@ entry:
 define void @tepl_unary_rowmax(ptr %a, ptr %dst) {
 entry:
   %ta = call %linx.tile @llvm.linx.tile.tload(ptr %a, i32 8, i32 1, i64 0, i64 8, i64 8, i64 0)
-  %tc = call %linx.tile @llvm.linx.tepl.unary(%linx.tile %ta, i32 18, i32 8, i32 1)
+  %tc = call %linx.tile @llvm.linx.tepl.unary(%linx.tile %ta, i32 65, i32 8, i32 1)
   call void @llvm.linx.tile.tstore(ptr %dst, %linx.tile %tc, i32 8, i32 1, i64 0, i64 8, i64 8, i64 0)
   ret void
 }
@@ -39,7 +39,7 @@ entry:
 define void @tepl_unary_int8_shape(ptr %a, ptr %dst) {
 entry:
   %ta = call %linx.tile @llvm.linx.tile.tload(ptr %a, i32 8, i32 19, i64 0, i64 128, i64 32, i64 0)
-  %tc = call %linx.tile @llvm.linx.tepl.unary(%linx.tile %ta, i32 45, i32 8, i32 19)
+  %tc = call %linx.tile @llvm.linx.tepl.unary(%linx.tile %ta, i32 15, i32 8, i32 19)
   call void @llvm.linx.tile.tstore(ptr %dst, %linx.tile %tc, i32 8, i32 19, i64 0, i64 128, i64 32, i64 0)
   ret void
 }

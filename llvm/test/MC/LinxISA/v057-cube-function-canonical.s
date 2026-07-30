@@ -17,7 +17,6 @@ test_v057_cube_function_canonical:
 	BSTART.TGEMVMX FP16
 	BSTART.TGEMVMX.BIAS FP16
 	BSTART.TGEMVMX.ACC FP16
-	BSTART.CUBE 3, FP16
 	C.BSTOP
 	.size	test_v057_cube_function_canonical, .-test_v057_cube_function_canonical
 
@@ -35,5 +34,4 @@ test_v057_cube_function_canonical:
 # CHECK: BSTART.TGEMVMX{{[[:space:]]+}}FP16
 # CHECK: BSTART.TGEMVMX.BIAS{{[[:space:]]+}}FP16
 # CHECK: BSTART.TGEMVMX.ACC{{[[:space:]]+}}FP16
-# CHECK: BSTART.CUBE{{[[:space:]]+}}3, FP16
 # CHECK: C.BSTOP

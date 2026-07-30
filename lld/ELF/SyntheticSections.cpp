@@ -382,6 +382,26 @@ void BuildIdSection::writeTo(uint8_t *buf) {
   hashBuf = buf + 16;
 }
 
+static constexpr StringLiteral PTOISAIdentity =
+    R"({"encoding_abi":"pto-isa-0.57.1-mode-function-v1","encoding_projection_sha256":"34f6602cf29ea6363d41d896111dad4de0f70ec36517138aa89e292857909da4","release":"0.57.1"})";
+
+PTOISAIdentitySection::PTOISAIdentitySection(Ctx &ctx)
+    : SyntheticSection(ctx, ".note.pto.isa", SHT_NOTE, SHF_ALLOC, 4) {}
+
+void PTOISAIdentitySection::writeTo(uint8_t *buf) {
+  write32(ctx, buf, 4);                         // namesz: PTO\0
+  write32(ctx, buf + 4, PTOISAIdentity.size()); // descsz
+  write32(ctx, buf + 8, 1);                     // PTO_NT_ISA_IDENTITY
+  memcpy(buf + 12, "PTO", 4);
+  memcpy(buf + 16, PTOISAIdentity.data(), PTOISAIdentity.size());
+  memset(buf + 16 + PTOISAIdentity.size(), 0,
+         getSize() - 16 - PTOISAIdentity.size());
+}
+
+size_t PTOISAIdentitySection::getSize() const {
+  return alignTo(16 + PTOISAIdentity.size(), 4);
+}
+
 void BuildIdSection::writeBuildId(ArrayRef<uint8_t> buf) {
   assert(buf.size() == hashSize);
   memcpy(hashBuf, buf.data(), hashSize);
@@ -4738,6 +4758,11 @@ template <class ELFT> void elf::createSyntheticSections(Ctx &ctx) {
       part.programHeaders =
           std::make_unique<PartitionProgramHeadersSection<ELFT>>(ctx);
       add(*part.programHeaders);
+    }
+
+    if (ctx.arg.emachine == EM_LINXISA) {
+      part.ptoISAIdentity = std::make_unique<PTOISAIdentitySection>(ctx);
+      add(*part.ptoISAIdentity);
     }
 
     if (ctx.arg.buildId != BuildIdKind::None) {
