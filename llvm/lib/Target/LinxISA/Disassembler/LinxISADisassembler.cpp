@@ -11,6 +11,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
 #include <cstdint>
+#include <optional>
 
 using namespace llvm;
 
@@ -135,6 +136,58 @@ static bool isSignedSetRet(const linxisa_inst_form &Form) {
   return AsmFmt.starts_with_insensitive("hl.setret");
 }
 
+static bool isFrameTemplateForm(const linxisa_inst_form &Form) {
+  StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
+  return AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
+         AsmFmt.contains("[RegDst0 ~ RegDstn]");
+}
+
+static bool isFrameTemplateEndpoint(uint64_t Reg) {
+  return Reg >= 2u && Reg <= 23u;
+}
+
+static unsigned frameTemplateRegisterCount(uint64_t Begin, uint64_t End) {
+  return static_cast<unsigned>(((End + 22u - Begin) % 22u) + 1u);
+}
+
+static bool isLegalFrameTemplate(const linxisa_inst_form &Form,
+                                 ArrayRef<int64_t> FieldVals) {
+  if (!isFrameTemplateForm(Form))
+    return true;
+
+  std::optional<uint64_t> Begin;
+  std::optional<uint64_t> End;
+  std::optional<uint64_t> FrameBytes;
+
+  for (unsigned i = 0; i < FieldVals.size(); ++i) {
+    const linxisa_field &F = linxisa_fields[Form.field_start + i];
+    StringRef FieldName(F.name ? F.name : "");
+    const uint64_t V = static_cast<uint64_t>(FieldVals[i]);
+    if (FieldName == "SrcBegin" || FieldName == "DstBegin")
+      Begin = V;
+    else if (FieldName == "SrcEnd" || FieldName == "DstEnd")
+      End = V;
+    else if (FieldName == "uimm")
+      FrameBytes = V;
+  }
+
+  if (!Begin || !End || !FrameBytes)
+    return false;
+  if (!isFrameTemplateEndpoint(*Begin) || !isFrameTemplateEndpoint(*End))
+    return false;
+  if ((*FrameBytes % 8u) != 0)
+    return false;
+  const unsigned SavedRegs = frameTemplateRegisterCount(*Begin, *End);
+  if (*FrameBytes < uint64_t{8} * SavedRegs)
+    return false;
+
+  StringRef Mnem(Form.mnemonic ? Form.mnemonic : "");
+  if (Mnem == "FRET.STK" && *Begin != 10u)
+    return false;
+
+  return true;
+}
+
 MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
     MCInst &Instr, uint64_t &Size, ArrayRef<uint8_t> Bytes, uint64_t Address,
     raw_ostream &CStream) const {
@@ -201,6 +254,11 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
 
   SmallVector<int64_t, 16> FieldVals;
   extractFields(*Matched, Insn, FieldVals);
+  if (!isLegalFrameTemplate(*Matched, FieldVals)) {
+    Instr.clear();
+    return Fail;
+  }
+
   for (unsigned i = 0; i < FieldVals.size(); ++i) {
     const linxisa_field &F = linxisa_fields[Matched->field_start + i];
     StringRef FieldName(F.name ? F.name : "");

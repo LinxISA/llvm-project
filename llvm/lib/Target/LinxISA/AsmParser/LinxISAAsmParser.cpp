@@ -30,6 +30,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -2026,6 +2027,47 @@ static bool hasField(const linxisa_inst_form &Form, StringRef FieldName) {
   return false;
 }
 
+static bool isFrameTemplateForm(StringRef AsmFmt) {
+  return AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
+         AsmFmt.contains("[RegDst0 ~ RegDstn]");
+}
+
+static bool isFrameTemplateEndpoint(unsigned Reg) {
+  return Reg >= 2u && Reg <= 23u;
+}
+
+static unsigned frameTemplateRegisterCount(unsigned Begin, unsigned End) {
+  return ((End + 22u - Begin) % 22u) + 1u;
+}
+
+static bool getFrameTemplateMaxBytes(const linxisa_inst_form &Form,
+                                     uint64_t &MaxBytes) {
+  constexpr unsigned FrameUnitShift = 3;
+  constexpr uint64_t FrameUnitBytes = uint64_t{1} << FrameUnitShift;
+
+  const linxisa_field *UimmField = nullptr;
+  for (unsigned i = 0; i < Form.field_count; ++i) {
+    const linxisa_field &Field = linxisa_fields[Form.field_start + i];
+    if (!Field.name || StringRef(Field.name) != "uimm")
+      continue;
+    if (UimmField)
+      return false;
+    UimmField = &Field;
+  }
+  if (!UimmField || UimmField->bit_width < FrameUnitShift)
+    return false;
+
+  const unsigned EncodedUnitBits = UimmField->bit_width - FrameUnitShift;
+  const uint64_t MaxUnits =
+      EncodedUnitBits >= 64
+          ? std::numeric_limits<uint64_t>::max()
+          : ((uint64_t{1} << EncodedUnitBits) - 1u);
+  if (MaxUnits > std::numeric_limits<uint64_t>::max() / FrameUnitBytes)
+    return false;
+  MaxBytes = MaxUnits * FrameUnitBytes;
+  return true;
+}
+
 bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &PI,
                                           MCInst &OutInst, std::string &Err) {
   const linxisa_inst_form &Form = linxisa_inst_forms[FormIndex];
@@ -2052,6 +2094,53 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   auto emitFieldExpr = [&](const MCExpr *E) {
     OutInst.addOperand(MCOperand::createExpr(E));
   };
+
+  if (isFrameTemplateForm(AsmFmt)) {
+    if (!require(!PI.Mem && PI.ArrowDests.empty() && PI.Keywords.empty() &&
+                     !PI.SetRetTarget,
+                 "unexpected operands for frame template"))
+      return false;
+    if (!require(PI.Regs.size() == 2, "expected register range operand"))
+      return false;
+    if (!require(PI.Imms.size() == 1, "expected frame template F"))
+      return false;
+
+    const unsigned Begin = PI.Regs[0].Code;
+    const unsigned End = PI.Regs[1].Code;
+    if (!require(isFrameTemplateEndpoint(Begin) &&
+                     isFrameTemplateEndpoint(End),
+                 "frame template register range endpoints must be in R2..R23"))
+      return false;
+
+    int64_t FrameBytes = 0;
+    if (!require(isConstExpr(PI.Imms[0].Expr, FrameBytes),
+                 "frame template F must be a constant"))
+      return false;
+    if (!require(FrameBytes % 8 == 0,
+                 "frame template F must be 8-byte aligned"))
+      return false;
+
+    const unsigned SavedRegs = frameTemplateRegisterCount(Begin, End);
+    if (!require(FrameBytes >= 0 &&
+                     static_cast<uint64_t>(FrameBytes) >=
+                         uint64_t{8} * SavedRegs,
+                 Twine("frame template F is too small for ") +
+                     Twine(SavedRegs) + " saved registers"))
+      return false;
+
+    uint64_t MaxFrameBytes = 0;
+    if (!require(getFrameTemplateMaxBytes(Form, MaxFrameBytes),
+                 "unexpected frame template uimm field layout"))
+      return false;
+    if (!require(static_cast<uint64_t>(FrameBytes) <= MaxFrameBytes,
+                 "frame template F does not fit encoded field"))
+      return false;
+
+    if (!require(!AsmFmt.starts_with_insensitive("FRET.STK") ||
+                     Begin == 10u,
+                 "FRET.STK frame template begin register must be R10"))
+      return false;
+  }
 
   // Special-case: setret/c.setret/hl.setret.
   if (AsmFmt.starts_with_insensitive("setret") ||
