@@ -1091,6 +1091,22 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
     selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULB_ACC_FIXP_SizeI, 3);
     return;
   }
+  case LinxV5ISD::BLK_MATMUL_BIAS_FIXP: {
+    selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI, 3);
+    return;
+  }
+  case LinxV5ISD::BLK_MATMUL_MX_FIXP: {
+    selectTemplateBlockMX(DL, Node, LinxV5::PseudoMAMULBMX_FIXP_SizeI, 4);
+    return;
+  }
+  case LinxV5ISD::BLK_MATMUL_MX_BIAS_FIXP: {
+    selectTemplateBlockMX(DL, Node, LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI, 3);
+    return;
+  }
+  case LinxV5ISD::BLK_MATMUL_MX_ACC_FIXP: {
+    selectTemplateBlockMX(DL, Node, LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI, 5);
+    return;
+  }
   case LinxV5ISD::BLK_MATMULMX: {
     selectTemplateBlockMX(DL, Node, LinxV5::PseudoMAMULBMX_SizeI, 4);
     return;

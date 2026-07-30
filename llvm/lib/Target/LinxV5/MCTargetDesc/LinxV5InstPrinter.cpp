@@ -858,7 +858,7 @@ void LinxV5InstPrinter::printTileOPCUBE(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPCUBE::MAMULB_FIXP:
     O << "TMATMUL.FIXP";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULBAC_FIXP:
+  case LinxV5Op::TileOPCUBE::MAMULB_BIAS_FIXP:
     O << "TMATMUL.BIAS.FIXP";
     break;
   case LinxV5Op::TileOPCUBE::MAMULB_ACC_FIXP:
@@ -867,7 +867,7 @@ void LinxV5InstPrinter::printTileOPCUBE(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPCUBE::MAMULBMX_FIXP:
     O << "TMATMULMX.FIXP";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULBMXAC_FIXP:
+  case LinxV5Op::TileOPCUBE::MAMULBMX_BIAS_FIXP:
     O << "TMATMULMX.BIAS.FIXP";
     break;
   case LinxV5Op::TileOPCUBE::MAMULBMX_ACC_FIXP:

@@ -19469,6 +19469,18 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   case LinxV5::BIblk_matmul_acc_fixp:
       ID = Intrinsic::linx_blk_matmul_acc_fixp;
       return EmitLinxV5BLK(E, ID, 3);
+  case LinxV5::BIblk_matmul_bias_fixp:
+      ID = Intrinsic::linx_blk_matmul_bias_fixp;
+      return EmitLinxV5BLK(E, ID, 3);
+  case LinxV5::BIblk_matmul_mx_fixp:
+      ID = Intrinsic::linx_blk_matmul_mx_fixp;
+      return EmitLinxV5BLKMX(E, ID, 4);
+  case LinxV5::BIblk_matmul_mx_bias_fixp:
+      ID = Intrinsic::linx_blk_matmul_mx_bias_fixp;
+      return EmitLinxV5BLKMX(E, ID, 3);
+  case LinxV5::BIblk_matmul_mx_acc_fixp:
+      ID = Intrinsic::linx_blk_matmul_mx_acc_fixp;
+      return EmitLinxV5BLKMX(E, ID, 5);
   case LinxV5::BIblk_matmulmx:
       ID = Intrinsic::linx_blk_matmulmx;
       return EmitLinxV5BLKMX(E, ID, 4);

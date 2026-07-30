@@ -2708,10 +2708,10 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPCUBE(OperandVector &Operands) {
                .Case("tmatmulmx.bias", TileOPCUBE::MAMULBMXAC)
                .Case("tmatmulmx.acc", TileOPCUBE::MAMULBMX_ACC)
                .Case("tmatmul.fixp", TileOPCUBE::MAMULB_FIXP)
-               .Case("tmatmul.bias.fixp", TileOPCUBE::MAMULBAC_FIXP)
+               .Case("tmatmul.bias.fixp", TileOPCUBE::MAMULB_BIAS_FIXP)
                .Case("tmatmul.acc.fixp", TileOPCUBE::MAMULB_ACC_FIXP)
                .Case("tmatmulmx.fixp", TileOPCUBE::MAMULBMX_FIXP)
-               .Case("tmatmulmx.bias.fixp", TileOPCUBE::MAMULBMXAC_FIXP)
+               .Case("tmatmulmx.bias.fixp", TileOPCUBE::MAMULBMX_BIAS_FIXP)
                .Case("tmatmulmx.acc.fixp", TileOPCUBE::MAMULBMX_ACC_FIXP)
                .Default(TileOPCUBE::EMPTY_TileOPCUBE);
 
