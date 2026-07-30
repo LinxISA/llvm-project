@@ -35,6 +35,8 @@ def linxv5_mcall   : SDNode<"LinxV5ISD::MCALL", SDT_LinxV5Call, [SDNPHasChain, S
 //       (7)TileSrc0, (8)TileSrc1, (9)....
 def linxv5_blk_matmul   : SDNode<"LinxV5ISD::BLK_MATMUL", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_blk_matmul_ac   : SDNode<"LinxV5ISD::BLK_MATMUL_AC", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_blk_matmul_fixp : SDNode<"LinxV5ISD::BLK_MATMUL_FIXP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_blk_matmul_acc_fixp : SDNode<"LinxV5ISD::BLK_MATMUL_ACC_FIXP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
 // Format of Template Block MX Instruction:
 // dst = (0)TileOut
@@ -1591,6 +1593,45 @@ def BDATR : BlockModifierBase {
   let AsmString = "B.DATR\t$DataLayout$canon, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, #sat";
 }
 
+// DavinciOO v5 FIXPIPE attributes. Required exactly once by TMATMUL*.FIXP.
+def B_FPATR : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+  let isDisassembleOnly = 0;
+
+  let OutOperandList = (outs);
+  let InOperandList = (ins uimm6:$PreQuantMode, uimm3:$ReluMode,
+                           uimm4:$GroupNCode, uimm1:$RowMaxEn,
+                           uimm1:$GroupMaxEn, uimm1:$RowMaxInit,
+                           uimm1:$MaxAbsEn);
+
+  bits<6> PreQuantMode;
+  bits<3> ReluMode;
+  bits<4> GroupNCode;
+  bits<1> RowMaxEn;
+  bits<1> GroupMaxEn;
+  bits<1> RowMaxInit;
+  bits<1> MaxAbsEn;
+
+  let Inst{31-26} = PreQuantMode;
+  let Inst{25-23} = ReluMode;
+  let Inst{22-19} = GroupNCode;
+  let Inst{18} = RowMaxEn;
+  let Inst{17} = GroupMaxEn;
+  let Inst{16} = RowMaxInit;
+  let Inst{15} = MaxAbsEn;
+  let Inst{14-12} = 0b010;
+  let Inst{11} = 0b0;
+  let Inst{10-7} = 0b0000;
+  let Inst{6-4} = 0b010;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+
+  let AsmString = "B.FPATR	$PreQuantMode, $ReluMode, $GroupNCode, "
+                  "$RowMaxEn, $GroupMaxEn, $RowMaxInit, $MaxAbsEn";
+}
+
 def B_IO : BlockModifierBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;
@@ -2910,6 +2951,13 @@ def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, Grou
   let TSize = 0;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
 }
+def B_IOT_OneSrc_NoDst_Size: B_IOT_Base<0b101, (outs),
+        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last,
+             TILE_Src_Reg:$SrcTile0)> {
+  let SrcTile1 = 0;
+  let DstTile = 0b00;
+  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}";
+}
 def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
 def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
@@ -2918,6 +2966,9 @@ def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins PE_MASK_Op:$PE_MASK, Grou
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1", (B_IOT_TwoSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK",
+    (B_IOT_TwoSrc_NoDst PE_MASK_Op:$PE_MASK, 0,
+     TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 1>;
 
 // ===-------------------------- Tile Op -----------------------------===
 def GPRPlusImmAsmOperand : AsmOperandClass {
@@ -2982,6 +3033,20 @@ let isHeaderOnly = 1 in
 def PseudoTCOPY : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
 (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile)> {
   let AsmString = "TCOPY\t$SrcTile, $DstTile$TileSize";
+}
+
+let isCodeGenOnly = 1, hasSideEffects = 1 in {
+def PseudoV5GMOV : Pseudo<(outs TILE_DstWithArrow:$DstTile),
+    (ins BstartDataType:$DataType, PE_MASK_Op:$PE_MASK,
+         TSize_Op:$TSize, GPRSrc:$PeerTID, TILE_Src_Reg:$SrcTile), []>;
+def PseudoV5SharedL2S : Pseudo<(outs),
+    (ins TileOPTMA:$Function, BstartDataType:$DataType,
+         SharedTIDOp:$SharedTID, PE_MASK_Op:$PE_MASK,
+         TSize_Op:$TSize, TILE_Src_Reg:$SrcTile), []>;
+def PseudoV5SharedS2L : Pseudo<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileOPTMA:$Function, BstartDataType:$DataType,
+         SharedTIDOp:$SharedTID, PE_MASK_Op:$PE_MASK,
+         TSize_Op:$TSize), []>;
 }
 
 let isHeaderOnly = 1, isCodeGenOnly = 1 in
@@ -3106,6 +3171,24 @@ class PseudoCUBE_MAMULBACC_Base_I<string TileOp> :
 }
 
 def PseudoMAMULBACC_SizeI : PseudoCUBE_MAMULBACC_Base_I<"TMATMUL.ACC">;
+
+class PseudoCUBE_MAMULB_FIXP_Base_I<string TileOp> :
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+
+def PseudoMAMULB_FIXP_SizeI : PseudoCUBE_MAMULB_FIXP_Base_I<"TMATMUL.FIXP">;
+
+class PseudoCUBE_MAMULB_ACC_FIXP_Base_I<string TileOp> :
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, ACC_TILE_SRC:$ACC)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $ACC, $DstTile$TileSize";
+}
+
+def PseudoMAMULB_ACC_FIXP_SizeI : PseudoCUBE_MAMULB_ACC_FIXP_Base_I<"TMATMUL.ACC.FIXP">;
 
 class PseudoCUBE_MAMULBMX_Base_I<string TileOp> :
   PseudoCCallImpl<(outs ACC_TILE_DstWithArrow:$DstTile),

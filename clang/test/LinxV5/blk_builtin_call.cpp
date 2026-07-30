@@ -5,9 +5,13 @@ using TileDType = float tile_size(256);
 // CHECK-LABEL: entry
 // CHECK:      %0 = tail call <256 x float> @llvm.linx.blk.matmul.v256f32.v256f32.v256f32(i64 16, i64 16, i64 16, i64 1, i64 1, <256 x float> %TA, <256 x float> %TB)
 // CHECK-NEXT: %1 = tail call <256 x float> @llvm.linx.blk.matmul.ac.v256f32.v256f32.v256f32.v256f32(i64 16, i64 16, i64 16, i64 1, i64 1, <256 x float> %TA, <256 x float> %TB, <256 x float> %TC)
+// CHECK-NEXT: %2 = tail call <256 x float> @llvm.linx.blk.matmul.fixp.v256f32.v256f32.v256f32(i64 16, i64 16, i64 16, i64 1, i64 1, <256 x float> %TA, <256 x float> %TB)
+// CHECK-NEXT: %3 = tail call <256 x float> @llvm.linx.blk.matmul.acc.fixp.v256f32.v256f32.v256f32.v256f32(i64 16, i64 16, i64 16, i64 1, i64 1, <256 x float> %TA, <256 x float> %TB, <256 x float> %TC)
 int test(TileDType TO, TileDType TA, TileDType TB, TileDType TC) {
   blk_matmul(16, 16, 16, 1, 1, TO, TA, TB);
   blk_matmul_ac(16, 16, 16, 1, 1, TO, TA, TB, TC);
+  blk_matmul_fixp(16, 16, 16, 1, 1, TO, TA, TB);
+  blk_matmul_acc_fixp(16, 16, 16, 1, 1, TO, TA, TB, TC);
   return 0;
 }
 

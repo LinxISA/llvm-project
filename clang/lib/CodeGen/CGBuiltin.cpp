@@ -19450,11 +19450,9 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   case LinxV5::BI__builtin_linx_get_system_reg:
       ID = Intrinsic::linx_get_sysreg;
       return EmitLinxV5GetSysReg(E, ID);
+  case LinxV5::BI__builtin_linx_get_thread_id:
   case LinxV5::BI__builtin_linx_get_thread_idx: {
-      // Aligned with website manual get_thread_idx(). Returns PE thread index
-      // (0..kThreadsPerBlock-1). Lowered to int_linx_get_thread_idx (IntrNoMem,
-      // no layer operand) which the backend lowers to SSR_GET reading PE-id SSR.
-      ID = Intrinsic::linx_get_thread_idx;
+      ID = Intrinsic::linx_get_thread_id;
       llvm::Function *F = CGM.getIntrinsic(ID, {});
       llvm::Value *Call = Builder.CreateCall(F, {});
       return Builder.CreateZExtOrTrunc(Call, CGM.Int32Ty);
@@ -19464,6 +19462,12 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
       return EmitLinxV5BLK(E, ID, 2);
   case LinxV5::BIblk_matmul_ac:
       ID = Intrinsic::linx_blk_matmul_ac;
+      return EmitLinxV5BLK(E, ID, 3);
+  case LinxV5::BIblk_matmul_fixp:
+      ID = Intrinsic::linx_blk_matmul_fixp;
+      return EmitLinxV5BLK(E, ID, 2);
+  case LinxV5::BIblk_matmul_acc_fixp:
+      ID = Intrinsic::linx_blk_matmul_acc_fixp;
       return EmitLinxV5BLK(E, ID, 3);
   case LinxV5::BIblk_matmulmx:
       ID = Intrinsic::linx_blk_matmulmx;

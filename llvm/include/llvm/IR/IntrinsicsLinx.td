@@ -19,7 +19,22 @@ def int_linx_get_sysreg : DefaultAttrsIntrinsic<[llvm_i64_ty],
                                                 [llvm_i64_ty],
                                                 [IntrHasSideEffects,]>;
 
+def int_linx_get_thread_id : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 def int_linx_get_thread_idx : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
+
+def int_linx_v5_gmov : Intrinsic<[llvm_anyvector_ty],
+    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, LLVMMatchType<0>],
+    [IntrHasSideEffects]>;
+def int_linx_v5_shared_l2s_insert : Intrinsic<[],
+    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty],
+    [IntrHasSideEffects]>;
+def int_linx_v5_shared_l2s_publish : Intrinsic<[],
+    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty],
+    [IntrHasSideEffects]>;
+def int_linx_v5_shared_s2l_broadcast : Intrinsic<[llvm_anyvector_ty],
+    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+def int_linx_v5_shared_s2l_extract : Intrinsic<[llvm_anyvector_ty],
+    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_set_loop_iterations : Intrinsic<[],
                                              [llvm_i64_ty, llvm_anyint_ty],
@@ -79,6 +94,16 @@ def int_linx_blk_matmul : Intrinsic<[llvm_anyvector_ty],
                                     [IntrHasSideEffects]>;
 
 def int_linx_blk_matmul_ac : Intrinsic<[llvm_anyvector_ty],
+                                    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+                                     llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+                                    [IntrHasSideEffects]>;
+
+def int_linx_blk_matmul_fixp : Intrinsic<[llvm_anyvector_ty],
+                                    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+                                     llvm_anyvector_ty, llvm_anyvector_ty],
+                                    [IntrHasSideEffects]>;
+
+def int_linx_blk_matmul_acc_fixp : Intrinsic<[llvm_anyvector_ty],
                                     [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                                      llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
                                     [IntrHasSideEffects]>;

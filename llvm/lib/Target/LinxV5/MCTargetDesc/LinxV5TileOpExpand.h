@@ -42,6 +42,8 @@ unsigned getPseudoTILEOpcode(unsigned Opcode);
 
 bool isMatmulPseudo(unsigned Opcode);
 
+bool isFixpMatmulPseudo(unsigned Opcode);
+
 unsigned getRepresentMCallOpcode(unsigned Opcode);
 
 void getPseudoCallBIOTBySrcDstNum(llvm::SmallVector<MCInst> &McVec,

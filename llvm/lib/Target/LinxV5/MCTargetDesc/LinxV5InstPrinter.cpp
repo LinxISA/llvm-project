@@ -390,67 +390,22 @@ void LinxV5InstPrinter::printGPRWithBracket(const MCInst *MI, unsigned OpNo,
   O << "<" << getRegisterName(Reg) << ">";
 }
 
-void LinxV5InstPrinter::printTileSizeWithBracket(const MCInst *MI, unsigned OpNo,
-                    const MCSubtargetInfo &STI,raw_ostream &O) {
+void LinxV5InstPrinter::printTileSizeWithBracket(
+    const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
+    raw_ostream &O) {
   if (MI->getOperand(OpNo).isExpr()) {
     const MCExpr *Expr = MI->getOperand(OpNo).getExpr();
-    O << "<"; Expr->print(O, &MAI); O << ">";
+    O << "<";
+    Expr->print(O, &MAI);
+    O << ">";
     return;
   }
 
+  static constexpr const char *TileSizes[] = {
+      "0B", "512B", "1KB", "2KB", "4KB", "8KB", "16KB", "32KB"};
   unsigned Imm = MI->getOperand(OpNo).getImm();
-  switch(Imm) {
-    case(0):
-    O << "<0B>";
-    break;
-    case(1):
-    O << "<32B>";
-    break;
-    case(2):
-    O << "<64B>";
-    break;
-    case(3):
-    O << "<128B>";
-    break;
-    case(4):
-    O << "<256B>";
-    break;
-    case(5):
-    O << "<512B>";
-    break;
-    case(6):
-    O << "<1KB>";
-    break;
-    case(7):
-    O << "<2KB>";
-    break;
-    case(8):
-    O << "<4KB>";
-    break;
-    case(9):
-    O << "<8KB>";
-    break;
-    case(10):
-    O << "<16KB>";
-    break;
-    case(11):
-    O << "<32KB>";
-    break;
-    case(12):
-    O << "<64KB>";
-    break;
-    case(13):
-    O << "<128KB>";
-    break;
-    case(14):
-    O << "<256KB>";
-    break;
-    case(15):
-    O << "<512KB>";
-    break;
-    default:
-    return;
-  }
+  if (Imm < sizeof(TileSizes) / sizeof(TileSizes[0]))
+    O << "<" << TileSizes[Imm] << ">";
 }
 
 void LinxV5InstPrinter::printPE_MASK(const MCInst *MI, unsigned OpNo,
@@ -900,8 +855,23 @@ void LinxV5InstPrinter::printTileOPCUBE(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPCUBE::MAMULBMX_ACC:
     O << "TMATMULMX.ACC";
     break;
-  case LinxV5Op::TileOPCUBE::ACCCVT:
-    O << "ACCCVT";
+  case LinxV5Op::TileOPCUBE::MAMULB_FIXP:
+    O << "TMATMUL.FIXP";
+    break;
+  case LinxV5Op::TileOPCUBE::MAMULBAC_FIXP:
+    O << "TMATMUL.BIAS.FIXP";
+    break;
+  case LinxV5Op::TileOPCUBE::MAMULB_ACC_FIXP:
+    O << "TMATMUL.ACC.FIXP";
+    break;
+  case LinxV5Op::TileOPCUBE::MAMULBMX_FIXP:
+    O << "TMATMULMX.FIXP";
+    break;
+  case LinxV5Op::TileOPCUBE::MAMULBMXAC_FIXP:
+    O << "TMATMULMX.BIAS.FIXP";
+    break;
+  case LinxV5Op::TileOPCUBE::MAMULBMX_ACC_FIXP:
+    O << "TMATMULMX.ACC.FIXP";
     break;
   default:
     O << Imm;

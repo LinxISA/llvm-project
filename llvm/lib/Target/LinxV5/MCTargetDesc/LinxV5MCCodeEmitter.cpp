@@ -98,6 +98,9 @@ public:
   void expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const;
+  void expandPseudoV5TLSU(const MCInst &MI, raw_ostream &OS,
+                          SmallVectorImpl<MCFixup> &Fixups,
+                          const MCSubtargetInfo &STI) const;
 
   void writeBinaryCodes(raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups,
                         const MCSubtargetInfo &STI,
@@ -187,6 +190,12 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                             const MCSubtargetInfo &STI) const {
   const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
   uint64_t TSFlags = Desc.TSFlags;
+  if (MI.getOpcode() == LinxV5::PseudoV5GMOV ||
+      MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
+      MI.getOpcode() == LinxV5::PseudoV5SharedS2L) {
+    expandPseudoV5TLSU(MI, OS, Fixups, STI);
+    return;
+  }
   if (LinxV5II::isTileOp(TSFlags)) {
     if (LinxV5II::isTileOpAtVEC(TSFlags) && !LinxV5II::isHeaderOnly(TSFlags)) {
       expandPseudoVCall(MI, OS, Fixups, STI);
@@ -455,6 +464,77 @@ void LinxV5MCCodeEmitter::expandPseudoTCOPY(const MCInst &MI, raw_ostream &OS,
   writeBinaryCodes(OS, Fixups, STI, getBIOTFromInst(MI, MCII), ByteCount);
 }
 
+void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
+    const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  unsigned ByteCount = 0;
+  if (MI.getOpcode() == LinxV5::PseudoV5GMOV) {
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::BSTART_TMA)
+             .addOperand(MI.getOperand(1))
+             .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::GMOV))},
+        ByteCount);
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+             .addOperand(MI.getOperand(0))
+             .addOperand(MI.getOperand(2))
+             .addOperand(MI.getOperand(3))
+             .addOperand(MCOperand::createImm(1))
+             .addOperand(MI.getOperand(5))},
+        ByteCount);
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::B_IO)
+             .addOperand(MCOperand::createReg(LinxV5::R0))
+             .addOperand(MI.getOperand(4))
+             .addOperand(MCOperand::createReg(LinxV5::R0))
+             .addOperand(MCOperand::createReg(LinxV5::R0))},
+        ByteCount);
+    return;
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoV5SharedL2S) {
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::BSTART_TMA)
+             .addOperand(MI.getOperand(1))
+             .addOperand(MI.getOperand(0))},
+        ByteCount);
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::C_B_IOS).addOperand(MI.getOperand(2))},
+        ByteCount);
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst_Size)
+             .addOperand(MI.getOperand(3))
+             .addOperand(MI.getOperand(4))
+             .addOperand(MCOperand::createImm(1))
+             .addOperand(MI.getOperand(5))},
+        ByteCount);
+    return;
+  }
+  writeBinaryCodes(
+      OS, Fixups, STI,
+      {MCInstBuilder(LinxV5::BSTART_TMA)
+           .addOperand(MI.getOperand(2))
+           .addOperand(MI.getOperand(1))},
+      ByteCount);
+  writeBinaryCodes(OS, Fixups, STI,
+                   {MCInstBuilder(LinxV5::C_B_IOS).addOperand(MI.getOperand(3))},
+                   ByteCount);
+  writeBinaryCodes(
+      OS, Fixups, STI,
+      {MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+           .addOperand(MI.getOperand(0))
+           .addOperand(MI.getOperand(4))
+           .addOperand(MI.getOperand(5))
+           .addOperand(MCOperand::createImm(1))},
+      ByteCount);
+}
+
 void LinxV5MCCodeEmitter::expandPseudoEmptyTile(
     const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
@@ -498,19 +578,6 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
     unsigned Dummy = 0;
-    // emit B.ARG  DataLayout.{canon,  normal}
-    if (getPseudoTILEOpcode(MI.getOpcode()) == LinxV5Op::TileOPCUBE::ACCCVT /*||
-      getPseudoTILEOpcode(MI.getOpcode()) == LinxV5Op::TileOP::TCVT*/) {
-    // bstart.par
-    writeBinaryCodes(OS, Fixups, STI,
-                     {MCInstBuilder(LinxV5::BSTART_CUBE)
-                          .addOperand(MI.getOperand(5))
-                          .addOperand(MCOperand::createImm(
-                              getPseudoTILEOpcode(MI.getOpcode())))},
-                     Dummy);
-    // emit bstart.par
-    writeBinaryCodes(OS, Fixups, STI, getBARGFromInst(MI, MCII), Dummy);
-    } else {
     // bstart.par
     writeBinaryCodes(OS, Fixups, STI,
                      {MCInstBuilder(LinxV5::BSTART_CUBE)
@@ -518,7 +585,20 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
                           .addOperand(MCOperand::createImm(
                               getPseudoTILEOpcode(MI.getOpcode())))},
                      Dummy);
-    }
+  if (isFixpMatmulPseudo(MI.getOpcode())) {
+    writeBinaryCodes(OS, Fixups, STI, getBATTRFromInst(MI, MCII), Dummy);
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::B_FPATR)
+             .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))},
+        Dummy);
+  }
   // b.iot
   writeBinaryCodes(OS, Fixups, STI, getBIOTFromInst(MI, MCII), Dummy);
   // b.dim

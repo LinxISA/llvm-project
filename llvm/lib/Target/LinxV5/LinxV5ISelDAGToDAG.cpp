@@ -1083,6 +1083,14 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
     selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULBAC_Higher_SizeI, 3);
     return;
   }
+  case LinxV5ISD::BLK_MATMUL_FIXP: {
+    selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULB_FIXP_SizeI, 2);
+    return;
+  }
+  case LinxV5ISD::BLK_MATMUL_ACC_FIXP: {
+    selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULB_ACC_FIXP_SizeI, 3);
+    return;
+  }
   case LinxV5ISD::BLK_MATMULMX: {
     selectTemplateBlockMX(DL, Node, LinxV5::PseudoMAMULBMX_SizeI, 4);
     return;
@@ -1105,6 +1113,33 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   }
   case LinxV5ISD::BLK_TSTORE: {
     selectTStore(DL, Node, LinxV5::PseudoTSTORE_noDsrc_noDdst);
+    return;
+  }
+  case LinxV5ISD::V5_GMOV: {
+    SmallVector<SDValue> Ops;
+    for (unsigned Index = 1; Index != Node->getNumOperands(); ++Index)
+      Ops.push_back(Node->getOperand(Index));
+    Ops.push_back(Node->getOperand(0));
+    ReplaceNode(Node, CurDAG->getMachineNode(
+                          LinxV5::PseudoV5GMOV, DL, Node->getVTList(), Ops));
+    return;
+  }
+  case LinxV5ISD::V5_SHARED_L2S: {
+    SmallVector<SDValue> Ops;
+    for (unsigned Index = 1; Index != Node->getNumOperands(); ++Index)
+      Ops.push_back(Node->getOperand(Index));
+    Ops.push_back(Node->getOperand(0));
+    ReplaceNode(Node, CurDAG->getMachineNode(
+                          LinxV5::PseudoV5SharedL2S, DL, Node->getVTList(), Ops));
+    return;
+  }
+  case LinxV5ISD::V5_SHARED_S2L: {
+    SmallVector<SDValue> Ops;
+    for (unsigned Index = 1; Index != Node->getNumOperands(); ++Index)
+      Ops.push_back(Node->getOperand(Index));
+    Ops.push_back(Node->getOperand(0));
+    ReplaceNode(Node, CurDAG->getMachineNode(
+                          LinxV5::PseudoV5SharedS2L, DL, Node->getVTList(), Ops));
     return;
   }
   // v5: BLK_ACCCVT removed (replaced by TMATMUL_ACC).

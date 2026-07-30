@@ -17,9 +17,9 @@
 
 BUILTIN(__builtin_linx_get_system_reg, "ULiULi", "n")
 
-// Returns the current PE's thread index (0..kThreadsPerBlock-1).
-// Aligned with website manual get_thread_idx(). Lowered to SSR_GET reading
-// a PE-id SSR (SSR-ID 16 placeholder, pending ISA assignment).
+// Returns the current PE ID (0..3) from the read-only PEID SSR (0x0802).
+BUILTIN(__builtin_linx_get_thread_id, "Ui", "nc")
+// Compatibility spelling retained for existing sources.
 BUILTIN(__builtin_linx_get_thread_idx, "Ui", "nc")
 
 BUILTIN(blkv_max,  "v.", "nt")
@@ -35,6 +35,8 @@ BUILTIN(blkv_rdor,   "v.", "nt")
 
 BUILTIN(blk_matmul, "v.", "nt")
 BUILTIN(blk_matmul_ac, "v.", "nt")
+BUILTIN(blk_matmul_fixp, "v.", "nt")
+BUILTIN(blk_matmul_acc_fixp, "v.", "nt")
 BUILTIN(blk_matmulmx, "v.", "nt")
 BUILTIN(blk_matmulmx_ac, "v.", "nt")
 BUILTIN(blk_matmulmxb, "v.", "nt")

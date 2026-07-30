@@ -887,6 +887,7 @@ public:
 
   template <unsigned N> bool isUImmShiftN() { return isImmShiftN<false, N>(); }
 
+  bool isUImm1() { return IsUImm<1>(); }
   bool isUImm2() { return IsUImm<2>(); }
   bool isUImm3() { return IsUImm<3>(); }
   bool isUImm4() { return IsUImm<4>(); }
@@ -1735,19 +1736,13 @@ static bool matchRegisterNameHelper(MCRegister &RegNo, StringRef Name) {
 static unsigned matchTileSizeHelper(StringRef Name) {
   return StringSwitch<unsigned>(Name)
       .Case("0B", 0)
-      .Case("32B", 1)
-      .Case("64B", 2)
-      .Case("128B", 3)
-      .Case("256B", 4)
-      .Case("512B", 5)
-      .Case("1KB", 6)
-      .Case("2KB", 7)
-      .Case("4KB", 8)
-      .Case("8KB", 9)
-      .Case("16KB", 10)
-      .Case("32KB", 11)
-      .Case("64KB", 12)
-      .Case("128KB", 13)
+      .Case("512B", 1)
+      .Case("1KB", 2)
+      .Case("2KB", 3)
+      .Case("4KB", 4)
+      .Case("8KB", 5)
+      .Case("16KB", 6)
+      .Case("32KB", 7)
       .Case("256KB", 14)
       .Case("512KB", 15)
       .Default(16);
@@ -2709,10 +2704,15 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPCUBE(OperandVector &Operands) {
                .Case("tmatmul", TileOPCUBE::MAMULB)
                .Case("tmatmul.bias", TileOPCUBE::MAMULBAC)
                .Case("tmatmul.acc", TileOPCUBE::MAMULB_ACC)
-               .Case("acccvt", TileOPCUBE::ACCCVT)
                .Case("tmatmulmx", TileOPCUBE::MAMULBMX)
                .Case("tmatmulmx.bias", TileOPCUBE::MAMULBMXAC)
                .Case("tmatmulmx.acc", TileOPCUBE::MAMULBMX_ACC)
+               .Case("tmatmul.fixp", TileOPCUBE::MAMULB_FIXP)
+               .Case("tmatmul.bias.fixp", TileOPCUBE::MAMULBAC_FIXP)
+               .Case("tmatmul.acc.fixp", TileOPCUBE::MAMULB_ACC_FIXP)
+               .Case("tmatmulmx.fixp", TileOPCUBE::MAMULBMX_FIXP)
+               .Case("tmatmulmx.bias.fixp", TileOPCUBE::MAMULBMXAC_FIXP)
+               .Case("tmatmulmx.acc.fixp", TileOPCUBE::MAMULBMX_ACC_FIXP)
                .Default(TileOPCUBE::EMPTY_TileOPCUBE);
 
   if (TileOP == TileOPCUBE::EMPTY_TileOPCUBE)
@@ -4024,20 +4024,9 @@ void LinxV5AsmParser::emitTCOPYIO(MCInst &Inst, MCStreamer &Out,  unsigned MemOp
 
 void LinxV5AsmParser::emitCCall(MCInst &Inst, MCStreamer &Out,
                                 unsigned CUBEOpc) {
-  // emit B.ARG  DataLayout.{canon,  normal}
-  if (CUBEOpc == LinxV5Op::TileOPCUBE::ACCCVT /*||
-      CUBEOpc == LinxV5Op::TileOP::TCVT*/) {
-    emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_CUBE)
-                            .addOperand(Inst.getOperand(5))
-                            .addOperand(MCOperand::createImm(CUBEOpc)));
-    // emit bstart.par
-    emitMcInstVecToStreamer(getBARGFromInst(Inst, MII), Out);
-  } else {
-    // emit bstart.par
-    emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_CUBE)
-                            .addOperand(Inst.getOperand(7))
-                            .addOperand(MCOperand::createImm(CUBEOpc)));
-  }
+  emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_CUBE)
+                          .addOperand(Inst.getOperand(7))
+                          .addOperand(MCOperand::createImm(CUBEOpc)));
   if (isMatmulPseudo(Inst.getOpcode())) {
     // b.catr DR + b.datr datatype
     emitMcInstVecToStreamer(getBATTRFromInst(Inst, MII), Out);

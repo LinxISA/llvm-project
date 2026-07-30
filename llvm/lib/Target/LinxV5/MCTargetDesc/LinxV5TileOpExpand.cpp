@@ -207,10 +207,10 @@ void getPseudoCallBIOTBySrcDstNum(llvm::SmallVector<MCInst> &McVec,
 
     MCInstBuilder builder(getOpcode(thisSrcCount, hasDst));
 
-    // v5 B.IOT operand order (with dst):
-    //   PE_MASK, TSize, Last, SrcTile0, [SrcTile1], DstTile
-    // v5 B.IOT operand order (no dst):
-    //   PE_MASK, Last, SrcTile0, [SrcTile1]
+    // MC operands list all defs before uses.
+    if (hasDst)
+      builder.addOperand(CallReader.getTileDst(dstIdx));
+
     // PE_MASK initialized to all-1 (1111) for all PEs.
     builder.addOperand(MCOperand::createImm(0b1111));  // PE_MASK=all
 
@@ -224,10 +224,8 @@ void getPseudoCallBIOTBySrcDstNum(llvm::SmallVector<MCInst> &McVec,
     for (unsigned i = 0; i < thisSrcCount; i++)
       builder.addOperand(CallReader.getTileSrc(srcIdx++));
 
-    if (hasDst) {
-      builder.addOperand(CallReader.getTileDst(dstIdx));
+    if (hasDst)
       dstIdx++;
-    }
 
     McVec.push_back(builder);
   }
@@ -236,6 +234,20 @@ void getPseudoCallBIOTBySrcDstNum(llvm::SmallVector<MCInst> &McVec,
 llvm::SmallVector<MCInst> getBATTRFromInst(MCInst Inst,
                                            const MCInstrInfo &MII) {
   llvm::SmallVector<MCInst> McVec;
+
+  if (isFixpMatmulPseudo(Inst.getOpcode())) {
+    McVec.push_back(
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
+            .addOperand(Inst.getOperand(8))
+            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Null))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    return McVec;
+  }
 
   // MX matmul family:
   // If DataTypeA != DataTypeB, emit:
@@ -298,12 +310,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI) {
       // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                          .addOperand(Inst.getOperand(11))  // DstTile
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                           .addOperand(Inst.getOperand(0))            // TSize
                           .addOperand(MCOperand::createImm(0))       // Last=0
                           .addOperand(Inst.getOperand(9))            // SrcTile0
-                          .addOperand(Inst.getOperand(10))           // SrcTile1
-                          .addOperand(Inst.getOperand(11)));         // DstTile
+                          .addOperand(Inst.getOperand(10)));  // SrcTile1
       // v5: B_IOT_OneSrc_NoDst(PE_MASK, Last, SrcTile0)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
@@ -313,12 +325,36 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     }
     // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                        .addOperand(Inst.getOperand(11))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(0))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1
                         .addOperand(Inst.getOperand(9))            // SrcTile0
-                        .addOperand(Inst.getOperand(10))          // SrcTile1
-                        .addOperand(Inst.getOperand(11)));        // DstTile
+                        .addOperand(Inst.getOperand(10)));  // SrcTile1
+    break;
+  case LinxV5::PseudoMAMULB_FIXP_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(10))
+                        .addOperand(Inst.getOperand(11)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(9))
+                        .addOperand(MCOperand::createImm(1)));
+    break;
+  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(10))
+                        .addOperand(Inst.getOperand(11)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(9))
+                        .addOperand(MCOperand::createImm(1)));
     break;
   case LinxV5::PseudoMAMULBMX_SizeI:
   case LinxV5::PseudoMAMULBMXAC_SizeI:
@@ -337,11 +373,11 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(13)));        // SrcTile1
       // v5: B_IOT_OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                          .addOperand(Inst.getOperand(14))  // DstTile
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                           .addOperand(Inst.getOperand(0))            // TSize
                           .addOperand(MCOperand::createImm(1))       // Last=1
-                          .addOperand(Inst.getOperand(9))            // SrcTile0
-                          .addOperand(Inst.getOperand(14)));         // DstTile
+                          .addOperand(Inst.getOperand(9)));  // SrcTile0
       break;
     }
     // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last, SrcTile0, SrcTile1)
@@ -352,12 +388,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(11)));        // SrcTile1
     // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                        .addOperand(Inst.getOperand(13))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(0))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1
                         .addOperand(Inst.getOperand(9))            // SrcTile0
-                        .addOperand(Inst.getOperand(12))          // SrcTile1
-                        .addOperand(Inst.getOperand(13)));        // DstTile
+                        .addOperand(Inst.getOperand(12)));  // SrcTile1
     break;
   case LinxV5::PseudoMAMULBMXB_SizeI:
   case LinxV5::PseudoMAMULBMXBAC_SizeI:
@@ -371,12 +407,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(11)));        // SrcTile1
       // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                          .addOperand(Inst.getOperand(13))  // DstTile
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                           .addOperand(Inst.getOperand(0))            // TSize
                           .addOperand(MCOperand::createImm(1))       // Last=1
                           .addOperand(Inst.getOperand(9))            // SrcTile0
-                          .addOperand(Inst.getOperand(12))          // SrcTile1
-                          .addOperand(Inst.getOperand(13)));        // DstTile
+                          .addOperand(Inst.getOperand(12)));  // SrcTile1
       break;
     }
     // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last, SrcTile0, SrcTile1)
@@ -387,11 +423,11 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(11)));        // SrcTile1
     // v5: B_IOT_OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(12))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(0))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1
-                        .addOperand(Inst.getOperand(9))            // SrcTile0
-                        .addOperand(Inst.getOperand(12)));        // DstTile
+                        .addOperand(Inst.getOperand(9)));  // SrcTile0
     break;
     // v5: NoSrc_Dst(PE_MASK, TSize, Last)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
@@ -400,8 +436,8 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(MCOperand::createImm(1)));     // Last
     break;
   case LinxV5::PseudoESAVE:
-    // v5: NoSrc_Dst(PE_MASK, TSize, Last)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))            // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(1))            // TSize(StackSize)
                         .addOperand(MCOperand::createImm(1)));     // Last
@@ -415,8 +451,8 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     break;
   case LinxV5::PseudoEmptyTile:
   case LinxV5::PseudoEmptyTileASM:
-    // v5: NoSrc_Dst(PE_MASK, TSize, Last)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))            // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(MCOperand::createImm(0))       // TSize=0
                         .addOperand(MCOperand::createImm(1)));     // Last
@@ -424,20 +460,20 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTMOV_SizeI:
     // v5: OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(9))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(0))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last
-                        .addOperand(Inst.getOperand(8))            // SrcTile0
-                        .addOperand(Inst.getOperand(9)));         // DstTile
+                        .addOperand(Inst.getOperand(8)));  // SrcTile0
     break;
   case LinxV5::PseudoTCOPY:
     // v5: OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(2))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(0))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last
-                        .addOperand(Inst.getOperand(1))            // SrcTile0
-                        .addOperand(Inst.getOperand(2)));          // DstTile
+                        .addOperand(Inst.getOperand(1)));  // SrcTile0
     break;
   case LinxV5::PseudoTSTORE_noDsrc_noDdst:
   case LinxV5::PseudoTSTORE_noDsrc_Ddst:
@@ -453,8 +489,8 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
   case LinxV5::PseudoTLOAD_Dsrc_noDdst:
   case LinxV5::PseudoTLOAD_Dsrc_Ddst:
-    // v5: NoSrc_Dst(PE_MASK, TSize, Last)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))            // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(8))            // TSize
                         .addOperand(MCOperand::createImm(1)));     // Last
@@ -558,6 +594,8 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case PseudoMAMULB_SizeI:
   case PseudoMAMULBAC_SizeI:
   case PseudoMAMULBACC_SizeI:
+  case PseudoMAMULB_FIXP_SizeI:
+  case PseudoMAMULB_ACC_FIXP_SizeI:
   case PseudoMAMULBMX_SizeI:
   case PseudoMAMULBMXB_SizeI:
   case PseudoMAMULBMXAC_SizeI:
@@ -724,6 +762,10 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoTLOAD_Dsrc_Ddst, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_Dsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoMAMULBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULB_ACC},
+      {LinxV5::PseudoMAMULB_FIXP_SizeI,
+       LinxV5Op::TileOPCUBE::MAMULB_FIXP},
+      {LinxV5::PseudoMAMULB_ACC_FIXP_SizeI,
+       LinxV5Op::TileOPCUBE::MAMULB_ACC_FIXP},
       {LinxV5::PseudoESAVE, LinxV5Op::TileOPTEPL::ESAVE},
       {LinxV5::PseudoERCOV, LinxV5Op::TileOPTEPL::ERCOV}};
 
@@ -735,12 +777,24 @@ bool isMatmulPseudo(unsigned Opcode) {
   case LinxV5::PseudoMAMULB_SizeI:
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:
+  case LinxV5::PseudoMAMULB_FIXP_SizeI:
+  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
   case LinxV5::PseudoMAMULBMX_SizeI:
   case LinxV5::PseudoMAMULBMXB_SizeI:
   case LinxV5::PseudoMAMULBMXAC_SizeI:
   case LinxV5::PseudoMAMULBMXBAC_SizeI:
   case LinxV5::PseudoMAMULBMXACC_SizeI:
   case LinxV5::PseudoMAMULBMXBACC_SizeI:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isFixpMatmulPseudo(unsigned Opcode) {
+  switch (Opcode) {
+  case LinxV5::PseudoMAMULB_FIXP_SizeI:
+  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
     return true;
   default:
     return false;

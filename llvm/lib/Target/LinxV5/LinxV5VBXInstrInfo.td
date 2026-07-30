@@ -41,6 +41,10 @@ def uimm2 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isUInt<2>(Imm);}]> {
   let OperandNamespace = "LinxV5Op";
 }
 
+def uimm1 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isUInt<1>(Imm);}]> {
+  let ParserMatchClass = UImmAsmOperand<1>;
+}
+
 def uimm3 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isUInt<3>(Imm);}]> {
   let ParserMatchClass = UImmAsmOperand<3>;
   let DecoderMethod = "decodeUImmOperand<3>";

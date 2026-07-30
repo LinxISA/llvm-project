@@ -50,6 +50,12 @@ using namespace llvm;
 
 STATISTIC(NumTailCalls, "Number of tail calls");
 
+static SDValue lowerV5GMOV(SDValue Op, SelectionDAG &DAG);
+static SDValue lowerV5SharedS2L(SDValue Op, SelectionDAG &DAG,
+                                unsigned Function);
+static SDValue lowerV5SharedL2S(SDValue Op, SelectionDAG &DAG,
+                                unsigned Function);
+
 static cl::opt<unsigned>
     MaxDepthForSearchSext("max-depth-for-linxv5-search-sext",
                           cl::desc("Max recursion depth for search sext"),
@@ -358,6 +364,8 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::MCALL)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_AC)
+    MAKE_CASE(LinxV5ISD::BLK_MATMUL_FIXP)
+    MAKE_CASE(LinxV5ISD::BLK_MATMUL_ACC_FIXP)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMXB)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX_AC)
@@ -365,6 +373,9 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::BLK_TLOAD)
     MAKE_CASE(LinxV5ISD::BLK_TSTORE)
     MAKE_CASE(LinxV5ISD::BLK_ACCCVT)
+    MAKE_CASE(LinxV5ISD::V5_GMOV)
+    MAKE_CASE(LinxV5ISD::V5_SHARED_L2S)
+    MAKE_CASE(LinxV5ISD::V5_SHARED_S2L)
     MAKE_CASE(LinxV5ISD::FABS)
     MAKE_CASE(LinxV5ISD::FSQRT)
     MAKE_CASE(LinxV5ISD::FEXP)
@@ -857,8 +868,17 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       Op->print(errs(), &DAG);
       report_fatal_error("unimplemented Intrinsic operand");
     }
+    case Intrinsic::linx_get_thread_id:
     case Intrinsic::linx_get_thread_idx:
       return lowerGetThreadIdx(Op, DAG);
+    case Intrinsic::linx_v5_gmov:
+      return lowerV5GMOV(Op, DAG);
+    case Intrinsic::linx_v5_shared_s2l_broadcast:
+      return lowerV5SharedS2L(
+          Op, DAG, LinxV5Op::TileOPTMA::TMOV_S2L_BROADCAST);
+    case Intrinsic::linx_v5_shared_s2l_extract:
+      return lowerV5SharedS2L(Op, DAG,
+                              LinxV5Op::TileOPTMA::TMOV_S2L_EXTRACT);
     case Intrinsic::linx_get_simt_ret:
       return lowerGetSIMTRet(Op, DAG);
     case Intrinsic::linx_get_sysreg: {
@@ -876,6 +896,10 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL, DL, Op, 2, DAG);
     case Intrinsic::linx_blk_matmul_ac:
       return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_AC, DL, Op, 3, DAG);
+    case Intrinsic::linx_blk_matmul_fixp:
+      return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_FIXP, DL, Op, 2, DAG);
+    case Intrinsic::linx_blk_matmul_acc_fixp:
+      return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_ACC_FIXP, DL, Op, 3, DAG);
     case Intrinsic::linx_blk_matmulmx:
       return lowerTemplateBLKMX(LinxV5ISD::BLK_MATMULMX, DL, Op, 4, DAG);
     case Intrinsic::linx_blk_matmulmxb:
@@ -954,18 +978,9 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
     case Intrinsic::blkv_get_index_z:
       return DAG.getCopyFromReg(DAG.getEntryNode(), DL, LinxV5::SIMT_LC2,
                                 MVT::i16);
-    case Intrinsic::linx_get_thread_idx: {
-      // Direct: lower to SSR_GET with Imm12=0xFFF (all-1s placeholder).
-      // SSR_GET outputs to DstRWithArrow (t/u/Rd — all allocatable GPR).
-      // No vreg cross-pool issue, no spill. IntrNoMem so no chain.
-      // Output only MVT::i64 (no MVT::Other chain — avoids creating a
-      // non-allocatable MCDst vreg for the chain result).
-      SDLoc DL(Op);
-      SDValue SSRId = DAG.getTargetConstant(0xFFF, DL, MVT::i64);
-      SDNode *N = DAG.getMachineNode(LinxV5::SSR_GET, DL, MVT::i64,
-                                     SSRId);
-      return SDValue(N, 0);
-    }
+    case Intrinsic::linx_get_thread_id:
+    case Intrinsic::linx_get_thread_idx:
+      return lowerGetThreadIdx(Op, DAG);
     }
   }
   case ISD::INTRINSIC_VOID: {
@@ -1079,12 +1094,80 @@ SDValue LinxV5TargetLowering::lowerMergeCF(SDLoc &DL, SDValue Op,
   return Result;
 }
 
-/// Assume Size must be constant.
 static unsigned calculateVCallSizeMask(EVT Type) {
-  unsigned SizeBytes = Type.getFixedSizeInBits() / 8;
-  assert(SizeBytes % 16 == 0 && "Error Vector Size!");
-  // E.g: 16(0b10000) -> 0; 32(0b100000) -> 1
-  return __builtin_ctz(SizeBytes) - 4;
+  uint64_t SizeBytes = Type.getFixedSizeInBits() / 8;
+  if (!isPowerOf2_64(SizeBytes) || SizeBytes < 512 || SizeBytes > 32768)
+    report_fatal_error(
+        "LinxV5 Tile size must be a power of two from 512 B through 32 KB");
+  return Log2_64(SizeBytes) - 8;
+}
+
+static uint64_t getV5ConstantOperand(SDValue Op, StringRef Name,
+                                     uint64_t MaxValue, bool AllowZero = true) {
+  const auto *Constant = dyn_cast<ConstantSDNode>(Op);
+  if (!Constant)
+    report_fatal_error(Twine("LinxV5 ") + Name +
+                       " operand must be a compile-time constant");
+  uint64_t Value = Constant->getZExtValue();
+  if (Value > MaxValue || (!AllowZero && Value == 0))
+    report_fatal_error(Twine("invalid LinxV5 ") + Name + " operand");
+  return Value;
+}
+
+static SDValue lowerV5GMOV(SDValue Op, SelectionDAG &DAG) {
+  SDLoc DL(Op);
+  uint64_t DataType = getV5ConstantOperand(Op.getOperand(2), "data type", 31);
+  uint64_t PEMask =
+      getV5ConstantOperand(Op.getOperand(3), "PE mask", 15, false);
+  if (const auto *PeerTID = dyn_cast<ConstantSDNode>(Op.getOperand(4)))
+    if (PeerTID->getZExtValue() > 3)
+      report_fatal_error("invalid LinxV5 GMOV peer thread ID");
+  SDValue Ops[] = {
+      Op.getOperand(0),
+      DAG.getTargetConstant(DataType, DL, MVT::i64),
+      DAG.getTargetConstant(PEMask, DL, MVT::i64),
+      DAG.getTargetConstant(calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64),
+      Op.getOperand(4), Op.getOperand(5)};
+  return DAG.getNode(LinxV5ISD::V5_GMOV, DL, Op->getVTList(), Ops);
+}
+
+static SDValue lowerV5SharedS2L(SDValue Op, SelectionDAG &DAG,
+                                unsigned Function) {
+  SDLoc DL(Op);
+  uint64_t SharedTID =
+      getV5ConstantOperand(Op.getOperand(2), "Shared Tile ID", 255);
+  uint64_t DataType = getV5ConstantOperand(Op.getOperand(3), "data type", 31);
+  uint64_t PEMask =
+      getV5ConstantOperand(Op.getOperand(4), "PE mask", 15, false);
+  SDValue Ops[] = {
+      Op.getOperand(0),
+      DAG.getTargetConstant(Function, DL, MVT::i64),
+      DAG.getTargetConstant(DataType, DL, MVT::i64),
+      DAG.getTargetConstant(SharedTID, DL, MVT::i64),
+      DAG.getTargetConstant(PEMask, DL, MVT::i64),
+      DAG.getTargetConstant(calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64)};
+  return DAG.getNode(LinxV5ISD::V5_SHARED_S2L, DL, Op->getVTList(), Ops);
+}
+
+static SDValue lowerV5SharedL2S(SDValue Op, SelectionDAG &DAG,
+                                unsigned Function) {
+  SDLoc DL(Op);
+  uint64_t SharedTID =
+      getV5ConstantOperand(Op.getOperand(2), "Shared Tile ID", 255);
+  uint64_t DataType = getV5ConstantOperand(Op.getOperand(3), "data type", 31);
+  uint64_t PEMask =
+      getV5ConstantOperand(Op.getOperand(4), "PE mask", 15, false);
+  SDValue SrcTile = Op.getOperand(5);
+  SDValue Ops[] = {
+      Op.getOperand(0),
+      DAG.getTargetConstant(Function, DL, MVT::i64),
+      DAG.getTargetConstant(DataType, DL, MVT::i64),
+      DAG.getTargetConstant(SharedTID, DL, MVT::i64),
+      DAG.getTargetConstant(PEMask, DL, MVT::i64),
+      DAG.getTargetConstant(calculateVCallSizeMask(SrcTile.getValueType()), DL,
+                            MVT::i64),
+      SrcTile};
+  return DAG.getNode(LinxV5ISD::V5_SHARED_L2S, DL, MVT::Other, Ops);
 }
 
 /// Intrinsic Ops: (0)Chain; (1)IntNo; (2)FuncPtr; (3,4,5): Dimensions; (6):
@@ -1435,6 +1518,12 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerTileOpWithBody(DL, Op, 0, uNum, DAG, LinxV5ISD::MCALL);
   } else if (IntNo == Intrinsic::linx_blk_tstore) {
     return lowerTStore(LinxV5ISD::BLK_TSTORE, DL, Op, DAG);
+  } else if (IntNo == Intrinsic::linx_v5_shared_l2s_insert) {
+    return lowerV5SharedL2S(Op, DAG,
+                            LinxV5Op::TileOPTMA::TMOV_L2S_INSERT);
+  } else if (IntNo == Intrinsic::linx_v5_shared_l2s_publish) {
+    return lowerV5SharedL2S(Op, DAG,
+                            LinxV5Op::TileOPTMA::TMOV_L2S_PUBLISH);
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =
@@ -1757,19 +1846,12 @@ SDValue LinxV5TargetLowering::lowerShiftLeftParts(SDValue Op,
 }
 
 SDValue LinxV5TargetLowering::lowerGetThreadIdx(SDValue Op,
-                                                  SelectionDAG &DAG) const {
-  // Aligned with website manual get_thread_idx(): returns PE thread index
-  // (0..kThreadsPerBlock-1). Lowered to SSR_GET reading PE-id SSR.
-  // SSR-ID 16 is a placeholder pending ISA assignment for SSR.THREAD_IDX.
-  // IntrNoMem, no operands (was IntrHasSideEffects + i64 layer param).
-  // IntrNoMem intrinsic has no chain operand; use the entry node.
+                                                SelectionDAG &DAG) const {
   SDLoc DL(Op);
-  SDValue Chain = DAG.getRoot();
-  SDValue SSRId = DAG.getTargetConstant(16, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(LinxV5::SSR_GET, DL, Op.getValueType(), MVT::Other,
-                        SSRId, Chain),
-      0);
+  SDValue SSRId = DAG.getTargetConstant(0x0802, DL, MVT::i64);
+  return SDValue(DAG.getMachineNode(LinxV5::SSR_GET, DL, Op.getValueType(),
+                                    SSRId),
+                 0);
 }
 
 SDValue LinxV5TargetLowering::lowerGetSIMTRet(SDValue Op,
