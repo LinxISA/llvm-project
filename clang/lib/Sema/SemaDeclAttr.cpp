@@ -8063,12 +8063,10 @@ static void handleLinxBLKFuncAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
     S.Diag(AL.getLoc(), diag::err_attribute_not_function) << AL;
     return;
   }
-  // Single-layer (scalar-only) architecture rejects the SIMT execution model.
-  // __mtc__/__vec__ are the only entry points that force the "simt" CPU and
-  // enable vcall/mcall code generation; rejecting them here keeps the
-  // attribute off the AST/IR entirely, so the backend never sees SIMT.
-  if (S.getLangOpts().LinxSingleLayer) {
-    S.Diag(AL.getLoc(), diag::err_linx_simt_disabled) << AL;
+  // The current LinxV5 superscalar compiler does not support SIMT. Reject the
+  // function attributes before they enter the AST/IR and force SIMT lowering.
+  if (S.Context.getTargetInfo().getTriple().isLinxClass()) {
+    S.Diag(AL.getLoc(), diag::err_linx_superscalar_simt_unsupported);
     return;
   }
   D->addAttr(::new (S.Context) A(S.Context, AL));

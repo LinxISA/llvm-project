@@ -11709,6 +11709,9 @@ def err_linx_simt_disabled : Error<
   "Linx SIMT execution model is disabled by '-mlinx-single-layer'; "
   "the '%0' attribute is not allowed in single-layer (scalar-only) architecture">;
 
+def err_linx_superscalar_simt_unsupported : Error<
+  "superscalar不支持simt，请检查代码是否有误使用">;
+
 def err_linx_lack_mtc_vec_called_kernel : Error<
   "The function '%0' lacks __vec__ or __mtc__ keyword modifier.">;
 

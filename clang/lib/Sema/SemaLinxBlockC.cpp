@@ -29,6 +29,10 @@ using namespace clang;
 ExprResult Sema::ActOnLinxBlockCExecConfigExpr(Scope *S, SourceLocation LLLLoc,
                                          MultiExprArg ExecConfig,
                                          SourceLocation GGGLoc) {
+  if (Context.getTargetInfo().getTriple().isLinxClass())
+    return ExprError(
+        Diag(LLLLoc, diag::err_linx_superscalar_simt_unsupported));
+
   constexpr unsigned MaxDimArgs = 3;
   constexpr unsigned DefaultDimArg = 1;
   if (ExecConfig.size() > MaxDimArgs)
