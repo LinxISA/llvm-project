@@ -98,6 +98,9 @@ void initializeLinxV5LoadStoreBridgeOptPass(PassRegistry &);
 FunctionPass *createLinxV5ClockhandsColoringPass();
 void initializeLinxV5ClockhandsColoringPass(PassRegistry &);
 
+FunctionPass *createLinxV5SharedRegAllocPass();
+void initializeLinxV5SharedRegAllocPass(PassRegistry &);
+
 FunctionPass *createLinxV5EmitHeaderPass();
 void initializeLinxV5EmitHeaderPass(PassRegistry &);
 

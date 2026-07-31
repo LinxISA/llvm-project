@@ -25,11 +25,11 @@ def int_linx_get_thread_idx : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 def int_linx_v5_gmov : Intrinsic<[llvm_anyvector_ty],
     [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, LLVMMatchType<0>],
     [IntrHasSideEffects]>;
-def int_linx_v5_shared_l2s_insert : Intrinsic<[],
-    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty],
+def int_linx_v5_shared_l2s_insert : Intrinsic<[llvm_i64_ty],
+    [llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty],
     [IntrHasSideEffects]>;
-def int_linx_v5_shared_l2s_publish : Intrinsic<[],
-    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty],
+def int_linx_v5_shared_l2s_publish : Intrinsic<[llvm_i64_ty],
+    [llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty],
     [IntrHasSideEffects]>;
 def int_linx_v5_shared_s2l_broadcast : Intrinsic<[llvm_anyvector_ty],
     [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
@@ -92,6 +92,16 @@ def int_linx_blk_matmul : Intrinsic<[llvm_anyvector_ty],
                                     [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                                      llvm_anyvector_ty, llvm_anyvector_ty],
                                     [IntrHasSideEffects]>;
+
+// v5 Shared-Right TMATMUL: same CUBE op as blk_matmul, but the Right (B)
+// operand is a Shared tile consumed via a C.B.IOS binder rather than a B.IOT
+// source stream. The B operand is therefore an opaque i64 Shared SSA handle
+// (NOT a tile vector), so it must not enter the vector OverloadType list. A
+// stays a normal Local tile vector; the result is an ordinary Local tile.
+def int_linx_blk_matmul_shared : Intrinsic<[llvm_anyvector_ty],
+    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+     llvm_anyvector_ty, llvm_i64_ty],
+    [IntrHasSideEffects]>;
 
 def int_linx_blk_matmul_ac : Intrinsic<[llvm_anyvector_ty],
                                     [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,

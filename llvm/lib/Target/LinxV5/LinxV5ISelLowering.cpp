@@ -374,6 +374,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::BLK_MATMULMXB)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX_AC)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMXB_AC)
+    MAKE_CASE(LinxV5ISD::BLK_MATMUL_SHARED)
     MAKE_CASE(LinxV5ISD::BLK_TLOAD)
     MAKE_CASE(LinxV5ISD::BLK_TSTORE)
     MAKE_CASE(LinxV5ISD::BLK_ACCCVT)
@@ -877,6 +878,12 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerGetThreadIdx(Op, DAG);
     case Intrinsic::linx_v5_gmov:
       return lowerV5GMOV(Op, DAG);
+    case Intrinsic::linx_v5_shared_l2s_insert:
+      return lowerV5SharedL2S(Op, DAG,
+                              LinxV5Op::TileOPTMA::TMOV_L2S_INSERT);
+    case Intrinsic::linx_v5_shared_l2s_publish:
+      return lowerV5SharedL2S(Op, DAG,
+                              LinxV5Op::TileOPTMA::TMOV_L2S_PUBLISH);
     case Intrinsic::linx_v5_shared_s2l_broadcast:
       return lowerV5SharedS2L(
           Op, DAG, LinxV5Op::TileOPTMA::TMOV_S2L_BROADCAST);
@@ -898,6 +905,8 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerShuffle(LinxV5ISD::SHFLXOR, DL, Op.getOperand(0), Op, DAG);
     case Intrinsic::linx_blk_matmul:
       return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL, DL, Op, 2, DAG);
+    case Intrinsic::linx_blk_matmul_shared:
+      return lowerTemplateBLKShared(DL, Op, DAG);
     case Intrinsic::linx_blk_matmul_ac:
       return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_AC, DL, Op, 3, DAG);
     case Intrinsic::linx_blk_matmul_fixp:
@@ -1146,8 +1155,6 @@ static SDValue lowerV5GMOV(SDValue Op, SelectionDAG &DAG) {
 static SDValue lowerV5SharedS2L(SDValue Op, SelectionDAG &DAG,
                                 unsigned Function) {
   SDLoc DL(Op);
-  uint64_t SharedTID =
-      getV5ConstantOperand(Op.getOperand(2), "Shared Tile ID", 255);
   uint64_t DataType = getV5ConstantOperand(Op.getOperand(3), "data type", 31);
   uint64_t PEMask =
       getV5ConstantOperand(Op.getOperand(4), "PE mask", 15, false);
@@ -1155,7 +1162,7 @@ static SDValue lowerV5SharedS2L(SDValue Op, SelectionDAG &DAG,
       Op.getOperand(0),
       DAG.getTargetConstant(Function, DL, MVT::i64),
       DAG.getTargetConstant(DataType, DL, MVT::i64),
-      DAG.getTargetConstant(SharedTID, DL, MVT::i64),
+      Op.getOperand(2),
       DAG.getTargetConstant(PEMask, DL, MVT::i64),
       DAG.getTargetConstant(calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64)};
   return DAG.getNode(LinxV5ISD::V5_SHARED_S2L, DL, Op->getVTList(), Ops);
@@ -1164,22 +1171,20 @@ static SDValue lowerV5SharedS2L(SDValue Op, SelectionDAG &DAG,
 static SDValue lowerV5SharedL2S(SDValue Op, SelectionDAG &DAG,
                                 unsigned Function) {
   SDLoc DL(Op);
-  uint64_t SharedTID =
-      getV5ConstantOperand(Op.getOperand(2), "Shared Tile ID", 255);
-  uint64_t DataType = getV5ConstantOperand(Op.getOperand(3), "data type", 31);
+  uint64_t DataType = getV5ConstantOperand(Op.getOperand(2), "data type", 31);
   uint64_t PEMask =
-      getV5ConstantOperand(Op.getOperand(4), "PE mask", 15, false);
-  SDValue SrcTile = Op.getOperand(5);
+      getV5ConstantOperand(Op.getOperand(3), "PE mask", 15, false);
+  SDValue SrcTile = Op.getOperand(4);
   SDValue Ops[] = {
       Op.getOperand(0),
       DAG.getTargetConstant(Function, DL, MVT::i64),
       DAG.getTargetConstant(DataType, DL, MVT::i64),
-      DAG.getTargetConstant(SharedTID, DL, MVT::i64),
       DAG.getTargetConstant(PEMask, DL, MVT::i64),
       DAG.getTargetConstant(calculateVCallSizeMask(SrcTile.getValueType()), DL,
                             MVT::i64),
       SrcTile};
-  return DAG.getNode(LinxV5ISD::V5_SHARED_L2S, DL, MVT::Other, Ops);
+  return DAG.getNode(LinxV5ISD::V5_SHARED_L2S, DL,
+                     DAG.getVTList(MVT::i64, MVT::Other), Ops);
 }
 
 /// Intrinsic Ops: (0)Chain; (1)IntNo; (2)FuncPtr; (3,4,5): Dimensions; (6):
@@ -1294,6 +1299,49 @@ SDValue LinxV5TargetLowering::lowerTemplateBLK(unsigned Opcode, SDLoc &DL,
 
   SDValue VCall = DAG.getNode(
       Opcode, DL, DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+  return VCall;
+}
+
+/// Intrinsic Ops for blk_matmul_shared:
+/// (0)Chain; (1)IntNo; (2,3,4): Dimensions;
+/// (5): Tile Element Type A; (6): Tile Element Type B;
+/// (7): Local Tile Input A; (8): Shared SSA handle.
+/// The Shared Right (B) is NOT a tile operand here — it is bound by C.B.IOS
+/// at MC expansion. Node result is the implicit ACC tile plus Other.
+SDValue LinxV5TargetLowering::lowerTemplateBLKShared(SDLoc &DL, SDValue Op,
+                                                      SelectionDAG &DAG) const {
+  SmallVector<SDValue> Ops;
+
+  SDValue Chain = Op.getOperand(0);
+  Ops.push_back(Chain);
+
+  Ops.push_back(Op.getOperand(2)); // Dim-X
+  Ops.push_back(Op.getOperand(3)); // Dim-Y
+  Ops.push_back(Op.getOperand(4)); // Dim-Z
+
+  SDValue TileElementTypeA = Op.getOperand(5);
+  unsigned TypeEnumA = cast<ConstantSDNode>(TileElementTypeA)->getZExtValue();
+  Ops.push_back(DAG.getTargetConstant(TypeEnumA, DL, MVT::i64));
+
+  SDValue TileElementTypeB = Op.getOperand(6);
+  unsigned TypeEnumB = cast<ConstantSDNode>(TileElementTypeB)->getZExtValue();
+  Ops.push_back(DAG.getTargetConstant(TypeEnumB, DL, MVT::i64));
+
+  unsigned TileSize = calculateVCallSizeMask(Op.getValueType());
+  Ops.push_back(DAG.getTargetConstant(TileSize, DL, MVT::i64));
+
+  SDValue TileUseA = Op.getOperand(7);
+  if (TileUseA.isUndef()) {
+    Op->print(errs(), &DAG);
+    report_fatal_error("\nPlease initialize tile register before use!");
+  }
+  Ops.push_back(TileUseA); // Local A tile (B is Shared, bound by C.B.IOS)
+
+  Ops.push_back(Op.getOperand(8));
+
+  SDValue VCall = DAG.getNode(
+      LinxV5ISD::BLK_MATMUL_SHARED, DL,
+      DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
   return VCall;
 }
 
@@ -1530,12 +1578,6 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerTileOpWithBody(DL, Op, 0, uNum, DAG, LinxV5ISD::MCALL);
   } else if (IntNo == Intrinsic::linx_blk_tstore) {
     return lowerTStore(LinxV5ISD::BLK_TSTORE, DL, Op, DAG);
-  } else if (IntNo == Intrinsic::linx_v5_shared_l2s_insert) {
-    return lowerV5SharedL2S(Op, DAG,
-                            LinxV5Op::TileOPTMA::TMOV_L2S_INSERT);
-  } else if (IntNo == Intrinsic::linx_v5_shared_l2s_publish) {
-    return lowerV5SharedL2S(Op, DAG,
-                            LinxV5Op::TileOPTMA::TMOV_L2S_PUBLISH);
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =
@@ -3885,7 +3927,7 @@ LinxV5TargetLowering::getConstraintType(StringRef Constraint) const {
       return C_Memory;
     }
   }
-  if (Constraint == "vr" || Constraint == "Tr")
+  if (Constraint == "vr" || Constraint == "Tr" || Constraint == "Sr")
     return C_RegisterClass;
   return TargetLowering::getConstraintType(Constraint);
 }
@@ -3896,6 +3938,10 @@ LinxV5TargetLowering::getSingleConstraintMatchWeight(
   ConstraintWeight weight =
       TargetLowering::getSingleConstraintMatchWeight(info, constraint);
   switch (*constraint) {
+  case 'S':
+    if (constraint[1] == 'r')
+      weight = CW_Register;
+    break;
   case 'v':
   case 'T':
     if (constraint[1] == 'r')
@@ -3925,6 +3971,8 @@ LinxV5TargetLowering::getRegForInlineAsmConstraint(
     return std::make_pair(0U, &LinxV5::SIMTCGVRegClass);
   if (Constraint == "Tr")
     return std::make_pair(0U, &LinxV5::Tile_ABSRegClass);
+  if (Constraint == "Sr")
+    return std::make_pair(0U, &LinxV5::Shared_ABSRegClass);
 
   // Clang will correctly decode the usage of register name aliases into their
   // official names. However, other frontends like `rustc` do not. This allows

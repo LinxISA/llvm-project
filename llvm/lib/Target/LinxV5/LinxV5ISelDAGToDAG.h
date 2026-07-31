@@ -113,6 +113,11 @@ public:
   void selectTemplateBlockMX(SDLoc &DL, SDNode *Node, unsigned Opc,
                              unsigned TileUseNum);
 
+  // v5: select PseudoMAMULB_SharedRight — pushes dims + DataTypeA/B + TileSize
+  // + the single Local A tile + the Shared SSA register + Chain. The
+  // Shared Right (B) is not a tile operand (bound by C.B.IOS at MC expansion).
+  void selectTemplateBlockShared(SDLoc &DL, SDNode *Node, unsigned Opc);
+
   void selectTLoad(SDLoc &DL, SDNode *Node, unsigned Opc);
 
   void selectTStore(SDLoc &DL, SDNode *Node, unsigned Opc);

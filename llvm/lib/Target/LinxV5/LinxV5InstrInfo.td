@@ -2745,6 +2745,7 @@ def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
   let PrintMethod = "printSharedTID";
   let EncoderMethod = "getImmOpValueTSize"; // reuse simple imm encoding
 }
+def SharedRegOp : RegisterOperand<Shared_ABS>;
 def C_B_IOS : BlockModifierBase {
   field bits<16> SoftFail = 0;
   field bits<16> Inst;
@@ -3039,13 +3040,12 @@ let isCodeGenOnly = 1, hasSideEffects = 1 in {
 def PseudoV5GMOV : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins BstartDataType:$DataType, PE_MASK_Op:$PE_MASK,
          TSize_Op:$TSize, GPRSrc:$PeerTID, TILE_Src_Reg:$SrcTile), []>;
-def PseudoV5SharedL2S : Pseudo<(outs),
+def PseudoV5SharedL2S : Pseudo<(outs SharedRegOp:$SharedDst),
     (ins TileOPTMA:$Function, BstartDataType:$DataType,
-         SharedTIDOp:$SharedTID, PE_MASK_Op:$PE_MASK,
-         TSize_Op:$TSize, TILE_Src_Reg:$SrcTile), []>;
+         PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, TILE_Src_Reg:$SrcTile), []>;
 def PseudoV5SharedS2L : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins TileOPTMA:$Function, BstartDataType:$DataType,
-         SharedTIDOp:$SharedTID, PE_MASK_Op:$PE_MASK,
+         SharedRegOp:$SharedSrc, PE_MASK_Op:$PE_MASK,
          TSize_Op:$TSize), []>;
 }
 
@@ -3136,14 +3136,33 @@ class PseudoCCallImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
   let isHeaderOnly = 1;
 }
 
+// v5 unified MATMUL: every variant writes an ordinary Local Tile result
+// (TILE_DstWithArrow), which participates in normal T/U/M/N clockhand
+// allocation. There is no dedicated ACC storage/register class; ".ACC"
+// variants carry an explicit ordinary-Tile accumulator source instead.
 class PseudoCUBE_MAMULB_Base_I<string TileOp> :
-  PseudoCCallImpl<(outs ACC_TILE_DstWithArrow:$DstTile),
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
   TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
     let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $DstTile$TileSize";
 }
 
 def PseudoMAMULB_SizeI : PseudoCUBE_MAMULB_Base_I<"TMATMUL">;
+
+// v5: TMATMUL with a Shared Right operand. Same CUBE op (BSTART.CUBE TMATMUL)
+// but the Right tile is supplied by a C.B.IOS binder (SharedTID, S#0..S#255)
+// instead of a B.IOT source stream. A stays a normal Local TILE_Src_Reg and
+// the result is an ordinary Local Tile (TILE_DstWithArrow). PE_MASK is forced
+// to 1111 at MC expansion. Internal mnemonic is CodeGen-only; the public API
+// keeps the name TMATMUL.
+class PseudoCUBE_MAMULB_SharedRight_Base_I<string TileOp> :
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, SharedRegOp:$SharedSrc)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SharedSrc, $DstTile$TileSize";
+}
+
+def PseudoMAMULB_SharedRight_SizeI : PseudoCUBE_MAMULB_SharedRight_Base_I<"TMATMUL.SHARED">;
 
 class PseudoCUBE_MAMULBAC_Higher_Base_I<string TileOp> :
   PseudoCCallImpl<(outs ACC_TILE_DstWithArrow:$DstTile),
@@ -3181,10 +3200,12 @@ class PseudoCUBE_MAMULB_FIXP_Base_I<string TileOp> :
 
 def PseudoMAMULB_FIXP_SizeI : PseudoCUBE_MAMULB_FIXP_Base_I<"TMATMUL.FIXP">;
 
+// v5 unified: accumulator is an ordinary TILE_Src_Reg, emitted in the B.IOT
+// source stream (no longer bypassed via implicit ACC state).
 class PseudoCUBE_MAMULB_ACC_FIXP_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
-  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, ACC_TILE_SRC:$ACC)> {
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$ACC)> {
     let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $ACC, $DstTile$TileSize";
 }
 

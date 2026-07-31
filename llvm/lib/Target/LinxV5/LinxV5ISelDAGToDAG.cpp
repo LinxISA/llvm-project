@@ -469,6 +469,33 @@ void LinxV5DAGToDAGISel::selectTemplateBlockMX(SDLoc &DL, SDNode *Node,
                                            Node->getValueType(1), Ops));
 }
 
+// v5: BLK_MATMUL_SHARED node operands:
+// (0)Chain; (1,2,3)Dims; (4)DataTypeA; (5)DataTypeB; (6)TileSize;
+// (7)Local A tile; (8)Shared SSA handle. The Shared Right (B) is never a tile operand
+// here; it is bound by C.B.IOS during MC expansion.
+void LinxV5DAGToDAGISel::selectTemplateBlockShared(SDLoc &DL, SDNode *Node,
+                                                    unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  selectVCallDim(DL, Node, 1, Ops);
+
+  SDValue DataTypeA = Node->getOperand(4);
+  Ops.push_back(DataTypeA);
+
+  SDValue DataTypeB = Node->getOperand(5);
+  Ops.push_back(DataTypeB);
+
+  SDValue TileSize = Node->getOperand(6);
+  Ops.push_back(TileSize);
+
+  Ops.push_back(Node->getOperand(7));  // Local A tile
+  Ops.push_back(Node->getOperand(8)); // Shared register
+
+  Ops.push_back(Node->getOperand(0)); // Chain
+
+  ReplaceNode(Node, CurDAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                                           Node->getValueType(1), Ops));
+}
+
 void LinxV5DAGToDAGISel::selectTLoad(SDLoc &DL, SDNode *Node, unsigned Opc) {
   SmallVector<SDValue> Ops;
   selectVCallDim(DL, Node, 1, Ops);
@@ -1077,6 +1104,10 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   }
   case LinxV5ISD::BLK_MATMUL: {
     selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULB_SizeI, 2);
+    return;
+  }
+  case LinxV5ISD::BLK_MATMUL_SHARED: {
+    selectTemplateBlockShared(DL, Node, LinxV5::PseudoMAMULB_SharedRight_SizeI);
     return;
   }
   case LinxV5ISD::BLK_MATMUL_AC: {

@@ -304,7 +304,31 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
   switch (Inst.getOpcode()) {
   default:
     llvm_unreachable("Can not find BIO From Pseudo Inst!");
+  // v5 basic TMATMUL: D = A * B. Unified ordinary-Tile result model:
+  //   Op0=DstTile(def), Op1..6=dims, Op7=DataTypeA, Op8=DataTypeB,
+  //   Op9=TileSize, Op10=SrcTile0(A), Op11=SrcTile1(B).
+  // Emit one B.IOT TwoSrc_Dst carrying both sources plus the ordinary dst.
   case LinxV5::PseudoMAMULB_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))             // DstTile
+                        .addOperand(MCOperand::createImm(0b1111))   // PE_MASK
+                        .addOperand(Inst.getOperand(9))             // TSize
+                        .addOperand(MCOperand::createImm(1))        // Last=1
+                        .addOperand(Inst.getOperand(10))            // SrcTile0 (A)
+                        .addOperand(Inst.getOperand(11)));          // SrcTile1 (B)
+    break;
+  case LinxV5::PseudoMAMULB_SharedRight_SizeI:
+    // v5 Shared Right: B is bound by C.B.IOS, not in B.IOT. Only A remains in
+    // the source stream; the ordinary dst still carries last. The C.B.IOS
+    // binder itself is emitted by expandPseudoCCall from the SharedTID operand.
+    //   Op0=DstTile(def), Op9=TileSize, Op10=SrcTile0(A), Op11=SharedTID.
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(0))             // DstTile
+                        .addOperand(MCOperand::createImm(0b1111))   // PE_MASK (fixed)
+                        .addOperand(Inst.getOperand(9))             // TSize
+                        .addOperand(MCOperand::createImm(1))        // Last=1
+                        .addOperand(Inst.getOperand(10)));          // SrcTile0 (A)
+    break;
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:
     if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI) {
@@ -345,16 +369,19 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(MCOperand::createImm(1)));
     break;
   case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
+    // v5 unified: accumulator is an ordinary source in the B.IOT stream.
+    //   B.IOT A, B (no dst, not last); B.IOT Acc, ->D (last).
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
                         .addOperand(MCOperand::createImm(0b1111))
                         .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))
-                        .addOperand(Inst.getOperand(11)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                        .addOperand(Inst.getOperand(0))
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(Inst.getOperand(9))
-                        .addOperand(MCOperand::createImm(1)));
+                        .addOperand(Inst.getOperand(10))   // SrcTile0 (A)
+                        .addOperand(Inst.getOperand(11))); // SrcTile1 (B)
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(0))   // DstTile
+                        .addOperand(MCOperand::createImm(0b1111)) // PE_MASK
+                        .addOperand(Inst.getOperand(9))   // TSize
+                        .addOperand(MCOperand::createImm(1))        // Last=1
+                        .addOperand(Inst.getOperand(12))); // SrcTile0 (Acc)
     break;
   case LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI:
     // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last=0, A, B) + B_IOT_OneSrc_NoDst(PE_MASK, Last=1, Bias) + B_IOT_NoSrc_Dst(DstTile, PE_MASK, TSize, Last=1)
@@ -816,6 +843,7 @@ llvm::SmallVector<MCInst> getBIODFromInst(MCInst Inst, const MCInstrInfo &MII) {
 unsigned getPseudoTILEOpcode(unsigned Opcode) {
   static const llvm::DenseMap<unsigned, unsigned> PseudoToOpc = {
       {LinxV5::PseudoMAMULB_SizeI, LinxV5Op::TileOPCUBE::MAMULB},
+      {LinxV5::PseudoMAMULB_SharedRight_SizeI, LinxV5Op::TileOPCUBE::MAMULB},
       {LinxV5::PseudoMAMULBAC_SizeI, LinxV5Op::TileOPCUBE::MAMULBAC},
       {LinxV5::PseudoMAMULBMX_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX},
       {LinxV5::PseudoMAMULBMXB_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX},
@@ -853,6 +881,7 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
 bool isMatmulPseudo(unsigned Opcode) {
   switch (Opcode) {
   case LinxV5::PseudoMAMULB_SizeI:
+  case LinxV5::PseudoMAMULB_SharedRight_SizeI:
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:
   case LinxV5::PseudoMAMULB_FIXP_SizeI:

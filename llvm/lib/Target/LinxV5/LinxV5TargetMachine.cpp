@@ -50,6 +50,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5LoadStoreBridgeOptPass(*PR);
   initializeLinxV5ClockhandsPostAllocPass(*PR);
   initializeLinxV5ClockhandsColoringPass(*PR);
+  initializeLinxV5SharedRegAllocPass(*PR);
   initializeLinxV5TRegToOffsetOptPass(*PR);
   initializeLinxV5EmitHeaderPass(*PR);
   initializeLinxV5ExpandPseudoPass(*PR);
@@ -241,6 +242,7 @@ bool LinxV5PassConfig::addRegAssignAndRewriteOptimized() {
   addPass(&RegisterCoalescerID);
   addPass(createLinxV5LoadStoreBridgeOptPass());
   addPass(createLinxV5ClockhandsColoringPass());
+  addPass(createLinxV5SharedRegAllocPass());
   addPass(createGreedyRegisterAllocator());
   addPreRewrite();
   addPass(&VirtRegRewriterID);

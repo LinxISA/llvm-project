@@ -178,6 +178,11 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
       if (!MO.isReg())
         OS << 'i';
       return false;
+    case 'S': // Print a Shared register as the C.B.IOS S#n encoding.
+      if (!MO.isReg())
+        return true;
+      OS << "S#" << STI->getRegisterInfo()->getEncodingValue(MO.getReg());
+      return false;
     }
   }
 

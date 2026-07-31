@@ -23,7 +23,10 @@ define void @fixp(ptr %in_a, ptr %in_b, ptr %out) {
 ; CHECK-NEXT: B.DATR FP32, byte0, Null
 ; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
 ; CHECK-NEXT: B.IOT {{.*}}, {{.*}}, mask=1111
-; CHECK-NEXT: B.IOT mask=1111, TSize=1, last, {{.*}}->
+; v5 unified: accumulator (Acc) is now an ordinary source in the B.IOT
+; stream (no longer bypassed via implicit ACC). The last B.IOT carries it
+; together with the ordinary Tile destination.
+; CHECK-NEXT: B.IOT {{.*}}, mask=1111, TSize=1, last
 define void @acc_fixp(ptr %in_a, ptr %in_b, ptr %out) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)
   %b = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 3, ptr %in_b, i64 16)

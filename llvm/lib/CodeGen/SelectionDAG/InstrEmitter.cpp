@@ -213,8 +213,11 @@ void InstrEmitter::CreateVirtualRegisters(SDNode *Node,
       const TargetRegisterClass *VTRC = TLI->getRegClassFor(
           Node->getSimpleValueType(i),
           (Node->isDivergent() || (RC && TRI->isDivergentRegClass(RC))));
-      if (RC)
-        VTRC = TRI->getCommonSubClass(RC, VTRC);
+      if (RC) {
+        const TargetRegisterClass *CommonRC =
+            TRI->getCommonSubClass(RC, VTRC);
+        VTRC = CommonRC && CommonRC->isAllocatable() ? CommonRC : RC;
+      }
       if (VTRC)
         RC = VTRC;
     }

@@ -40,6 +40,13 @@ bool LinxV5TargetInfo::isValidCPUName(StringRef Name) const { return true; }
 bool LinxV5TargetInfo::validateAsmConstraint(
     const char *&Name, TargetInfo::ConstraintInfo &Info) const {
   switch (Name[0]) {
+  case 'S':
+    if (Name[1] == 'r') {
+      Info.setAllowsRegister();
+      Name++;
+      return true;
+    }
+    return false;
   case 'v':
   case 'T':
     if (Name[1] == 'r') {

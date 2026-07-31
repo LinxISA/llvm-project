@@ -233,6 +233,12 @@ class LinxV5DepSrcReg<bits<5> Enc, string n, list<string> alt = []> : Register<n
   let AltNames = alt;
 }
 
+class LinxV5SharedReg<bits<8> Enc, string n, list<string> alt = []>
+    : Register<n> {
+  let HWEncoding{7-0} = Enc;
+  let AltNames = alt;
+}
+
 } // Namespace = "LinxV5"
 
 let RegAltNameIndices = [ABIRegAltName] in {
@@ -556,4 +562,20 @@ def Dep_SRC : RegisterClass<"LinxV5", [vAny], 64, (add
 )> {
   let Size = 64;
   let isAllocatable = 0;
+}
+
+// Shared tile handles are architectural global registers. Keep them in a
+// separate register file so allocation is an absolute S#0..S#255 assignment.
+let RegAltNameIndices = [ABIRegAltName] in {
+  foreach Index = 0-255 in {
+    def Shared_S#Index : LinxV5SharedReg<Index, "shared_s"#Index,
+                                           ["S#"#Index]>,
+                                           DwarfRegNum<[100]>;
+  }
+}
+
+def Shared_ABS : RegisterClass<"LinxV5", [i64], 64,
+                               (sequence "Shared_S%u", 0, 255)> {
+  let Size = 64;
+  let isAllocatable = 1;
 }

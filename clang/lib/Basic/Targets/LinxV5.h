@@ -56,6 +56,7 @@ public:
   std::string convertConstraint(const char *&Constraint) const override {
     std::string R;
     switch (*Constraint) {
+    case 'S':
     case 'v':
     case 'T':
       if (Constraint[1] == 'r')

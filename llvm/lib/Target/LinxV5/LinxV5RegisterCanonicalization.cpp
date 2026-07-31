@@ -231,6 +231,7 @@ static DenseSet<const TargetRegisterClass *> KnownRCs = {
     &LinxV5::GRNoR0RegClass,       // gpr
     &LinxV5::Tile_ABSRegClass,     // tile
     &LinxV5::TILE_ABS_ACCRegClass, // acc
+    &LinxV5::Shared_ABSRegClass,    // shared tile handle
     // simt
     &LinxV5::SIMTCGVLRegClass, // general vector
     &LinxV5::SIMTCGVRegClass,  // general vector and CopyFromReg(ri/tile/lc)

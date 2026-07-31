@@ -499,12 +499,15 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
     writeBinaryCodes(
         OS, Fixups, STI,
         {MCInstBuilder(LinxV5::BSTART_TMA)
-             .addOperand(MI.getOperand(1))
-             .addOperand(MI.getOperand(0))},
+             .addOperand(MI.getOperand(2))
+             .addOperand(MI.getOperand(1))},
         ByteCount);
     writeBinaryCodes(
         OS, Fixups, STI,
-        {MCInstBuilder(LinxV5::C_B_IOS).addOperand(MI.getOperand(2))},
+        {MCInstBuilder(LinxV5::C_B_IOS)
+             .addOperand(MCOperand::createImm(
+                 Ctx.getRegisterInfo()->getEncodingValue(
+                     MI.getOperand(0).getReg())))},
         ByteCount);
     writeBinaryCodes(
         OS, Fixups, STI,
@@ -523,7 +526,10 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
            .addOperand(MI.getOperand(1))},
       ByteCount);
   writeBinaryCodes(OS, Fixups, STI,
-                   {MCInstBuilder(LinxV5::C_B_IOS).addOperand(MI.getOperand(3))},
+                   {MCInstBuilder(LinxV5::C_B_IOS)
+                        .addOperand(MCOperand::createImm(
+                            Ctx.getRegisterInfo()->getEncodingValue(
+                                MI.getOperand(3).getReg())))},
                    ByteCount);
   writeBinaryCodes(
       OS, Fixups, STI,
@@ -597,6 +603,15 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
              .addOperand(MCOperand::createImm(0))
              .addOperand(MCOperand::createImm(0))
              .addOperand(MCOperand::createImm(0))},
+        Dummy);
+  }
+  if (MI.getOpcode() == LinxV5::PseudoMAMULB_SharedRight_SizeI) {
+    writeBinaryCodes(
+        OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::C_B_IOS)
+             .addOperand(MCOperand::createImm(
+                 Ctx.getRegisterInfo()->getEncodingValue(
+                     MI.getOperand(11).getReg())))},
         Dummy);
   }
   // b.iot
