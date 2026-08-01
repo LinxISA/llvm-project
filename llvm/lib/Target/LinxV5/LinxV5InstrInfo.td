@@ -2930,6 +2930,9 @@ def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
   let AsmString = "B.IOT" # "\t${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
 def : InstAlias<"B.IOT\t$DstTile", (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0), 0>;
+def : InstAlias<"B.IOT\t$PE_MASK, $TSize, $DstTile",
+    (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
+                     TSize_Op:$TSize, 0), 0>;
 
 def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
@@ -2938,6 +2941,9 @@ def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $DstTile", (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $TSize, $DstTile",
+    (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
+                      TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
 def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
@@ -2945,6 +2951,10 @@ def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $DstTile", (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK, $TSize, $DstTile",
+    (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
+                      TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0,
+                      TILE_Src_Reg:$SrcTile1), 0>;
 
 def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
   let SrcTile1 = 0;
