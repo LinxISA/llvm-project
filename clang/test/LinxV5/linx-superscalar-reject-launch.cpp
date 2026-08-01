@@ -4,5 +4,5 @@ void kernel(int);
 
 void caller() {
   kernel<<<1, 1, 1>>>(0);
-  // CHECK: error: superscalar不支持simt，请检查代码是否有误使用
+  // CHECK: error: SIMT constructs are not supported by the superscalar compiler; check the source for unintended SIMT usage
 }

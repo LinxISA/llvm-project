@@ -5,9 +5,9 @@
 // regardless of whether -mlinx-single-layer is explicitly present.
 
 __vec__ int vec_func(int a) { return a + 1; }
-// CHECK: error: superscalar不支持simt，请检查代码是否有误使用
+// CHECK: error: SIMT constructs are not supported by the superscalar compiler; check the source for unintended SIMT usage
 
 __mtc__ int mtc_func(int a) { return a + 2; }
-// CHECK: error: superscalar不支持simt，请检查代码是否有误使用
+// CHECK: error: SIMT constructs are not supported by the superscalar compiler; check the source for unintended SIMT usage
 
 int plain_func(int a) { return a + 3; }

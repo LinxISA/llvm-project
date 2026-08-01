@@ -11710,7 +11710,8 @@ def err_linx_simt_disabled : Error<
   "the '%0' attribute is not allowed in single-layer (scalar-only) architecture">;
 
 def err_linx_superscalar_simt_unsupported : Error<
-  "superscalar不支持simt，请检查代码是否有误使用">;
+  "SIMT constructs are not supported by the superscalar compiler; "
+  "check the source for unintended SIMT usage">;
 
 def err_linx_lack_mtc_vec_called_kernel : Error<
   "The function '%0' lacks __vec__ or __mtc__ keyword modifier.">;
