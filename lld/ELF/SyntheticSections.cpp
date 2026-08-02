@@ -383,7 +383,7 @@ void BuildIdSection::writeTo(uint8_t *buf) {
 }
 
 static constexpr StringLiteral PTOISAIdentity =
-    R"({"encoding_abi":"pto-isa-0.57.1-mode-function-v1","encoding_projection_sha256":"34f6602cf29ea6363d41d896111dad4de0f70ec36517138aa89e292857909da4","release":"0.57.1"})";
+    R"({"encoding_abi":"pto-isa-0.57.1-mode-function-v1","encoding_projection_sha256":"9705a984e2e48e0d4e856d3fbcfa07041c8578dd326d81f1c90279e826354c32","release":"0.57.1"})";
 
 PTOISAIdentitySection::PTOISAIdentitySection(Ctx &ctx)
     : SyntheticSection(ctx, ".note.pto.isa", SHT_NOTE, SHF_ALLOC, 4) {}
