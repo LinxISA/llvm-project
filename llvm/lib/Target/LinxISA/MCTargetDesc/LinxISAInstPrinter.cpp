@@ -133,41 +133,8 @@ static StringRef dtypeName(unsigned DT) {
   }
 }
 
-static StringRef cubeAliasMnemonic(unsigned Func) {
-  switch (Func & 0x1fu) {
-  case 0:
-    return "BSTART.TMATMUL";
-  case 1:
-    return "BSTART.TMATMUL.BIAS";
-  case 2:
-    return "BSTART.TMATMUL.ACC";
-  case 4:
-    return "BSTART.TMATMULMX";
-  case 5:
-    return "BSTART.TMATMULMX.BIAS";
-  case 6:
-    return "BSTART.TMATMULMX.ACC";
-  case 8:
-    return "BSTART.ACCCVT";
-  case 16:
-    return "BSTART.TGEMV";
-  case 17:
-    return "BSTART.TGEMV.BIAS";
-  case 18:
-    return "BSTART.TGEMV.ACC";
-  case 20:
-    return "BSTART.TGEMVMX";
-  case 21:
-    return "BSTART.TGEMVMX.BIAS";
-  case 22:
-    return "BSTART.TGEMVMX.ACC";
-  default:
-    return StringRef();
-  }
-}
-
-static StringRef teplAliasMnemonic(unsigned TileOpcode) {
-  return LinxISA::canonicalTEPLAliasMnemonicV057(TileOpcode & 0x3ffu);
+static StringRef teplAliasMnemonic(unsigned Selector) {
+  return LinxISA::canonicalTEPLAliasMnemonicV057(Selector & 0x7fu);
 }
 
 static unsigned tmaStateOpFromFunction(unsigned Func) {
@@ -208,30 +175,6 @@ static StringRef layoutFormatName(unsigned Format) {
     return "DN2NZ.normal";
   case 28:
     return "NZ2DN.canon";
-  default:
-    return StringRef();
-  }
-}
-
-static StringRef tmovModeName(unsigned Mode) {
-  switch (Mode & 0x1fu) {
-  case 0:
-    return "V2V";
-  case 1:
-    return "A2V";
-  default:
-    return StringRef();
-  }
-}
-
-static StringRef teplModeName(unsigned Mode) {
-  switch (Mode & 0x1fu) {
-  case 0:
-    return "VV";
-  case 1:
-    return "VS";
-  case 2:
-    return "SV";
   default:
     return StringRef();
   }
@@ -935,9 +878,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   //
   // Canonical v0.57 disassembly uses direct named TMA/CUBE/TEPL forms where
   // the selector has an architectural name.
-  const bool IsTypedCUBE = AsmFmt.starts_with("BSTART.CUBE");
   const bool IsTypedTEPL = AsmFmt.starts_with("BSTART.TEPL");
-  const bool IsTypedFIXP = AsmFmt.starts_with("BSTART.FIXP");
   const bool IsTypedVPAR = AsmFmt.starts_with("BSTART.VPAR");
   const bool IsTypedVSEQ = AsmFmt.starts_with("BSTART.VSEQ");
   const bool IsTypedMPAR = AsmFmt.starts_with("BSTART.MPAR");
@@ -978,9 +919,9 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   const bool IsDirectTMAAlias = DirectTMAFunc.has_value();
   const bool IsDirectCUBEAlias = DirectCUBEFunc.has_value();
   const bool IsDirectTEPLAlias = DirectTEPLOpcode.has_value();
-  if (IsTypedCUBE || IsTypedTEPL || IsTypedFIXP || IsTypedVPAR ||
-      IsTypedVSEQ || IsTypedMPAR || IsTypedMSEQ ||
-      IsDirectTMAAlias || IsDirectCUBEAlias || IsDirectTEPLAlias) {
+  if (IsTypedTEPL || IsTypedVPAR || IsTypedVSEQ || IsTypedMPAR ||
+      IsTypedMSEQ || IsDirectTMAAlias || IsDirectCUBEAlias ||
+      IsDirectTEPLAlias) {
     const unsigned DT = static_cast<unsigned>(
                             findFieldImm("DataType")
                                 .value_or(findFieldImm("dtype").value_or(0))) &
@@ -1016,37 +957,6 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return;
     }
 
-    if (IsTypedCUBE) {
-      const unsigned Func =
-          static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x1fu;
-      ParStateOp = cubeStateOpFromFunction(Func);
-      if (StringRef Alias = cubeAliasMnemonic(Func); !Alias.empty()) {
-        OS << Alias << "\t";
-        printDataType();
-      } else {
-        OS << "BSTART.CUBE\t" << utostr(Func) << ", ";
-        printDataType();
-      }
-      LastTileHeader = LastTileHeaderKind::CUBE;
-
-      LastParTileOp = ParStateOp;
-      LastParTileOpValid = true;
-      printAnnotation(OS, Annot);
-      return;
-    }
-
-    if (IsTypedFIXP) {
-      const unsigned Function =
-          static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x3ffu;
-      OS << "BSTART.FIXP\t" << utostr(Function) << ", ";
-      printDataType();
-      LastParTileOp = 0u;
-      LastParTileOpValid = false;
-      LastTileHeader = LastTileHeaderKind::None;
-      printAnnotation(OS, Annot);
-      return;
-    }
-
     if (IsTypedVPAR || IsTypedVSEQ || IsTypedMPAR || IsTypedMSEQ) {
       const unsigned Mode =
           static_cast<unsigned>(findFieldImm("Mode").value_or(0)) & 0x3u;
@@ -1062,13 +972,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return;
     }
 
-    const unsigned TileOpcode =
-        static_cast<unsigned>(findFieldImm("TileOpcode").value_or(0)) & 0x3ffu;
-    ParStateOp = TileOpcode;
+    const unsigned Mode =
+        static_cast<unsigned>(findFieldImm("Mode").value_or(0)) & 0x3u;
+    const unsigned Function =
+        static_cast<unsigned>(findFieldImm("Function").value_or(0)) & 0x1fu;
+    const unsigned Selector = (Mode << 5) | Function;
+    ParStateOp = Selector;
 
     StringRef Alias;
     if (IsTypedTEPL) {
-      Alias = teplAliasMnemonic(TileOpcode);
+      Alias = teplAliasMnemonic(Selector);
       LastTileHeader = LastTileHeaderKind::TEPL;
     }
 
@@ -1076,7 +989,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       OS << Alias << "\t";
       printDataType();
     } else {
-      OS << "BSTART.TEPL\t" << utostr(TileOpcode) << ", ";
+      OS << "BSTART.TEPL\t" << utostr(Mode) << ", " << utostr(Function) << ", ";
       printDataType();
     }
 
@@ -1314,7 +1227,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     }
 
     // Non-tile block starts terminate any tile-header descriptor context used
-    // by B.ARG/B.IOT pretty-printing.
+    // by B.IOT pretty-printing.
     LastParTileOp = 0;
     LastParTileOpValid = false;
     LastTileHeader = LastTileHeaderKind::None;
@@ -1565,13 +1478,11 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     if (!First)
       OS << ", ";
 
-    static constexpr const char *DstKinds[] = {"t", "u", "m", "n", "acc"};
+    static constexpr const char *DstKinds[] = {"t", "u", "m", "n"};
     const char *DstKind = DstTile < std::size(DstKinds) ? DstKinds[DstTile] : "t";
     OS << "->" << DstKind << "<";
-    if (Size == 0u) {
-      OS << "0";
-    } else if (Size < 5u || Size > 8u) {
-      // Unit-qualified source syntax intentionally accepts only 512B..4KB.
+    if (Size < 3u || Size > 9u) {
+      // Preserve architecturally reserved raw values numerically in dumps.
       // Preserve other raw imm4 encodings as numeric size codes so objdump
       // output remains byte-stable when passed back through llvm-mc.
       OS << utostr(Size);
@@ -1585,63 +1496,6 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     OS << ">";
 
     printAnnotation(OS, Annot);
-    return;
-  }
-
-  // Special-case: block argument format selector.
-  if (AsmFmt.starts_with("B.ARG")) {
-    const unsigned Format =
-        static_cast<unsigned>(findFieldImm("format").value_or(0)) & 0x1fu;
-
-    auto printNamedOrFallback = [&](StringRef Name, StringRef Prefix) {
-      OS << "B.ARG\t";
-      if (!Name.empty()) {
-        OS << Name;
-      } else {
-        OS << utostr(Format);
-      }
-      printAnnotation(OS, Annot);
-    };
-
-    // Keep user-authored fully-specialized forms verbatim.
-    if (AsmFmt.contains("ND2ZN.normal") || AsmFmt.contains("DN2NZ.normal") ||
-        AsmFmt.contains("DN2ZN.normal") || AsmFmt.contains("NZ2DN.canon") ||
-        AsmFmt.contains("NORM.normal")) {
-      const StringRef Prefix = "B.ARG ";
-      StringRef Tail = AsmFmt;
-      if (Tail.starts_with(Prefix))
-        Tail = Tail.drop_front(Prefix.size());
-      OS << "B.ARG\t" << Tail;
-      printAnnotation(OS, Annot);
-      return;
-    }
-
-    const unsigned ActiveParOp = LastParTileOpValid ? LastParTileOp : 0u;
-    switch (LastTileHeader) {
-    case LastTileHeaderKind::TMA:
-      if (ActiveParOp == 34u) { // TMOV
-        printNamedOrFallback(tmovModeName(Format), "mode");
-        return;
-      }
-      // TLOAD/TSTORE: layout/pad selector.
-      printNamedOrFallback(layoutFormatName(Format), "format");
-      return;
-    case LastTileHeaderKind::TEPL:
-      printNamedOrFallback(teplModeName(Format), "mode");
-      return;
-    case LastTileHeaderKind::CUBE:
-      if (ActiveParOp == 258u) { // ACCCVT qarg0
-        printNamedOrFallback(StringRef(), "qarg0");
-        return;
-      }
-      printNamedOrFallback(StringRef(), "arg");
-      return;
-    case LastTileHeaderKind::None:
-      break;
-    }
-
-    // Context-free fallback.
-    printNamedOrFallback(layoutFormatName(Format), "format");
     return;
   }
 
@@ -1704,19 +1558,27 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned CMode =
         static_cast<unsigned>(findFieldImm("CMode").value_or(0)) & 0x7u;
     const unsigned Layout =
-        static_cast<unsigned>(findFieldImm("DataLayout").value_or(0)) & 0x1fu;
+        static_cast<unsigned>(findFieldImm("Layout").value_or(0)) & 0x1fu;
     const unsigned DType =
         static_cast<unsigned>(findFieldImm("DataType").value_or(0)) & 0x1fu;
     const unsigned Pad =
-        static_cast<unsigned>(findFieldImm("PadValue").value_or(0)) & 0x1fu;
+        static_cast<unsigned>(findFieldImm("PadValueOrByteId").value_or(0)) &
+        0x3u;
     const unsigned RMode =
         static_cast<unsigned>(findFieldImm("RMode").value_or(0)) & 0x7u;
     const unsigned Sat =
         static_cast<unsigned>(findFieldImm("Sat").value_or(0)) & 0x1u;
+    const unsigned Canonicalize =
+        static_cast<unsigned>(findFieldImm("Canonicalize").value_or(0)) & 0x1u;
     const StringRef DTName = dtypeName(DType);
     const StringRef PadName = padValueName(Pad);
 
-    OS << "B.DATR\t" << ((Layout & 1u) ? "normal" : "canon") << ", ";
+    OS << "B.DATR\t";
+    if (StringRef LayoutName = layoutFormatName(Layout); !LayoutName.empty())
+      OS << LayoutName;
+    else
+      OS << "Layout" << utostr(Layout);
+    OS << ", ";
     if (!DTName.empty())
       OS << DTName;
     else
@@ -1729,6 +1591,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     OS << ", cmode" << CMode << ", rmode" << RMode;
     if (Sat)
       OS << ", sat";
+    if (Canonicalize)
+      OS << ", canonicalize";
     printAnnotation(OS, Annot);
     return;
   }

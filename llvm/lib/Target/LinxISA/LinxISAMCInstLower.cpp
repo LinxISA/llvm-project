@@ -9,6 +9,7 @@
 #include "LinxISAMCInstLower.h"
 #include "LinxISA.h"
 #include "LinxISABaseInfo.h"
+#include "LinxISATileOpcodesV057.h"
 #include "MCTargetDesc/LinxISAMCAsmInfo.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
@@ -19,15 +20,15 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
-#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include <utility>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace llvm;
@@ -374,21 +375,45 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
   case LinxISA::BSTART_CUBE: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t Func = I(1) & 0x1f;
-    OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("BSTART.CUBE Function, DataType",
-                              /*LengthBits=*/32));
+    const unsigned Func = static_cast<unsigned>(I(1)) & 0x1fu;
+    static constexpr std::pair<unsigned, const char *> CUBEAsmFormats[] = {
+        {0u, "BSTART.TMATMUL DataType"},
+        {1u, "BSTART.TMATMUL.BIAS DataType"},
+        {2u, "BSTART.TMATMUL.ACC DataType"},
+        {4u, "BSTART.TMATMULMX DataType"},
+        {5u, "BSTART.TMATMULMX.BIAS DataType"},
+        {6u, "BSTART.TMATMULMX.ACC DataType"},
+        {8u, "BSTART.ACCCVT DataType"},
+        {16u, "BSTART.TGEMV DataType"},
+        {17u, "BSTART.TGEMV.BIAS DataType"},
+        {18u, "BSTART.TGEMV.ACC DataType"},
+        {20u, "BSTART.TGEMVMX DataType"},
+        {21u, "BSTART.TGEMVMX.BIAS DataType"},
+        {22u, "BSTART.TGEMVMX.ACC DataType"},
+    };
+    const char *AsmFmt = nullptr;
+    for (const auto &[Function, Format] : CUBEAsmFormats)
+      if (Function == Func) {
+        AsmFmt = Format;
+        break;
+      }
+    if (!AsmFmt)
+      report_fatal_error("LinxISA: invalid PTO ISA 0.57.1 CUBE Function");
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
-    OutMI.addOperand(MCOperand::createImm(Func));
     return;
   }
   case LinxISA::BSTART_TEPL: {
     const int64_t DataType = I(0) & 0x1f;
-    const int64_t TileOpcode = I(1) & 0x3ff;
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.TEPL TileOpcode, DataType",
-                                          /*LengthBits=*/32));
+    const unsigned Selector = static_cast<unsigned>(I(1)) & 0x7fu;
+    if (!LinxISA::isCanonicalTEPLTileOpcodeV057(Selector))
+      report_fatal_error("LinxISA: reserved PTO ISA 0.57.1 TEPL Mode/Function");
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(
+        "BSTART.TEPL Mode, Function, DataType", /*LengthBits=*/32));
+    // Catalog field order is DataType, Function, Mode.
     OutMI.addOperand(MCOperand::createImm(DataType));
-    OutMI.addOperand(MCOperand::createImm(TileOpcode));
+    OutMI.addOperand(MCOperand::createImm(Selector & 0x1fu));
+    OutMI.addOperand(MCOperand::createImm((Selector >> 5) & 0x3u));
     return;
   }
 
@@ -415,35 +440,34 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  case LinxISA::B_ARG: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("B.ARG format", /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // format
-    return;
-  }
-
   case LinxISA::B_CATR: {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(
         "B.CATR {trap, atomic, <aq, rl, aqrl>, far, dr}",
         /*LengthBits=*/32));
-    // Canonical catalog field order: DR, aq, atom, far, reserve, rl, trap.
+    // Canonical catalog field order: DR, aq, atom, far, rl, trap.
     OutMI.addOperand(MCOperand::createImm(I(1))); // DR
     OutMI.addOperand(MCOperand::createImm(I(2))); // aq
     OutMI.addOperand(MCOperand::createImm(I(3))); // atom
     OutMI.addOperand(MCOperand::createImm(I(4))); // far
-    OutMI.addOperand(MCOperand::createImm(0));    // reserve
     OutMI.addOperand(MCOperand::createImm(I(5))); // rl
     OutMI.addOperand(MCOperand::createImm(I(0))); // trap
     return;
   }
 
   case LinxISA::B_DATR: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(
-        "B.DATR {layout.{canon, normal}, datatype, padvalue, cmode, rmode, sat}",
-        /*LengthBits=*/32));
-    // Canonical catalog field order: CMode, DataLayout, DataType, PadValue,
-    // RMode, Sat.
-    for (unsigned Index = 0; Index != 6; ++Index)
-      OutMI.addOperand(MCOperand::createImm(I(Index)));
+    OutMI.setOpcode(
+        getSpecOpcodeByAsmFmt("B.DATR {layout, datatype, padvalue_or_byteid, "
+                              "cmode, rmode, sat, canonicalize}",
+                              /*LengthBits=*/32));
+    // Machine operand order: CMode, Layout, DataType, PadValueOrByteId,
+    // RMode, Sat, Canonicalize. Catalog field order differs.
+    OutMI.addOperand(MCOperand::createImm(I(0))); // CMode
+    OutMI.addOperand(MCOperand::createImm(I(6))); // Canonicalize
+    OutMI.addOperand(MCOperand::createImm(I(2))); // DataType
+    OutMI.addOperand(MCOperand::createImm(I(1))); // Layout
+    OutMI.addOperand(MCOperand::createImm(I(3))); // PadValueOrByteId
+    OutMI.addOperand(MCOperand::createImm(I(4))); // RMode
+    OutMI.addOperand(MCOperand::createImm(I(5))); // Sat
     return;
   }
 
@@ -496,14 +520,20 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     const bool Src1Valid = I(4) == 0;
     const bool HasSrc0 = Src0Valid || Src1Valid;
     const bool HasSrc1 = Src0Valid && Src1Valid;
-    StringRef AsmFmt = HasSrc1
-                           ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, ->DstTile<Size>"
-                       : HasSrc0
-                           ? "B.IOT SrcTile0<.reuse>, <last>, ->DstTile<Size>"
-                           : "B.IOT <last>, ->DstTile<Size>";
+    const bool HasDestination = static_cast<unsigned>(I(0)) <= 3u;
+    StringRef AsmFmt;
+    if (HasDestination)
+      AsmFmt = HasSrc1   ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, "
+                           "->DstTile<Size>"
+               : HasSrc0 ? "B.IOT SrcTile0<.reuse>, <last>, ->DstTile<Size>"
+                         : "B.IOT <last>, ->DstTile<Size>";
+    else
+      AsmFmt = HasSrc1 ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>"
+                       : "B.IOT SrcTile0<.reuse>, <last>";
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
     // Emit operands in the selected canonical form's catalog field order.
-    OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
+    if (HasDestination)
+      OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
     OutMI.addOperand(MCOperand::createImm(Last)); // L
     if (HasSrc0) {
       const unsigned SrcIndex = Src0Valid ? 5 : 6;
@@ -515,7 +545,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       if (HasSrc1)
         OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile1
     }
-    OutMI.addOperand(MCOperand::createImm(I(7))); // imm4 (Size)
+    if (HasDestination)
+      OutMI.addOperand(MCOperand::createImm(I(7))); // imm4 (Size)
     return;
   }
 

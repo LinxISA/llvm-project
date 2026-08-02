@@ -5,10 +5,10 @@
 declare %linx.tile @llvm.linx.tile.tload(ptr, i32, i32, i64, i64, i64, i64)
 declare %linx.tile @llvm.linx.cube.acccvt(%linx.tile, i32, i32, i64, i64)
 
-define void @bad_acccvt_qarg1(ptr %src) {
+define void @bad_acccvt_qarg0(ptr %src) {
 entry:
   %acc = call %linx.tile @llvm.linx.tile.tload(ptr %src, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
-  %out = call %linx.tile @llvm.linx.cube.acccvt(%linx.tile %acc, i32 8, i32 1, i64 0, i64 1)
+  %out = call %linx.tile @llvm.linx.cube.acccvt(%linx.tile %acc, i32 8, i32 1, i64 1, i64 0)
   ret void
 }
 

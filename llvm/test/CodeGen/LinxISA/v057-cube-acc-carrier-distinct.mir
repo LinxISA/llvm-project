@@ -7,11 +7,11 @@
 # before the M-hand accumulator carrier is released at commit.
 # CHECK-LABEL: name: acc_carrier_distinct
 # CHECK: B_IOT_SIZE_G1 4, 0, 0, 0, 0, 33, 1, 8
-# CHECK: B_IOT_SIZE_G1 2, 0, 0, 0, 1, 33, 0, 8
-# CHECK: B_IOT_SIZE_G1 2, 0, 0, 0, 1, 32, 0, 8
+# CHECK: B_IOT_SIZE_G1 7, 0, 0, 0, 1, 33, 0, 8
+# CHECK: B_IOT_SIZE_G1 7, 0, 0, 0, 1, 32, 0, 8
 # CHECK-LABEL: name: acccvt_carrier_distinct
-# CHECK: B_IOT_SIZE_G1 2, 0, 0, 0, 1, 33, 0, 8
-# CHECK: B_IOT_SIZE_G1 2, 0, 0, 0, 1, 32, 0, 8
+# CHECK: B_IOT_SIZE_G1 7, 0, 0, 0, 1, 33, 0, 8
+# CHECK: B_IOT_SIZE_G1 7, 0, 0, 0, 1, 32, 0, 8
 
 --- |
   define void @acc_carrier_distinct(ptr %a, ptr %b, ptr %out) {
@@ -45,7 +45,7 @@ body:             |
     $tile1 = PSEUDO_TMA_TLOAD $r3, 8
     $tile19 = PSEUDO_CUBE_MAMULB $tile0, $tile1, 4, 4, 4
     $tile16 = PSEUDO_CUBE_MAMULB killed $tile0, killed $tile1, 4, 4, 4
-    $tile17 = PSEUDO_CUBE_ACCCVT killed $tile16, 8, 0, 7, 0
+    $tile17 = PSEUDO_CUBE_ACCCVT killed $tile16, 8, 0, 0, 0
     PSEUDO_TMA_TSTORE $r4, killed $tile19, 8
     PSEUDO_TMA_TSTORE killed $r4, killed $tile17, 8
     PSEUDO_RET implicit $r10

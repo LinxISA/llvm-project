@@ -3,11 +3,15 @@
 #include "MCTargetDesc/LinxISAMCAsmInfo.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
 #include "TargetInfo/LinxISATargetInfo.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -28,6 +32,50 @@
 #include "LinxISAGenRegisterInfo.inc"
 
 using namespace llvm;
+
+namespace {
+
+constexpr StringLiteral PTOISAIdentity =
+    R"({"encoding_abi":"pto-isa-0.57.1-mode-function-v1","encoding_projection_sha256":"9705a984e2e48e0d4e856d3fbcfa07041c8578dd326d81f1c90279e826354c32","release":"0.57.1"})";
+
+class LinxISAObjectTargetStreamer final : public MCTargetStreamer {
+public:
+  explicit LinxISAObjectTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
+
+  void finish() override {
+    MCStreamer &Out = getStreamer();
+    MCContext &Ctx = Out.getContext();
+    MCSectionELF *Note =
+        Ctx.getELFSection(".note.pto.isa", ELF::SHT_NOTE, ELF::SHF_ALLOC);
+    if (Note->isRegistered()) {
+      Ctx.reportError(
+          SMLoc(), "LinxISA: input assembly must not define .note.pto.isa; the "
+                   "assembler emits the canonical PTO ISA identity");
+      return;
+    }
+
+    MCSection *Previous = Out.getCurrentSectionOnly();
+    Out.switchSection(Note);
+    Out.emitValueToAlignment(Align(4));
+    Out.emitIntValue(4, 4); // namesz: PTO\0
+    Out.emitIntValue(PTOISAIdentity.size(), 4);
+    Out.emitIntValue(1, 4); // PTO_NT_ISA_IDENTITY
+    Out.emitBytes(StringRef("PTO", 4));
+    Out.emitBytes(PTOISAIdentity);
+    Out.emitValueToAlignment(Align(4));
+    Out.endSection(Note);
+    Out.switchSection(Previous);
+  }
+};
+
+static MCTargetStreamer *
+createLinxISAObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
+  if (!STI.getTargetTriple().isOSBinFormatELF())
+    return nullptr;
+  return new LinxISAObjectTargetStreamer(S);
+}
+
+} // namespace
 
 static MCInstrInfo *createLinxISAMCInstrInfo() {
   // Build a minimal MCInstrInfo that can safely name all spec-defined opcodes.
@@ -149,5 +197,7 @@ LLVMInitializeLinxISATargetMC() {
     TargetRegistry::RegisterMCInstPrinter(*T, createLinxISAMCInstPrinter);
     TargetRegistry::RegisterMCRelocationInfo(*T, createLinxISAMCRelocationInfo);
     TargetRegistry::RegisterELFStreamer(*T, createMCStreamer);
+    TargetRegistry::RegisterObjectTargetStreamer(
+        *T, createLinxISAObjectTargetStreamer);
   }
 }

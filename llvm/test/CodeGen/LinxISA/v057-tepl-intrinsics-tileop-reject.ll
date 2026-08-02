@@ -8,8 +8,8 @@ declare %linx.tile @llvm.linx.tepl.unary(%linx.tile, i32, i32, i32)
 define void @bad_tepl_tileop(ptr %src) {
 entry:
   %t0 = call %linx.tile @llvm.linx.tile.tload(ptr %src, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
-  %t1 = call %linx.tile @llvm.linx.tepl.unary(%linx.tile %t0, i32 1024, i32 8, i32 0)
+  %t1 = call %linx.tile @llvm.linx.tepl.unary(%linx.tile %t0, i32 128, i32 8, i32 0)
   ret void
 }
 
-; CHECK: Linx: tepl.unary requires TileOp10 in range 0..1023
+; CHECK: Linx: tepl.unary requires packed Mode/Function in range 0..127

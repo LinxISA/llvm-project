@@ -2,6 +2,7 @@
 
 	.text
 bad_v057_tepl_tileop:
-	BSTART.TEPL 1024, FP16
+	BSTART.TEPL 4, 0, FP16
+	BSTART.TEPL 0, 32, FP16
 
-# CHECK: error: BSTART.TEPL TileOpcode must be in range 0..1023
+# CHECK-COUNT-2: error: BSTART.TEPL requires Mode 0..3 and Function 0..31

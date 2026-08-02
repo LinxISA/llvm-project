@@ -6,7 +6,6 @@
 test_v04_vector_simt:
 	BSTART.MSEQ 0
 	B.TEXT .body
-	B.ARG NORM.normal
 	B.IOR [s0],[]
 	B.IOT last, ->t<4KB>
 	C.B.DIMI 64, ->lb0
@@ -26,7 +25,6 @@ test_v04_vector_simt:
 # CHECK-LABEL: <test_v04_vector_simt>:
 # CHECK: BSTART.MSEQ
 # CHECK: B.TEXT
-# CHECK: B.ARG{{[[:space:]]+}}NORM.normal
 # CHECK: B.IOR{{[[:space:]]+}}[s0],[]{{[[:space:]]*$}}
 # CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<4KB>
 # CHECK: C.B.DIMI{{[[:space:]]+}}64, {{[[:space:]]*}}->lb0

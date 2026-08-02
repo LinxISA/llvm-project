@@ -97,8 +97,8 @@ entry:
 ; CHECK-LABEL: vseq_local_scratch:
 ; CHECK:      BSTART.MSEQ
 ; CHECK-NEXT: B.TEXT {{\.__linx_vblock_body\.[0-9]+}}
-; CHECK:      B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<0>
-; CHECK:      B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->u<64B>
+; CHECK:      B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<128B>
+; CHECK:      B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->u<128B>
 ; CHECK:      {{^\.__linx_vblock_body\.[0-9]+:}}
 ; CHECK:      v.swi.u.local zero, [ts, lc0<<2, 0]
 ; CHECK:      v.lwi.u.local [ts, lc0<<2, 4], ->vt#1

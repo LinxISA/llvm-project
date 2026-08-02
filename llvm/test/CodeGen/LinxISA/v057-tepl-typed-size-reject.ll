@@ -9,8 +9,8 @@ define void @bad_tepl_tadd_size(ptr %a, ptr %b) {
 entry:
   %ta = call %linx.tile @llvm.linx.tile.tload(ptr %a, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
   %tb = call %linx.tile @llvm.linx.tile.tload(ptr %b, i32 8, i32 0, i64 0, i64 8, i64 8, i64 0)
-  %tc = call %linx.tile @llvm.linx.tepl.tadd(%linx.tile %ta, %linx.tile %tb, i32 4, i32 0)
+  %tc = call %linx.tile @llvm.linx.tepl.tadd(%linx.tile %ta, %linx.tile %tb, i32 2, i32 0)
   ret void
 }
 
-; CHECK: Linx: tepl.tadd requires SizeCode in [5,8]
+; CHECK: Linx: tepl.tadd requires SizeCode in [3,9] (128B..8KB)

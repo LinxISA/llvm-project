@@ -105,28 +105,32 @@ static std::optional<uint64_t> tileSizeCodeToBytes(unsigned SizeCode) {
 }
 
 static std::optional<unsigned> tileBytesToSizeCode(uint64_t Bytes) {
+  // Local VBLOCK scratch sizing is independent of the active B.IOT
+  // destination-size policy and retains the backend's 16B..4KB input
+  // contract. The wire descriptor rounds sub-128B reservations up to the
+  // architectural minimum SizeCode 3.
   if (Bytes < 16u || Bytes > 4096u || !isPowerOf2_64(Bytes))
     return std::nullopt;
-  return static_cast<unsigned>(Log2_64(Bytes) - 4u);
+  return std::max(3u, static_cast<unsigned>(Log2_64(Bytes) - 4u));
 }
 
 static bool isStrictTileSizeCode(unsigned SizeCode) {
   std::optional<uint64_t> Bytes = tileSizeCodeToBytes(SizeCode);
-  return Bytes && *Bytes >= 512u && *Bytes <= 4096u;
+  return Bytes && *Bytes >= 128u && *Bytes <= 8192u;
 }
 
 static void validateStrictTileSizeCode(int64_t SizeCode, StringRef Context) {
   if (SizeCode < 0 || SizeCode > 31 ||
       !isStrictTileSizeCode(static_cast<unsigned>(SizeCode))) {
     report_fatal_error(Twine("Linx: ") + Context +
-                       " requires SizeCode in strict 512B..4KB policy");
+                       " requires SizeCode in 128B..8KB policy");
   }
 }
 
 static void validateTileOpcode(int64_t TileOpcode, StringRef Context) {
-  if (TileOpcode < 0 || TileOpcode > 1023)
+  if (TileOpcode < 0 || TileOpcode > 127)
     report_fatal_error(Twine("Linx: ") + Context +
-                       " requires TileOpcode in range 0..1023");
+                       " requires packed Mode/Function in range 0..127");
 }
 
 static bool isWhitelistedTEPLTileOpcode(int64_t TileOpcode) {
@@ -139,7 +143,7 @@ static void validateWhitelistedTEPLTileOpcode(int64_t TileOpcode,
   validateTileOpcode(TileOpcode, Context);
   if (!isWhitelistedTEPLTileOpcode(TileOpcode))
     report_fatal_error(Twine("Linx: ") + Context +
-                       " uses a reserved TileOpcode in canonical v0.57");
+                       " uses a reserved Mode/Function in PTO ISA 0.57.1");
 }
 
 static void validateCubeDimImm(int64_t Dim, StringRef DimName,
@@ -234,14 +238,14 @@ static void validateTileByteBudget(StringRef Context, uint64_t Dim0,
                                    std::optional<uint64_t> SizeCode) {
   const uint64_t Bytes =
       computeTileBytesOrDie(Context, Dim0, Dim1, Dim2, ElemBits);
-  constexpr uint64_t StrictMaxBytes = 4096u;
+  constexpr uint64_t StrictMaxBytes = 8192u;
   if (Bytes > StrictMaxBytes) {
     report_fatal_error(Twine("Linx: ") + Context +
                        " tile-byte check failed: bytes=" + Twine(Bytes) +
                        "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
                        ", dim2=" + Twine(Dim2) +
                        ", elem_bits=" + Twine(ElemBits) +
-                       ") exceeds strict max 4096B. Shrink dimensions or "
+                       ") exceeds strict max 8192B. Shrink dimensions or "
                        "element width.");
   }
 
@@ -429,7 +433,6 @@ static bool isSimtBodyHeaderOpcode(unsigned Opc) {
 static bool isHeaderDescriptorOpcode(unsigned Opc) {
   switch (Opc) {
   case LinxISA::B_TEXT:
-  case LinxISA::B_ARG:
   case LinxISA::B_CATR:
   case LinxISA::B_DATR:
   case LinxISA::B_DIM_LB0:
@@ -2300,6 +2303,21 @@ public:
             .addImm(0);
       };
 
+      auto emitDATR = [&](MachineBasicBlock &AttrMBB,
+                          MachineBasicBlock::iterator AttrInsertPt,
+                          int64_t Layout) {
+        if (Layout == 0)
+          return;
+        BuildMI(AttrMBB, AttrInsertPt, DL, TII.get(LinxISA::B_DATR))
+            .addImm(0)      // CMode
+            .addImm(Layout) // Layout
+            .addImm(0)      // DataType (carried by BSTART)
+            .addImm(0)      // PadValueOrByteId
+            .addImm(0)      // RMode
+            .addImm(0)      // Sat
+            .addImm(0);     // Canonicalize
+      };
+
       switch (PseudoMI->getOpcode()) {
       case LinxISA::PSEUDO_TMA_TLOAD: {
         const Register Dst = PseudoMI->getOperand(0).getReg();
@@ -2316,14 +2334,13 @@ public:
             .addImm(TMA_TLOAD);
 
         // Canonical descriptor-carrying TLOAD header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOT.
+        //   B.DIM(LB0/LB1) + B.IOR + B.IOT.
         //
         // The current PTO auto-mode bridge does not pass explicit layout/dim
         // metadata yet, so use bring-up defaults here:
-        //   LB0/LB1 = 0, format=0 (Normal), RegSrc1/2=zero, RegDst=zero.
+        //   LB0/LB1 = 0, Layout=Normal, RegSrc1/2=zero, RegDst=zero.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)  // RegDst (bring-up: unused)
             .addReg(LinxISA::R0)  // RegSrc0: stride bytes (default 0)
@@ -2364,7 +2381,6 @@ public:
 
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
             .addReg(LinxISA::R0)
@@ -2435,7 +2451,7 @@ public:
           emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
           emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
         }
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
+        emitDATR(MBB, InsertPt, Layout);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
             .addReg(StrideReg)
@@ -2464,7 +2480,7 @@ public:
         const int64_t Size = PseudoMI->getOperand(2).getImm();
         validateStrictTileSizeCode(Size, "TMA.TSTORE");
 
-        const unsigned SrcID = tileRegIdFromReg(TRI, Src);
+        (void)tileRegIdFromReg(TRI, Src);
         const unsigned EncSrc = TileSourceCodes.lookup(PseudoMI).front();
         const bool SrcReuse = !PseudoMI->getOperand(1).isKill();
 
@@ -2473,10 +2489,9 @@ public:
             .addImm(TMA_TSTORE);
 
         // Canonical descriptor-carrying TSTORE header:
-        //   B.DIM(LB0/LB1) + B.ARG + B.IOR + B.IOT/B.IOT.
+        //   B.DIM(LB0/LB1) + B.IOR + B.IOT.
         emitDim(MBB, InsertPt, /*LoopNest=*/0, /*Imm=*/0);
         emitDim(MBB, InsertPt, /*LoopNest=*/1, /*Imm=*/0);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)  // RegDst: valid mask / flags (default 0)
             .addReg(LinxISA::R0)  // RegSrc0: stride bytes (default 0)
@@ -2486,15 +2501,14 @@ public:
         // Store: encode the source tile in SrcTile0 and mark it present
         // (S0V=0).
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(dstTileFieldFromRelRef(
-                tileRelRefFromId(SrcID))) // destination hand
-            .addImm(SrcReuse ? 1 : 0)     // S0R
-            .addImm(0)                    // S0V (present)
-            .addImm(0)                    // S1R
-            .addImm(1)                    // S1V (absent)
-            .addImm(EncSrc) // SrcTile0 (architectural relative rank)
-            .addImm(0)      // SrcTile1 (unused)
-            .addImm(Size)   // SizeCode (imm5)
+            .addImm(7)                // no destination (TSTORE)
+            .addImm(SrcReuse ? 1 : 0) // S0R
+            .addImm(0)                // S0V (present)
+            .addImm(0)                // S1R
+            .addImm(1)                // S1V (absent)
+            .addImm(EncSrc)           // SrcTile0 (architectural relative rank)
+            .addImm(0)                // SrcTile1 (unused)
+            .addImm(Size)             // SizeCode (imm5)
             .addReg(Src, RegState::Implicit);
 
         PseudoMI->eraseFromParent();
@@ -2534,7 +2548,7 @@ public:
         if (!StrideReg)
           report_fatal_error(
               "Linx: TMA.TSTORE requires stride register binding");
-        const unsigned SrcID = tileRegIdFromReg(TRI, Src);
+        (void)tileRegIdFromReg(TRI, Src);
         const unsigned EncSrc = TileSourceCodes.lookup(PseudoMI).front();
         const bool SrcReuse = !PseudoMI->getOperand(1).isKill();
 
@@ -2549,7 +2563,7 @@ public:
           emitDim(MBB, InsertPt, /*LoopNest=*/0, LB0);
           emitDim(MBB, InsertPt, /*LoopNest=*/1, LB1);
         }
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Layout);
+        emitDATR(MBB, InsertPt, Layout);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
             .addReg(LinxISA::R0)
             .addReg(StrideReg)
@@ -2557,7 +2571,7 @@ public:
             .addReg(LinxISA::R0);
 
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
-            .addImm(dstTileFieldFromRelRef(tileRelRefFromId(SrcID)))
+            .addImm(7) // no destination (TSTORE)
             .addImm(SrcReuse ? 1 : 0)
             .addImm(0)
             .addImm(0)
@@ -2612,12 +2626,16 @@ public:
           (void)tileIdFromRelRef(DstRef);
         }
 
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
-            .addImm(Meta.DataType)
-            .addImm(TMA_TMOV);
-
-        // B.ARG carries TMOV mode (strict profile: V2V + A2V).
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
+        if (IsA2V)
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_CUBE))
+              .addImm(Meta.DataType)
+              .addImm(CUBE_ACCCVT);
+        else
+          BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_TMA))
+              .addImm(Meta.DataType)
+              .addImm(TMA_TMOV);
+        if (Meta.HasLayout)
+          emitDATR(MBB, InsertPt, Meta.Layout);
 
         if (!IsA2V) {
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
@@ -2820,10 +2838,9 @@ public:
       }
 
       case LinxISA::PSEUDO_CUBE_ACCCVT: {
-        // Expand into one block:
-        //   BSTART.CUBE(ACCCVT) + B.ARG(qarg0) + B.IOT(dst)
-        //
-        // qarg1 is reserved for follow-on quant wiring and must be 0 in PR5.
+        // Expand into one block: BSTART.ACCCVT + B.IOT(dst). The retired
+        // B.ARG quantization carrier has no PTO ISA 0.57.1 replacement;
+        // conversion controls are carried by B.DATR-specific intrinsics.
         const Register Dst = PseudoMI->getOperand(0).getReg();
         const Register Acc = PseudoMI->getOperand(1).getReg();
         const int64_t Size = PseudoMI->getOperand(2).getImm();
@@ -2834,9 +2851,10 @@ public:
         validateStrictTileSizeCode(Size, "CUBE.ACCCVT");
         if (DType < 0 || DType > 31)
           report_fatal_error("Linx: CUBE.ACCCVT dtype must fit u5");
-        if (QArg1 != 0)
+        if (QArg0 != 0 || QArg1 != 0)
           report_fatal_error(
-              "Linx: CUBE.ACCCVT currently requires qarg1=0 in canonical v0.4");
+              "Linx: CUBE.ACCCVT requires retired qarg0/qarg1 operands to be "
+              "zero in PTO ISA 0.57.1");
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         if (DstID < 16)
@@ -2847,7 +2865,6 @@ public:
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::BSTART_CUBE))
             .addImm(DType)
             .addImm(CUBE_ACCCVT);
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(QArg0);
         BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
             .addImm(DstKind)
             .addImm(0)     // S0R
@@ -2989,7 +3006,6 @@ public:
                 "Linx: TEPL full-tile profile does not fit B.DIM");
           }
         }
-        BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_ARG)).addImm(Mode);
         if (IsBinaryScalar || IsSplat) {
           // TEPL scalar extensions bind scalar source through B.IOR.
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOR))
@@ -3171,7 +3187,7 @@ public:
         }
         if ((Attr & ~AttrAQRLMask) != 0u) {
           report_fatal_error("Linx: vblock.launch only supports aq/rl B.CATR "
-                             "bits in canonical v0.57");
+                             "bits in PTO ISA 0.57.1");
         }
         if (Attr != 0u) {
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_CATR))
@@ -3211,7 +3227,7 @@ public:
               .addImm(1)
               .addImm(0)
               .addImm(0)
-              .addImm(0);
+              .addImm(3); // active destinations have SizeCode >= 3
           BuildMI(MBB, InsertPt, DL, TII.get(LinxISA::B_IOT_SIZE_G1))
               .addImm(dstTileFieldFromHand(TileHand::U))
               .addImm(0)

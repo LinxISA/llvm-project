@@ -26,6 +26,7 @@
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
@@ -46,6 +47,89 @@ extern template void ObjFile<ELF32LE>::importCmseSymbols();
 extern template void ObjFile<ELF32BE>::importCmseSymbols();
 extern template void ObjFile<ELF64LE>::importCmseSymbols();
 extern template void ObjFile<ELF64BE>::importCmseSymbols();
+
+static constexpr StringLiteral PTOISAIdentity =
+    R"({"encoding_abi":"pto-isa-0.57.1-mode-function-v1","encoding_projection_sha256":"9705a984e2e48e0d4e856d3fbcfa07041c8578dd326d81f1c90279e826354c32","release":"0.57.1"})";
+
+template <class ELFT>
+static SmallVector<size_t, 1>
+validatePTOISAIdentity(Ctx &ctx, ELFFileBase &file, const ELFFile<ELFT> &obj,
+                       ArrayRef<typename ELFT::Shdr> sections,
+                       StringRef shstrtab) {
+  SmallVector<size_t, 1> noteIndices;
+  if (ctx.arg.emachine != EM_LINXISA)
+    return noteIndices;
+
+  for (size_t i = 0; i != sections.size(); ++i) {
+    const typename ELFT::Shdr &sec = sections[i];
+    StringRef name = CHECK2(obj.getSectionName(sec, shstrtab), &file);
+    if (name != ".note.pto.isa")
+      continue;
+    noteIndices.push_back(i);
+
+    ArrayRef<uint8_t> data = CHECK2(obj.getSectionContents(sec), &file);
+    auto wireError = [&](StringRef reason) {
+      Err(ctx) << &file << ": invalid .note.pto.isa: " << reason;
+    };
+    if (sec.sh_type != SHT_NOTE) {
+      wireError("section type must be SHT_NOTE");
+      continue;
+    }
+    if (sec.sh_flags != SHF_ALLOC) {
+      wireError("section flags must be exactly SHF_ALLOC");
+      continue;
+    }
+    if (sec.sh_addralign != 4) {
+      wireError("section alignment must be 4");
+      continue;
+    }
+    const size_t expectedSize = alignTo(16 + PTOISAIdentity.size(), 4);
+    if (data.size() != expectedSize) {
+      wireError("expected exactly one canonical identity record");
+      continue;
+    }
+    if (read32<ELFT::Endianness>(data.data()) != 4 ||
+        read32<ELFT::Endianness>(data.data() + 4) != PTOISAIdentity.size() ||
+        read32<ELFT::Endianness>(data.data() + 8) != 1 ||
+        StringRef(reinterpret_cast<const char *>(data.data() + 12), 4) !=
+            StringRef("PTO", 4)) {
+      wireError("owner must be PTO\\0 with namesz 4 and type 1");
+      continue;
+    }
+    StringRef desc(reinterpret_cast<const char *>(data.data() + 16),
+                   PTOISAIdentity.size());
+    if (desc == PTOISAIdentity)
+      continue;
+
+    Expected<json::Value> parsed = json::parse(desc);
+    if (!parsed) {
+      consumeError(parsed.takeError());
+      wireError("descriptor is not canonical JSON");
+      continue;
+    }
+    json::Object *identity = parsed->getAsObject();
+    if (!identity) {
+      wireError("descriptor is not a JSON object");
+      continue;
+    }
+    if (identity->getString("release") != "0.57.1")
+      wireError("release mismatch (expected 0.57.1)");
+    else if (identity->getString("encoding_abi") !=
+             "pto-isa-0.57.1-mode-function-v1")
+      wireError("encoding ABI mismatch");
+    else if (identity->getString("encoding_projection_sha256") !=
+             "9705a984e2e48e0d4e856d3fbcfa07041c8578dd326d81f1c90279e826354c32")
+      wireError("encoding projection hash mismatch");
+    else
+      wireError("descriptor is not the canonical compact JSON encoding");
+  }
+
+  if (noteIndices.empty())
+    Err(ctx) << &file << ": missing required .note.pto.isa identity";
+  else if (noteIndices.size() != 1)
+    Err(ctx) << &file << ": multiple .note.pto.isa sections are not allowed";
+  return noteIndices;
+}
 
 // Returns "<internal>", "foo.a(bar.o)" or "baz.o".
 std::string elf::toStr(Ctx &ctx, const InputFile *f) {
@@ -588,6 +672,9 @@ template <class ELFT> void ObjFile<ELFT>::parse(bool ignoreComdats) {
   StringRef shstrtab = CHECK2(obj.getSectionStringTable(objSections), this);
   uint64_t size = objSections.size();
   sections.resize(size);
+  for (size_t index :
+       validatePTOISAIdentity(ctx, *this, obj, objSections, shstrtab))
+    sections[index] = &InputSection::discarded;
   for (size_t i = 0; i != size; ++i) {
     const Elf_Shdr &sec = objSections[i];
 
@@ -1566,6 +1653,8 @@ template <class ELFT> void SharedFile::parse() {
   ArrayRef<Elf_Dyn> dynamicTags;
   const ELFFile<ELFT> obj = this->getObj<ELFT>();
   ArrayRef<Elf_Shdr> sections = getELFShdrs<ELFT>();
+  StringRef shstrtab = CHECK2(obj.getSectionStringTable(sections), this);
+  (void)validatePTOISAIdentity(ctx, *this, obj, sections, shstrtab);
 
   const Elf_Shdr *versymSec = nullptr;
   const Elf_Shdr *verdefSec = nullptr;

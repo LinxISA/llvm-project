@@ -83,7 +83,7 @@ static int64_t getMemScaleForVT(MVT MemVT) {
 }
 
 static bool isStrictTileSizeCode(uint64_t SizeCode) {
-  return SizeCode >= 5 && SizeCode <= 8;
+  return SizeCode >= 3 && SizeCode <= 9;
 }
 
 static uint64_t sizeCodeToBytes(uint64_t SizeCode) {
@@ -168,7 +168,7 @@ static void validateTileByteBudget(StringRef IntrinsicName, uint64_t Dim0,
                                    std::optional<uint64_t> SizeCode) {
   const uint64_t Bytes =
       computeTileBytesOrDie(IntrinsicName, Dim0, Dim1, Dim2, ElemBits);
-  constexpr uint64_t StrictMaxBytes = 4096u;
+  constexpr uint64_t StrictMaxBytes = 8192u;
 
   if (Bytes > StrictMaxBytes) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
@@ -176,7 +176,7 @@ static void validateTileByteBudget(StringRef IntrinsicName, uint64_t Dim0,
                        "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
                        ", dim2=" + Twine(Dim2) +
                        ", elem_bits=" + Twine(ElemBits) +
-                       ") exceeds strict max 4096B. Shrink dimensions or "
+                       ") exceeds strict max 8192B. Shrink dimensions or "
                        "element width.");
   }
 
@@ -221,7 +221,7 @@ static void validateStrictTileSizeCode(uint64_t SizeCode,
                                        StringRef IntrinsicName) {
   if (!isStrictTileSizeCode(SizeCode)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " requires SizeCode in [5,8] (strict 512B..4KB)");
+                       " requires SizeCode in [3,9] (128B..8KB)");
   }
 }
 
@@ -292,14 +292,14 @@ static void validateCubeAccumulatorOperandChain(SDValue AccOperand,
 }
 
 static void validateTileOpcode(uint64_t TileOpcode, StringRef IntrinsicName) {
-  if (!isUInt<10>(TileOpcode)) {
+  if (!isUInt<7>(TileOpcode)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " requires TileOpcode in range 0..1023");
+                       " requires packed Mode/Function in range 0..127");
   }
 }
 
 static bool isWhitelistedTEPLTileOpcode(uint64_t TileOpcode) {
-  return LinxISA::isCanonicalTEPLTileOpcodeV057(TileOpcode & 0x3ffu);
+  return LinxISA::isCanonicalTEPLTileOpcodeV057(TileOpcode & 0x7fu);
 }
 
 static void validateWhitelistedTEPLTileOpcode(uint64_t TileOpcode,
@@ -307,16 +307,16 @@ static void validateWhitelistedTEPLTileOpcode(uint64_t TileOpcode,
   validateTileOpcode(TileOpcode, IntrinsicName);
   if (!isWhitelistedTEPLTileOpcode(TileOpcode)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " uses a reserved TileOpcode in canonical v0.57");
+                       " uses a reserved Mode/Function in PTO ISA 0.57.1");
   }
 }
 
 static constexpr uint64_t TEPL_TILEOP_TADD = 0x000u;
 static constexpr uint64_t TEPL_TILEOP_TSUB = 0x001u;
-static constexpr uint64_t TEPL_TILEOP_TROWMAX = 0x012u;
-static constexpr uint64_t TEPL_TILEOP_TCOLEXPAND = 0x01eu;
-static constexpr uint64_t TEPL_TILEOP_TROWEXPAND = 0x01fu;
-static constexpr uint64_t TEPL_TILEOP_TEXPANDS = 0x019u;
+static constexpr uint64_t TEPL_TILEOP_TROWMAX = 0x041u;
+static constexpr uint64_t TEPL_TILEOP_TCOLEXPAND = 0x054u;
+static constexpr uint64_t TEPL_TILEOP_TROWEXPAND = 0x044u;
+static constexpr uint64_t TEPL_TILEOP_TEXPANDS = 0x03bu;
 static constexpr uint64_t TEPL_MODE_VV = 0u;
 static constexpr uint64_t TEPL_MODE_VS = 1u;
 static constexpr uint64_t TEPL_MODE_SV = 2u;
@@ -1186,9 +1186,10 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstSImmOperand(N, 6, "cube.acccvt", "qarg1");
       validateStrictTileSizeCode(SizeCode, "cube.acccvt");
       validateTileDataTypeU5(DType, "cube.acccvt");
-      if (QArg1 != 0)
+      if (QArg0 != 0 || QArg1 != 0)
         report_fatal_error(
-            "Linx: cube.acccvt requires qarg1=0 in canonical v0.4");
+            "Linx: cube.acccvt requires retired qarg0/qarg1 operands to be "
+            "zero in PTO ISA 0.57.1");
       validateCubeAccumulatorOperandChain(N->getOperand(2), "cube.acccvt");
 
       SDValue Chain = N->getOperand(0);

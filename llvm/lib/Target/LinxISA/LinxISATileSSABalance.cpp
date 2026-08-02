@@ -88,7 +88,7 @@ static std::optional<uint64_t> sizeCodeToBytes(unsigned SizeCode) {
 
 static bool isStrictTileSizeCode(unsigned SizeCode) {
   std::optional<uint64_t> Bytes = sizeCodeToBytes(SizeCode);
-  return Bytes && *Bytes >= 512u && *Bytes <= 4096u;
+  return Bytes && *Bytes >= 128u && *Bytes <= 8192u;
 }
 
 static unsigned getTileRegId(const TargetRegisterInfo &TRI, Register Reg) {
@@ -146,7 +146,7 @@ static bool metadataCompatible(const TileMeta &A, const TileMeta &B,
     return false;
   }
   if (!isStrictTileSizeCode(A.SizeCode) || !isStrictTileSizeCode(B.SizeCode)) {
-    Reason = "SizeCode outside strict 512B..4KB policy";
+    Reason = "SizeCode outside 128B..8KB policy";
     return false;
   }
   if (A.SizeCode != B.SizeCode) {
@@ -390,7 +390,7 @@ public:
       if (Incoming.HasSize && !isStrictTileSizeCode(Incoming.SizeCode)) {
         reportTileBalanceError(
             MF, DefMI,
-            Twine("SizeCode outside strict 512B..4KB policy (size=") +
+            Twine("SizeCode outside 128B..8KB policy (size=") +
                 Twine(unsigned(Incoming.SizeCode)) + ")");
       }
 
@@ -596,7 +596,7 @@ public:
           if (!isStrictTileSizeCode(CopyMeta.SizeCode)) {
             reportTileBalanceError(
                 MF, *CopyMI,
-                Twine("SizeCode outside strict 512B..4KB policy (src id=") +
+                Twine("SizeCode outside 128B..8KB policy (src id=") +
                     Twine(SrcId) +
                     ", size=" + Twine(unsigned(CopyMeta.SizeCode)) + ")");
           }

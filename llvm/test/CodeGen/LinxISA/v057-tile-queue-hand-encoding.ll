@@ -34,10 +34,10 @@ entry:
 ; The ninth simultaneously live tile occupies physical U0, but B.IOT must
 ; encode the architectural U-hand base (16) as u#1, never physical id 8/t#9.
 ; CHECK-LABEL: tile_hand_encoding:
-; CHECK:      B.IOT{{[[:space:]]+}}u#1, last, ->u<4KB>
+; CHECK:      B.IOT{{[[:space:]]+}}u#1, last
 ; CHECK-NOT:  t#9
 ; OBJ-LABEL:  <tile_hand_encoding>:
-; OBJ:        B.IOT{{[[:space:]]+}}u#1, last, ->u<4KB>
+; OBJ:        B.IOT{{[[:space:]]+}}u#1, last
 ; OBJ-NOT:    t#9
 
 define void @mn_hand_encoding(ptr %src, ptr %dst) {
@@ -66,8 +66,8 @@ entry:
 }
 
 ; CHECK-LABEL: mn_hand_encoding:
-; CHECK:      B.IOT{{[[:space:]]+}}n#1, last, ->n<4KB>
+; CHECK:      B.IOT{{[[:space:]]+}}n#1, last
 ; CHECK-NOT:  m#9
 ; OBJ-LABEL:  <mn_hand_encoding>:
-; OBJ:        B.IOT{{[[:space:]]+}}n#1, last, ->n<4KB>
+; OBJ:        B.IOT{{[[:space:]]+}}n#1, last
 ; OBJ-NOT:    m#9

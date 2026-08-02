@@ -272,28 +272,34 @@ static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
       .Default(std::nullopt);
 }
 
-static std::optional<unsigned> parseCubeFunctionKeyword(StringRef Name) {
-  const std::string Up = toUpperStr(Name.trim());
-  return StringSwitch<std::optional<unsigned>>(Up)
-      .Case("TMATMUL", 0u)
-      .Case("TMATMUL.BIAS", 1u)
-      .Case("TMATMUL.ACC", 2u)
-      .Case("TMATMULMX", 4u)
-      .Case("TMATMULMX.BIAS", 5u)
-      .Case("TMATMULMX.ACC", 6u)
-      .Case("ACCCVT", 8u)
-      .Case("TGEMV", 16u)
-      .Case("TGEMV.BIAS", 17u)
-      .Case("TGEMV.ACC", 18u)
-      .Case("TGEMVMX", 20u)
-      .Case("TGEMVMX.BIAS", 21u)
-      .Case("TGEMVMX.ACC", 22u)
-      .Default(std::nullopt);
-}
-
 static std::optional<unsigned> parseTEPLTileOpcodeKeyword(StringRef Name) {
   const std::string Up = toUpperStr(Name.trim());
   return LinxISA::parseCanonicalTEPLTileOpcodeV057(Up);
+}
+
+static std::optional<unsigned> parseLayoutKeyword(StringRef Name) {
+  const std::string Up = toUpperStr(Name.trim());
+  const StringRef Ref(Up);
+  if (Ref == "NORM" || Ref == "NORMAL" || Ref == "CANON" ||
+      Ref == "NORM.NORMAL")
+    return 0u;
+  if (Ref == "ND2NZ.NORMAL")
+    return 2u;
+  if (Ref == "ND2ZN.NORMAL")
+    return 3u;
+  if (Ref == "DN2ZN.NORMAL")
+    return 8u;
+  if (Ref == "DN2NZ.NORMAL")
+    return 9u;
+  if (Ref == "NZ2DN.CANON")
+    return 28u;
+  if (Ref.starts_with("LAYOUT")) {
+    StringRef Tail = Ref.drop_front(6);
+    unsigned Value = 0;
+    if (!Tail.getAsInteger(0, Value) && Value < 32u)
+      return Value;
+  }
+  return std::nullopt;
 }
 
 static std::optional<uint32_t> parseSSRIdName(StringRef Name) {
@@ -1452,7 +1458,7 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
         SizeCode = static_cast<unsigned>(N);
       }
     } else {
-      // Identifier-only form: allow `4KB` / `512B` / `8` (as SizeCode).
+      // Identifier-only form: allow `8KB` / `128B` / `9` (as SizeCode).
       std::string TextUp = toUpperStr(getTok().getString());
       Lex();
 
@@ -1489,11 +1495,11 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
       SizeCode = *Code;
     }
 
-    // Canonical source syntax restricts unit-qualified sizes to 512B..4KB.
-    // Raw disassembly SizeCode values must still roundtrip.
-    if (HaveBytes && (SizeCode < 5u || SizeCode > 8u)) {
+    // Canonical v0.57.1 active destinations span 128B..8KB (codes 3..9).
+    // Raw numeric syntax is checked at descriptor normalization below too.
+    if (HaveBytes && (SizeCode < 3u || SizeCode > 9u)) {
       return Error(getTok().getLoc(),
-                   "tile size must be in strict range 512B..4KB");
+                   "tile size must be in strict range 128B..8KB");
     }
 
     if (parseToken(AsmToken::Greater, "expected '>' to close size suffix"))
@@ -1922,11 +1928,12 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
             Text.equals_insensitive("ATOMIC") ||
             Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
             Text.equals_insensitive("FAR") || Text.equals_insensitive("SAT") ||
+            Text.equals_insensitive("CANONICALIZE") ||
             Text.starts_with_insensitive("CMODE") ||
             Text.starts_with_insensitive("RMODE") ||
             Text.equals_insensitive("NORMAL") ||
-            Text.equals_insensitive("CANON") || parseDataTypeKeyword(Text) ||
-            parsePadValueKeyword(Text)) {
+            Text.equals_insensitive("CANON") || parseLayoutKeyword(Text) ||
+            parseDataTypeKeyword(Text) || parsePadValueKeyword(Text)) {
           SMLoc L = getTok().getLoc();
           SMLoc E = getTok().getEndLoc();
           Lex();
@@ -2696,91 +2703,6 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  // Special-case: block argument format selector (B.ARG).
-  if (AsmFmt.starts_with("B.ARG")) {
-    if (!require(!PI.Mem && PI.ArrowDests.empty() && !PI.SetRetTarget,
-                 "unexpected operands for B.ARG"))
-      return false;
-    if (!require(PI.Regs.empty(), "unexpected register operands for B.ARG"))
-      return false;
-    if (!require(PI.Keywords.empty(), "unexpected keyword operands for B.ARG"))
-      return false;
-    if (Form.field_count == 0) {
-      SmallString<64> Printed;
-      for (unsigned I = 0; I < PI.Imms.size(); ++I) {
-        if (I)
-          Printed += ", ";
-        const MCExpr *E = PI.Imms[I].Expr;
-        if (!require(E != nullptr, "expected B.ARG selector"))
-          return false;
-        const auto *Sym = dyn_cast<MCSymbolRefExpr>(E);
-        if (!require(Sym != nullptr, "B.ARG symbolic form expects named selectors"))
-          return false;
-        Printed += toUpperStr(Sym->getSymbol().getName());
-      }
-
-      std::string Expected = toUpperStr(AsmFmt.str());
-      if (StringRef(Expected).starts_with("B.ARG "))
-        Expected = Expected.substr(StringRef("B.ARG ").size());
-      if (!require(StringRef(Printed).equals_insensitive(Expected),
-                   "unexpected B.ARG field layout"))
-        return false;
-      return true;
-    }
-
-    if (!require(Form.field_count == 1 &&
-                     StringRef(linxisa_fields[Form.field_start].name) == "format",
-                 "unexpected B.ARG field layout"))
-      return false;
-    if (!require(PI.Imms.size() == 1 && PI.Imms[0].Expr,
-                 "expected format selector"))
-      return false;
-
-    const MCExpr *E = PI.Imms[0].Expr;
-    int64_t V = 0;
-    if (isConstExpr(E, V)) {
-      if (!require(V >= 0 && V <= 31, "format must fit 5 bits"))
-        return false;
-      emitFieldImm(V);
-      return true;
-    }
-
-    auto *Sym = dyn_cast<MCSymbolRefExpr>(E);
-    if (!require(Sym != nullptr,
-                 "format must be an integer or known layout name"))
-      return false;
-    std::string Up = toUpperStr(Sym->getSymbol().getName());
-    unsigned Fmt = 0;
-    if (Up == "NORM.NORMAL")
-      Fmt = 0;
-    else if (Up == "ND2NZ.NORMAL")
-      Fmt = 2;
-    else if (Up == "ND2ZN.NORMAL")
-      Fmt = 3;
-    else if (Up == "DN2ZN.NORMAL")
-      Fmt = 8;
-    else if (Up == "DN2NZ.NORMAL")
-      Fmt = 9;
-    else if (Up == "NZ2DN.CANON")
-      Fmt = 28;
-    else if (Up == "V2V")
-      Fmt = 0;
-    else if (Up == "A2V")
-      Fmt = 1;
-    else if (Up == "VV")
-      Fmt = 0;
-    else if (Up == "VS")
-      Fmt = 1;
-    else if (Up == "SV")
-      Fmt = 2;
-    else
-      return require(false,
-                     "unknown B.ARG name (use format=<imm> for raw values)");
-
-    emitFieldImm(Fmt);
-    return true;
-  }
-
   // Special-case: block argument registers (B.DIM).
   if (AsmFmt.starts_with("B.DIM")) {
     if (!require(!PI.Mem && !PI.SetRetTarget, "unexpected operands for B.DIM"))
@@ -2886,9 +2808,10 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         Attrs["ORDER"] = Text;
         return;
       }
-      if (Text.equals_insensitive("ATOMIC") || Text.equals_insensitive("TRAP") ||
-          Text.equals_insensitive("DR") || Text.equals_insensitive("FAR") ||
-          Text.equals_insensitive("SAT")) {
+      if (Text.equals_insensitive("ATOMIC") ||
+          Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
+          Text.equals_insensitive("FAR") || Text.equals_insensitive("SAT") ||
+          Text.equals_insensitive("CANONICALIZE")) {
         Attrs[Text] = "ON";
         return;
       }
@@ -2904,7 +2827,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
           RMode = Value;
         return;
       }
-      if (Text.equals_insensitive("NORMAL") || Text.equals_insensitive("CANON")) {
+      if (parseLayoutKeyword(Text)) {
         Attrs["LAYOUT"] = Text;
         return;
       }
@@ -2943,9 +2866,12 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     }
 
     unsigned Layout = 0;
-    if (auto It = Attrs.find("LAYOUT"); It != Attrs.end() &&
-                                      It->second.equals_insensitive("NORMAL"))
-      Layout = 1;
+    if (auto It = Attrs.find("LAYOUT"); It != Attrs.end()) {
+      auto L = parseLayoutKeyword(It->second);
+      if (!require(L.has_value(), "invalid B.DATR layout"))
+        return false;
+      Layout = *L;
+    }
 
     unsigned DType = 0;
     if (auto It = Attrs.find("DTYPE"); It != Attrs.end()) {
@@ -2969,11 +2895,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         emitFieldImm(onBit("TRAP"));
       else if (FN == "DR" || FN == "dr")
         emitFieldImm(onBit("DR"));
-      else if (FN == "DataLayout")
+      else if (FN == "DataLayout" || FN == "Layout")
         emitFieldImm(Layout);
       else if (FN == "DataType")
         emitFieldImm(DType);
-      else if (FN == "PadValue")
+      else if (FN == "PadValue" || FN == "PadValueOrByteId")
         emitFieldImm(Pad);
       else if (FN == "CMode")
         emitFieldImm(CMode);
@@ -2981,6 +2907,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         emitFieldImm(RMode);
       else if (FN == "Sat")
         emitFieldImm(onBit("SAT"));
+      else if (FN == "Canonicalize")
+        emitFieldImm(onBit("CANONICALIZE"));
       else if (FN == "aq")
         emitFieldImm(Aq);
       else if (FN == "atom" || FN == "atomic")
@@ -3075,7 +3003,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   }
 
   // Special-case: canonical B.IOT descriptors. v0.57 adds source-only forms
-  // whose DstTile=111 and imm4=0 constants are carried by the generated form.
+  // whose inapplicable destination and size fields are encoded as zero.
   if (AsmFmt.starts_with("B.IOT")) {
     if (!require(!PI.Mem && !PI.SetRetTarget,
                  "unexpected operands for B.IOT"))
@@ -3095,16 +3023,20 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                      : "source-only B.IOT does not accept a destination suffix"))
       return false;
 
-    unsigned DstTile = 7u;
+    unsigned DstTile = 0u;
     unsigned SizeCode = 0u;
     if (FormHasDestination) {
       DstTile = PI.ArrowDests[0].Code & 0x7u;
       SizeCode = PI.ArrowDests[0].AngleSize;
-      if (!require(SizeCode <= 15u, "B.IOT size code must fit canonical imm4"))
+      if (!require(DstTile <= 3u,
+                   "B.IOT destination must be one of t/u/m/n; ACC is implicit"))
         return false;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
                        !PI.ArrowDests[0].HasAngleReg,
                    "B.IOT expects size suffix '->t<Size>'"))
+        return false;
+      if (!require(SizeCode >= 3u && SizeCode <= 9u,
+                   "B.IOT destination size must be 128B..8KB"))
         return false;
     }
 
@@ -3176,27 +3108,20 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   if (!require(!PI.Mem.has_value(), "unexpected memory operand"))
     return false;
 
-  // Generic tile block headers are canonically "<selector>, DataType":
-  // Function for TMA/CUBE, TileOpcode for TEPL.
+  // The generic TEPL header exposes the architectural Mode/Function fields.
   //
-  // The encoded field order remains DataType/Function|TileOpcode, so parse in
+  // The encoded field order remains DataType/Function/Mode, so parse in
   // canonical source order here and emit in field order below.
-  const bool IsBStartCUBE = AsmFmt == "BSTART.CUBE Function, DataType";
-  const bool IsBStartTEPL = AsmFmt == "BSTART.TEPL TileOpcode, DataType";
-  const bool IsBStartFIXP = AsmFmt == "BSTART.FIXP TileOp, DataType";
-  if (IsBStartCUBE || IsBStartTEPL || IsBStartFIXP) {
-    const char *Kind = IsBStartCUBE
-                           ? "BSTART.CUBE"
-                           : (IsBStartTEPL ? "BSTART.TEPL" : "BSTART.FIXP");
+  const bool IsBStartTEPL = AsmFmt == "BSTART.TEPL Mode, Function, DataType";
+  if (IsBStartTEPL) {
+    constexpr StringLiteral Kind = "BSTART.TEPL";
     if (!require(PI.Regs.empty() && PI.Keywords.empty() && PI.ArrowDests.empty() &&
                      !PI.SetRetTarget,
                  (Twine("unexpected operands for ") + Kind)))
       return false;
-    const char *Selector = (IsBStartTEPL || IsBStartFIXP) ? "TileOpcode"
-                                                          : "Function";
-    if (!require(
-            PI.Imms.size() == 2,
-            (Twine("expected operands '") + Selector + ", DataType' for " + Kind)))
+    if (!require(PI.Imms.size() == 3u,
+                 (Twine("expected operands 'Mode, Function, DataType' for ") +
+                  Kind)))
       return false;
 
     auto decodeNamedImm = [&](const MCExpr *E, StringRef FieldName)
@@ -3212,16 +3137,6 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
           return std::nullopt;
         }
         if (FieldName == "Function") {
-          if (IsBStartCUBE) {
-            if (auto Fn = parseCubeFunctionKeyword(Sym))
-              return static_cast<int64_t>(*Fn);
-          } else if (IsBStartTEPL || IsBStartFIXP) {
-            if (auto Op = parseTEPLTileOpcodeKeyword(Sym))
-              return static_cast<int64_t>(*Op);
-          }
-          return std::nullopt;
-        }
-        if (FieldName == "TileOpcode") {
           if (auto Op = parseTEPLTileOpcodeKeyword(Sym))
             return static_cast<int64_t>(*Op);
           return std::nullopt;
@@ -3230,45 +3145,30 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       return std::nullopt;
     };
 
-    std::optional<int64_t> FuncVal =
-        decodeNamedImm(PI.Imms[0].Expr, IsBStartTEPL ? "TileOpcode" : "Function");
-    std::optional<int64_t> DataTypeVal =
-        decodeNamedImm(PI.Imms[1].Expr, "DataType");
-
-    if (IsBStartCUBE) {
-      if (!require(FuncVal.has_value(),
-                   "Function must be a constant or one of "
-                   "{TMATMUL,TMATMUL.BIAS,TMATMUL.ACC,TMATMULMX,"
-                   "TMATMULMX.BIAS,TMATMULMX.ACC,ACCCVT,TGEMV,"
-                   "TGEMV.BIAS,TGEMV.ACC,TGEMVMX,TGEMVMX.BIAS,"
-                   "TGEMVMX.ACC}"))
-        return false;
-    } else {
-      if (!require(FuncVal.has_value(),
-                   "TileOpcode must be a constant or one of "
-                   "{TADD,TSUB,TMUL,TDIV,TMAX,TMIN,TROWMAX,TROWMIN,TROWSUM,"
-                   "TCOLMAX,TCOLMIN,TCOLSUM,TADDS,...}"))
-        return false;
-    }
+    std::optional<int64_t> ModeVal;
+    std::optional<int64_t> FuncVal;
+    std::optional<int64_t> DataTypeVal;
+    ModeVal = decodeNamedImm(PI.Imms[0].Expr, "Mode");
+    FuncVal = decodeNamedImm(PI.Imms[1].Expr, "Function");
+    DataTypeVal = decodeNamedImm(PI.Imms[2].Expr, "DataType");
     if (!require(DataTypeVal.has_value(),
                  "DataType must be a constant or one of "
                  "{FP64,FP32,FP16,FP8,BF16,FPL8,FP4,FPL4,"
                  "INT64,INT32,INT16,INT8,INT4,"
                  "UINT64,UINT32,UINT16,UINT8,UINT4}"))
       return false;
-    if (IsBStartTEPL) {
-      if (!require(*FuncVal >= 0 && *FuncVal <= 0x3ff,
-                   "BSTART.TEPL TileOpcode must be in range 0..1023"))
-        return false;
-      if (!require(LinxISA::isCanonicalTEPLTileOpcodeV057(
-                       static_cast<unsigned>(*FuncVal)),
-                   "BSTART.TEPL TileOpcode is reserved in canonical v0.57"))
-        return false;
-    }
-    if (IsBStartFIXP)
-      if (!require(*FuncVal >= 0 && *FuncVal <= 0x3ff,
-                   "BSTART.FIXP selector must be in range 0..1023"))
-        return false;
+    if (!require(ModeVal.has_value() && FuncVal.has_value(),
+                 "BSTART.TEPL Mode and Function must be constants"))
+      return false;
+    if (!require(*ModeVal >= 0 && *ModeVal <= 3 && *FuncVal >= 0 &&
+                     *FuncVal <= 31,
+                 "BSTART.TEPL requires Mode 0..3 and Function 0..31"))
+      return false;
+    if (!require(LinxISA::isCanonicalTEPLTileOpcodeV057(
+                     (static_cast<unsigned>(*ModeVal) << 5) |
+                     static_cast<unsigned>(*FuncVal)),
+                 "BSTART.TEPL Mode/Function is reserved in PTO ISA 0.57.1"))
+      return false;
     if (!require(*DataTypeVal >= 0 && *DataTypeVal <= 31,
                  (Twine(Kind) + " DataType out of range")))
       return false;
@@ -3284,8 +3184,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         emitFieldImm(*FuncVal);
         continue;
       }
-      if (FN == "TileOpcode") {
-        emitFieldImm(*FuncVal);
+      if (FN == "Mode") {
+        emitFieldImm(*ModeVal);
         continue;
       }
       Err = (Twine("unsupported ") + Kind + " field: " + FN).str();
@@ -3623,11 +3523,6 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         }
         if (!require(false, (FN + " must be a constant for now").str()))
           return false;
-      }
-      if (FN == "Function" && AsmFmt.starts_with_insensitive("BSTART.FIXP") &&
-          V >= 0 && V <= 0x3ff) {
-        emitFieldImm(V);
-        continue;
       }
       emitFieldImm(V);
       continue;
@@ -4028,12 +3923,18 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     if (PI.Imms.size() != 1)
       return Error(IDLoc, "TEPL alias expects exactly one DataType operand");
 
-    ParsedImm OpcodeImm;
-    OpcodeImm.Expr = MCConstantExpr::create(*TEPLAliasOpcode, getContext());
-    OpcodeImm.Loc = IDLoc;
+    ParsedImm ModeImm;
+    ModeImm.Expr =
+        MCConstantExpr::create((*TEPLAliasOpcode >> 5) & 0x3u, getContext());
+    ModeImm.Loc = IDLoc;
+    ParsedImm FunctionImm;
+    FunctionImm.Expr =
+        MCConstantExpr::create(*TEPLAliasOpcode & 0x1fu, getContext());
+    FunctionImm.Loc = IDLoc;
     ParsedImm DataTypeImm = PI.Imms[0];
     PI.Imms.clear();
-    PI.Imms.push_back(OpcodeImm);
+    PI.Imms.push_back(ModeImm);
+    PI.Imms.push_back(FunctionImm);
     PI.Imms.push_back(DataTypeImm);
   }
 
@@ -4127,6 +4028,7 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
   std::optional<Match> Best;
   std::string LastErr;
+  std::optional<std::string> ShapeMatchedErr;
 
   for (unsigned FormIndex : It->second) {
     const linxisa_inst_form &F = linxisa_inst_forms[FormIndex];
@@ -4134,6 +4036,19 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     std::string Err;
     if (!buildMCInstForForm(FormIndex, PI, MI, Err)) {
       LastErr = Err;
+      // B.IOT has five forms sharing one mnemonic. Preserve the diagnostic
+      // from the form whose source/destination shape matches the source text
+      // instead of letting the last source-only form hide it.
+      if (StringRef(Key).equals_insensitive("B.IOT")) {
+        StringRef Fmt(F.asm_fmt);
+        const bool FormHasDestination = Fmt.contains("->DstTile");
+        const unsigned FormSources = Fmt.contains("SrcTile1")   ? 2u
+                                     : Fmt.contains("SrcTile0") ? 1u
+                                                                : 0u;
+        if (FormHasDestination == (PI.ArrowDests.size() == 1u) &&
+            FormSources == PI.Imms.size())
+          ShapeMatchedErr = Err;
+      }
       continue;
     }
 
@@ -4155,6 +4070,8 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   }
 
   if (!Best) {
+    if (ShapeMatchedErr)
+      return Error(IDLoc, *ShapeMatchedErr);
     if (!LastErr.empty())
       return Error(IDLoc, LastErr);
     return Error(IDLoc, "no matching encoding for instruction");

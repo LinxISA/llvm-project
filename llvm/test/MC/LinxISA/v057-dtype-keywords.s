@@ -10,8 +10,8 @@ test_v057_dtype_keywords:
 	BSTART.TMATMUL FP8
 	BSTART.ACCCVT BF16
 	BSTART.TADD FP4
-	BSTART.TEPL 511, FPL4
-	BSTART.TEPL 12, UINT4
+	BSTART.TEPL 3, 14, FPL4
+	BSTART.TEPL 2, 29, UINT4
 	C.BSTOP
 	.size	test_v057_dtype_keywords, .-test_v057_dtype_keywords
 
@@ -22,6 +22,6 @@ test_v057_dtype_keywords:
 # CHECK: BSTART.TMATMUL{{[[:space:]]+}}FP8
 # CHECK: BSTART.ACCCVT{{[[:space:]]+}}BF16
 # CHECK: BSTART.TADD{{[[:space:]]+}}FP4
-# CHECK: BSTART.TEPL{{[[:space:]]+}}511, FPL4
+# CHECK: BSTART.TTRANS{{[[:space:]]+}}FPL4
 # CHECK: BSTART.TCOLARGMIN{{[[:space:]]+}}UINT4
 # CHECK: C.BSTOP

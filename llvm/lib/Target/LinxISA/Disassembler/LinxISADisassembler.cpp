@@ -188,6 +188,21 @@ static bool isLegalFrameTemplate(const linxisa_inst_form &Form,
   return true;
 }
 
+static bool isLegalBIOTDestination(const linxisa_inst_form &Form,
+                                   ArrayRef<int64_t> FieldVals) {
+  StringRef Mnemonic(Form.mnemonic ? Form.mnemonic : "");
+  StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
+  if (Mnemonic != "B.IOT" || !AsmFmt.contains("->DstTile"))
+    return true;
+
+  for (unsigned I = 0; I != FieldVals.size(); ++I) {
+    const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+    if (StringRef(Field.name ? Field.name : "") == "DstTile")
+      return static_cast<uint64_t>(FieldVals[I]) <= 3u;
+  }
+  return false;
+}
+
 MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
     MCInst &Instr, uint64_t &Size, ArrayRef<uint8_t> Bytes, uint64_t Address,
     raw_ostream &CStream) const {
@@ -254,7 +269,8 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
 
   SmallVector<int64_t, 16> FieldVals;
   extractFields(*Matched, Insn, FieldVals);
-  if (!isLegalFrameTemplate(*Matched, FieldVals)) {
+  if (!isLegalFrameTemplate(*Matched, FieldVals) ||
+      !isLegalBIOTDestination(*Matched, FieldVals)) {
     Instr.clear();
     return Fail;
   }
