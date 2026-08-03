@@ -8,7 +8,7 @@ target triple = "linx64v5"
 ; CHECK-NEXT: B.DATR FP32, byte0, Null
 ; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
 ; CHECK-NEXT: B.IOT {{.*}}, {{.*}}, mask=1111
-; CHECK-NEXT: B.IOT mask=1111, TSize=1, last, {{.*}}->
+; CHECK-NEXT: B.IOT mask=1111, last, {{.*}}->{{.*}}<{{(512B|1KB|2KB|4KB|8KB|16KB|32KB)}}>
 define void @fixp(ptr %in_a, ptr %in_b, ptr %out) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)
   %b = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 3, ptr %in_b, i64 16)

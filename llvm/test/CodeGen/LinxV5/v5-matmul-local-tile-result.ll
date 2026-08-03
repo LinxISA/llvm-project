@@ -10,7 +10,7 @@ target triple = "linx64v5"
 ; CHECK-LABEL: <basic>:
 ; CHECK: BSTART.CUBE TMATMUL, FP32
 ; CHECK-NOT: ->acc
-; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, TSize={{[0-9]+}}, last, ->
+; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last, ->{{.*}}<{{(512B|1KB|2KB|4KB|8KB|16KB|32KB)}}>
 ; CHECK-NOT: ->acc
 define void @basic(ptr %in_a, ptr %in_b, ptr %out) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)
@@ -24,9 +24,9 @@ define void @basic(ptr %in_a, ptr %in_b, ptr %out) {
 ; The result of the first TMATMUL is used directly as an input to a second
 ; TMATMUL — no ACCCVT, no implicit ACC def.
 ; CHECK: BSTART.CUBE TMATMUL, FP32
-; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, TSize={{[0-9]+}}, last, ->
+; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last, ->{{.*}}<{{(512B|1KB|2KB|4KB|8KB|16KB|32KB)}}>
 ; CHECK: BSTART.CUBE TMATMUL, FP32
-; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, TSize={{[0-9]+}}, last, ->
+; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last, ->{{.*}}<{{(512B|1KB|2KB|4KB|8KB|16KB|32KB)}}>
 define void @chain(ptr %in_a, ptr %in_b, ptr %in_c, ptr %out) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)
   %b = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 3, ptr %in_b, i64 16)

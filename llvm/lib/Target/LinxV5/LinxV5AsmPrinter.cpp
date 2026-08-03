@@ -167,6 +167,18 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     OS << "S#" << STI->getRegisterInfo()->getEncodingValue(MO.getReg());
     return false;
   }
+  // v5: %Z carries a B.IOT TileSize imm (0..7) and prints the size text
+  // ("512B"/"1KB"/.../"32KB") without brackets; the surrounding "<" ">" are
+  // written literally in the asm string ("->%[Dst]<%Z[TileSize]>").
+  if (ExtraCode && ExtraCode[0] == 'Z' && ExtraCode[1] == 0) {
+    if (!MO.isImm())
+      return true;
+    static const char *TileSizes[] = {"0B",   "512B", "1KB", "2KB",
+                                     "4KB",  "8KB",  "16KB", "32KB"};
+    if ((unsigned)MO.getImm() < sizeof(TileSizes) / sizeof(TileSizes[0]))
+      OS << TileSizes[MO.getImm()];
+    return false;
+  }
 
   // First try the generic code, which knows about modifiers like 'c' and 'n'.
   if (!AsmPrinter::PrintAsmOperand(MI, OpNo, ExtraCode, OS))

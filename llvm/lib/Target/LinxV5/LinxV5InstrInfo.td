@@ -2827,6 +2827,15 @@ def TileSizeWithBracketAsmOperand : AsmOperandClass {
   let RenderMethod = "addImmOperands";
 }
 
+// v5: B.IOT destination-suffix TileSize (e.g. "->t<8KB>"). Same 3-bit TSize
+// field/encoding as TSize_Op, but parses/prints the bracket-size form. Used
+// only by B_IOT_*_Dst; TSize_Op keeps "TSize=N" for non-B.IOT and legacy.
+def B_IOT_TileSizeAsmOperand : AsmOperandClass {
+  let Name = "B_IOT_TileSize";
+  let ParserMethod = "parseTileSizeWithBracket";
+  let RenderMethod = "addImmOperands";
+}
+
 def TILE_Src_Reg : RegisterOperand<TILE_SRC> {
   let ParserMatchClass = TileRegAsmOperand;
   let PrintMethod = "printTileSrcReg";
@@ -2922,23 +2931,37 @@ def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
   let EncoderMethod = "getImmOpValueTSize";
 }
 
+// v5: B.IOT destination-suffix TileSize operand. 3-bit, same encoding as
+// TSize_Op (getImmOpValueTSize), but parses "<8KB>" and prints "<8KB>" as a
+// destination suffix. Only B_IOT_*_Dst use this; TSize_Op keeps "TSize=N".
+def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
+  let ParserMatchClass = B_IOT_TileSizeAsmOperand;
+  let PrintMethod = "printTileSizeWithBracket";
+  let EncoderMethod = "getImmOpValueTSize";
+}
+
 def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
-        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last)> {
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last)> {
   let SrcTile0 = 0;
   let SrcTile1 = 0;
   let Format = InstFormat_STACK_SIZE;
-  let AsmString = "B.IOT" # "\t${PE_MASK}, ${TSize}${Last}, $DstTile";
+  // v5: TileSize prints as a destination suffix "<8KB>" rather than "TSize=N".
+  let AsmString = "B.IOT" # "\t${PE_MASK}${Last}, $DstTile$TSize";
 }
 def : InstAlias<"B.IOT\t$DstTile", (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0), 0>;
 def : InstAlias<"B.IOT\t$PE_MASK, $TSize, $DstTile",
     (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
                      TSize_Op:$TSize, 0), 0>;
+// v5 legacy compatibility: "TSize=N, last, ->dst" still accepted on input.
+def : InstAlias<"B.IOT\t$PE_MASK, $TSize, $Last, $DstTile",
+    (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
+                     TSize_Op:$TSize, GroupOp:$Last), 0>;
 
 def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
-        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
   let SrcTile1 = 0;
   let Format = InstFormat_STACK_SIZE;
-  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}, $DstTile";
+  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}, $DstTile$TSize";
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $DstTile", (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $TSize, $DstTile",
@@ -2946,9 +2969,9 @@ def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $TSize, $DstTile",
                       TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
 def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
-        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let Format = InstFormat_STACK_SIZE;
-  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}, ${TSize}${Last}, $DstTile";
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}, $DstTile$TSize";
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $DstTile", (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK, $TSize, $DstTile",

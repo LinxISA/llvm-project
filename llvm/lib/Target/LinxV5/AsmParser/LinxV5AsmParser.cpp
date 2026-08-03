@@ -542,6 +542,10 @@ public:
   bool isPE_MASK() const { return isImm(); }
   bool isTSize() const { return isImm(); }
 
+  // v5: B.IOT destination-suffix TileSize ("<8KB>"), same value form as
+  // isTileSizeWithBracket; distinct predicate per AsmOperandClass name.
+  bool isB_IOT_TileSize() const { return isTileSizeWithBracket(); }
+
   bool isGPRWithBracket() const { return isReg(); }
 
   bool isTileSizeWithBracket() const {
@@ -2937,7 +2941,8 @@ LinxV5AsmParser::parseTileSizeWithBracket(OperandVector &Operands) {
     const MCExpr *Res = MCConstantExpr::create(Val, getContext());
     Operands.push_back(LinxV5Operand::createImm(Res, S, E));
     getParser().Lex(); //consume enum
-    if (getLexer().peekTok().getString().str().compare(">")) {
+    // After consuming the enum value, the current token should be '>'.
+    if (!getLexer().getTok().getString().str().compare(">")) {
       getLexer().Lex(); // consume '>'
     }
     return MatchOperand_Success;
@@ -2948,7 +2953,7 @@ LinxV5AsmParser::parseTileSizeWithBracket(OperandVector &Operands) {
     const MCExpr *Res = MCConstantExpr::create(16, getContext());
     Operands.push_back(LinxV5Operand::createImm(Res, S, E));
     getLexer().Lex(); // consume zero
-    if (getLexer().peekTok().getString().str().compare(">")) {
+    if (!getLexer().getTok().getString().str().compare(">")) {
       getLexer().Lex(); // consume '>'
     }
     return MatchOperand_Success;
@@ -2967,7 +2972,7 @@ LinxV5AsmParser::parseTileSizeWithBracket(OperandVector &Operands) {
     Operands.push_back(LinxV5Operand::createImm(Res, S, E));
     getLexer().Lex(); // consume imm
     getLexer().Lex(); // comsum size unit
-    if (getLexer().peekTok().getString().str().compare(">")) {
+    if (!getLexer().getTok().getString().str().compare(">")) {
       getLexer().Lex(); // consume '>'
     }
   } else {
