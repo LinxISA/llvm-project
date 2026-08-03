@@ -156,11 +156,22 @@ void LinxV5AsmPrinter::emitStackSizeGlobal(const MachineFunction &MF) {
 
 bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                                        const char *ExtraCode, raw_ostream &OS) {
+  const MachineOperand &MO = MI->getOperand(OpNo);
+
+  // Handle LinxV5-specific modifiers before the generic printer. In
+  // particular, %S carries a Shared_ABS register and must always print the
+  // architectural S#n name rather than being consumed as a generic modifier.
+  if (ExtraCode && ExtraCode[0] == 'S' && ExtraCode[1] == 0) {
+    if (!MO.isReg())
+      return true;
+    OS << "S#" << STI->getRegisterInfo()->getEncodingValue(MO.getReg());
+    return false;
+  }
+
   // First try the generic code, which knows about modifiers like 'c' and 'n'.
   if (!AsmPrinter::PrintAsmOperand(MI, OpNo, ExtraCode, OS))
     return false;
 
-  const MachineOperand &MO = MI->getOperand(OpNo);
   if (ExtraCode && ExtraCode[0]) {
     if (ExtraCode[1] != 0)
       return true; // Unknown modifier.
@@ -177,11 +188,6 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     case 'i': // Literal 'i' if operand is not a register.
       if (!MO.isReg())
         OS << 'i';
-      return false;
-    case 'S': // Print a Shared register as the C.B.IOS S#n encoding.
-      if (!MO.isReg())
-        return true;
-      OS << "S#" << STI->getRegisterInfo()->getEncodingValue(MO.getReg());
       return false;
     }
   }
