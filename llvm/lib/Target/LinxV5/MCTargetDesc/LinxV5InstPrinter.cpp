@@ -421,9 +421,18 @@ void LinxV5InstPrinter::printPE_MASK(const MCInst *MI, unsigned OpNo,
 void LinxV5InstPrinter::printSharedTID(const MCInst *MI, unsigned OpNo,
                     const MCSubtargetInfo &STI, raw_ostream &O) {
   // v5 Shared architectural ID: print as "S#n" (machine-level notation).
-  if (MI->getOperand(OpNo).isImm()) {
-    O << "S#" << MI->getOperand(OpNo).getImm();
+  const MCOperand &MO = MI->getOperand(OpNo);
+  int64_t Value;
+  if (MO.isImm())
+    Value = MO.getImm();
+  else if (MO.isExpr() && MO.getExpr()->evaluateAsAbsolute(Value))
+    ;
+  else {
+    if (MO.isExpr())
+      MO.getExpr()->print(O, &MAI);
+    return;
   }
+  O << "S#" << Value;
 }
 
 void LinxV5InstPrinter::printTSize(const MCInst *MI, unsigned OpNo,

@@ -2743,7 +2743,7 @@ def SharedTIDAsmOperand : AsmOperandClass {
 def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
   let ParserMatchClass = SharedTIDAsmOperand;
   let PrintMethod = "printSharedTID";
-  let EncoderMethod = "getImmOpValueTSize"; // reuse simple imm encoding
+  let EncoderMethod = "getImmOpValueSharedTID";
 }
 def SharedRegOp : RegisterOperand<Shared_ABS>;
 def C_B_IOS : BlockModifierBase {

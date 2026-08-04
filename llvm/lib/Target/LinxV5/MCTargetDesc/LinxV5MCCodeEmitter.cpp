@@ -125,6 +125,10 @@ public:
                               SmallVectorImpl<MCFixup> &Fixups,
                               const MCSubtargetInfo &STI) const;
 
+  unsigned getImmOpValueSharedTID(const MCInst &MI, unsigned OpNo,
+                                  SmallVectorImpl<MCFixup> &Fixups,
+                                  const MCSubtargetInfo &STI) const;
+
   unsigned getImmOpValueAsr1(const MCInst &MI, unsigned OpNo,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
@@ -675,6 +679,23 @@ LinxV5MCCodeEmitter::getImmOpValueTSize(const MCInst &MI, unsigned OpNo,
   if (MO.isImm())
     return static_cast<unsigned>(MO.getImm());
   return getImmOpValue(MI, OpNo, Fixups, STI);
+}
+
+unsigned LinxV5MCCodeEmitter::getImmOpValueSharedTID(
+    const MCInst &MI, unsigned OpNo, SmallVectorImpl<MCFixup> &Fixups,
+    const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+  int64_t Value;
+  if (MO.isImm())
+    Value = MO.getImm();
+  else if (MO.isExpr() && MO.getExpr()->evaluateAsAbsolute(Value))
+    ;
+  else
+    report_fatal_error("SharedTID requires an absolute immediate");
+
+  if (!isUInt<8>(Value))
+    report_fatal_error("SharedTID immediate is out of range");
+  return static_cast<unsigned>(Value);
 }
 
 unsigned

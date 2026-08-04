@@ -1,4 +1,5 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=asm %s -o - | FileCheck %s --check-prefix=ASM
+; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -stop-after=linxv5-emit-header %s -o - | FileCheck %s --check-prefix=MIR
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
 ; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s --check-prefix=OBJ
 
@@ -11,6 +12,8 @@ target triple = "linx64v5"
 ; ASM-LABEL: shared_inline_asm_modifier:
 ; ASM: C.B.IOS S#0
 ; ASM: C.B.IOS S#0
+; MIR: INLINEASM &"C.B.IOS ${0:S}", {{.*}}regdef:Shared_ABS{{.*}}, def renamable $shared_s0
+; MIR: INLINEASM &"C.B.IOS ${0:S}", {{.*}}reguse:Shared_ABS{{.*}}, killed renamable $shared_s0
 ; OBJ-LABEL: <shared_inline_asm_modifier>:
 ; OBJ: C.B.IOS S#0
 ; OBJ: C.B.IOS S#0

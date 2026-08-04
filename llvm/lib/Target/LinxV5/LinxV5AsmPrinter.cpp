@@ -162,9 +162,11 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   // particular, %S carries a Shared_ABS register and must always print the
   // architectural S#n name rather than being consumed as a generic modifier.
   if (ExtraCode && ExtraCode[0] == 'S' && ExtraCode[1] == 0) {
-    if (!MO.isReg())
+    if (!MO.isReg() ||
+        !LinxV5::Shared_ABSRegClass.contains(MO.getReg()))
       return true;
-    OS << "S#" << STI->getRegisterInfo()->getEncodingValue(MO.getReg());
+    OS << LinxV5InstPrinter::getRegisterName(MO.getReg(),
+                                             LinxV5::ABIRegAltName);
     return false;
   }
   // v5: %Z carries a B.IOT TileSize imm (0..7) and prints the size text

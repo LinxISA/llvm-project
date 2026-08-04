@@ -2355,10 +2355,9 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   StringRef Str = Tok.getString();
   if (Str.empty())
     Str = Tok.getIdentifier();
-  StringRef Lower = Str.lower();
-  if (!Lower.startswith("s#"))
+  if (!Str.startswith_insensitive("s#"))
     return MatchOperand_NoMatch;
-  StringRef NumStr = Lower.substr(2);
+  StringRef NumStr = Str.substr(2);
   if (NumStr.empty())
     return MatchOperand_NoMatch;
   unsigned TID;
