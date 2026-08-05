@@ -1593,7 +1593,10 @@ def BDATR : BlockModifierBase {
   let AsmString = "B.DATR\t$DataLayout$canon, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, #sat";
 }
 
-// DavinciOO v5 FIXPIPE attributes. Required exactly once by TMATMUL*.FIXP.
+// DavinciOO v5 FIXPIPE attributes. Required exactly once by every supported
+// TMATMUL/TMATMULMX family (not just the .FIXP variants). The instruction
+// encoding itself is unchanged; the contract was widened so every CUBE bundle
+// carries one B.FPATR after B.DATR.
 def B_FPATR : BlockModifierBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;

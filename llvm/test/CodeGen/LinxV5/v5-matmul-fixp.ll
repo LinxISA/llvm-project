@@ -19,6 +19,7 @@ define void @fixp(ptr %in_a, ptr %in_b, ptr %out) {
 
 ; CHECK-LABEL: <acc_fixp>:
 ; CHECK: BSTART.CUBE TMATMUL, FP32
+; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
 ; CHECK: BSTART.CUBE TMATMUL.ACC.FIXP, FP32
 ; CHECK-NEXT: B.DATR FP32, byte0, Null
 ; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0

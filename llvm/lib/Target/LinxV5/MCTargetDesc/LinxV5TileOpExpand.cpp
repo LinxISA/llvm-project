@@ -878,6 +878,11 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
   return PseudoToOpc.lookup(Opcode);
 }
 
+// isMatmulPseudo identifies the entire TMATMUL/TMATMULMX family. Per the
+// DavinciOO v5 contract every supported CUBE bundle must carry exactly one
+// B.FPATR, so this predicate (not isFixpMatmulPseudo) now drives B.FPATR
+// emission in expandPseudoCCall. The SharedRight and Higher variants are
+// members of the same family and are included.
 bool isMatmulPseudo(unsigned Opcode) {
   switch (Opcode) {
   case LinxV5::PseudoMAMULB_SizeI:
@@ -886,18 +891,46 @@ bool isMatmulPseudo(unsigned Opcode) {
   case LinxV5::PseudoMAMULBACC_SizeI:
   case LinxV5::PseudoMAMULB_FIXP_SizeI:
   case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
+  case LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI:
   case LinxV5::PseudoMAMULBMX_SizeI:
   case LinxV5::PseudoMAMULBMXB_SizeI:
   case LinxV5::PseudoMAMULBMXAC_SizeI:
   case LinxV5::PseudoMAMULBMXBAC_SizeI:
   case LinxV5::PseudoMAMULBMXACC_SizeI:
   case LinxV5::PseudoMAMULBMXBACC_SizeI:
+  case LinxV5::PseudoMAMULBMX_FIXP_SizeI:
+  case LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI:
+  case LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI:
     return true;
   default:
     return false;
   }
 }
 
+// isFixpResultPseudo identifies the six .FIXP opcodes that carry FIXP-specific
+// result/ACC semantics (destination dtype derived from PreQuantMode, implicit
+// ACC invalidation, etc.). It is a future-proof predicate for behavior that
+// must remain FIXP-only while B.FPATR emission is generalized to the whole
+// family. Currently no call site depends on it; kept here to record the
+// family-vs-FIXP-result split required by the v5 FPATR generalization.
+bool isFixpResultPseudo(unsigned Opcode) {
+  switch (Opcode) {
+  case LinxV5::PseudoMAMULB_FIXP_SizeI:
+  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
+  case LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI:
+  case LinxV5::PseudoMAMULBMX_FIXP_SizeI:
+  case LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI:
+  case LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI:
+    return true;
+  default:
+    return false;
+  }
+}
+
+// isFixpMatmulPseudo is retained for the legacy getBATTRFromInst path, which
+// synthesizes a B.DATR carrying DataTypeB as SrcType for the two plain FIXP
+// variants. That is FIXP-result B.DATR behavior, not B.FPATR emission, so it
+// is intentionally NOT widened here even though B.FPATR now covers all 12.
 bool isFixpMatmulPseudo(unsigned Opcode) {
   switch (Opcode) {
   case LinxV5::PseudoMAMULB_FIXP_SizeI:
