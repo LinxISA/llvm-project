@@ -40,11 +40,7 @@ llvm::SmallVector<MCInst> getBTEXTTFromInst(MCInst Inst, const MCInstrInfo &MII)
 
 unsigned getPseudoTILEOpcode(unsigned Opcode);
 
-bool isMatmulPseudo(unsigned Opcode);
-
-bool isFixpResultPseudo(unsigned Opcode);
-
-bool isFixpMatmulPseudo(unsigned Opcode);
+bool isActiveMatrixPseudo(unsigned Opcode);
 
 unsigned getRepresentMCallOpcode(unsigned Opcode);
 

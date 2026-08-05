@@ -364,12 +364,6 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::MCALL)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_AC)
-    MAKE_CASE(LinxV5ISD::BLK_MATMUL_FIXP)
-    MAKE_CASE(LinxV5ISD::BLK_MATMUL_ACC_FIXP)
-    MAKE_CASE(LinxV5ISD::BLK_MATMUL_BIAS_FIXP)
-    MAKE_CASE(LinxV5ISD::BLK_MATMUL_MX_FIXP)
-    MAKE_CASE(LinxV5ISD::BLK_MATMUL_MX_BIAS_FIXP)
-    MAKE_CASE(LinxV5ISD::BLK_MATMUL_MX_ACC_FIXP)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMXB)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX_AC)
@@ -909,18 +903,6 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerTemplateBLKShared(DL, Op, DAG);
     case Intrinsic::linx_blk_matmul_ac:
       return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_AC, DL, Op, 3, DAG);
-    case Intrinsic::linx_blk_matmul_fixp:
-      return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_FIXP, DL, Op, 2, DAG);
-    case Intrinsic::linx_blk_matmul_acc_fixp:
-      return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_ACC_FIXP, DL, Op, 3, DAG);
-    case Intrinsic::linx_blk_matmul_bias_fixp:
-      return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL_BIAS_FIXP, DL, Op, 3, DAG);
-    case Intrinsic::linx_blk_matmul_mx_fixp:
-      return lowerTemplateBLKMX(LinxV5ISD::BLK_MATMUL_MX_FIXP, DL, Op, 4, DAG);
-    case Intrinsic::linx_blk_matmul_mx_bias_fixp:
-      return lowerTemplateBLKMX(LinxV5ISD::BLK_MATMUL_MX_BIAS_FIXP, DL, Op, 3, DAG);
-    case Intrinsic::linx_blk_matmul_mx_acc_fixp:
-      return lowerTemplateBLKMX(LinxV5ISD::BLK_MATMUL_MX_ACC_FIXP, DL, Op, 5, DAG);
     case Intrinsic::linx_blk_matmulmx:
       return lowerTemplateBLKMX(LinxV5ISD::BLK_MATMULMX, DL, Op, 4, DAG);
     case Intrinsic::linx_blk_matmulmxb:

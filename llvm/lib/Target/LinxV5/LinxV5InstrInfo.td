@@ -35,8 +35,6 @@ def linxv5_mcall   : SDNode<"LinxV5ISD::MCALL", SDT_LinxV5Call, [SDNPHasChain, S
 //       (7)TileSrc0, (8)TileSrc1, (9)....
 def linxv5_blk_matmul   : SDNode<"LinxV5ISD::BLK_MATMUL", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_blk_matmul_ac   : SDNode<"LinxV5ISD::BLK_MATMUL_AC", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
-def linxv5_blk_matmul_fixp : SDNode<"LinxV5ISD::BLK_MATMUL_FIXP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
-def linxv5_blk_matmul_acc_fixp : SDNode<"LinxV5ISD::BLK_MATMUL_ACC_FIXP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
 // Format of Template Block MX Instruction:
 // dst = (0)TileOut
@@ -3227,26 +3225,6 @@ class PseudoCUBE_MAMULBACC_Base_I<string TileOp> :
 
 def PseudoMAMULBACC_SizeI : PseudoCUBE_MAMULBACC_Base_I<"TMATMUL.ACC">;
 
-class PseudoCUBE_MAMULB_FIXP_Base_I<string TileOp> :
-  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
-  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
-  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
-    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $DstTile$TileSize";
-}
-
-def PseudoMAMULB_FIXP_SizeI : PseudoCUBE_MAMULB_FIXP_Base_I<"TMATMUL.FIXP">;
-
-// v5 unified: accumulator is an ordinary TILE_Src_Reg, emitted in the B.IOT
-// source stream (no longer bypassed via implicit ACC state).
-class PseudoCUBE_MAMULB_ACC_FIXP_Base_I<string TileOp> :
-  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
-  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
-  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$ACC)> {
-    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $ACC, $DstTile$TileSize";
-}
-
-def PseudoMAMULB_ACC_FIXP_SizeI : PseudoCUBE_MAMULB_ACC_FIXP_Base_I<"TMATMUL.ACC.FIXP">;
-
 class PseudoCUBE_MAMULBMX_Base_I<string TileOp> :
   PseudoCCallImpl<(outs ACC_TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
@@ -3319,40 +3297,59 @@ class PseudoCUBE_MAMULBMXBACC_Base_I<string TileOp> :
 
 def PseudoMAMULBMXBACC_SizeI : PseudoCUBE_MAMULBMXBACC_Base_I<"TMATMULMX.ACC">;
 
-// v5 FIXP variants: bias_fixp (3 src), mx_fixp (4 src), mx_bias_fixp (3 src),
-// mx_acc_fixp (4 src + ACC). All output to TILE_DstWithArrow (local tile, not ACC).
-// ACC variants use ACC_TILE_SRC for implicit ACC (not B.IOT).
-class PseudoCUBE_MAMULB_BIAS_FIXP_Base_I<string TileOp> :
+// v5 TGEMV (Function 16-18, 20-22): PE-local M=1 GEMV. Local-only operand
+// stream; no SharedTile/C.B.IOS/Core4 cooperative form. Reuses the TMATMUL
+// B.IOT source schema (same source arity per variant). The accumulator-input
+// variants (TGEMV_ACC/TGEMVMX_ACC) read an ordinary Local C tile as a
+// TILE_Src_Reg, never a physical ACC singleton. M=1 is not enforced at MC
+// level (it is an IR/ISel/TileOP verifier concern; see work-package F).
+class PseudoCUBE_TGEMV_Base_I<string TileOp> :
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+def PseudoTGEMV_SizeI : PseudoCUBE_TGEMV_Base_I<"TGEMV">;
+
+class PseudoCUBE_TGEMV_BIAS_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
   TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2)> {
     let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $SrcTile2, $DstTile$TileSize";
 }
-def PseudoMAMULB_BIAS_FIXP_SizeI : PseudoCUBE_MAMULB_BIAS_FIXP_Base_I<"TMATMUL.BIAS.FIXP">;
+def PseudoTGEMV_BIAS_SizeI : PseudoCUBE_TGEMV_BIAS_Base_I<"TGEMV.BIAS">;
 
-class PseudoCUBE_MAMULBMX_FIXP_Base_I<string TileOp> :
+class PseudoCUBE_TGEMV_ACC_Base_I<string TileOp> :
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SrcTile1, $SrcTile2, $DstTile$TileSize";
+}
+def PseudoTGEMV_ACC_SizeI : PseudoCUBE_TGEMV_ACC_Base_I<"TGEMV.ACC">;
+
+class PseudoCUBE_TGEMVMX_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
   TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2, TILE_Src_Reg:$SrcTile3)> {
     let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" # "\t$SrcTile0, $SrcTile1, $SrcTile2, $SrcTile3, $DstTile$TileSize";
 }
-def PseudoMAMULBMX_FIXP_SizeI : PseudoCUBE_MAMULBMX_FIXP_Base_I<"TMATMULMX.FIXP">;
+def PseudoTGEMVMX_SizeI : PseudoCUBE_TGEMVMX_Base_I<"TGEMVMX">;
 
-class PseudoCUBE_MAMULBMX_BIAS_FIXP_Base_I<string TileOp> :
+class PseudoCUBE_TGEMVMX_BIAS_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
-  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2)> {
-    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" # "\t$SrcTile0, $SrcTile1, $SrcTile2, $DstTile$TileSize";
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2, TILE_Src_Reg:$SrcTile3, TILE_Src_Reg:$SrcTile4)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" # "\t$SrcTile0, $SrcTile1, $SrcTile2, $SrcTile3, $SrcTile4, $DstTile$TileSize";
 }
-def PseudoMAMULBMX_BIAS_FIXP_SizeI : PseudoCUBE_MAMULBMX_BIAS_FIXP_Base_I<"TMATMULMX.BIAS.FIXP">;
+def PseudoTGEMVMX_BIAS_SizeI : PseudoCUBE_TGEMVMX_BIAS_Base_I<"TGEMVMX.BIAS">;
 
-class PseudoCUBE_MAMULBMX_ACC_FIXP_Base_I<string TileOp> :
+class PseudoCUBE_TGEMVMX_ACC_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
-  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2, TILE_Src_Reg:$SrcTile3, ACC_TILE_SRC:$ACC)> {
-    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" # "\t$SrcTile0, $SrcTile1, $SrcTile2, $SrcTile3, $ACC, $DstTile$TileSize";
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, TILE_Src_Reg:$SrcTile2, TILE_Src_Reg:$SrcTile3, TILE_Src_Reg:$SrcTile4)> {
+    let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" # "\t$SrcTile0, $SrcTile1, $SrcTile2, $SrcTile3, $SrcTile4, $DstTile$TileSize";
 }
-def PseudoMAMULBMX_ACC_FIXP_SizeI : PseudoCUBE_MAMULBMX_ACC_FIXP_Base_I<"TMATMULMX.ACC.FIXP">;
+def PseudoTGEMVMX_ACC_SizeI : PseudoCUBE_TGEMVMX_ACC_Base_I<"TGEMVMX.ACC">;
 
 // v5: ACCCVT is removed (status: "removed" in DavinciOO ISA; replaced by
 // TMATMUL_ACC). The PseudoACCCVT_SizeI/SizeR defs are deleted so they no

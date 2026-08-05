@@ -864,23 +864,23 @@ void LinxV5InstPrinter::printTileOPCUBE(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPCUBE::MAMULBMX_ACC:
     O << "TMATMULMX.ACC";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULB_FIXP:
-    O << "TMATMUL.FIXP";
+  case LinxV5Op::TileOPCUBE::TGEMV:
+    O << "TGEMV";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULB_BIAS_FIXP:
-    O << "TMATMUL.BIAS.FIXP";
+  case LinxV5Op::TileOPCUBE::TGEMV_BIAS:
+    O << "TGEMV.BIAS";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULB_ACC_FIXP:
-    O << "TMATMUL.ACC.FIXP";
+  case LinxV5Op::TileOPCUBE::TGEMV_ACC:
+    O << "TGEMV.ACC";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULBMX_FIXP:
-    O << "TMATMULMX.FIXP";
+  case LinxV5Op::TileOPCUBE::TGEMVMX:
+    O << "TGEMVMX";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULBMX_BIAS_FIXP:
-    O << "TMATMULMX.BIAS.FIXP";
+  case LinxV5Op::TileOPCUBE::TGEMVMX_BIAS:
+    O << "TGEMVMX.BIAS";
     break;
-  case LinxV5Op::TileOPCUBE::MAMULBMX_ACC_FIXP:
-    O << "TMATMULMX.ACC.FIXP";
+  case LinxV5Op::TileOPCUBE::TGEMVMX_ACC:
+    O << "TGEMVMX.ACC";
     break;
   default:
     O << Imm;

@@ -2710,12 +2710,12 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPCUBE(OperandVector &Operands) {
                .Case("tmatmulmx", TileOPCUBE::MAMULBMX)
                .Case("tmatmulmx.bias", TileOPCUBE::MAMULBMXAC)
                .Case("tmatmulmx.acc", TileOPCUBE::MAMULBMX_ACC)
-               .Case("tmatmul.fixp", TileOPCUBE::MAMULB_FIXP)
-               .Case("tmatmul.bias.fixp", TileOPCUBE::MAMULB_BIAS_FIXP)
-               .Case("tmatmul.acc.fixp", TileOPCUBE::MAMULB_ACC_FIXP)
-               .Case("tmatmulmx.fixp", TileOPCUBE::MAMULBMX_FIXP)
-               .Case("tmatmulmx.bias.fixp", TileOPCUBE::MAMULBMX_BIAS_FIXP)
-               .Case("tmatmulmx.acc.fixp", TileOPCUBE::MAMULBMX_ACC_FIXP)
+               .Case("tgemv", TileOPCUBE::TGEMV)
+               .Case("tgemv.bias", TileOPCUBE::TGEMV_BIAS)
+               .Case("tgemv.acc", TileOPCUBE::TGEMV_ACC)
+               .Case("tgemvmx", TileOPCUBE::TGEMVMX)
+               .Case("tgemvmx.bias", TileOPCUBE::TGEMVMX_BIAS)
+               .Case("tgemvmx.acc", TileOPCUBE::TGEMVMX_ACC)
                .Default(TileOPCUBE::EMPTY_TileOPCUBE);
 
   if (TileOP == TileOPCUBE::EMPTY_TileOPCUBE)
@@ -4031,7 +4031,7 @@ void LinxV5AsmParser::emitCCall(MCInst &Inst, MCStreamer &Out,
   emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_CUBE)
                           .addOperand(Inst.getOperand(7))
                           .addOperand(MCOperand::createImm(CUBEOpc)));
-  if (isMatmulPseudo(Inst.getOpcode())) {
+  if (isActiveMatrixPseudo(Inst.getOpcode())) {
     // b.catr DR + b.datr datatype
     emitMcInstVecToStreamer(getBATTRFromInst(Inst, MII), Out);
   }

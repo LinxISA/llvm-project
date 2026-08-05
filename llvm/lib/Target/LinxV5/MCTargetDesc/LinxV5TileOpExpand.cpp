@@ -235,25 +235,11 @@ llvm::SmallVector<MCInst> getBATTRFromInst(MCInst Inst,
                                            const MCInstrInfo &MII) {
   llvm::SmallVector<MCInst> McVec;
 
-  if (isFixpMatmulPseudo(Inst.getOpcode())) {
-    McVec.push_back(
-        MCInstBuilder(LinxV5::BDATR)
-            .addOperand(MCOperand::createImm(0))
-            .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
-            .addOperand(Inst.getOperand(8))
-            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Null))
-            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
-            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
-            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
-            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
-    return McVec;
-  }
-
   // MX matmul family:
   // If DataTypeA != DataTypeB, emit:
   //   B.ATTR DataTypeB
   // If DataTypeA == DataTypeB, no B.ATTR is needed.
-  if (isMatmulPseudo(Inst.getOpcode())) {
+  if (isActiveMatrixPseudo(Inst.getOpcode())) {
     constexpr unsigned DataTypeAOpNo = 7;
     constexpr unsigned DataTypeBOpNo = 8;
 
@@ -309,6 +295,7 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
   //   Op9=TileSize, Op10=SrcTile0(A), Op11=SrcTile1(B).
   // Emit one B.IOT TwoSrc_Dst carrying both sources plus the ordinary dst.
   case LinxV5::PseudoMAMULB_SizeI:
+  case LinxV5::PseudoTGEMV_SizeI:
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
                         .addOperand(Inst.getOperand(0))             // DstTile
                         .addOperand(MCOperand::createImm(0b1111))   // PE_MASK
@@ -331,7 +318,11 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     break;
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:
-    if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI) {
+  case LinxV5::PseudoTGEMV_BIAS_SizeI:
+  case LinxV5::PseudoTGEMV_ACC_SizeI:
+    if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI ||
+        Inst.getOpcode() == LinxV5::PseudoTGEMV_BIAS_SizeI ||
+        Inst.getOpcode() == LinxV5::PseudoTGEMV_ACC_SizeI) {
       // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
                           .addOperand(Inst.getOperand(11))  // DstTile
@@ -356,107 +347,15 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(9))            // SrcTile0
                         .addOperand(Inst.getOperand(10)));  // SrcTile1
     break;
-  case LinxV5::PseudoMAMULB_FIXP_SizeI:
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))
-                        .addOperand(Inst.getOperand(11)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                        .addOperand(Inst.getOperand(0))
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(Inst.getOperand(9))
-                        .addOperand(MCOperand::createImm(1)));
-    break;
-  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
-    // v5 unified: accumulator is an ordinary source in the B.IOT stream.
-    //   B.IOT A, B (no dst, not last); B.IOT Acc, ->D (last).
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))   // SrcTile0 (A)
-                        .addOperand(Inst.getOperand(11))); // SrcTile1 (B)
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
-                        .addOperand(Inst.getOperand(0))   // DstTile
-                        .addOperand(MCOperand::createImm(0b1111)) // PE_MASK
-                        .addOperand(Inst.getOperand(9))   // TSize
-                        .addOperand(MCOperand::createImm(1))        // Last=1
-                        .addOperand(Inst.getOperand(12))); // SrcTile0 (Acc)
-    break;
-  case LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI:
-    // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last=0, A, B) + B_IOT_OneSrc_NoDst(PE_MASK, Last=1, Bias) + B_IOT_NoSrc_Dst(DstTile, PE_MASK, TSize, Last=1)
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))
-                        .addOperand(Inst.getOperand(11)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(12)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                        .addOperand(Inst.getOperand(0))
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(Inst.getOperand(9))
-                        .addOperand(MCOperand::createImm(1)));
-    break;
-  case LinxV5::PseudoMAMULBMX_FIXP_SizeI:
-    // v5: 4 src (A, ScaleA, B, ScaleB) + NoSrc_Dst
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))
-                        .addOperand(Inst.getOperand(11)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(12))
-                        .addOperand(Inst.getOperand(13)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                        .addOperand(Inst.getOperand(0))
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(Inst.getOperand(9))
-                        .addOperand(MCOperand::createImm(1)));
-    break;
-  case LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI:
-    // v5: 3 src (A, ScaleA, B) + NoSrc_Dst (bias is SrcTile2)
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))
-                        .addOperand(Inst.getOperand(11)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(12)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                        .addOperand(Inst.getOperand(0))
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(Inst.getOperand(9))
-                        .addOperand(MCOperand::createImm(1)));
-    break;
-  case LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI:
-    // v5: 4 src (A, ScaleA, B, ScaleB) + NoSrc_Dst (ACC implicit, not in B.IOT)
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(10))
-                        .addOperand(Inst.getOperand(11)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(12))
-                        .addOperand(Inst.getOperand(13)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                        .addOperand(Inst.getOperand(0))
-                        .addOperand(MCOperand::createImm(0b1111))
-                        .addOperand(Inst.getOperand(9))
-                        .addOperand(MCOperand::createImm(1)));
-    break;
   case LinxV5::PseudoMAMULBMX_SizeI:
   case LinxV5::PseudoMAMULBMXAC_SizeI:
   case LinxV5::PseudoMAMULBMXACC_SizeI:
-    if (Inst.getOpcode() == LinxV5::PseudoMAMULBMXAC_SizeI) {
+  case LinxV5::PseudoTGEMVMX_SizeI:
+  case LinxV5::PseudoTGEMVMX_BIAS_SizeI:
+  case LinxV5::PseudoTGEMVMX_ACC_SizeI:
+    if (Inst.getOpcode() == LinxV5::PseudoMAMULBMXAC_SizeI ||
+        Inst.getOpcode() == LinxV5::PseudoTGEMVMX_BIAS_SizeI ||
+        Inst.getOpcode() == LinxV5::PseudoTGEMVMX_ACC_SizeI) {
       // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last, SrcTile0, SrcTile1)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
@@ -691,14 +590,18 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case PseudoMAMULB_SizeI:
   case PseudoMAMULBAC_SizeI:
   case PseudoMAMULBACC_SizeI:
-  case PseudoMAMULB_FIXP_SizeI:
-  case PseudoMAMULB_ACC_FIXP_SizeI:
   case PseudoMAMULBMX_SizeI:
   case PseudoMAMULBMXB_SizeI:
   case PseudoMAMULBMXAC_SizeI:
   case PseudoMAMULBMXBAC_SizeI:
   case PseudoMAMULBMXACC_SizeI:
-  case PseudoMAMULBMXBACC_SizeI: {
+  case PseudoMAMULBMXBACC_SizeI:
+  case PseudoTGEMV_SizeI:
+  case PseudoTGEMV_BIAS_SizeI:
+  case PseudoTGEMV_ACC_SizeI:
+  case PseudoTGEMVMX_SizeI:
+  case PseudoTGEMVMX_BIAS_SizeI:
+  case PseudoTGEMVMX_ACC_SizeI: {
     // ->lb0
     if (!isZeroRegAndOneImm(Inst, 1))
       McVec.push_back(MCInstBuilder(LinxV5::B_DIM)
@@ -860,81 +763,44 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoTLOAD_Dsrc_Ddst, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_Dsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoMAMULBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULB_ACC},
-      {LinxV5::PseudoMAMULB_FIXP_SizeI,
-       LinxV5Op::TileOPCUBE::MAMULB_FIXP},
-      {LinxV5::PseudoMAMULB_ACC_FIXP_SizeI,
-       LinxV5Op::TileOPCUBE::MAMULB_ACC_FIXP},
-      {LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI,
-       LinxV5Op::TileOPCUBE::MAMULB_BIAS_FIXP},
-      {LinxV5::PseudoMAMULBMX_FIXP_SizeI,
-       LinxV5Op::TileOPCUBE::MAMULBMX_FIXP},
-      {LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI,
-       LinxV5Op::TileOPCUBE::MAMULBMX_BIAS_FIXP},
-      {LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI,
-       LinxV5Op::TileOPCUBE::MAMULBMX_ACC_FIXP},
+      {LinxV5::PseudoTGEMV_SizeI, LinxV5Op::TileOPCUBE::TGEMV},
+      {LinxV5::PseudoTGEMV_BIAS_SizeI, LinxV5Op::TileOPCUBE::TGEMV_BIAS},
+      {LinxV5::PseudoTGEMV_ACC_SizeI, LinxV5Op::TileOPCUBE::TGEMV_ACC},
+      {LinxV5::PseudoTGEMVMX_SizeI, LinxV5Op::TileOPCUBE::TGEMVMX},
+      {LinxV5::PseudoTGEMVMX_BIAS_SizeI, LinxV5Op::TileOPCUBE::TGEMVMX_BIAS},
+      {LinxV5::PseudoTGEMVMX_ACC_SizeI, LinxV5Op::TileOPCUBE::TGEMVMX_ACC},
       {LinxV5::PseudoESAVE, LinxV5Op::TileOPTEPL::ESAVE},
       {LinxV5::PseudoERCOV, LinxV5Op::TileOPTEPL::ERCOV}};
 
   return PseudoToOpc.lookup(Opcode);
 }
 
-// isMatmulPseudo identifies the entire TMATMUL/TMATMULMX family. Per the
-// DavinciOO v5 contract every supported CUBE bundle must carry exactly one
-// B.FPATR, so this predicate (not isFixpMatmulPseudo) now drives B.FPATR
-// emission in expandPseudoCCall. The SharedRight and Higher variants are
-// members of the same family and are included.
-bool isMatmulPseudo(unsigned Opcode) {
+// isActiveMatrixPseudo identifies every active Matrix CUBE operation
+// (TMATMUL/TMATMULMX family). Per the DavinciOO v5 contract every supported
+// CUBE bundle must carry exactly one B.FPATR, so this predicate drives
+// B.FPATR emission in expandPseudoCCall. The SharedRight and Higher variants
+// are members of the same family and are included. The deleted
+// TMATMUL*_FIXP opcodes (Function 9-14) are intentionally absent; they are
+// reserved/illegal. TGEMV pseudos are added here once defined in
+// LinxV5InstrInfo.td (Function 16/17/18/20/21/22).
+bool isActiveMatrixPseudo(unsigned Opcode) {
   switch (Opcode) {
   case LinxV5::PseudoMAMULB_SizeI:
   case LinxV5::PseudoMAMULB_SharedRight_SizeI:
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:
-  case LinxV5::PseudoMAMULB_FIXP_SizeI:
-  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
-  case LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI:
   case LinxV5::PseudoMAMULBMX_SizeI:
   case LinxV5::PseudoMAMULBMXB_SizeI:
   case LinxV5::PseudoMAMULBMXAC_SizeI:
   case LinxV5::PseudoMAMULBMXBAC_SizeI:
   case LinxV5::PseudoMAMULBMXACC_SizeI:
   case LinxV5::PseudoMAMULBMXBACC_SizeI:
-  case LinxV5::PseudoMAMULBMX_FIXP_SizeI:
-  case LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI:
-  case LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI:
-    return true;
-  default:
-    return false;
-  }
-}
-
-// isFixpResultPseudo identifies the six .FIXP opcodes that carry FIXP-specific
-// result/ACC semantics (destination dtype derived from PreQuantMode, implicit
-// ACC invalidation, etc.). It is a future-proof predicate for behavior that
-// must remain FIXP-only while B.FPATR emission is generalized to the whole
-// family. Currently no call site depends on it; kept here to record the
-// family-vs-FIXP-result split required by the v5 FPATR generalization.
-bool isFixpResultPseudo(unsigned Opcode) {
-  switch (Opcode) {
-  case LinxV5::PseudoMAMULB_FIXP_SizeI:
-  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
-  case LinxV5::PseudoMAMULB_BIAS_FIXP_SizeI:
-  case LinxV5::PseudoMAMULBMX_FIXP_SizeI:
-  case LinxV5::PseudoMAMULBMX_BIAS_FIXP_SizeI:
-  case LinxV5::PseudoMAMULBMX_ACC_FIXP_SizeI:
-    return true;
-  default:
-    return false;
-  }
-}
-
-// isFixpMatmulPseudo is retained for the legacy getBATTRFromInst path, which
-// synthesizes a B.DATR carrying DataTypeB as SrcType for the two plain FIXP
-// variants. That is FIXP-result B.DATR behavior, not B.FPATR emission, so it
-// is intentionally NOT widened here even though B.FPATR now covers all 12.
-bool isFixpMatmulPseudo(unsigned Opcode) {
-  switch (Opcode) {
-  case LinxV5::PseudoMAMULB_FIXP_SizeI:
-  case LinxV5::PseudoMAMULB_ACC_FIXP_SizeI:
+  case LinxV5::PseudoTGEMV_SizeI:
+  case LinxV5::PseudoTGEMV_BIAS_SizeI:
+  case LinxV5::PseudoTGEMV_ACC_SizeI:
+  case LinxV5::PseudoTGEMVMX_SizeI:
+  case LinxV5::PseudoTGEMVMX_BIAS_SizeI:
+  case LinxV5::PseudoTGEMVMX_ACC_SizeI:
     return true;
   default:
     return false;

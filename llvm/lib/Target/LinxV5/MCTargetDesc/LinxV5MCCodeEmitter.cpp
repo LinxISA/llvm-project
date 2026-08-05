@@ -595,12 +595,13 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
                           .addOperand(MCOperand::createImm(
                               getPseudoTILEOpcode(MI.getOpcode())))},
                      Dummy);
-  // v5: every TMATMUL/TMATMULMX CUBE bundle carries exactly one B.FPATR after
-  // B.DATR. The predicate is the whole-family isMatmulPseudo, not the legacy
-  // isFixpMatmulPseudo, so non-FIXP variants also emit a (zero) B.FPATR. The
-  // seven immediates are synthesized as zero for now; a future change threads
-  // real FPATR operands through the pseudos/ISel.
-  if (isMatmulPseudo(MI.getOpcode())) {
+  // v5: every active Matrix CUBE bundle (TMATMUL/TMATMULMX, and TGEMV once
+  // defined) carries exactly one B.FPATR after B.DATR. The predicate is the
+  // whole-family isActiveMatrixPseudo; the deleted TMATMUL*_FIXP opcodes
+  // (Function 9-14) are reserved/illegal and never reach here. The seven
+  // immediates are synthesized as zero for now; a future change threads real
+  // FPATR operands through the pseudos/ISel.
+  if (isActiveMatrixPseudo(MI.getOpcode())) {
     writeBinaryCodes(OS, Fixups, STI, getBATTRFromInst(MI, MCII), Dummy);
     writeBinaryCodes(
         OS, Fixups, STI,

@@ -108,45 +108,6 @@ def int_linx_blk_matmul_ac : Intrinsic<[llvm_anyvector_ty],
                                      llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
                                     [IntrHasSideEffects]>;
 
-def int_linx_blk_matmul_fixp : Intrinsic<[llvm_anyvector_ty],
-                                    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-                                     llvm_anyvector_ty, llvm_anyvector_ty],
-                                    [IntrHasSideEffects]>;
-
-def int_linx_blk_matmul_acc_fixp : Intrinsic<[llvm_anyvector_ty],
-                                    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-                                     llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
-                                    [IntrHasSideEffects]>;
-
-// v5 FIXP variants: bias_fixp (3 vec src), mx_fixp (4 vec), mx_bias_fixp (5 vec),
-// mx_acc_fixp (4 vec + implicit ACC). Follow non-FIXP MX/MXB intrinsic patterns.
-def int_linx_blk_matmul_bias_fixp : Intrinsic<[llvm_anyvector_ty],
-                                    [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-                                     llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
-                                    [IntrHasSideEffects]>;
-
-def int_linx_blk_matmul_mx_fixp : Intrinsic<[llvm_anyvector_ty],
-                                      [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-                                       llvm_i64_ty, llvm_i64_ty,
-                                       llvm_anyvector_ty, llvm_anyvector_ty,
-                                       llvm_anyvector_ty, llvm_anyvector_ty],
-                                      [IntrHasSideEffects]>;
-
-def int_linx_blk_matmul_mx_bias_fixp : Intrinsic<[llvm_anyvector_ty],
-                                       [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-                                        llvm_i64_ty, llvm_i64_ty,
-                                        llvm_anyvector_ty, llvm_anyvector_ty,
-                                        llvm_anyvector_ty],
-                                       [IntrHasSideEffects]>;
-
-def int_linx_blk_matmul_mx_acc_fixp : Intrinsic<[llvm_anyvector_ty],
-                                         [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-                                          llvm_i64_ty, llvm_i64_ty,
-                                          llvm_anyvector_ty, llvm_anyvector_ty,
-                                          llvm_anyvector_ty, llvm_anyvector_ty,
-                                          llvm_anyvector_ty],
-                                         [IntrHasSideEffects]>;
-
 def int_linx_blk_matmulmx : Intrinsic<[llvm_anyvector_ty],
                                       [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                                        llvm_i64_ty, llvm_i64_ty,

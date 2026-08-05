@@ -354,18 +354,27 @@ enum TileOPTMA {
 enum DREnum { MR = 0, DR = 1, EMPTY_DREnum };
 
 enum TileOPCUBE {
+  // DavinciOO v5 active Matrix Functions (per
+  // DavinciOO_intrinsic_changes_since_3b4fe5e.md):
+  //   TMATMUL 0, TMATMUL.BIAS 1, TMATMUL.ACC 2,
+  //   TMATMULMX 4, TMATMULMX.BIAS 5, TMATMULMX.ACC 6,
+  //   TGEMV 16, TGEMV.BIAS 17, TGEMV.ACC 18,
+  //   TGEMVMX 20, TGEMVMX.BIAS 21, TGEMVMX.ACC 22.
+  // Function 3, 7, 8, 9-15, 19 are reserved/illegal. Function 8 was legacy
+  // ACCCVT (removed); 9-14 were the deleted TMATMUL*_FIXP profile and must
+  // never be remapped to a public operation.
   MAMULB = 0,
   MAMULBAC = 1,
   MAMULB_ACC = 2,
   MAMULBMX = 4,
   MAMULBMXAC = 5,
   MAMULBMX_ACC = 6,
-  MAMULB_FIXP = 9,
-  MAMULB_BIAS_FIXP = 10,
-  MAMULB_ACC_FIXP = 11,
-  MAMULBMX_FIXP = 12,
-  MAMULBMX_BIAS_FIXP = 13,
-  MAMULBMX_ACC_FIXP = 14,
+  TGEMV = 16,
+  TGEMV_BIAS = 17,
+  TGEMV_ACC = 18,
+  TGEMVMX = 20,
+  TGEMVMX_BIAS = 21,
+  TGEMVMX_ACC = 22,
   EMPTY_TileOPCUBE
 };
 
