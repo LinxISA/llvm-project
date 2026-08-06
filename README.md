@@ -13,17 +13,17 @@
 - Linx toolchain artifacts used by superproject gates
 
 ## Canonical Build and Test Commands
-Run from `/Users/zhoubot/linx-isa`.
+Run from `${LINX_ISA_ROOT}`.
 
 ```bash
 cmake -S compiler/llvm/llvm -B compiler/llvm/build-linxisa-clang -G Ninja \
   -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DLLVM_TARGETS_TO_BUILD=Linx
+  -DLLVM_TARGETS_TO_BUILD=LinxISA
 cmake --build compiler/llvm/build-linxisa-clang --target clang lld
 
-cd /Users/zhoubot/linx-isa/avs/compiler/linx-llvm/tests
-CLANG=/Users/zhoubot/linx-isa/compiler/llvm/build-linxisa-clang/bin/clang ./run.sh
-CLANGXX=/Users/zhoubot/linx-isa/compiler/llvm/build-linxisa-clang/bin/clang++ ./run_cpp.sh
+cd ${LINX_ISA_ROOT}/avs/compiler/linx-llvm/tests
+CLANG=${LINX_ISA_ROOT}/compiler/llvm/build-linxisa-clang/bin/clang ./run.sh
+CLANGXX=${LINX_ISA_ROOT}/compiler/llvm/build-linxisa-clang/bin/clang++ ./run_cpp.sh
 ```
 
 ## LinxISA Integration Touchpoints
@@ -32,6 +32,6 @@ CLANGXX=/Users/zhoubot/linx-isa/compiler/llvm/build-linxisa-clang/bin/clang++ ./
 - ABI/runtime coupling with `lib/musl`, `lib/glibc`, and kernel userspace bring-up
 
 ## Related Docs
-- `/Users/zhoubot/linx-isa/docs/project/navigation.md`
-- `/Users/zhoubot/linx-isa/docs/bringup/`
-- `/Users/zhoubot/linx-isa/avs/compiler/linx-llvm/README.md`
+- `${LINX_ISA_ROOT}/docs/project/navigation.md`
+- `${LINX_ISA_ROOT}/docs/bringup/`
+- `${LINX_ISA_ROOT}/avs/compiler/linx-llvm/README.md`
