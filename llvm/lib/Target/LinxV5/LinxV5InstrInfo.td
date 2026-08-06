@@ -2908,9 +2908,10 @@ def TileSizeWithBracket : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]>
 }
 
 // v5: PE_MASK (4-bit, {PE0,PE1,PE2,PE3}, 1000=PE0..1111=all) and TSize
-// (3-bit, 000=IMPLICIT, 001=512B..111=32KB). These replace the v4 imm4
-// TileSize field. Custom AsmOperandClass + ParserMethod so the asm syntax
-// "mask=N, TSize=N" is parsed as a whole token.
+// (3-bit, 000=IMPLICIT, 001=128B..111=8KB). TSize is encoded at PE granularity;
+// the hardware multiplies it by 4 to derive the full core size. These replace
+// the v4 imm4 TileSize field. Custom AsmOperandClass + ParserMethod so the asm
+// syntax "mask=N, TSize=N" is parsed as a whole token.
 def PE_MASKAsmOperand : AsmOperandClass {
   let Name = "PE_MASK";
   let ParserMethod = "parsePE_MASK";

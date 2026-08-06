@@ -402,7 +402,7 @@ void LinxV5InstPrinter::printTileSizeWithBracket(
   }
 
   static constexpr const char *TileSizes[] = {
-      "0B", "512B", "1KB", "2KB", "4KB", "8KB", "16KB", "32KB"};
+      "0B", "128B", "256B", "512B", "1KB", "2KB", "4KB", "8KB"};
   unsigned Imm = MI->getOperand(OpNo).getImm();
   if (Imm < sizeof(TileSizes) / sizeof(TileSizes[0]))
     O << "<" << TileSizes[Imm] << ">";

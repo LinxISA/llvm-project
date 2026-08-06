@@ -1740,15 +1740,13 @@ static bool matchRegisterNameHelper(MCRegister &RegNo, StringRef Name) {
 static unsigned matchTileSizeHelper(StringRef Name) {
   return StringSwitch<unsigned>(Name)
       .Case("0B", 0)
-      .Case("512B", 1)
-      .Case("1KB", 2)
-      .Case("2KB", 3)
-      .Case("4KB", 4)
-      .Case("8KB", 5)
-      .Case("16KB", 6)
-      .Case("32KB", 7)
-      .Case("256KB", 14)
-      .Case("512KB", 15)
+      .Case("128B", 1)
+      .Case("256B", 2)
+      .Case("512B", 3)
+      .Case("1KB", 4)
+      .Case("2KB", 5)
+      .Case("4KB", 6)
+      .Case("8KB", 7)
       .Default(16);
 }
 

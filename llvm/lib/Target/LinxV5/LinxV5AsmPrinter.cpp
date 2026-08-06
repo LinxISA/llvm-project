@@ -170,13 +170,14 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     return false;
   }
   // v5: %Z carries a B.IOT TileSize imm (0..7) and prints the size text
-  // ("512B"/"1KB"/.../"32KB") without brackets; the surrounding "<" ">" are
-  // written literally in the asm string ("->%[Dst]<%Z[TileSize]>").
+  // ("128B"/"256B"/.../"8KB") without brackets; the surrounding "<" ">" are
+  // written literally in the asm string ("->%[Dst]<%Z[TileSize]>"). TSize is
+  // encoded at PE granularity (the hardware multiplies by 4 for the core).
   if (ExtraCode && ExtraCode[0] == 'Z' && ExtraCode[1] == 0) {
     if (!MO.isImm())
       return true;
-    static const char *TileSizes[] = {"0B",   "512B", "1KB", "2KB",
-                                     "4KB",  "8KB",  "16KB", "32KB"};
+    static const char *TileSizes[] = {"0B",   "128B", "256B", "512B",
+                                     "1KB",  "2KB",  "4KB",  "8KB"};
     if ((unsigned)MO.getImm() < sizeof(TileSizes) / sizeof(TileSizes[0]))
       OS << TileSizes[MO.getImm()];
     return false;
