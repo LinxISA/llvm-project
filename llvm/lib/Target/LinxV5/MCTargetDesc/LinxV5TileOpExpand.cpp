@@ -462,15 +462,17 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(MCOperand::createImm(1))       // Last
                         .addOperand(Inst.getOperand(8)));  // SrcTile0
     break;
-  case LinxV5::PseudoTCOPY:
+  case LinxV5::PseudoTCOPY: {
     // v5: OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
+    // PseudoTCOPY operands: [0]=DstTile(def), [1]=TileSize(imm), [2]=SrcTile.
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
-                        .addOperand(Inst.getOperand(2))  // DstTile
+                        .addOperand(Inst.getOperand(0))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                        .addOperand(Inst.getOperand(0))            // TSize
+                        .addOperand(Inst.getOperand(1))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last
-                        .addOperand(Inst.getOperand(1)));  // SrcTile0
+                        .addOperand(Inst.getOperand(2)));  // SrcTile0
     break;
+  }
   case LinxV5::PseudoTSTORE_noDsrc_noDdst:
   case LinxV5::PseudoTSTORE_noDsrc_Ddst:
   case LinxV5::PseudoTSTORE_Dsrc_noDdst:
