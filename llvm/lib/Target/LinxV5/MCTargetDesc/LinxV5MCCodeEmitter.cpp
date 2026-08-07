@@ -353,7 +353,6 @@ static bool isCompressedOpcode(unsigned Opcode) {
   case LinxV5::BSTART_AUX_WITHOUT_TARGET_16:
   case LinxV5::BSTART_FP_WITHOUT_TARGET_16:
 
-  case LinxV5::C_B_IOS:
   case LinxV5::C_B_DIMI:
     return true;
   }
@@ -506,12 +505,15 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
              .addOperand(MI.getOperand(2))
              .addOperand(MI.getOperand(1))},
         ByteCount);
+    // PTO v0.58 reissue: destination B.IOS (mask, ->S<id><size>).
     writeBinaryCodes(
         OS, Fixups, STI,
-        {MCInstBuilder(LinxV5::C_B_IOS)
+        {MCInstBuilder(LinxV5::B_IOS)
              .addOperand(MCOperand::createImm(
                  Ctx.getRegisterInfo()->getEncodingValue(
-                     MI.getOperand(0).getReg())))},
+                     MI.getOperand(0).getReg())))  // SharedTID
+             .addOperand(MI.getOperand(3))         // PE_MASK
+             .addOperand(MI.getOperand(4))},       // TSize
         ByteCount);
     writeBinaryCodes(
         OS, Fixups, STI,
@@ -529,11 +531,14 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
            .addOperand(MI.getOperand(2))
            .addOperand(MI.getOperand(1))},
       ByteCount);
+  // PTO v0.58 reissue: source B.IOS (S<id>, mask=...).
   writeBinaryCodes(OS, Fixups, STI,
-                   {MCInstBuilder(LinxV5::C_B_IOS)
+                   {MCInstBuilder(LinxV5::B_IOS)
                         .addOperand(MCOperand::createImm(
                             Ctx.getRegisterInfo()->getEncodingValue(
-                                MI.getOperand(3).getReg())))},
+                                MI.getOperand(3).getReg())))  // SharedTID
+                        .addOperand(MI.getOperand(4))          // PE_MASK
+                        .addOperand(MCOperand::createImm(0))}, // TSize=0
                    ByteCount);
   writeBinaryCodes(
       OS, Fixups, STI,
@@ -616,12 +621,16 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
         Dummy);
   }
   if (MI.getOpcode() == LinxV5::PseudoMAMULB_SharedRight_SizeI) {
+    // PTO v0.58 reissue: CUBE Shared binder is a source B.IOS (TSize=0,
+    // mask=1111). operand(11)=SharedTID.
     writeBinaryCodes(
         OS, Fixups, STI,
-        {MCInstBuilder(LinxV5::C_B_IOS)
+        {MCInstBuilder(LinxV5::B_IOS)
              .addOperand(MCOperand::createImm(
                  Ctx.getRegisterInfo()->getEncodingValue(
-                     MI.getOperand(11).getReg())))},
+                     MI.getOperand(11).getReg())))  // SharedTID
+             .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
+             .addOperand(MCOperand::createImm(0))},     // TSize=0
         Dummy);
   }
   // b.iot

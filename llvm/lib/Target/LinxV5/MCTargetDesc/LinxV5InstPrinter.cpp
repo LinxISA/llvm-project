@@ -48,6 +48,13 @@ static cl::opt<bool>
 void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                   StringRef Annot, const MCSubtargetInfo &STI,
                                   raw_ostream &O) {
+  // PTO v0.58 reissue: B.IOS prints a source or destination form depending on
+  // TSize (0 => "S<id>, mask=...", nonzero => "mask=..., ->S<id><size>").
+  if (MI->getOpcode() == LinxV5::B_IOS) {
+    printB_IOS(MI, STI, O);
+    printAnnotation(O, Annot);
+    return;
+  }
   if (NoAliases || !printAliasInstr(MI, Address, STI, O)) {
     printInstruction(MI, Address, STI, O);
   }
@@ -420,7 +427,8 @@ void LinxV5InstPrinter::printPE_MASK(const MCInst *MI, unsigned OpNo,
 
 void LinxV5InstPrinter::printSharedTID(const MCInst *MI, unsigned OpNo,
                     const MCSubtargetInfo &STI, raw_ostream &O) {
-  // v5 Shared architectural ID: print as "S#n" (machine-level notation).
+  // PTO v0.58 reissue: Shared architectural ID prints as "S" followed by the
+  // absolute index (S0..S255); no '#' prefix.
   const MCOperand &MO = MI->getOperand(OpNo);
   int64_t Value;
   if (MO.isImm())
@@ -432,7 +440,36 @@ void LinxV5InstPrinter::printSharedTID(const MCInst *MI, unsigned OpNo,
       MO.getExpr()->print(O, &MAI);
     return;
   }
-  O << "S#" << Value;
+  O << "S" << Value;
+}
+
+void LinxV5InstPrinter::printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
+                    const MCSubtargetInfo &STI, raw_ostream &O) {
+  // PTO v0.58 reissue: destination Shared ID prints as "->S" + index.
+  O << "->";
+  printSharedTID(MI, OpNo, STI, O);
+}
+
+// PTO v0.58 reissue: print a complete B.IOS binder. TSize=0 selects the
+// source form ("B.IOS S17, mask=1111"); a nonzero TSize selects the
+// destination form ("B.IOS mask=0011, ->S12<128B>"). Operands:
+// 0=SharedTID, 1=PE_MASK, 2=TSize.
+void LinxV5InstPrinter::printB_IOS(const MCInst *MI, const MCSubtargetInfo &STI,
+                                   raw_ostream &O) {
+  unsigned TSize = MI->getOperand(2).getImm();
+  O << "B.IOS\t";
+  if (TSize == 0) {
+    // source form
+    printSharedTID(MI, 0, STI, O);
+    O << ", ";
+    printPE_MASK(MI, 1, STI, O);
+  } else {
+    // destination form
+    printPE_MASK(MI, 1, STI, O);
+    O << ", ->";
+    printSharedTID(MI, 0, STI, O);
+    printTileSizeWithBracket(MI, 2, STI, O);
+  }
 }
 
 void LinxV5InstPrinter::printTSize(const MCInst *MI, unsigned OpNo,

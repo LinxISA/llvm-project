@@ -419,6 +419,20 @@ static DecodeStatus decodeFail(MCInst &Inst, const InsnType &insn,
   return MCDisassembler::Fail;
 }
 
+// B.IOS destination TSize: a nonzero TSize selects the destination role. If
+// the field is zero the word is the source form (B_IOS_Src), so reject zero
+// here to let the decoder fall through to B_IOS_Src.
+template <typename InsnType>
+static DecodeStatus decodeBIOSDstTSize(MCInst &Inst, const InsnType &insn,
+                                       int64_t Address,
+                                       const MCDisassembler *Decoder) {
+  uint64_t TSize = (static_cast<uint64_t>(insn) >> 9) & 0x7;
+  if (TSize == 0)
+    return MCDisassembler::Fail;
+  Inst.addOperand(MCOperand::createImm(TSize));
+  return MCDisassembler::Success;
+}
+
 #include "LinxV5GenDisassemblerTables.inc"
 
 enum DecoderNS {

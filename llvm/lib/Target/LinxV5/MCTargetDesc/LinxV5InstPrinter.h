@@ -80,6 +80,10 @@ public:
                     const MCSubtargetInfo &STI, raw_ostream &O);
   void printSharedTID(const MCInst *MI, unsigned OpNo,
                     const MCSubtargetInfo &STI, raw_ostream &O);
+  void printB_IOS(const MCInst *MI, const MCSubtargetInfo &STI,
+                  raw_ostream &O);
+  void printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
+                    const MCSubtargetInfo &STI, raw_ostream &O);
   void printGPRPlusImm(const MCInst *MI, unsigned OpNo,
                        const MCSubtargetInfo &STI, raw_ostream &O);
   void printDRImm(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,

@@ -1683,6 +1683,8 @@ def B_IOD_Nodst : LinxV5InstBase {
   field bits<32> Inst;
   let Size = 4;
   let isDisassembleOnly = 0;
+  let isCodeGenOnly = 1;  // B.IOD retired (handoff 5.0.1); drop from decoder so
+                          // B.IOS with SharedTID=0 decodes unambiguously.
   let OutOperandList = (outs );
   let InOperandList = (ins RegDepSrc:$DepSrc0);
 
@@ -2746,26 +2748,20 @@ def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
   let PrintMethod = "printSharedTID";
   let EncoderMethod = "getImmOpValueSharedTID";
 }
-def SharedRegOp : RegisterOperand<Shared_ABS>;
-def C_B_IOS : BlockModifierBase {
-  field bits<16> SoftFail = 0;
-  field bits<16> Inst;
-  let Size = 2;
-  let isDisassembleOnly = 0;
-
-  bits<8> SharedTID;
-
-  dag OutOperandList = (outs);
-  let InOperandList = (ins SharedTIDOp:$SharedTID);
-  let Inst{15-14} = 0b11;
-  let Inst{13-6} = SharedTID;
-  let Inst{5-4} = 0b11;
-  let Inst{3-1} = 0b110;
-  let Inst{0} = 0b0;
-
-  let AsmString = "C.B.IOS" # "\t$SharedTID";
+// Destination Shared operand: "->S17" (arrow + absolute ID). Used by B.IOS
+// destination form. The arrow is part of the operand (like TILE_DstWithArrow),
+// so the AsmMatcher matches it as a single operand class.
+def SharedTIDWithArrowAsmOperand : AsmOperandClass {
+  let Name = "SharedTIDWithArrow";
+  let ParserMethod = "parseSharedTIDWithArrow";
+  let RenderMethod = "addImmOperands";
 }
-
+def SharedTIDWithArrowOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
+  let ParserMatchClass = SharedTIDWithArrowAsmOperand;
+  let PrintMethod = "printSharedTIDWithArrow";
+  let EncoderMethod = "getImmOpValueSharedTID";
+}
+def SharedRegOp : RegisterOperand<Shared_ABS>;
 class B_IOT_Base<bits<3> Func, dag outs, dag ins, string opcodestr="", string argstr="">
     : LinxV5Inst<outs, ins, opcodestr, argstr> {
 let Format = InstFormatBlockModifier;
@@ -2933,6 +2929,17 @@ def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
   let EncoderMethod = "getImmOpValueTSize";
 }
 
+// B.IOS destination TSize: must be nonzero (a nonzero TSize selects the
+// destination role; TSize=0 is the source form). The DecoderMethod lets the
+// disassembler reject TSize=0 for B_IOS_Dst, so a TSize=0 word decodes as
+// B_IOS_Src instead of being ambiguous.
+def BIOS_Dst_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
+  let ParserMatchClass = B_IOT_TileSizeAsmOperand;
+  let PrintMethod = "printTileSizeWithBracket";
+  let EncoderMethod = "getImmOpValueTSize";
+  let DecoderMethod = "decodeBIOSDstTSize";
+}
+
 // v5: B.IOT destination-suffix TileSize operand. 3-bit, same encoding as
 // TSize_Op (getImmOpValueTSize), but parses "<8KB>" and prints "<8KB>" as a
 // destination suffix. Only B_IOT_*_Dst use this; TSize_Op keeps "TSize=N".
@@ -2941,6 +2948,55 @@ def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
   let PrintMethod = "printTileSizeWithBracket";
   let EncoderMethod = "getImmOpValueTSize";
 }
+
+// PTO v0.58 reissue: 32-bit B.IOS Shared operand binder, replacing the retired
+// 16-bit C.B.IOS. Carries an absolute Shared ID (S0..S255), the per-PE size
+// (TSize) and the operation PE mask. TSize=0 selects a Shared source; a
+// nonzero TSize selects a Shared destination and declares per-PE capacity.
+//   source:      B.IOS S12, mask=1111
+//   destination: B.IOS mask=0011, ->S12<128B>
+// Encoding: [31:28]=0, [27:20]=SharedTID, [19]=0, [18:15]=PE_MASK,
+//           [14:12]=funct3=001, [11:9]=TSize, [8:7]=00, [6:0]=0x13.
+// match=0x00001013, mask=0xf00871ff.
+class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
+    : LinxV5Inst<outs, ins, "B.IOS", argstr> {
+  let Format = InstFormatBlockModifier;
+  let Size = 4;
+  let isDisassembleOnly = 0;
+
+  bits<8> SharedTID;
+  bits<4> PE_MASK;
+  bits<3> TSize;
+
+  let Inst{31-28} = 0b0000;
+  let Inst{27-20} = SharedTID;
+  let Inst{19} = 0b0;
+  let Inst{18-15} = PE_MASK;
+  let Inst{14-12} = Role;
+  let Inst{11-9} = TSize;
+  let Inst{8-7} = 0b00;
+  let Inst{6-0} = 0b0010011;
+}
+
+// PTO v0.58 reissue Shared binder. TSize=0 selects a source
+// ("B.IOS S17, mask=1111"); a nonzero TSize selects a destination
+// ("B.IOS mask=0011, ->S12<128B>"). A single B_IOS instruction avoids a
+// decoder ambiguity between the two roles (they share funct3=001/opcode=0x13
+// and differ only in TSize). printInst prints the source or destination form
+// from TSize; the two InstAliases below accept both textual inputs.
+def B_IOS : B_IOS_Base<0b001, (outs),
+        (ins SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
+             TSize_Op:$TSize)> {
+  // printInst overrides the printed form based on TSize.
+  let AsmString = "B.IOS" # "\t$PE_MASK, $SharedTID$TSize";
+}
+// Source input: "B.IOS S17, mask=1111" (TSize defaults to 0).
+def : InstAlias<"B.IOS\t$SharedTID, $PE_MASK",
+    (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK, 0), 0>;
+// Destination input: "B.IOS mask=0011, ->S12<128B>".
+def : InstAlias<"B.IOS\t$PE_MASK, $SharedTID$TSize",
+    (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
+     B_IOT_TileSize_Op:$TSize), 0>;
 
 def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last)> {
@@ -2995,6 +3051,10 @@ def B_IOT_OneSrc_NoDst_Size: B_IOT_Base<0b101, (outs),
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}";
 }
 def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
+
+// PTO v0.58 reissue: no mask-only Shared B.IOT companion exists (B.IOT binds
+// Local Tiles only). The retired no-src/no-dst TSize-only form is removed;
+// Shared size/mask are carried by B.IOS.
 
 def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let DstTile = 0b00;

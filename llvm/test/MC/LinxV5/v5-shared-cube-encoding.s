@@ -3,10 +3,11 @@
 
 # v5 shared/tlsu encoding round-trip. The deleted TMATMUL*_FIXP mnemonics
 # (Function 9-14) are no longer parsed; active CUBE functions (TMATMUL 0,
-# TGEMV 16) and the TLSU/GMOV functions remain.
+# TGEMV 16) and the TLSU/GMOV functions remain. PTO v0.58 reissue: the retired
+# 16-bit C.B.IOS is replaced by the 32-bit B.IOS (source form, TSize=0).
 
-C.B.IOS S#0
-C.B.IOS S#255
+B.IOS S0, mask=1111
+B.IOS S255, mask=1111
 BSTART.CUBE TMATMUL, FP32
 B.FPATR 0, 0, 0, 0, 0, 0, 0
 BSTART.CUBE TGEMV, FP32
@@ -18,8 +19,8 @@ BSTART.TLSU TMOV.S2L.EXTRACT, FP32
 BSTART.TLSU TSTORE.SPART, FP32
 BSTART.TLSU GMOV, FP32
 
-# CHECK: C.B.IOS{{.*}}S#0
-# CHECK: C.B.IOS{{.*}}S#255
+# CHECK: B.IOS{{.*}}S0, mask=1111
+# CHECK: B.IOS{{.*}}S255, mask=1111
 # CHECK: BSTART.CUBE{{.*}}TMATMUL
 # CHECK: B.FPATR{{.*}}0, 0, 0, 0, 0, 0, 0
 # CHECK: BSTART.CUBE{{.*}}TGEMV
@@ -30,7 +31,7 @@ BSTART.TLSU GMOV, FP32
 # CHECK: BSTART.TLSU{{.*}}TSTORE.SPART
 # CHECK: BSTART.TLSU{{.*}}GMOV
 
-# DIS: C.B.IOS{{.*}}S#0
-# DIS: C.B.IOS{{.*}}S#255
+# DIS: B.IOS{{.*}}S0, mask=1111
+# DIS: B.IOS{{.*}}S255, mask=1111
 # DIS: BSTART.CUBE{{.*}}TMATMUL
 # DIS: BSTART.TLSU{{.*}}GMOV

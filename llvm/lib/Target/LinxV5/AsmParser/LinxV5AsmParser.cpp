@@ -176,6 +176,8 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   OperandMatchResultTy parseTileRegWithArrow(OperandVector &Operands);
   // v5: parse "S#n" Shared architectural ID (C.B.IOS binder).
   OperandMatchResultTy parseSharedTID(OperandVector &Operands);
+  // PTO v0.58 reissue: parse "->S17" destination Shared ID (B.IOS).
+  OperandMatchResultTy parseSharedTIDWithArrow(OperandVector &Operands);
   // v5: parse "mask=N" PE_MASK and "TSize=N" TSize operands.
   OperandMatchResultTy parsePE_MASK(OperandVector &Operands);
   OperandMatchResultTy parseTSize(OperandVector &Operands);
@@ -539,6 +541,7 @@ public:
 
   // v5: SharedTID/PE_MASK/TSize are parsed as immediates.
   bool isSharedTID() const { return isImm(); }
+  bool isSharedTIDWithArrow() const { return isImm(); }
   bool isPE_MASK() const { return isImm(); }
   bool isTSize() const { return isImm(); }
 
@@ -2344,18 +2347,27 @@ OperandMatchResultTy LinxV5AsmParser::parseGroupOp(OperandVector &Operands) {
   return MatchOperand_Success;
 }
 
-// v5: parse "S#n" Shared architectural ID (C.B.IOS binder operand).
+// PTO v0.58 reissue: parse destination Shared ID "->S17" for the 32-bit
+// B.IOS destination form. Consumes an optional leading "->" arrow and the
+// absolute "S17" ID (rejecting the retired "S#n" spelling). The arrow is kept
+// in the operand so a single SharedIDWithArrow operand class serves both the
+// source ("S17") and destination ("->S17") text forms.
 OperandMatchResultTy
-LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
+LinxV5AsmParser::parseSharedTIDWithArrow(OperandVector &Operands) {
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
-  auto &Tok = getLexer().getTok();
-  StringRef Str = Tok.getString();
+  StringRef Str = getLexer().getTok().getString();
+  if (Str == "->") {
+    getLexer().Lex();  // consume '->'
+    Str = getLexer().getTok().getString();
+  }
   if (Str.empty())
-    Str = Tok.getIdentifier();
-  if (!Str.startswith_insensitive("s#"))
+    Str = getLexer().getTok().getIdentifier();
+  if (!Str.startswith_insensitive("s"))
     return MatchOperand_NoMatch;
-  StringRef NumStr = Str.substr(2);
+  if (Str.size() > 1 && Str[1] == '#')
+    return MatchOperand_NoMatch;
+  StringRef NumStr = Str.substr(1);
   if (NumStr.empty())
     return MatchOperand_NoMatch;
   unsigned TID;
@@ -2365,7 +2377,39 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
     return MatchOperand_NoMatch;
   const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
   Operands.push_back(LinxV5Operand::createImm(Val, S, E));
-  getLexer().Lex();  // consume 'S#n'
+  getLexer().Lex();  // consume 'S17'
+  return MatchOperand_Success;
+}
+
+// PTO v0.58 reissue: parse absolute Shared architectural ID "S0".."S255"
+// (no '#' prefix) for the 32-bit B.IOS binder operand. The leading "->" of a
+// destination ("->S17") is matched as a separate literal token by the AsmMatcher,
+// so this method only consumes the bare "S17". The retired "S#n" spelling is
+// rejected.
+OperandMatchResultTy
+LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
+  SMLoc S = getLoc();
+  SMLoc E = SMLoc::getFromPointer(S.getPointer());
+  auto &Tok = getLexer().getTok();
+  StringRef Str = Tok.getString();
+  if (Str.empty())
+    Str = Tok.getIdentifier();
+  if (!Str.startswith_insensitive("s"))
+    return MatchOperand_NoMatch;
+  // Reject the retired "S#n" spelling.
+  if (Str.size() > 1 && Str[1] == '#')
+    return MatchOperand_NoMatch;
+  StringRef NumStr = Str.substr(1);
+  if (NumStr.empty())
+    return MatchOperand_NoMatch;
+  unsigned TID;
+  if (NumStr.getAsInteger(10, TID))
+    return MatchOperand_NoMatch;
+  if (TID > 255)
+    return MatchOperand_NoMatch;
+  const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
+  Operands.push_back(LinxV5Operand::createImm(Val, S, E));
+  getLexer().Lex();  // consume 'S17'
   return MatchOperand_Success;
 }
 
@@ -2386,9 +2430,21 @@ LinxV5AsmParser::parsePE_MASK(OperandVector &Operands) {
   // expect integer
   if (getLexer().getTok().getKind() != AsmToken::Integer)
     return MatchOperand_ParseFail;
-  unsigned Val = getLexer().getTok().getIntVal();
-  if (Val > 15)
-    return MatchOperand_ParseFail;
+  // PTO v0.58 reissue: PE_MASK is a 4-bit binary spelling ("mask=0011" is
+  // the bit pattern 0011 = 3, not octal/decimal 11). Parse the token as a
+  // binary digit string.
+  unsigned Val = 0;
+  StringRef MaskStr = getLexer().getTok().getString();
+  // Strip any leading "0b".
+  if (MaskStr.startswith_insensitive("0b"))
+    MaskStr = MaskStr.substr(2);
+  for (char C : MaskStr) {
+    if (C != '0' && C != '1')
+      return MatchOperand_ParseFail;
+    Val = (Val << 1) | (C - '0');
+    if (Val > 15)
+      return MatchOperand_ParseFail;
+  }
   getLexer().Lex(); // consume integer
   const MCExpr *Expr = MCConstantExpr::create(Val, getParser().getContext());
   Operands.push_back(LinxV5Operand::createImm(Expr, S, E));

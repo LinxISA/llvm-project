@@ -6,13 +6,13 @@ target triple = "linx64v5"
 ; Overlapping Shared SSA values need different absolute registers.
 ; CHECK-LABEL: <overlap>:
 ; CHECK: BSTART.TLSU TMOV.L2S.PUBLISH, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK: BSTART.TLSU TMOV.L2S.PUBLISH, FP32
-; CHECK-NEXT: C.B.IOS S#1
+; CHECK-NEXT: B.IOS mask=1111, ->S1<512B>
 ; CHECK: BSTART.TLSU TMOV.S2L.EXTRACT, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS S0, mask=1111
 ; CHECK: BSTART.TLSU TMOV.S2L.EXTRACT, FP32
-; CHECK-NEXT: C.B.IOS S#1
+; CHECK-NEXT: B.IOS S1, mask=1111
 define void @overlap(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in0, i64 0)
   %b = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in1, i64 0)
@@ -28,13 +28,13 @@ define void @overlap(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
 ; Non-overlapping Shared SSA values may reuse the same absolute register.
 ; CHECK-LABEL: <reuse>:
 ; CHECK: BSTART.TLSU TMOV.L2S.PUBLISH, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK: BSTART.TLSU TMOV.S2L.EXTRACT, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS S0, mask=1111
 ; CHECK: BSTART.TLSU TMOV.L2S.PUBLISH, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK: BSTART.TLSU TMOV.S2L.EXTRACT, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS S0, mask=1111
 define void @reuse(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in0, i64 0)
   %s0 = call i64 @llvm.linx.v5.shared.l2s.publish.v128f32(i64 1, i64 15, <128 x float> %a)
@@ -47,14 +47,14 @@ define void @reuse(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
   ret void
 }
 
-; Shared-right TMATMUL consumes the Shared register through C.B.IOS. The B.IOT
+; Shared-right TMATMUL consumes the Shared register through B.IOS. The B.IOT
 ; stream contains only local A and the ordinary local-tile result.
 ; CHECK-LABEL: <matmul_shared>:
 ; CHECK: BSTART.TLSU TMOV.L2S.PUBLISH, FP32
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK: BSTART.CUBE TMATMUL, FP32
 ; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
-; CHECK-NEXT: C.B.IOS S#0
+; CHECK-NEXT: B.IOS S0, mask=1111
 ; CHECK-NEXT: B.IOT {{[^,]+}}, mask=1111, TSize={{[0-9]+}}, last
 define void @matmul_shared(ptr %in_a, ptr %in_b, ptr %out) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)

@@ -565,11 +565,12 @@ def Dep_SRC : RegisterClass<"LinxV5", [vAny], 64, (add
 }
 
 // Shared tile handles are architectural global registers. Keep them in a
-// separate register file so allocation is an absolute S#0..S#255 assignment.
+// separate register file so allocation is an absolute S0..S255 assignment.
+// (PTO v0.58 reissue: Shared spelling is "S0".."S255", no '#' prefix.)
 let RegAltNameIndices = [ABIRegAltName] in {
   foreach Index = 0-255 in {
     def Shared_S#Index : LinxV5SharedReg<Index, "shared_s"#Index,
-                                           ["S#"#Index]>,
+                                           ["S"#Index]>,
                                            DwarfRegNum<[100]>;
   }
 }
