@@ -5,7 +5,7 @@ target triple = "linx64v5"
 
 ; CHECK-LABEL: <gmov>:
 ; CHECK: BSTART.TLSU GMOV, FP32
-; CHECK-NEXT: B.IOT {{.*}}mask=1111, TSize=1, last
+; CHECK-NEXT: B.IOT {{.*}}mask=1111, TSize=3, last
 ; CHECK-NEXT: B.IOR [a2],[]
 define void @gmov(ptr %in, ptr %out, i64 %peer) {
   %src = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in, i64 0)

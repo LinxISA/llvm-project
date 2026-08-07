@@ -1098,13 +1098,14 @@ SDValue LinxV5TargetLowering::lowerMergeCF(SDLoc &DL, SDValue Op,
 }
 
 static unsigned calculateVCallSizeMask(EVT Type) {
-  // Tile size is encoded at PE granularity: the type's full size is the whole
-  // core (4-PE) tile, so the per-PE fragment is one quarter of it. Legal
-  // per-PE sizes are 128 B..8 KB.
-  uint64_t SizeBytes = Type.getFixedSizeInBits() / 8 / 4;
+  // The tile register type's size is the per-PE tile size and encodes directly
+  // (no division by 4): the same compact code matchTileSizeHelper uses
+  // (128B..8KB -> 1..7 = Log2-6). Fixups/encoders pass the value through, so
+  // codegen and handwritten asm must agree on this encoding.
+  uint64_t SizeBytes = Type.getFixedSizeInBits() / 8;
   if (!isPowerOf2_64(SizeBytes) || SizeBytes < 128 || SizeBytes > 8192)
     report_fatal_error(
-        "LinxV5 Tile size must be a power of two from 128 B through 8 KB (per PE)");
+        "LinxV5 Tile size must be a power of two from 128 B through 8 KB");
   return Log2_64(SizeBytes) - 6;
 }
 
