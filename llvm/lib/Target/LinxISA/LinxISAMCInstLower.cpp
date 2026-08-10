@@ -108,6 +108,40 @@ static unsigned getSpecOpcodeByAsmFmt(StringRef AsmFmt, unsigned LengthBits) {
   return Opc;
 }
 
+static unsigned getSpecOpcodeByAsmFmtAndMatch(StringRef AsmFmt,
+                                              unsigned LengthBits,
+                                              uint64_t Match) {
+  struct CacheEntry {
+    std::string Key;
+    unsigned Opcode;
+  };
+  static std::vector<CacheEntry> Cache;
+
+  std::string Key =
+      (AsmFmt + "/" + Twine(LengthBits) + "/" + Twine(Match)).str();
+  for (const CacheEntry &E : Cache)
+    if (E.Key == Key)
+      return E.Opcode;
+
+  for (unsigned Opc = 0; Opc < linxisa_inst_forms_count; ++Opc) {
+    const linxisa_inst_form &F = linxisa_inst_forms[Opc];
+    if (unsigned(F.length_bits) != LengthBits)
+      continue;
+    if (!F.asm_fmt || AsmFmt != StringRef(F.asm_fmt))
+      continue;
+    if (F.match != Match)
+      continue;
+    Cache.push_back({Key, Opc});
+    return Opc;
+  }
+
+  SmallString<128> Msg;
+  raw_svector_ostream OS(Msg);
+  OS << "Linx: missing spec opcode for asm fmt '" << AsmFmt << "' ("
+     << LengthBits << "b, match=" << Match << ")";
+  report_fatal_error(OS.str());
+}
+
 unsigned LinxISAMCInstLower::getReg5Encoding(unsigned Reg) const {
   return TRI.getEncodingValue(Reg) & 0x1F;
 }
@@ -359,19 +393,32 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::BSTART_TLSU: {
     const int64_t DataType = I(0) & 0x1f;
     const unsigned Func = static_cast<unsigned>(I(1)) & 0x1fu;
-    static constexpr const char *TLSUAsmFormats[] = {
-        "BSTART.TLOAD DataType",        "BSTART.TSTORE DataType",
-        "BSTART.TMOV DataType",         "BSTART.TPREFETCH DataType",
-        "BSTART.MGATHER DataType",      "BSTART.MSCATTER DataType",
-        "BSTART.MGATHER.MASK DataType", "BSTART.MSCATTER.MASK DataType",
-        "BSTART.MGATHER.CAS DataType",
+    struct TLSUEncoding {
+      unsigned Function;
+      const char *AsmFormat;
+      uint64_t Match;
     };
-    if (Func >= std::size(TLSUAsmFormats))
-      report_fatal_error("LinxISA: invalid PTO ISA 0.58 TLSU function");
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(TLSUAsmFormats[Func],
-                                          /*LengthBits=*/32));
-    OutMI.addOperand(MCOperand::createImm(DataType));
-    return;
+    static constexpr TLSUEncoding TLSUEncodings[] = {
+        {0u, "BSTART.TLOAD DataType", 0x00011181u},
+        {1u, "BSTART.TSTORE DataType", 0x00111181u},
+        {2u, "BSTART.TMOV DataType", 0x00211181u},
+        {3u, "BSTART.TPREFETCH DataType", 0x00311181u},
+        {4u, "BSTART.MGATHER DataType", 0x00411181u},
+        {5u, "BSTART.MSCATTER DataType", 0x00511181u},
+        {6u, "BSTART.MGATHER.MASK DataType", 0x00611181u},
+        {7u, "BSTART.MSCATTER.MASK DataType", 0x00711181u},
+        {8u, "BSTART.MGATHER.CAS DataType", 0x00811181u},
+        {13u, "BSTART.GMOV DataType", 0x00d11181u},
+    };
+    for (const TLSUEncoding &Encoding : TLSUEncodings) {
+      if (Func != Encoding.Function)
+        continue;
+      OutMI.setOpcode(getSpecOpcodeByAsmFmtAndMatch(
+          Encoding.AsmFormat, /*LengthBits=*/32, Encoding.Match));
+      OutMI.addOperand(MCOperand::createImm(DataType));
+      return;
+    }
+    report_fatal_error("LinxISA: invalid PTO ISA 0.58 TLSU function");
   }
   case LinxISA::BSTART_CUBE: {
     const int64_t DataType = I(0) & 0x1f;

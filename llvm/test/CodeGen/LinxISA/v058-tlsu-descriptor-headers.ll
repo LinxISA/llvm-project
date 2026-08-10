@@ -1,4 +1,6 @@
 ; RUN: llc -mtriple=linx64 -O2 < %s | FileCheck %s
+; RUN: llc -mtriple=linx64 -O2 -filetype=obj < %s -o %t
+; RUN: llvm-objdump -d %t | FileCheck %s --check-prefix=ENC
 
 %linx.tile = type target("linx.tile")
 
@@ -22,3 +24,9 @@ entry:
 ; CHECK: B.IOR
 ; CHECK: B.IOT
 ; CHECK-NOT: B.ARG
+
+; The ordinary TSTORE lowering must select the TLSU function-1 base form
+; (match 0x00111181), not the distinct TSTORE.SPART encoding variant
+; (match 0x00e11181), even though both forms share the same assembly format.
+; ENC: 81 11 01 00  BSTART.TLOAD{{[[:space:]]+}}FP64
+; ENC: 81 11 11 00  BSTART.TSTORE{{[[:space:]]+}}FP64
