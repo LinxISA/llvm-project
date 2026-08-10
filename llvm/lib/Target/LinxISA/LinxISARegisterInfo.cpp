@@ -38,10 +38,11 @@ LinxISARegisterInfo::getCallPreservedMask(const MachineFunction &MF,
   return CSR_Linx_RegMask;
 }
 
-BitVector LinxISARegisterInfo::getReservedRegs(const MachineFunction &MF) const {
+BitVector
+LinxISARegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   Reserved.set(LinxISA::R0);
-  Reserved.set(LinxISA::R1); // sp
+  Reserved.set(LinxISA::R1);  // sp
   Reserved.set(LinxISA::R10); // ra
   if (MF.getSubtarget().getFrameLowering()->hasFP(MF)) {
     Reserved.set(LinxISA::R18); // s8 / frame pointer
@@ -57,7 +58,8 @@ BitVector LinxISARegisterInfo::getReservedRegs(const MachineFunction &MF) const 
   return Reserved;
 }
 
-Register LinxISARegisterInfo::getFrameRegister(const MachineFunction &MF) const {
+Register
+LinxISARegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   if (MF.getSubtarget().getFrameLowering()->hasFP(MF)) {
     return LinxISA::R18; // s8
   }
@@ -98,10 +100,9 @@ static Register scavengeScratchGPR(MachineBasicBlock::iterator II,
     report_fatal_error(Twine("Linx: ") + Context +
                        " frame index elimination requires RegScavenger");
 
-  Register BaseReg =
-      RS->scavengeRegisterBackwards(LinxISA::GPRRegClass, II,
-                                    /*RestoreAfter=*/true, SPAdj,
-                                    /*AllowSpill=*/true);
+  Register BaseReg = RS->scavengeRegisterBackwards(LinxISA::GPRRegClass, II,
+                                                   /*RestoreAfter=*/true, SPAdj,
+                                                   /*AllowSpill=*/true);
   if (!BaseReg)
     report_fatal_error(Twine("Linx: failed to scavenge scratch register for ") +
                        Context);
@@ -111,8 +112,7 @@ static Register scavengeScratchGPR(MachineBasicBlock::iterator II,
 static void materializeFramePlusOffset(MachineInstr &MI,
                                        MachineBasicBlock::iterator II,
                                        const TargetInstrInfo &TII,
-                                       Register BaseReg,
-                                       Register FrameReg,
+                                       Register BaseReg, Register FrameReg,
                                        int64_t OffsetBytes) {
   MachineBasicBlock &MBB = *MI.getParent();
   DebugLoc DL = MI.getDebugLoc();
@@ -123,9 +123,8 @@ static void materializeFramePlusOffset(MachineInstr &MI,
   Register Src = FrameReg;
   while (Remaining != 0) {
     const bool IsPos = Remaining > 0;
-    const uint64_t Abs =
-        IsPos ? static_cast<uint64_t>(Remaining)
-              : static_cast<uint64_t>(-Remaining);
+    const uint64_t Abs = IsPos ? static_cast<uint64_t>(Remaining)
+                               : static_cast<uint64_t>(-Remaining);
     const uint64_t Chunk = std::min<uint64_t>(Abs, (1u << 24) - 1);
     const bool UseLongImm = Chunk > 4095;
     const unsigned Opc =
@@ -146,8 +145,7 @@ static void materializeFramePlusOffset(MachineInstr &MI,
 }
 
 bool LinxISARegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
-                                              int SPAdj,
-                                              unsigned FIOperandNum,
+                                              int SPAdj, unsigned FIOperandNum,
                                               RegScavenger *RS) const {
   MachineInstr &MI = *II;
   MachineFunction &MF = *MI.getParent()->getParent();
@@ -178,8 +176,7 @@ bool LinxISARegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   case LinxISA::SW:
   case LinxISA::SD: {
     if (OffsetBytes == 0) {
-      MI.getOperand(FIOperandNum)
-          .ChangeToRegister(FrameReg, /*isDef=*/false);
+      MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
       return false;
     }
 
@@ -197,9 +194,9 @@ bool LinxISARegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // Tile pseudo stack accesses carry a FrameIndex in operand #0. Materialize
   // a base register and rewrite the FrameIndex operand into that register.
   switch (MI.getOpcode()) {
-  case LinxISA::PSEUDO_TMA_TLOAD:
-  case LinxISA::PSEUDO_TMA_TLOAD_ANY:
-  case LinxISA::PSEUDO_TMA_TSTORE: {
+  case LinxISA::PSEUDO_TLSU_TLOAD:
+  case LinxISA::PSEUDO_TLSU_TLOAD_ANY:
+  case LinxISA::PSEUDO_TLSU_TSTORE: {
     if (OffsetBytes == 0) {
       MI.getOperand(FIOperandNum).ChangeToRegister(FrameReg, /*isDef=*/false);
       return false;

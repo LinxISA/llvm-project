@@ -6,9 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
-#include "LinxISATileOpcodesV057.h"
+#include "MCTargetDesc/LinxISAOpcodeTables.h"
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -17,13 +17,13 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
-#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCParser/AsmLexer.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
@@ -42,7 +42,8 @@ static std::string toUpperStr(StringRef S) {
   std::string Out;
   Out.reserve(S.size());
   for (char C : S)
-    Out.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(C))));
+    Out.push_back(
+        static_cast<char>(std::toupper(static_cast<unsigned char>(C))));
   return Out;
 }
 
@@ -67,7 +68,7 @@ static std::optional<unsigned> parseRegCode(StringRef Name) {
 
   std::string Upper = toUpperStr(N);
 
-  // v0.4 vector/SIMT register namespaces (10-bit register codes).
+  // PTO 0.58 vector/SIMT register namespaces (10-bit register codes).
   //
   // V.* instructions use 10-bit register fields (split across the 64-bit
   // 32x2 encoding). Scalar instructions use 5-bit register fields. The
@@ -78,11 +79,10 @@ static std::optional<unsigned> parseRegCode(StringRef Name) {
   //   Class 1:  ri0..ri31     (ordered argument namespace from B.IOR)
   //   Class 2:  p             (kernel EXEC mask; only index 28 is canonical)
   //   Class 3:  lc0..lc2      (hardware loop counters)
-  //   Class 4:  vt / vt#n     (vector T-hand queue; index 0 is the push selector)
-  //   Class 5:  vu / vu#n     (vector U-hand queue)
-  //   Class 6:  vm / vm#n     (vector M-hand queue)
-  //   Class 7:  vn / vn#n     (vector N-hand queue)
-  //   Class 8:  ta/tb/tc/td/to/ts (vector tile bases)
+  //   Class 4:  vt / vt#n     (vector T-hand queue; index 0 is the push
+  //   selector) Class 5:  vu / vu#n     (vector U-hand queue) Class 6:  vm /
+  //   vm#n     (vector M-hand queue) Class 7:  vn / vn#n     (vector N-hand
+  //   queue) Class 8:  ta/tb/tc/td/to/ts (vector tile bases)
   auto parsePrefixedIndex = [&](StringRef Prefix, unsigned Class,
                                 unsigned MaxIndex) -> std::optional<unsigned> {
     StringRef U(Upper);
@@ -238,43 +238,62 @@ static std::optional<unsigned> parseTileRef(StringRef Name, bool &Reuse) {
   return (Hand << 4) | ((Depth - 1u) & 0xfu);
 }
 
+static std::optional<unsigned> parseSharedTileId(StringRef Name) {
+  StringRef N = Name.trim();
+  if (N.size() < 2 || (N[0] != 's' && N[0] != 'S'))
+    return std::nullopt;
+  unsigned Value = 0;
+  if (N.drop_front().getAsInteger(10, Value) || Value > 255u)
+    return std::nullopt;
+  return Value;
+}
+
+static std::optional<unsigned> parsePEMaskKeyword(StringRef Text) {
+  if (!Text.starts_with("MASK=") || Text.size() != 9u)
+    return std::nullopt;
+  unsigned Value = 0;
+  for (char C : Text.drop_front(5)) {
+    if (C != '0' && C != '1')
+      return std::nullopt;
+    Value = (Value << 1) | (C - '0');
+  }
+  return Value;
+}
+
 static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
   const std::string Up = toUpperStr(Name.trim());
   return StringSwitch<std::optional<unsigned>>(Up)
       .Case("FP64", 0u)
       .Case("FP32", 1u)
-      .Case("FP16", 2u)
-      .Case("FP8", 3u)
-      .Case("BF16", 6u)
-      .Case("FPL8", 7u)
-      .Case("FP4", 11u)
-      .Case("FPL4", 12u)
-      .Case("INT64", 16u)
+      .Case("TF32", 2u)
+      .Case("HF32", 3u)
+      .Case("FP16", 4u)
+      .Case("BF16", 5u)
+      .Case("HIF8", 6u)
+      .Case("E4M3", 7u)
+      .Case("E5M2", 8u)
+      .Case("E3M2", 9u)
+      .Case("E2M3", 10u)
+      .Case("E2M1X2", 11u)
+      .Case("E1M2X2", 12u)
+      .Case("E8M0", 13u)
+      .Case("HIF4X2", 14u)
       .Case("S64", 16u)
-      .Case("INT32", 17u)
       .Case("S32", 17u)
-      .Case("INT16", 18u)
       .Case("S16", 18u)
-      .Case("INT8", 19u)
       .Case("S8", 19u)
-      .Case("INT4", 20u)
-      .Case("S4", 20u)
-      .Case("UINT64", 24u)
+      .Case("S4X2", 20u)
       .Case("U64", 24u)
-      .Case("UINT32", 25u)
       .Case("U32", 25u)
-      .Case("UINT16", 26u)
       .Case("U16", 26u)
-      .Case("UINT8", 27u)
       .Case("U8", 27u)
-      .Case("UINT4", 28u)
-      .Case("U4", 28u)
+      .Case("U4X2", 28u)
       .Default(std::nullopt);
 }
 
-static std::optional<unsigned> parseTEPLTileOpcodeKeyword(StringRef Name) {
+static std::optional<unsigned> parseTileOperationKeyword(StringRef Name) {
   const std::string Up = toUpperStr(Name.trim());
-  return LinxISA::parseCanonicalTEPLTileOpcodeV057(Up);
+  return LinxISA::parseTileOperationV058(Up);
 }
 
 static std::optional<unsigned> parseLayoutKeyword(StringRef Name) {
@@ -463,14 +482,13 @@ static std::optional<uint32_t> parseSSRIdName(StringRef Name) {
 
 static MCRegister regCodeToMCReg(unsigned Code) {
   static const MCRegister Regs[32] = {
-      LinxISA::R0,  LinxISA::R1,  LinxISA::R2,  LinxISA::R3,
-      LinxISA::R4,  LinxISA::R5,  LinxISA::R6,  LinxISA::R7,
-      LinxISA::R8,  LinxISA::R9,  LinxISA::R10, LinxISA::R11,
-      LinxISA::R12, LinxISA::R13, LinxISA::R14, LinxISA::R15,
-      LinxISA::R16, LinxISA::R17, LinxISA::R18, LinxISA::R19,
-      LinxISA::R20, LinxISA::R21, LinxISA::R22, LinxISA::R23,
-      LinxISA::T1,  LinxISA::T2,  LinxISA::T3,  LinxISA::T4,
-      LinxISA::U1,  LinxISA::U2,  LinxISA::U3,  LinxISA::U4,
+      LinxISA::R0,  LinxISA::R1,  LinxISA::R2,  LinxISA::R3,  LinxISA::R4,
+      LinxISA::R5,  LinxISA::R6,  LinxISA::R7,  LinxISA::R8,  LinxISA::R9,
+      LinxISA::R10, LinxISA::R11, LinxISA::R12, LinxISA::R13, LinxISA::R14,
+      LinxISA::R15, LinxISA::R16, LinxISA::R17, LinxISA::R18, LinxISA::R19,
+      LinxISA::R20, LinxISA::R21, LinxISA::R22, LinxISA::R23, LinxISA::T1,
+      LinxISA::T2,  LinxISA::T3,  LinxISA::T4,  LinxISA::U1,  LinxISA::U2,
+      LinxISA::U3,  LinxISA::U4,
   };
   if (Code < 32)
     return Regs[Code];
@@ -540,13 +558,14 @@ static std::optional<std::string> getLegacyAliasDiag(StringRef Mnemonic) {
   const StringRef Key(Up);
 
   if (Key == "L.BSTOP")
-    return "legacy alias 'L.BSTOP' is not allowed in canonical v0.57; use 'C.BSTOP'";
+    return "legacy alias 'L.BSTOP' is not allowed in canonical PTO 0.58; use "
+           "'C.BSTOP'";
 
   const bool IsCanonicalLongBStart =
-      Key == "L.BSTART.STD" || Key == "L.BSTART.FP" ||
-      Key == "L.BSTART.SYS";
+      Key == "L.BSTART.STD" || Key == "L.BSTART.FP" || Key == "L.BSTART.SYS";
   if (Key.starts_with("L.") && !IsCanonicalLongBStart)
-    return "legacy 'L.*' mnemonics are not allowed in canonical v0.57; use canonical "
+    return "legacy 'L.*' mnemonics are not allowed in canonical PTO 0.58; use "
+           "canonical "
            "mnemonics (for example 'V.*' and typed BSTART.* forms)";
 
   return std::nullopt;
@@ -980,8 +999,7 @@ public:
   }
 
   static std::unique_ptr<LinxOperand> createSetRetTarget(const MCExpr *E,
-                                                         SMLoc Loc,
-                                                         SMLoc End) {
+                                                         SMLoc Loc, SMLoc End) {
     auto Op = std::make_unique<LinxOperand>(SetRetTarget, Loc, End);
     Op->E = E;
     return Op;
@@ -1078,8 +1096,7 @@ public:
 
   ParseStatus parseDirective(AsmToken DirectiveID) override;
 
-  bool parseRegister(MCRegister &Reg, SMLoc &StartLoc,
-                     SMLoc &EndLoc) override;
+  bool parseRegister(MCRegister &Reg, SMLoc &StartLoc, SMLoc &EndLoc) override;
 
   ParseStatus tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
                                SMLoc &EndLoc) override;
@@ -1098,7 +1115,7 @@ private:
   bool parseRegOperand(ParsedReg &Out);
   bool parseImmOperand(const MCExpr *&OutExpr, SMLoc &Start, SMLoc &End);
   bool parseMemOperand(ParsedMem &OutMem);
-  bool parseArrowDestOperand(ParsedReg &OutDest);
+  bool parseArrowDestOperand(ParsedReg &OutDest, bool AllowShared = false);
 
   bool buildParsedInst(OperandVector &Operands, ParsedInst &Out);
   bool buildMCInstForForm(unsigned FormIndex, const ParsedInst &PI,
@@ -1141,8 +1158,7 @@ static const StringMap<SmallVector<unsigned, 4>> &getMnemonicMap() {
   return Map;
 }
 
-ParseStatus LinxISAAsmParser::tryParseRegister(MCRegister &Reg,
-                                               SMLoc &StartLoc,
+ParseStatus LinxISAAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
                                                SMLoc &EndLoc) {
   if (!getTok().is(AsmToken::Identifier))
     return ParseStatus::NoMatch;
@@ -1168,7 +1184,7 @@ bool LinxISAAsmParser::parseRegister(MCRegister &Reg, SMLoc &StartLoc,
       isArchivedRawVectorOperandName(getTok().getString())) {
     return Error(getTok().getLoc(),
                  "archived raw vector operand name is not allowed in canonical "
-                 "v0.4; use TA/TB/TC/TD/TO/TS");
+                 "LinxISA 0.58; use TA/TB/TC/TD/TO/TS");
   }
   return Error(getTok().getLoc(), "expected register");
 }
@@ -1182,9 +1198,8 @@ bool LinxISAAsmParser::parseImmOperand(const MCExpr *&OutExpr, SMLoc &Start,
       return Error(getTok().getLoc(), "expected relocation name after '%'");
 
     StringRef Reloc = getTok().getString();
-    const bool IsTPCRel =
-        Reloc.equals_insensitive("tpcrel_hi") ||
-        Reloc.equals_insensitive("tpcrel_lo");
+    const bool IsTPCRel = Reloc.equals_insensitive("tpcrel_hi") ||
+                          Reloc.equals_insensitive("tpcrel_lo");
     if (!IsTPCRel)
       return Error(getTok().getLoc(), "unsupported '%' relocation syntax");
     Lex();
@@ -1193,7 +1208,8 @@ bool LinxISAAsmParser::parseImmOperand(const MCExpr *&OutExpr, SMLoc &Start,
       return true;
     if (getParser().parseExpression(OutExpr, End))
       return true;
-    if (parseToken(AsmToken::RParen, "expected ')' after relocation expression"))
+    if (parseToken(AsmToken::RParen,
+                   "expected ')' after relocation expression"))
       return true;
     return false;
   }
@@ -1209,9 +1225,8 @@ bool LinxISAAsmParser::parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
       return Error(getTok().getLoc(), "expected relocation name after '%'");
 
     StringRef Reloc = getTok().getString();
-    const bool IsTPCRel =
-        Reloc.equals_insensitive("tpcrel_hi") ||
-        Reloc.equals_insensitive("tpcrel_lo");
+    const bool IsTPCRel = Reloc.equals_insensitive("tpcrel_hi") ||
+                          Reloc.equals_insensitive("tpcrel_lo");
     if (!IsTPCRel)
       return Error(getTok().getLoc(), "unsupported '%' relocation syntax");
     Lex();
@@ -1220,7 +1235,8 @@ bool LinxISAAsmParser::parsePrimaryExpr(const MCExpr *&Res, SMLoc &EndLoc) {
       return true;
     if (getParser().parseExpression(Res, EndLoc))
       return true;
-    if (parseToken(AsmToken::RParen, "expected ')' after relocation expression"))
+    if (parseToken(AsmToken::RParen,
+                   "expected ')' after relocation expression"))
       return true;
     return false;
   }
@@ -1261,7 +1277,7 @@ bool LinxISAAsmParser::parseRegOperand(ParsedReg &Out) {
   if (isArchivedRawVectorOperandName(Base))
     return Error(getTok().getLoc(),
                  "archived raw vector operand name is not allowed in canonical "
-                 "v0.4; use TA/TB/TC/TD/TO/TS");
+                 "LinxISA 0.58; use TA/TB/TC/TD/TO/TS");
 
   auto Code = parseRegCode(Base);
   if (!Code)
@@ -1349,7 +1365,8 @@ bool LinxISAAsmParser::parseMemOperand(ParsedMem &OutMem) {
   return false;
 }
 
-bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
+bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest,
+                                             bool AllowShared) {
   if (parseToken(AsmToken::MinusGreater, "expected '->'"))
     return true;
 
@@ -1374,7 +1391,9 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
   if (getTok().is(AsmToken::Less)) {
     std::string Up = toUpperStr(Base);
     unsigned Kind = 0;
-    if (Up == "T") {
+    if (AllowShared && parseSharedTileId(Base)) {
+      Kind = *parseSharedTileId(Base);
+    } else if (Up == "T") {
       Kind = 0;
     } else if (Up == "U") {
       Kind = 1;
@@ -1385,8 +1404,9 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
     } else if (Up == "ACC") {
       Kind = 4;
     } else {
-      return Error(D.Loc,
-                   "invalid tile kind for '-><kind><...>' (expected t/u/m/n/acc)");
+      return Error(D.Loc, AllowShared ? "B.IOS Shared register must be S0..S255"
+                                      : "invalid tile kind for '-><kind><...>' "
+                                        "(expected t/u/m/n/acc)");
     }
     D.Code = Kind;
     Lex(); // '<'
@@ -1406,14 +1426,14 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
       }
     }
 
-    // Parse size form: <SizeCode> or <N KB> or <N B>
+    // Parse size form: <TSize> or <N KB> or <N B>
     if (!getTok().is(AsmToken::Integer) && !getTok().is(AsmToken::Identifier))
       return Error(getTok().getLoc(),
                    "expected size code or <N KB>/<N B> after '<'");
 
     uint64_t Bytes = 0;
     bool HaveBytes = false;
-    unsigned SizeCode = 0;
+    unsigned TSize = 0;
 
     auto toSizeCodeFromBytes = [&](uint64_t B) -> std::optional<unsigned> {
       if (B == 0 || (B & (B - 1u)) != 0u)
@@ -1424,11 +1444,9 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
         T >>= 1;
         Log2++;
       }
-      if (Log2 < 4u)
+      if (Log2 < 6u)
         return std::nullopt;
-      const unsigned Code = Log2 - 4u;
-      if (Code > 31u)
-        return std::nullopt;
+      const unsigned Code = Log2 - 6u;
       return Code;
     };
 
@@ -1452,13 +1470,13 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
       }
 
       if (!HaveBytes) {
-        // No unit: treat as the raw SizeCode.
+        // No unit: treat as the raw TSize.
         if (N > 31u)
           return Error(getTok().getLoc(), "size code must fit 5 bits");
-        SizeCode = static_cast<unsigned>(N);
+        TSize = static_cast<unsigned>(N);
       }
     } else {
-      // Identifier-only form: allow `8KB` / `128B` / `9` (as SizeCode).
+      // Identifier-only form: allow `8KB` / `128B` / `9` (as TSize).
       std::string TextUp = toUpperStr(getTok().getString());
       Lex();
 
@@ -1482,8 +1500,8 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
       } else {
         uint64_t N = 0;
         if (StringRef(TextUp).getAsInteger(0, N) || N > 31u)
-          return Error(getTok().getLoc(), "expected <SizeCode> or <N KB>/<N B>");
-        SizeCode = static_cast<unsigned>(N);
+          return Error(getTok().getLoc(), "expected <TSize> or <N KB>/<N B>");
+        TSize = static_cast<unsigned>(N);
       }
     }
 
@@ -1492,12 +1510,11 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
       if (!Code)
         return Error(getTok().getLoc(),
                      "size must be power-of-two bytes and >=16B");
-      SizeCode = *Code;
+      TSize = *Code;
     }
 
-    // Canonical v0.57.1 active destinations span 128B..8KB (codes 3..9).
-    // Raw numeric syntax is checked at descriptor normalization below too.
-    if (HaveBytes && (SizeCode < 3u || SizeCode > 9u)) {
+    // PTO 0.58 TSize codes 1..7 map to 128B..8KB per participating PE.
+    if (TSize < 1u || TSize > 7u) {
       return Error(getTok().getLoc(),
                    "tile size must be in strict range 128B..8KB");
     }
@@ -1506,7 +1523,7 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest) {
       return true;
 
     D.HasAngleSize = true;
-    D.AngleSize = SizeCode & 0x1fu;
+    D.AngleSize = TSize & 0x1fu;
     OutDest = D;
     return false;
   }
@@ -1537,6 +1554,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
   bool AllowMemOperands = false;
   bool AllowFrameRangeOperands = false;
   bool IsTileIODesc = false;
+  bool IsSharedIODesc = false;
   bool IsBlockAttr = false;
   unsigned MaxArrowDests = 0;
   {
@@ -1602,6 +1620,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
 
     StringRef KeyRef(Key);
     IsTileIODesc = KeyRef == "B.IOT";
+    IsSharedIODesc = KeyRef == "B.IOS";
     IsBlockAttr = KeyRef == "B.CATR" || KeyRef == "B.DATR";
   }
 
@@ -1621,7 +1640,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
 
     if (getTok().is(AsmToken::MinusGreater)) {
       ParsedReg D;
-      if (parseArrowDestOperand(D))
+      if (parseArrowDestOperand(D, IsSharedIODesc))
         return true;
       Operands.push_back(LinxOperand::createArrowDest(D, getTok().getLoc()));
       if (MaxArrowDests >= 2) {
@@ -1639,7 +1658,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
     if (getTok().is(AsmToken::LBrac)) {
       if (IsTileIODesc)
         return Error(getTok().getLoc(),
-                     "bracketed B.IOT source lists are not canonical v0.57; "
+                     "bracketed B.IOT source lists are not canonical PTO 0.58; "
                      "write tile sources as comma-separated operands");
       if (AllowFrameRangeOperands) {
         SMLoc Start = getTok().getLoc();
@@ -1674,10 +1693,9 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
           BaseTok = Tok.take_front(Dot);
 
         const bool LooksLikeReg = parseRegCode(BaseTok).has_value();
-        const bool IsMem =
-            AllowMemOperands && LooksLikeReg &&
-            (getLexer().peekTok().is(AsmToken::Comma) ||
-             getLexer().peekTok().is(AsmToken::RBrac));
+        const bool IsMem = AllowMemOperands && LooksLikeReg &&
+                           (getLexer().peekTok().is(AsmToken::Comma) ||
+                            getLexer().peekTok().is(AsmToken::RBrac));
         if (IsMem) {
           // Parse [base] or [base, off] without re-consuming '['.
           ParsedReg Base;
@@ -1871,6 +1889,27 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
     }
 
     if (getTok().is(AsmToken::Identifier)) {
+      if ((IsTileIODesc || IsSharedIODesc) &&
+          getTok().getString().equals_insensitive("mask") &&
+          getLexer().peekTok().is(AsmToken::Equal)) {
+        SMLoc L = getTok().getLoc();
+        Lex();
+        Lex(); // '='
+        if (!getTok().is(AsmToken::Integer))
+          return Error(getTok().getLoc(),
+                       "PE mask must contain exactly four binary digits");
+        StringRef Digits = getTok().getString();
+        if (Digits.size() != 4u ||
+            llvm::any_of(Digits, [](char C) { return C != '0' && C != '1'; }))
+          return Error(getTok().getLoc(),
+                       "PE mask must contain exactly four binary digits");
+        std::string Text = (Twine("MASK=") + Digits).str();
+        SMLoc E = getTok().getEndLoc();
+        Lex();
+        Operands.push_back(LinxOperand::createKeyword(Text, L, E));
+        continue;
+      }
+
       // Fused BSTART return-target syntax: `ra=<label>`.
       if (getTok().getString().equals_insensitive("ra") &&
           getLexer().peekTok().is(AsmToken::Equal)) {
@@ -1911,12 +1950,33 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
       if (IsTileIODesc) {
         bool Reuse = false;
         if (auto Tile = parseTileRef(getTok().getString(), Reuse)) {
+          if (Reuse)
+            return Error(getTok().getLoc(),
+                         "B.IOT reuse suffix is not part of PTO ISA 0.58");
           SMLoc L = getTok().getLoc();
           SMLoc E = getTok().getEndLoc();
           Lex();
-          const unsigned Enc = (*Tile & 0x3fu) | (Reuse ? (1u << 6) : 0u);
+          const unsigned Enc = *Tile & 0x3fu;
           Operands.push_back(LinxOperand::createImm(
               MCConstantExpr::create(Enc, getContext()), L, E));
+          continue;
+        }
+      }
+
+      if (IsSharedIODesc) {
+        StringRef SharedName = getTok().getString();
+        if (SharedName.size() >= 2u &&
+            (SharedName[0] == 's' || SharedName[0] == 'S') &&
+            std::isdigit(static_cast<unsigned char>(SharedName[1]))) {
+          auto SharedTID = parseSharedTileId(SharedName);
+          if (!SharedTID)
+            return Error(getTok().getLoc(),
+                         "B.IOS Shared register must be S0..S255");
+          SMLoc L = getTok().getLoc();
+          SMLoc E = getTok().getEndLoc();
+          Lex();
+          Operands.push_back(LinxOperand::createImm(
+              MCConstantExpr::create(*SharedTID, getContext()), L, E));
           continue;
         }
       }
@@ -1985,7 +2045,8 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
   return false;
 }
 
-bool LinxISAAsmParser::buildParsedInst(OperandVector &Operands, ParsedInst &Out) {
+bool LinxISAAsmParser::buildParsedInst(OperandVector &Operands,
+                                       ParsedInst &Out) {
   Out = ParsedInst();
   for (unsigned i = 1; i < Operands.size(); ++i) {
     auto *Op = static_cast<LinxOperand *>(Operands[i].get());
@@ -2065,18 +2126,18 @@ static bool getFrameTemplateMaxBytes(const linxisa_inst_form &Form,
     return false;
 
   const unsigned EncodedUnitBits = UimmField->bit_width - FrameUnitShift;
-  const uint64_t MaxUnits =
-      EncodedUnitBits >= 64
-          ? std::numeric_limits<uint64_t>::max()
-          : ((uint64_t{1} << EncodedUnitBits) - 1u);
+  const uint64_t MaxUnits = EncodedUnitBits >= 64
+                                ? std::numeric_limits<uint64_t>::max()
+                                : ((uint64_t{1} << EncodedUnitBits) - 1u);
   if (MaxUnits > std::numeric_limits<uint64_t>::max() / FrameUnitBytes)
     return false;
   MaxBytes = MaxUnits * FrameUnitBytes;
   return true;
 }
 
-bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &PI,
-                                          MCInst &OutInst, std::string &Err) {
+bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
+                                          const ParsedInst &PI, MCInst &OutInst,
+                                          std::string &Err) {
   const linxisa_inst_form &Form = linxisa_inst_forms[FormIndex];
   StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
 
@@ -2097,7 +2158,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   }
 
   // Helpers for emitting a field value in spec order.
-  auto emitFieldImm = [&](int64_t V) { OutInst.addOperand(MCOperand::createImm(V)); };
+  auto emitFieldImm = [&](int64_t V) {
+    OutInst.addOperand(MCOperand::createImm(V));
+  };
   auto emitFieldExpr = [&](const MCExpr *E) {
     OutInst.addOperand(MCOperand::createExpr(E));
   };
@@ -2114,8 +2177,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
 
     const unsigned Begin = PI.Regs[0].Code;
     const unsigned End = PI.Regs[1].Code;
-    if (!require(isFrameTemplateEndpoint(Begin) &&
-                     isFrameTemplateEndpoint(End),
+    if (!require(isFrameTemplateEndpoint(Begin) && isFrameTemplateEndpoint(End),
                  "frame template register range endpoints must be in R2..R23"))
       return false;
 
@@ -2128,9 +2190,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       return false;
 
     const unsigned SavedRegs = frameTemplateRegisterCount(Begin, End);
-    if (!require(FrameBytes >= 0 &&
-                     static_cast<uint64_t>(FrameBytes) >=
-                         uint64_t{8} * SavedRegs,
+    if (!require(FrameBytes >= 0 && static_cast<uint64_t>(FrameBytes) >=
+                                        uint64_t{8} * SavedRegs,
                  Twine("frame template F is too small for ") +
                      Twine(SavedRegs) + " saved registers"))
       return false;
@@ -2143,8 +2204,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                  "frame template F does not fit encoded field"))
       return false;
 
-    if (!require(!AsmFmt.starts_with_insensitive("FRET.STK") ||
-                     Begin == 10u,
+    if (!require(!AsmFmt.starts_with_insensitive("FRET.STK") || Begin == 10u,
                  "FRET.STK frame template begin register must be R10"))
       return false;
   }
@@ -2179,7 +2239,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   }
 
   // BSTOP/C.BSTOP: no operands.
-  if (AsmFmt.equals_insensitive("bstop") || AsmFmt.equals_insensitive("c.bstop")) {
+  if (AsmFmt.equals_insensitive("bstop") ||
+      AsmFmt.equals_insensitive("c.bstop")) {
     if (!require(Form.field_count == 0, "unexpected bstop field layout"))
       return false;
     if (!require(PI.Regs.empty() && PI.Imms.empty() && PI.Keywords.empty() &&
@@ -2192,10 +2253,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   // Atomic fused CALL encodings carry two independent PC-relative fields in
   // one instruction.  Do not route these through the legacy `ra=` sugar,
   // which emits a BSTART followed by a separate C.SETRET.
-  const bool IsFusedCall32 =
-      AsmFmt.starts_with_insensitive("BSTART.CALL ");
-  const bool IsFusedCall48 =
-      AsmFmt.starts_with_insensitive("HL.BSTART.CALL ");
+  const bool IsFusedCall32 = AsmFmt.starts_with_insensitive("BSTART.CALL ");
+  const bool IsFusedCall48 = AsmFmt.starts_with_insensitive("HL.BSTART.CALL ");
   if (IsFusedCall32 || IsFusedCall48) {
     if (!require(PI.Regs.empty() && PI.Keywords.empty() && !PI.Mem &&
                      !PI.SetRetTarget,
@@ -2205,8 +2264,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                  "expected call target and return target for fused "
                  "BSTART.CALL"))
       return false;
-    if (!require(PI.ArrowDests.size() == 1 &&
-                     PI.ArrowDests[0].Code == 10,
+    if (!require(PI.ArrowDests.size() == 1 && PI.ArrowDests[0].Code == 10,
                  "fused BSTART.CALL destination must be ->ra"))
       return false;
     if (!require(Form.field_count == 2,
@@ -2236,10 +2294,14 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
        AsmFmt.starts_with_insensitive("c.bstart") ||
        AsmFmt.starts_with_insensitive("hl.bstart") ||
        AsmFmt.starts_with_insensitive("l.bstart")) &&
-      (hasField(Form, "BrType") || AsmFmt.contains_insensitive("{DIRECT, CALL}") ||
-       AsmFmt.contains_insensitive(" FALL") || AsmFmt.contains_insensitive(" DIRECT") ||
-       AsmFmt.contains_insensitive(" COND") || AsmFmt.contains_insensitive(" CALL") ||
-       AsmFmt.contains_insensitive(" ICALL") || AsmFmt.contains_insensitive(" IND") ||
+      (hasField(Form, "BrType") ||
+       AsmFmt.contains_insensitive("{DIRECT, CALL}") ||
+       AsmFmt.contains_insensitive(" FALL") ||
+       AsmFmt.contains_insensitive(" DIRECT") ||
+       AsmFmt.contains_insensitive(" COND") ||
+       AsmFmt.contains_insensitive(" CALL") ||
+       AsmFmt.contains_insensitive(" ICALL") ||
+       AsmFmt.contains_insensitive(" IND") ||
        AsmFmt.contains_insensitive(" RET"));
 
   if (IsBStartBranchHeader) {
@@ -2279,12 +2341,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     const BStartKind WantKind =
         BrTypeVal ? brTypeToBStartKind(*BrTypeVal) : BStartKind::Unknown;
     const BStartKind FormKind = bstartKindFromAsmFmt(AsmFmt);
-    const BStartKind EffectiveKind =
-        HasBrTypeField ? WantKind : FormKind;
+    const BStartKind EffectiveKind = HasBrTypeField ? WantKind : FormKind;
 
     // If the encoding carries BrType, use the parsed/defaulted branch kind.
-    if (HasBrTypeField && !require(BrTypeVal.has_value(),
-                                   "expected branch kind (BrType)"))
+    if (HasBrTypeField &&
+        !require(BrTypeVal.has_value(), "expected branch kind (BrType)"))
       return false;
 
     // If the encoding does not carry BrType, ensure the requested kind matches
@@ -2308,14 +2369,16 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
 
     // Require a label operand for encodings that carry a label.
     if (LabelExpr && !HasLabelField)
-      return require(false, "unexpected label operand for this BSTART encoding");
+      return require(false,
+                     "unexpected label operand for this BSTART encoding");
 
     if (HasLabelField) {
-      const bool NeedsLabel =
-          EffectiveKind == BStartKind::Direct || EffectiveKind == BStartKind::Cond ||
-          EffectiveKind == BStartKind::Call ||
-          EffectiveKind == BStartKind::DirectOrCall;
-      if (EffectiveKind == BStartKind::Fall || EffectiveKind == BStartKind::Unknown) {
+      const bool NeedsLabel = EffectiveKind == BStartKind::Direct ||
+                              EffectiveKind == BStartKind::Cond ||
+                              EffectiveKind == BStartKind::Call ||
+                              EffectiveKind == BStartKind::DirectOrCall;
+      if (EffectiveKind == BStartKind::Fall ||
+          EffectiveKind == BStartKind::Unknown) {
         // FALL encodings may include an optional fixup label.
       } else if (NeedsLabel) {
         if (!require(LabelExpr != nullptr, "expected branch target label"))
@@ -2365,8 +2428,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         }
         int64_t V = 0;
         if (isConstExpr(LabelExpr, V)) {
-          if (FN == "simm" &&
-              AsmFmt.starts_with_insensitive("L.BSTART")) {
+          if (FN == "simm" && AsmFmt.starts_with_insensitive("L.BSTART")) {
             if (!require((V & 0x1) == 0,
                          "L.BSTART target is not 2-byte aligned"))
               return false;
@@ -2393,12 +2455,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     const bool AllowsExplicitHiddenMemDst =
         AsmFmt.starts_with_insensitive("prf") ||
         AsmFmt.starts_with_insensitive("prfi.");
-    const bool IsHlCas =
-        AsmFmt.starts_with_insensitive("hl.cas") ||
-        AsmFmt.starts_with_insensitive("casb") ||
-        AsmFmt.starts_with_insensitive("cash") ||
-        AsmFmt.starts_with_insensitive("casw") ||
-        AsmFmt.starts_with_insensitive("casd");
+    const bool IsHlCas = AsmFmt.starts_with_insensitive("hl.cas") ||
+                         AsmFmt.starts_with_insensitive("casb") ||
+                         AsmFmt.starts_with_insensitive("cash") ||
+                         AsmFmt.starts_with_insensitive("casw") ||
+                         AsmFmt.starts_with_insensitive("casd");
     const bool IsLr = AsmFmt.starts_with_insensitive("lr.");
     unsigned MemRegIdx = 0;
 
@@ -2435,15 +2496,16 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (M.HasLane) {
         const unsigned ExpectedLc0 = (3u << 5) | 0u; // lc0
         const bool AllowCompatVectorLane =
-            Form.length_bits == 64 && M.HasIndex && M.Lane.Code == ExpectedLc0 &&
-            hasField(Form, "SrcR");
+            Form.length_bits == 64 && M.HasIndex &&
+            M.Lane.Code == ExpectedLc0 && hasField(Form, "SrcR");
         if (!require(AllowCompatVectorLane,
                      "unexpected 3-part memory operand for this instruction"))
           return false;
       }
     }
 
-    // Determine base field from the asm template: `[SrcL, ...]` / `[SrcR, ...]`.
+    // Determine base field from the asm template: `[SrcL, ...]` / `[SrcR,
+    // ...]`.
     StringRef BaseField = "SrcL";
     if (size_t L = AsmFmt.find('['); L != StringRef::npos) {
       StringRef Inside = AsmFmt.substr(L + 1);
@@ -2472,8 +2534,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(PI.Regs.size() >= 1, "expected store value register"))
         return false;
 
-    int64_t Scale = memScaleFromMnemonic(Form.mnemonic ? StringRef(Form.mnemonic)
-                                                       : StringRef());
+    int64_t Scale = memScaleFromMnemonic(
+        Form.mnemonic ? StringRef(Form.mnemonic) : StringRef());
 
     for (unsigned i = 0; i < Form.field_count; ++i) {
       const linxisa_field &Field = linxisa_fields[Form.field_start + i];
@@ -2539,7 +2601,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
 
       if (FN == "SrcD" && !IsStore) {
         if (IsHlCas) {
-          if (!require(PI.Regs.size() >= 2, "expected compare and swap registers"))
+          if (!require(PI.Regs.size() >= 2,
+                       "expected compare and swap registers"))
             return false;
           if (!require(PI.Regs[1].Code < (1u << Field.bit_width),
                        "store value register does not fit field width"))
@@ -2561,7 +2624,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (FN == "SrcD1") {
         if (!require(IsStore, "unexpected SrcD1 on load"))
           return false;
-        if (!require(PI.Regs.size() >= 2, "expected second store value register"))
+        if (!require(PI.Regs.size() >= 2,
+                     "expected second store value register"))
           return false;
         if (!require(PI.Regs[1].Code < (1u << Field.bit_width),
                      "store value register does not fit field width"))
@@ -2570,7 +2634,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         continue;
       }
 
-      if (FN == "SrcL" && IsStore && ValueField.has_value() && *ValueField == "SrcL") {
+      if (FN == "SrcL" && IsStore && ValueField.has_value() &&
+          *ValueField == "SrcL") {
         if (!require(PI.Regs[0].Code < (1u << Field.bit_width),
                      "store value register does not fit field width"))
           return false;
@@ -2590,7 +2655,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         if (BaseField == "SrcR") {
           if (!require(M.Base.Code < (1u << Field.bit_width),
                        "base register does not fit field width"))
-          return false;
+            return false;
           emitFieldImm(static_cast<int64_t>(M.Base.Code));
           continue;
         }
@@ -2627,7 +2692,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
           if (AsmFmt.contains("+shamt")) {
             const unsigned ScaleK = LaneScale.value_or(0u);
             const unsigned Actual = M.Index.HasExplicitShift ? Sh : ScaleK;
-            if (!require(Actual >= ScaleK, "expected index shift >= lane scale"))
+            if (!require(Actual >= ScaleK,
+                         "expected index shift >= lane scale"))
               return false;
             Sh = Actual - ScaleK;
           }
@@ -2639,7 +2705,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       }
 
       if (FN.starts_with("simm") || FN.starts_with("uimm")) {
-        if (!require(!M.HasIndex, "expected immediate offset in memory operand"))
+        if (!require(!M.HasIndex,
+                     "expected immediate offset in memory operand"))
           return false;
         if (!require(M.OffExpr != nullptr, "missing memory offset"))
           return false;
@@ -2695,7 +2762,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       return false;
     }
 
-    // Sanity: for stores with an explicit encoded value reg, require it be present.
+    // Sanity: for stores with an explicit encoded value reg, require it be
+    // present.
     if (IsStore && ValueField.has_value())
       if (!require(PI.Regs.size() >= 1, "expected store value register"))
         return false;
@@ -2707,8 +2775,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   if (AsmFmt.starts_with("B.DIM")) {
     if (!require(!PI.Mem && !PI.SetRetTarget, "unexpected operands for B.DIM"))
       return false;
-    if (!require(PI.Keywords.empty(),
-                 "unexpected keyword operands for B.DIM"))
+    if (!require(PI.Keywords.empty(), "unexpected keyword operands for B.DIM"))
       return false;
     if (!require(PI.Regs.size() == 1, "expected RegSrc for B.DIM"))
       return false;
@@ -2751,37 +2818,97 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
 
   // Special-case: GPR descriptor binding (B.IOR).
   if (AsmFmt.starts_with("B.IOR")) {
-    if (!require(!PI.Mem && PI.ArrowDests.empty() && !PI.SetRetTarget,
-                 "unexpected operands for B.IOR"))
+    if (!require(!PI.Mem && !PI.SetRetTarget, "unexpected operands for B.IOR"))
       return false;
     if (!require(PI.Imms.empty(), "unexpected immediate operands for B.IOR"))
       return false;
     if (!require(PI.Keywords.empty(), "unexpected keyword operands for B.IOR"))
       return false;
 
-    if (!require(PI.Regs.size() <= 4, "B.IOR expects up to 4 registers"))
+    if (!require(PI.Regs.size() <= 3 && PI.ArrowDests.size() <= 1,
+                 "B.IOR expects up to 3 sources and 1 destination"))
       return false;
 
-    // Canonical v0.4 disassembly prints sources as:
-    //   B.IOR [RegSrc1, RegSrc0, RegSrc2],[RegDst]
-    // with zeros omitted.
-    unsigned RegSrc1 = 0;
+    for (const ParsedReg &Reg : PI.Regs)
+      if (!require(Reg.Code < 24u,
+                   "B.IOR register must be one of the 24 absolute GPRs"))
+        return false;
+    for (const ParsedReg &Reg : PI.ArrowDests)
+      if (!require(Reg.Code < 24u,
+                   "B.IOR register must be one of the 24 absolute GPRs"))
+        return false;
+
+    // PTO 0.58 source order is RegSrc0, RegSrc1, RegSrc2 followed by the
+    // optional arrow destination.
     unsigned RegSrc0 = 0;
+    unsigned RegSrc1 = 0;
     unsigned RegSrc2 = 0;
     unsigned RegDst = 0;
     if (PI.Regs.size() >= 1)
-      RegSrc1 = PI.Regs[0].Code;
+      RegSrc0 = PI.Regs[0].Code;
     if (PI.Regs.size() >= 2)
-      RegSrc0 = PI.Regs[1].Code;
+      RegSrc1 = PI.Regs[1].Code;
     if (PI.Regs.size() >= 3)
       RegSrc2 = PI.Regs[2].Code;
-    if (PI.Regs.size() >= 4)
-      RegDst = PI.Regs[3].Code;
+    if (!PI.ArrowDests.empty())
+      RegDst = PI.ArrowDests[0].Code;
 
     emitFieldImm(RegDst & 0x1fu);  // RegDst
     emitFieldImm(RegSrc0 & 0x1fu); // RegSrc0 (stride)
     emitFieldImm(RegSrc1 & 0x1fu); // RegSrc1 (base)
     emitFieldImm(RegSrc2 & 0x1fu); // RegSrc2
+    return true;
+  }
+
+  if (AsmFmt.starts_with("B.IOS")) {
+    if (!require(!PI.Mem && PI.Regs.empty() && !PI.SetRetTarget,
+                 "unexpected operands for B.IOS"))
+      return false;
+    if (!require(PI.Keywords.size() == 1,
+                 "B.IOS requires exactly one mask=PE_MASK operand"))
+      return false;
+    auto PEMask = parsePEMaskKeyword(PI.Keywords[0].TextUpper);
+    if (!require(PEMask.has_value(),
+                 "PE mask must contain exactly four binary digits"))
+      return false;
+
+    const bool IsSource = PI.Imms.size() == 1 && PI.ArrowDests.empty();
+    const bool IsDestination = PI.Imms.empty() && PI.ArrowDests.size() == 1;
+    if (!require(
+            IsSource || IsDestination,
+            "B.IOS must be either a Shared source or a Shared destination"))
+      return false;
+
+    unsigned SharedTID = 0;
+    unsigned TSize = 0;
+    if (IsSource) {
+      int64_t Value = 0;
+      if (!require(isConstExpr(PI.Imms[0].Expr, Value) && Value >= 0 &&
+                       Value <= 255,
+                   "B.IOS Shared register must be S0..S255"))
+        return false;
+      SharedTID = static_cast<unsigned>(Value);
+    } else {
+      SharedTID = PI.ArrowDests[0].Code;
+      TSize = PI.ArrowDests[0].AngleSize;
+      if (!require(PI.ArrowDests[0].HasAngleSize &&
+                       !PI.ArrowDests[0].HasAngleReg && TSize >= 1u &&
+                       TSize <= 7u,
+                   "B.IOS destination size must be 128B..8KB"))
+        return false;
+    }
+
+    for (unsigned I = 0; I < Form.field_count; ++I) {
+      StringRef FieldName(linxisa_fields[Form.field_start + I].name);
+      if (FieldName == "PE_MASK")
+        emitFieldImm(*PEMask);
+      else if (FieldName == "SharedTID")
+        emitFieldImm(SharedTID);
+      else if (FieldName == "TSize")
+        emitFieldImm(TSize);
+      else
+        return require(false, ("unsupported B.IOS field: " + FieldName).str());
+    }
     return true;
   }
 
@@ -2920,7 +3047,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       else if (FN == "reserve")
         emitFieldImm(0);
       else
-        return require(false, ("unsupported block attribute field: " + FN).str());
+        return require(false,
+                       ("unsupported block attribute field: " + FN).str());
     }
     return true;
   }
@@ -3002,40 +3130,56 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return true;
   }
 
-  // Special-case: canonical B.IOT descriptors. v0.57 adds source-only forms
-  // whose inapplicable destination and size fields are encoded as zero.
+  // Special-case: canonical PTO 0.58 B.IOT descriptors.  Every form carries
+  // an explicit four-PE participation mask.  Reuse bits do not exist, and the
+  // source-only forms keep their two architecturally unused low bits at zero.
   if (AsmFmt.starts_with("B.IOT")) {
-    if (!require(!PI.Mem && !PI.SetRetTarget,
-                 "unexpected operands for B.IOT"))
+    if (!require(!PI.Mem && !PI.SetRetTarget, "unexpected operands for B.IOT"))
       return false;
-    if (!require(PI.Regs.empty(),
-                 "unexpected register operands for B.IOT"))
+    if (!require(PI.Regs.empty(), "unexpected register operands for B.IOT"))
       return false;
 
     bool WantLast = false;
-    for (const ParsedKeyword &K : PI.Keywords)
-      if (K.TextUpper == "LAST")
+    std::optional<unsigned> PEMask;
+    for (const ParsedKeyword &K : PI.Keywords) {
+      if (K.TextUpper == "LAST") {
+        if (!require(!WantLast, "B.IOT accepts last at most once"))
+          return false;
         WantLast = true;
+        continue;
+      }
+      if (auto ParsedMask = parsePEMaskKeyword(K.TextUpper)) {
+        if (!require(!PEMask.has_value(),
+                     "B.IOT requires exactly one mask=PE_MASK operand"))
+          return false;
+        PEMask = *ParsedMask;
+        continue;
+      }
+      return require(false, "unexpected keyword operand for B.IOT");
+    }
+    if (!require(PEMask.has_value(),
+                 "B.IOT requires exactly one mask=PE_MASK operand"))
+      return false;
     const bool FormHasDestination = AsmFmt.contains("->DstTile");
-    if (!require(PI.ArrowDests.size() == (FormHasDestination ? 1u : 0u),
-                 FormHasDestination
-                     ? "expected tile destination suffix (for example '->t<1KB>')"
-                     : "source-only B.IOT does not accept a destination suffix"))
+    if (!require(
+            PI.ArrowDests.size() == (FormHasDestination ? 1u : 0u),
+            FormHasDestination
+                ? "expected tile destination suffix (for example '->t<1KB>')"
+                : "source-only B.IOT does not accept a destination suffix"))
       return false;
 
     unsigned DstTile = 0u;
-    unsigned SizeCode = 0u;
+    unsigned TSize = 0u;
     if (FormHasDestination) {
       DstTile = PI.ArrowDests[0].Code & 0x7u;
-      SizeCode = PI.ArrowDests[0].AngleSize;
-      if (!require(DstTile <= 3u,
-                   "B.IOT destination must be one of t/u/m/n; ACC is implicit"))
+      TSize = PI.ArrowDests[0].AngleSize;
+      if (!require(DstTile <= 3u, "B.IOT destination must be one of t/u/m/n"))
         return false;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
                        !PI.ArrowDests[0].HasAngleReg,
                    "B.IOT expects size suffix '->t<Size>'"))
         return false;
-      if (!require(SizeCode >= 3u && SizeCode <= 9u,
+      if (!require(TSize >= 1u && TSize <= 7u,
                    "B.IOT destination size must be 128B..8KB"))
         return false;
     }
@@ -3044,38 +3188,31 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                  "B.IOT supports at most 2 SrcTile operands"))
       return false;
 
-    const unsigned ExpectedSources = AsmFmt.contains("SrcTile1")
-                                         ? 2u
-                                     : AsmFmt.contains("SrcTile0") ? 1u : 0u;
+    const unsigned ExpectedSources = AsmFmt.contains("SrcTile1")   ? 2u
+                                     : AsmFmt.contains("SrcTile0") ? 1u
+                                                                   : 0u;
     if (!require(PI.Imms.size() == ExpectedSources,
                  "source tile count does not match B.IOT encoding form"))
       return false;
 
-    unsigned S0R = 0, S1R = 0;
     unsigned Src0 = 0, Src1 = 0;
-    auto takeTileImm = [&](unsigned i, unsigned &Tile,
-                           unsigned &Reuse) -> bool {
+    auto takeTileImm = [&](unsigned i, unsigned &Tile) -> bool {
       int64_t V = 0;
-      if (!isConstExpr(PI.Imms[i].Expr, V))
+      if (!isConstExpr(PI.Imms[i].Expr, V) || V < 0 || V > 63)
         return false;
-      Tile = static_cast<unsigned>(V) & 0x3fu;
-      Reuse = (static_cast<unsigned>(V) >> 6) & 0x1u;
+      Tile = static_cast<unsigned>(V);
       return true;
     };
 
     if (PI.Imms.size() >= 1) {
-      unsigned Reuse = 0;
-      if (!require(takeTileImm(0, Src0, Reuse),
-                   "tile refs must be constant in bring-up"))
+      if (!require(takeTileImm(0, Src0),
+                   "B.IOT tile source must be one of t#0..n#15"))
         return false;
-      S0R = Reuse & 1u;
     }
     if (PI.Imms.size() >= 2) {
-      unsigned Reuse = 0;
-      if (!require(takeTileImm(1, Src1, Reuse),
-                   "tile refs must be constant in bring-up"))
+      if (!require(takeTileImm(1, Src1),
+                   "B.IOT tile source must be one of t#0..n#15"))
         return false;
-      S1R = Reuse & 1u;
     }
 
     for (unsigned i = 0; i < Form.field_count; ++i) {
@@ -3085,19 +3222,18 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         emitFieldImm(DstTile);
       else if (FN == "L")
         emitFieldImm(WantLast);
-      else if (FN == "S0R")
-        emitFieldImm(S0R);
-      else if (FN == "S1R")
-        emitFieldImm(S1R);
+      else if (FN == "PE_MASK")
+        emitFieldImm(*PEMask);
+      else if (FN == "PTOU0_7" || FN == "PTOU0_8")
+        emitFieldImm(0);
       else if (FN == "SrcTile0")
         emitFieldImm(Src0);
       else if (FN == "SrcTile1")
         emitFieldImm(Src1);
-      else if (FN == "imm4")
-        emitFieldImm(SizeCode);
+      else if (FN == "TSize")
+        emitFieldImm(TSize);
       else
-        return require(false,
-                       ("unsupported B.IOT field: " + FN).str());
+        return require(false, ("unsupported B.IOT field: " + FN).str());
     }
 
     return true;
@@ -3115,8 +3251,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
   const bool IsBStartTEPL = AsmFmt == "BSTART.TEPL Mode, Function, DataType";
   if (IsBStartTEPL) {
     constexpr StringLiteral Kind = "BSTART.TEPL";
-    if (!require(PI.Regs.empty() && PI.Keywords.empty() && PI.ArrowDests.empty() &&
-                     !PI.SetRetTarget,
+    if (!require(PI.Regs.empty() && PI.Keywords.empty() &&
+                     PI.ArrowDests.empty() && !PI.SetRetTarget,
                  (Twine("unexpected operands for ") + Kind)))
       return false;
     if (!require(PI.Imms.size() == 3u,
@@ -3124,8 +3260,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                   Kind)))
       return false;
 
-    auto decodeNamedImm = [&](const MCExpr *E, StringRef FieldName)
-        -> std::optional<int64_t> {
+    auto decodeNamedImm = [&](const MCExpr *E,
+                              StringRef FieldName) -> std::optional<int64_t> {
       int64_t V = 0;
       if (isConstExpr(E, V))
         return V;
@@ -3137,7 +3273,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
           return std::nullopt;
         }
         if (FieldName == "Function") {
-          if (auto Op = parseTEPLTileOpcodeKeyword(Sym))
+          if (auto Op = parseTileOperationKeyword(Sym))
             return static_cast<int64_t>(*Op);
           return std::nullopt;
         }
@@ -3153,9 +3289,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     DataTypeVal = decodeNamedImm(PI.Imms[2].Expr, "DataType");
     if (!require(DataTypeVal.has_value(),
                  "DataType must be a constant or one of "
-                 "{FP64,FP32,FP16,FP8,BF16,FPL8,FP4,FPL4,"
-                 "INT64,INT32,INT16,INT8,INT4,"
-                 "UINT64,UINT32,UINT16,UINT8,UINT4}"))
+                 "{FP64,FP32,TF32,HF32,FP16,BF16,HiF8,E4M3,E5M2,E3M2,"
+                 "E2M3,E2M1X2,E1M2X2,E8M0,HiF4X2,"
+                 "S64,S32,S16,S8,S4X2,U64,U32,U16,U8,U4X2}"))
       return false;
     if (!require(ModeVal.has_value() && FuncVal.has_value(),
                  "BSTART.TEPL Mode and Function must be constants"))
@@ -3164,10 +3300,10 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
                      *FuncVal <= 31,
                  "BSTART.TEPL requires Mode 0..3 and Function 0..31"))
       return false;
-    if (!require(LinxISA::isCanonicalTEPLTileOpcodeV057(
+    if (!require(LinxISA::isCanonicalTileOperationV058(
                      (static_cast<unsigned>(*ModeVal) << 5) |
                      static_cast<unsigned>(*FuncVal)),
-                 "BSTART.TEPL Mode/Function is reserved in PTO ISA 0.57.1"))
+                 "BSTART.TEPL Mode/Function is reserved in PTO ISA 0.58"))
       return false;
     if (!require(*DataTypeVal >= 0 && *DataTypeVal <= 31,
                  (Twine(Kind) + " DataType out of range")))
@@ -3216,9 +3352,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     return PI.Imms[ImmIdx++].Expr;
   };
 
-  auto bindFieldRegOrder =
-      [&](std::initializer_list<std::pair<StringRef, std::optional<ParsedReg> *>>
-              Bindings) -> bool {
+  auto bindFieldRegOrder = [&](std::initializer_list<
+                               std::pair<StringRef, std::optional<ParsedReg> *>>
+                                   Bindings) -> bool {
     for (const auto &Binding : Bindings) {
       auto R = takeReg();
       if (!require(R.has_value(),
@@ -3280,7 +3416,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     StringRef FN(Field.name);
 
     if (FN == "RegDst") {
-      if (!require(PI.ArrowDests.size() == 1, "expected destination after '->'"))
+      if (!require(PI.ArrowDests.size() == 1,
+                   "expected destination after '->'"))
         return false;
       if (!require(PI.ArrowDests[0].Code < (1u << Field.bit_width),
                    "destination register does not fit field width"))
@@ -3301,9 +3438,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       continue;
     }
 
-    if (FN == "RegSrc" || FN == "RegSrc0" || FN == "RegSrc1" || FN == "RegSrc2" ||
-        FN.starts_with("RegSrc0") || FN.starts_with("RegSrc1") ||
-        FN.starts_with("RegSrc2")) {
+    if (FN == "RegSrc" || FN == "RegSrc0" || FN == "RegSrc1" ||
+        FN == "RegSrc2" || FN.starts_with("RegSrc0") ||
+        FN.starts_with("RegSrc1") || FN.starts_with("RegSrc2")) {
       auto R = takeReg();
       if (!require(R.has_value(), "missing register operand"))
         return false;
@@ -3327,7 +3464,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     }
 
     if (FN == "LoopNest") {
-      if (!require(PI.ArrowDests.size() == 1, "expected destination after '->'"))
+      if (!require(PI.ArrowDests.size() == 1,
+                   "expected destination after '->'"))
         return false;
       if (!require(PI.ArrowDests[0].Code < (1u << Field.bit_width),
                    "loopnest selector does not fit field width"))
@@ -3375,15 +3513,17 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
     }
 
     if (FN == "shamt") {
-      const bool IsSetcImm = AsmFmt.starts_with_insensitive("setc.") &&
-                             (hasField(Form, "simm12") || hasField(Form, "uimm12"));
+      const bool IsSetcImm =
+          AsmFmt.starts_with_insensitive("setc.") &&
+          (hasField(Form, "simm12") || hasField(Form, "uimm12"));
       if (IsSetcImm) {
         if (!SplitImm12.has_value()) {
           const MCExpr *E = takeImmExpr();
           if (!require(E != nullptr, "missing immediate operand"))
             return false;
           int64_t V = 0;
-          if (!require(isConstExpr(E, V), "immediate must be a constant for now"))
+          if (!require(isConstExpr(E, V),
+                       "immediate must be a constant for now"))
             return false;
           SplitImm12 = V;
         }
@@ -3430,19 +3570,21 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(E != nullptr, ("missing " + FN + " immediate").str()))
         return false;
       int64_t V = 0;
-      if (!require(isConstExpr(E, V), (FN + " must be a constant for now").str()))
+      if (!require(isConstExpr(E, V),
+                   (FN + " must be a constant for now").str()))
         return false;
       emitFieldImm(V);
       continue;
     }
 
-    if (FN == "LSR_ID" || FN == "ACR-ID" || FN == "C-ID" ||
-        FN == "CROSS-BID" || FN == "M" || FN == "N" || FN == "model") {
+    if (FN == "LSR_ID" || FN == "ACR-ID" || FN == "C-ID" || FN == "CROSS-BID" ||
+        FN == "M" || FN == "N" || FN == "model") {
       const MCExpr *E = takeImmExpr();
       if (!require(E != nullptr, ("missing " + FN + " immediate").str()))
         return false;
       int64_t V = 0;
-      if (!require(isConstExpr(E, V), (FN + " must be a constant for now").str()))
+      if (!require(isConstExpr(E, V),
+                   (FN + " must be a constant for now").str()))
         return false;
       emitFieldImm(V);
       continue;
@@ -3453,7 +3595,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       if (!require(E != nullptr, ("missing " + FN + " immediate").str()))
         return false;
       int64_t V = 0;
-      if (!require(isConstExpr(E, V), (FN + " must be a constant for now").str()))
+      if (!require(isConstExpr(E, V),
+                   (FN + " must be a constant for now").str()))
         return false;
       emitFieldImm(V);
       continue;
@@ -3496,9 +3639,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         FN == "TileOpcode" || FN == "TileOp") {
       const MCExpr *E = takeImmExpr();
       if (E == nullptr) {
-        if (FN == "Mode" &&
-            (AsmFmt.starts_with_insensitive("BSTART.VPAR") ||
-             AsmFmt.starts_with_insensitive("BSTART.VSEQ"))) {
+        if (FN == "Mode" && (AsmFmt.starts_with_insensitive("BSTART.VPAR") ||
+                             AsmFmt.starts_with_insensitive("BSTART.VSEQ"))) {
           emitFieldImm(1);
           continue;
         }
@@ -3516,7 +3658,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
         }
         if (FN == "Mode") {
           if (const auto *S = dyn_cast<MCSymbolRefExpr>(E))
-            if (auto Mode = parseVectorBlockModeKeyword(S->getSymbol().getName())) {
+            if (auto Mode =
+                    parseVectorBlockModeKeyword(S->getSymbol().getName())) {
               emitFieldImm(*Mode);
               continue;
             }
@@ -3540,7 +3683,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
           return false;
       }
       int64_t V = 0;
-      if (!require(isConstExpr(E, V), (FN + " must be a constant for now").str()))
+      if (!require(isConstExpr(E, V),
+                   (FN + " must be a constant for now").str()))
         return false;
       emitFieldImm(V);
       continue;
@@ -3548,7 +3692,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
 
     if (FN == "PRED_IMM" || FN == "SUCC_IMM") {
       const MCExpr *E = takeImmExpr();
-      if (E == nullptr && AsmFmt.equals_insensitive("fence.d pred_imm, succ_imm")) {
+      if (E == nullptr &&
+          AsmFmt.equals_insensitive("fence.d pred_imm, succ_imm")) {
         emitFieldImm(1);
         continue;
       }
@@ -3622,7 +3767,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       continue;
     }
 
-    if (FN.starts_with("simm") || FN.starts_with("uimm") || FN.starts_with("imm")) {
+    if (FN.starts_with("simm") || FN.starts_with("uimm") ||
+        FN.starts_with("imm")) {
       const MCExpr *E = takeImmExpr();
       if (!require(E != nullptr, "missing immediate operand"))
         return false;
@@ -3630,8 +3776,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex, const ParsedInst &
       const bool IsShuffleImmediate =
           FN == "imm" && AsmFmt.starts_with_insensitive("v.shfli.");
       if (IsShuffleImmediate) {
-        if (!require(isConstExpr(E, V),
-                     "V.SHFLI immediate must be a constant"))
+        if (!require(isConstExpr(E, V), "V.SHFLI immediate must be a constant"))
           return false;
         const uint64_t Limit = uint64_t{1} << Field.bit_width;
         if (!require(V >= 0 && static_cast<uint64_t>(V) < Limit,
@@ -3685,12 +3830,13 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     Key.resize(Key.size() - StringRef(".LOCAL").size());
   }
 
-  std::optional<unsigned> TEPLAliasOpcode;
-  if (StringRef(Key).starts_with("BSTART.")) {
-    TEPLAliasOpcode = LinxISA::parseCanonicalTEPLTileOpcodeV057(
-        StringRef(Key).drop_front(StringRef("BSTART.").size()));
-    if (TEPLAliasOpcode)
-      Key = "BSTART.TEPL";
+  std::optional<LinxISA::TileEngineV058> RequestedTileEngine;
+  if (Key == "BSTART.VEC") {
+    RequestedTileEngine = LinxISA::TileEngineV058::VEC;
+    Key = "BSTART.TEPL";
+  } else if (Key == "BSTART.SFU") {
+    RequestedTileEngine = LinxISA::TileEngineV058::SFU;
+    Key = "BSTART.TEPL";
   }
 
   const auto &Map = getMnemonicMap();
@@ -3719,14 +3865,12 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return Base.str();
     };
 
-    if (Base == "FABS" || Base == "FADD" || Base == "FDIV" ||
-        Base == "FEQ" || Base == "FEQS" || Base == "FEXP" ||
-        Base == "FGE" || Base == "FGES" || Base == "FLT" ||
-        Base == "FLTS" || Base == "FMADD" || Base == "FMAX" ||
-        Base == "FMIN" || Base == "FMSUB" || Base == "FMUL" ||
-        Base == "FNE" || Base == "FNES" || Base == "FNMADD" ||
-        Base == "FNMSUB" || Base == "FRECIP" || Base == "FSQRT" ||
-        Base == "FSUB")
+    if (Base == "FABS" || Base == "FADD" || Base == "FDIV" || Base == "FEQ" ||
+        Base == "FEQS" || Base == "FEXP" || Base == "FGE" || Base == "FGES" ||
+        Base == "FLT" || Base == "FLTS" || Base == "FMADD" || Base == "FMAX" ||
+        Base == "FMIN" || Base == "FMSUB" || Base == "FMUL" || Base == "FNE" ||
+        Base == "FNES" || Base == "FNMADD" || Base == "FNMSUB" ||
+        Base == "FRECIP" || Base == "FSQRT" || Base == "FSUB")
       return pushFpUnary();
 
     const auto Sep = Suffix.find("2");
@@ -3798,9 +3942,9 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     if (auto Canonical = tryResolvePrefetchAlias("HL.PRFI.UA."))
       return Canonical;
 
-    auto tryResolveQueueAlias =
-        [&](StringRef Prefix, bool AllowH, bool HasI, bool HasS,
-            bool HasH) -> std::optional<std::string> {
+    auto tryResolveQueueAlias = [&](StringRef Prefix, bool AllowH, bool HasI,
+                                    bool HasS,
+                                    bool HasH) -> std::optional<std::string> {
       if (!KeyRef.starts_with_insensitive(Prefix))
         return std::nullopt;
       unsigned E = 0, H = 0, I = 0, R = 0, S = 0;
@@ -3832,8 +3976,8 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return Canonical;
 
     auto tryResolveVectorCvtAlias =
-        [&](StringRef Prefix, auto ParseSrc, auto ParseDst)
-            -> std::optional<std::string> {
+        [&](StringRef Prefix, auto ParseSrc,
+            auto ParseDst) -> std::optional<std::string> {
       if (!KeyRef.starts_with_insensitive(Prefix))
         return std::nullopt;
       StringRef Suffix = KeyRef.drop_front(Prefix.size());
@@ -3916,22 +4060,44 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   for (const ParsedImm &I : SynthesizedImms)
     PI.Imms.push_back(I);
 
-  if (TEPLAliasOpcode) {
+  if (RequestedTileEngine) {
     if (!PI.Regs.empty() || !PI.Keywords.empty() || PI.Mem.has_value() ||
         !PI.ArrowDests.empty() || PI.SetRetTarget.has_value())
-      return Error(IDLoc, "TEPL alias expects only a DataType operand");
-    if (PI.Imms.size() != 1)
-      return Error(IDLoc, "TEPL alias expects exactly one DataType operand");
+      return Error(IDLoc, "VEC/SFU alias expects an operation and DataType");
+    if (PI.Imms.size() != 2)
+      return Error(IDLoc,
+                   "VEC/SFU alias expects exactly 'Operation, DataType'");
+
+    const auto *OperationExpr = dyn_cast<MCSymbolRefExpr>(PI.Imms[0].Expr);
+    if (!OperationExpr)
+      return Error(PI.Imms[0].Loc, "expected PTO 0.58 tile operation name");
+    StringRef OperationName = OperationExpr->getSymbol().getName();
+    auto Selector = LinxISA::parseTileOperationV058(toUpperStr(OperationName));
+    if (!Selector)
+      return Error(
+          PI.Imms[0].Loc,
+          ("unknown PTO 0.58 tile operation '" + OperationName + "'").str());
+    auto ActualEngine = LinxISA::tileEngineV058(*Selector);
+    if (!ActualEngine)
+      return Error(
+          PI.Imms[0].Loc,
+          (OperationName + " has no PTO 0.58 engine classification").str());
+    if (*ActualEngine != *RequestedTileEngine) {
+      StringRef Expected = LinxISA::tileEngineNameV058(*ActualEngine);
+      StringRef Requested = LinxISA::tileEngineNameV058(*RequestedTileEngine);
+      return Error(PI.Imms[0].Loc, (OperationName + " is classified as " +
+                                    Expected + ", not " + Requested)
+                                       .str());
+    }
 
     ParsedImm ModeImm;
     ModeImm.Expr =
-        MCConstantExpr::create((*TEPLAliasOpcode >> 5) & 0x3u, getContext());
+        MCConstantExpr::create((*Selector >> 5) & 0x3u, getContext());
     ModeImm.Loc = IDLoc;
     ParsedImm FunctionImm;
-    FunctionImm.Expr =
-        MCConstantExpr::create(*TEPLAliasOpcode & 0x1fu, getContext());
+    FunctionImm.Expr = MCConstantExpr::create(*Selector & 0x1fu, getContext());
     FunctionImm.Loc = IDLoc;
-    ParsedImm DataTypeImm = PI.Imms[0];
+    ParsedImm DataTypeImm = PI.Imms[1];
     PI.Imms.clear();
     PI.Imms.push_back(ModeImm);
     PI.Imms.push_back(FunctionImm);
@@ -4012,7 +4178,8 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       }
     }
     if (!Built)
-      return Error(IDLoc, SetRetErr.empty() ? "failed to build C.SETRET" : SetRetErr);
+      return Error(IDLoc,
+                   SetRetErr.empty() ? "failed to build C.SETRET" : SetRetErr);
 
     Out.emitInstruction(SetRetMI, getSTI());
     return false;
@@ -4083,7 +4250,8 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
 } // namespace
 
-extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxISAAsmParser() {
+extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
+LLVMInitializeLinxISAAsmParser() {
   RegisterMCAsmParser<LinxISAAsmParser> X(getTheLinx32Target());
   RegisterMCAsmParser<LinxISAAsmParser> Y(getTheLinx64Target());
 }

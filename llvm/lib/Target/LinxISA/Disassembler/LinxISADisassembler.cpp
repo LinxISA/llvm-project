@@ -1,8 +1,8 @@
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInst.h"
@@ -76,9 +76,9 @@ static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
     if ((Insn & F.mask) != F.match)
       continue;
 
-    // Disambiguate packed tile/par headers from MSEQ/MPAR in canonical v0.4:
-    // MSEQ/MPAR require bit[25]=0. Some generated masks are currently
-    // under-constrained and can otherwise steal TEPL/TMA/CUBE headers during
+    // Disambiguate packed tile/par headers from MSEQ/MPAR in canonical PTO
+    // 0.58: MSEQ/MPAR require bit[25]=0. Some generated masks are currently
+    // under-constrained and can otherwise steal TEPL/TLSU/CUBE headers during
     // disassembly.
     StringRef Mnem(F.mnemonic ? F.mnemonic : "");
     if ((Mnem == "BSTART.MSEQ" || Mnem == "BSTART.MPAR") &&
@@ -203,9 +203,10 @@ static bool isLegalBIOTDestination(const linxisa_inst_form &Form,
   return false;
 }
 
-MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
-    MCInst &Instr, uint64_t &Size, ArrayRef<uint8_t> Bytes, uint64_t Address,
-    raw_ostream &CStream) const {
+MCDisassembler::DecodeStatus
+LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
+                                    ArrayRef<uint8_t> Bytes, uint64_t Address,
+                                    raw_ostream &CStream) const {
   // Allow symbolic operand printing when llvm-objdump installs a symbolizer.
   CommentStream = &CStream;
 
@@ -263,8 +264,7 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
     // Control-flow immediates are halfword-scaled.
     return FieldName == "simm12" || FieldName == "simm17" ||
            FieldName == "simm22" || FieldName == "simm25" ||
-           FieldName == "uimm5" || FieldName == "imm20" ||
-           FieldName == "imm32";
+           FieldName == "uimm5" || FieldName == "imm20" || FieldName == "imm32";
   };
 
   SmallVector<int64_t, 16> FieldVals;
@@ -284,7 +284,8 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
     bool IsBranchLike = false;
     int64_t SymValue = V;
 
-    if (Mnem.ends_with(".PCR") && (FieldName == "simm17" || FieldName == "simm")) {
+    if (Mnem.ends_with(".PCR") &&
+        (FieldName == "simm17" || FieldName == "simm")) {
       // *.PCR/HL.*.PCR: PC-relative data access.
       WantsSym = true;
       IsBranchLike = false;
@@ -306,8 +307,7 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
       WantsSym = true;
       IsBranchLike = true;
       SymValue = static_cast<int64_t>(Address) + (V << 1);
-    } else if (FieldName == "uimm5" &&
-               (IsFusedCall32 || IsFusedCall48)) {
+    } else if (FieldName == "uimm5" && (IsFusedCall32 || IsFusedCall48)) {
       WantsSym = true;
       IsBranchLike = true;
       const uint64_t ReturnFieldOffset = IsFusedCall32 ? 2 : 4;
@@ -336,7 +336,8 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
       IsBranchLike = true;
       SymValue = static_cast<int64_t>(Address) + V;
     } else if (isHalfwordPcRel(FieldName) &&
-               (Mnem == "C.SETRET" || Mnem == "SETRET" || Mnem == "HL.SETRET")) {
+               (Mnem == "C.SETRET" || Mnem == "SETRET" ||
+                Mnem == "HL.SETRET")) {
       WantsSym = true;
       IsBranchLike = true;
       // SETRET immediates are halfword offsets from the SETRET instruction PC.
@@ -387,7 +388,8 @@ MCDisassembler::DecodeStatus LinxISADisassembler::getInstruction(
         if (isSignedSetRet(*NextForm)) {
           int64_t Delta = Enc;
           Delta <<= 1;
-          Target = static_cast<uint64_t>(static_cast<int64_t>(SetRetAddr) + Delta);
+          Target =
+              static_cast<uint64_t>(static_cast<int64_t>(SetRetAddr) + Delta);
         } else {
           uint64_t Delta = static_cast<uint64_t>(Enc) << 1;
           Target = SetRetAddr + Delta;

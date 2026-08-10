@@ -37,10 +37,9 @@ void LinxISAInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 }
 
 void LinxISAInstrInfo::storeRegToStackSlot(
-    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
-    Register SrcReg, bool IsKill, int FrameIndex,
-    const TargetRegisterClass *RC, Register /*VReg*/,
-    MachineInstr::MIFlag /*Flags*/) const {
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI, Register SrcReg,
+    bool IsKill, int FrameIndex, const TargetRegisterClass *RC,
+    Register /*VReg*/, MachineInstr::MIFlag /*Flags*/) const {
   DebugLoc DL;
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
@@ -54,11 +53,11 @@ void LinxISAInstrInfo::storeRegToStackSlot(
   }
 
   if (LinxISA::TILERegClass.hasSubClassEq(RC)) {
-    // Tile spills use TSTORE with a fixed 4KiB payload (SizeCode=8).
-    BuildMI(MBB, MBBI, DL, get(LinxISA::PSEUDO_TMA_TSTORE))
+    // Tile spills use TSTORE with a fixed 4KiB payload (TSize=6).
+    BuildMI(MBB, MBBI, DL, get(LinxISA::PSEUDO_TLSU_TSTORE))
         .addFrameIndex(FrameIndex)
         .addReg(SrcReg, getKillRegState(IsKill))
-        .addImm(8);
+        .addImm(6);
     return;
   }
 
@@ -66,10 +65,9 @@ void LinxISAInstrInfo::storeRegToStackSlot(
 }
 
 void LinxISAInstrInfo::loadRegFromStackSlot(
-    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
-    Register DestReg, int FrameIndex, const TargetRegisterClass *RC,
-    Register /*VReg*/, unsigned /*SubIdx*/,
-    MachineInstr::MIFlag /*Flags*/) const {
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI, Register DestReg,
+    int FrameIndex, const TargetRegisterClass *RC, Register /*VReg*/,
+    unsigned /*SubIdx*/, MachineInstr::MIFlag /*Flags*/) const {
   DebugLoc DL;
   if (MBBI != MBB.end())
     DL = MBBI->getDebugLoc();
@@ -82,22 +80,19 @@ void LinxISAInstrInfo::loadRegFromStackSlot(
   }
 
   if (LinxISA::TILERegClass.hasSubClassEq(RC)) {
-    // Tile reloads use TLOAD with a fixed 4KiB payload (SizeCode=8).
-    BuildMI(MBB, MBBI, DL, get(LinxISA::PSEUDO_TMA_TLOAD_ANY), DestReg)
+    // Tile reloads use TLOAD with a fixed 4KiB payload (TSize=6).
+    BuildMI(MBB, MBBI, DL, get(LinxISA::PSEUDO_TLSU_TLOAD_ANY), DestReg)
         .addFrameIndex(FrameIndex)
-        .addImm(8);
+        .addImm(6);
     return;
   }
 
   report_fatal_error("Linx: cannot load this register class");
 }
 
-unsigned LinxISAInstrInfo::insertBranch(MachineBasicBlock &MBB,
-                                        MachineBasicBlock *TBB,
-                                        MachineBasicBlock *FBB,
-                                        ArrayRef<MachineOperand> Cond,
-                                        const DebugLoc &DL,
-                                        int *BytesAdded) const {
+unsigned LinxISAInstrInfo::insertBranch(
+    MachineBasicBlock &MBB, MachineBasicBlock *TBB, MachineBasicBlock *FBB,
+    ArrayRef<MachineOperand> Cond, const DebugLoc &DL, int *BytesAdded) const {
   if (BytesAdded)
     *BytesAdded = 0;
 

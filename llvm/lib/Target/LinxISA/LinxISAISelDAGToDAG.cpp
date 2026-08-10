@@ -9,7 +9,7 @@
 #include "LinxISA.h"
 #include "LinxISABaseInfo.h"
 #include "LinxISATargetMachine.h"
-#include "LinxISATileOpcodesV057.h"
+#include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/IR/Function.h"
@@ -82,13 +82,11 @@ static int64_t getMemScaleForVT(MVT MemVT) {
   return 1;
 }
 
-static bool isStrictTileSizeCode(uint64_t SizeCode) {
-  return SizeCode >= 3 && SizeCode <= 9;
+static bool isStrictTileTSize(uint64_t TSize) {
+  return TSize >= 1 && TSize <= 7;
 }
 
-static uint64_t sizeCodeToBytes(uint64_t SizeCode) {
-  return 1ull << (SizeCode + 4u);
-}
+static uint64_t tSizeToBytes(uint64_t TSize) { return 1ull << (TSize + 6u); }
 
 static uint64_t dtypeElementBitsForTileCheck(uint64_t DType) {
   switch (DType & 0x1fu) {
@@ -165,7 +163,7 @@ static uint64_t computeTileBytesOrDie(StringRef IntrinsicName, uint64_t Dim0,
 static void validateTileByteBudget(StringRef IntrinsicName, uint64_t Dim0,
                                    uint64_t Dim1, uint64_t Dim2,
                                    uint64_t ElemBits,
-                                   std::optional<uint64_t> SizeCode) {
+                                   std::optional<uint64_t> TSize) {
   const uint64_t Bytes =
       computeTileBytesOrDie(IntrinsicName, Dim0, Dim1, Dim2, ElemBits);
   constexpr uint64_t StrictMaxBytes = 8192u;
@@ -180,17 +178,17 @@ static void validateTileByteBudget(StringRef IntrinsicName, uint64_t Dim0,
                        "element width.");
   }
 
-  if (SizeCode) {
-    const uint64_t LimitBytes = sizeCodeToBytes(*SizeCode);
+  if (TSize) {
+    const uint64_t LimitBytes = tSizeToBytes(*TSize);
     if (Bytes > LimitBytes) {
       report_fatal_error(Twine("Linx: ") + IntrinsicName +
                          " tile-byte check failed: bytes=" + Twine(Bytes) +
                          "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
                          ", dim2=" + Twine(Dim2) + ", elem_bits=" +
                          Twine(ElemBits) + ") exceeds descriptor limit " +
-                         Twine(LimitBytes) + "B (SizeCode=" + Twine(*SizeCode) +
+                         Twine(LimitBytes) + "B (TSize=" + Twine(*TSize) +
                          "). Shrink dimensions/element width or increase "
-                         "SizeCode.");
+                         "TSize.");
     }
   }
 }
@@ -217,11 +215,10 @@ static int64_t requireConstSImmOperand(const SDNode *N, unsigned OperandIdx,
   return C->getSExtValue();
 }
 
-static void validateStrictTileSizeCode(uint64_t SizeCode,
-                                       StringRef IntrinsicName) {
-  if (!isStrictTileSizeCode(SizeCode)) {
+static void validateStrictTileTSize(uint64_t TSize, StringRef IntrinsicName) {
+  if (!isStrictTileTSize(TSize)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " requires SizeCode in [3,9] (128B..8KB)");
+                       " requires TSize in [1,7] (128B..8KB)");
   }
 }
 
@@ -234,92 +231,36 @@ static void validateTileDataTypeU5(uint64_t DType, StringRef IntrinsicName) {
 
 static void validateCubeDimU17(uint64_t Dim, StringRef IntrinsicName,
                                StringRef DimName) {
-  if (!isUInt<17>(Dim)) {
+  if (!isUInt<17>(Dim) || !isPowerOf2_64(Dim)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName + " requires " +
-                       DimName + " in range 0..131071");
+                       DimName +
+                       " to be a positive power of two in range "
+                       "1..65536");
   }
 }
 
-static std::optional<unsigned> getIntrinsicIDFromTileValue(SDValue V) {
-  SDNode *Node = V.getNode();
-  if (!Node)
-    return std::nullopt;
-
-  switch (Node->getOpcode()) {
-  case ISD::BITCAST:
-  case ISD::ANY_EXTEND:
-  case ISD::ZERO_EXTEND:
-  case ISD::SIGN_EXTEND:
-  case ISD::TRUNCATE:
-    return getIntrinsicIDFromTileValue(Node->getOperand(0));
-  case ISD::INTRINSIC_W_CHAIN:
-  case ISD::INTRINSIC_WO_CHAIN: {
-    auto *ID = dyn_cast<ConstantSDNode>(Node->getOperand(1));
-    if (!ID)
-      return std::nullopt;
-    return static_cast<unsigned>(ID->getZExtValue());
-  }
-  default:
-    return std::nullopt;
-  }
-}
-
-static bool isCubeAccumulatorProducerIntrinsic(unsigned IntrID) {
-  switch (static_cast<Intrinsic::ID>(IntrID)) {
-  case Intrinsic::linx_cube_mamulb:
-  case Intrinsic::linx_cube_mamulb_legacy:
-  case Intrinsic::linx_cube_mamulb_acc:
-  case Intrinsic::linx_cube_mamulb_acc_legacy:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static void validateCubeAccumulatorOperandChain(SDValue AccOperand,
-                                                StringRef IntrinsicName) {
-  // Enforce the strict CUBE accumulator chain when the producer is directly
-  // visible in DAG: TMATMUL/TMATMUL.ACC seed/update the implicit ACC, and
-  // TMATMUL.ACC/ACCCVT must consume that accumulator state.
-  std::optional<unsigned> ProducerID = getIntrinsicIDFromTileValue(AccOperand);
-  if (!ProducerID)
-    return;
-  if (!isCubeAccumulatorProducerIntrinsic(*ProducerID)) {
-    report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " requires accumulator operand produced by "
-                       "cube.mamulb or cube.mamulb.acc");
-  }
-}
-
-static void validateTileOpcode(uint64_t TileOpcode, StringRef IntrinsicName) {
-  if (!isUInt<7>(TileOpcode)) {
+static void validateTileOperation(uint64_t TileOperation,
+                                  StringRef IntrinsicName) {
+  if (!isUInt<7>(TileOperation)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
                        " requires packed Mode/Function in range 0..127");
   }
 }
 
-static bool isWhitelistedTEPLTileOpcode(uint64_t TileOpcode) {
-  return LinxISA::isCanonicalTEPLTileOpcodeV057(TileOpcode & 0x7fu);
-}
-
-static void validateWhitelistedTEPLTileOpcode(uint64_t TileOpcode,
-                                              StringRef IntrinsicName) {
-  validateTileOpcode(TileOpcode, IntrinsicName);
-  if (!isWhitelistedTEPLTileOpcode(TileOpcode)) {
+static void validateCanonicalTileOperation(uint64_t TileOperation,
+                                           StringRef IntrinsicName) {
+  validateTileOperation(TileOperation, IntrinsicName);
+  if (!LinxISA::isCanonicalTileOperationV058(TileOperation)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " uses a reserved Mode/Function in PTO ISA 0.57.1");
+                       " uses a reserved Mode/Function in PTO ISA 0.58");
   }
 }
 
-static constexpr uint64_t TEPL_TILEOP_TADD = 0x000u;
-static constexpr uint64_t TEPL_TILEOP_TSUB = 0x001u;
-static constexpr uint64_t TEPL_TILEOP_TROWMAX = 0x041u;
-static constexpr uint64_t TEPL_TILEOP_TCOLEXPAND = 0x054u;
-static constexpr uint64_t TEPL_TILEOP_TROWEXPAND = 0x044u;
-static constexpr uint64_t TEPL_TILEOP_TEXPANDS = 0x03bu;
-static constexpr uint64_t TEPL_MODE_VV = 0u;
-static constexpr uint64_t TEPL_MODE_VS = 1u;
-static constexpr uint64_t TEPL_MODE_SV = 2u;
+static constexpr uint64_t TILEOP_TADD = 0x000u;
+static constexpr uint64_t TILEOP_TSUB = 0x001u;
+static constexpr uint64_t TILEOP_TROWMAX = 0x041u;
+static constexpr uint64_t TILEOP_MODE_VS = 1u;
+static constexpr uint64_t TILEOP_MODE_SV = 2u;
 
 bool LinxISADAGToDAGISel::selectMemAddr(SDValue Addr, SDValue &Base,
                                         SDValue &Off, int64_t Scale) {
@@ -940,35 +881,35 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       return V;
     };
 
-    if (IntrID == Intrinsic::linx_tma_tload_shape) {
+    if (IntrID == Intrinsic::linx_tlsu_tload_shape) {
       const uint64_t DType =
-          requireConstUImmOperand(N, 3, "tma.tload.shape", "dtype");
+          requireConstUImmOperand(N, 3, "tlsu.tload.shape", "dtype");
       const int64_t Layout =
-          requireConstSImmOperand(N, 4, "tma.tload.shape", "layout");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 8, "tma.tload.shape", "size_code");
-      validateStrictTileSizeCode(SizeCode, "tma.tload.shape");
-      validateTileDataTypeU5(DType, "tma.tload.shape");
+          requireConstSImmOperand(N, 4, "tlsu.tload.shape", "layout");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 8, "tlsu.tload.shape", "tsize");
+      validateStrictTileTSize(TSize, "tlsu.tload.shape");
+      validateTileDataTypeU5(DType, "tlsu.tload.shape");
       SDValue Ops[] = {N->getOperand(2),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        CurDAG->getTargetConstant(Layout, DL, MVT::i64),
                        forceGpr(N->getOperand(5)),
                        forceGpr(N->getOperand(6)),
                        forceGpr(N->getOperand(7)),
-                       CurDAG->getTargetConstant(SizeCode, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TSize, DL, MVT::i64),
                        forceGpr(N->getOperand(9)),
                        N->getOperand(0)};
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TLOAD_SHAPE, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TLOAD_SHAPE, DL,
                                            N->getValueType(0), MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
     if (IntrID == Intrinsic::linx_tile_tload) {
-      // (chain, id, base, immSizeCode, immDType, immLayout, immLB0,
+      // (chain, id, base, immTSize, immDType, immLayout, immLB0,
       //  immLB1, immStrideBytes)
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 3, "tile.tload", "size_code");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 3, "tile.tload", "tsize");
       const uint64_t DType =
           requireConstUImmOperand(N, 4, "tile.tload", "dtype");
       const int64_t Layout =
@@ -977,12 +918,12 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const int64_t LB1 = requireConstSImmOperand(N, 7, "tile.tload", "lb1");
       const int64_t StrideBytes =
           requireConstSImmOperand(N, 8, "tile.tload", "stride_bytes");
-      validateStrictTileSizeCode(SizeCode, "tile.tload");
+      validateStrictTileTSize(TSize, "tile.tload");
       validateTileDataTypeU5(DType, "tile.tload");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tile.tload", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tile.tload", "lb1");
       validateTileByteBudget("tile.tload", Dim0, Dim1, /*dim2=*/1u,
-                             dtypeElementBitsForTileCheck(DType), SizeCode);
+                             dtypeElementBitsForTileCheck(DType), TSize);
       if (StrideBytes < 0) {
         report_fatal_error("Linx: tile.tload requires stride_bytes >= 0");
       }
@@ -1005,50 +946,50 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue LayoutImm = CurDAG->getTargetConstant(Layout, DL, MVT::i64);
       SDValue LB0Imm = CurDAG->getTargetConstant(LB0, DL, MVT::i64);
       SDValue LB1Imm = CurDAG->getTargetConstant(LB1, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue Stride = forceGpr(N->getOperand(8));
       SDValue Ops[] = {Base,   DTypeImm, LayoutImm, LB0Imm,
                        LB1Imm, SizeImm,  Stride,    Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TLOAD_DESC, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TLOAD_DESC, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tma_tload_desc) {
-      // (chain, id, base, immDType, immLayout, immLB0, immLB1, immSizeCode,
+    if (IntrID == Intrinsic::linx_tlsu_tload_desc) {
+      // (chain, id, base, immDType, immLayout, immLB0, immLB1, immTSize,
       //  immStrideBytes)
       const uint64_t DType =
-          requireConstUImmOperand(N, 3, "tma.tload.desc", "dtype");
+          requireConstUImmOperand(N, 3, "tlsu.tload.desc", "dtype");
       const int64_t Layout =
-          requireConstSImmOperand(N, 4, "tma.tload.desc", "layout");
+          requireConstSImmOperand(N, 4, "tlsu.tload.desc", "layout");
       const int64_t LB0 =
-          requireConstSImmOperand(N, 5, "tma.tload.desc", "lb0");
+          requireConstSImmOperand(N, 5, "tlsu.tload.desc", "lb0");
       const int64_t LB1 =
-          requireConstSImmOperand(N, 6, "tma.tload.desc", "lb1");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 7, "tma.tload.desc", "size_code");
+          requireConstSImmOperand(N, 6, "tlsu.tload.desc", "lb1");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 7, "tlsu.tload.desc", "tsize");
       const int64_t StrideBytes =
-          requireConstSImmOperand(N, 8, "tma.tload.desc", "stride_bytes");
-      validateStrictTileSizeCode(SizeCode, "tma.tload.desc");
-      validateTileDataTypeU5(DType, "tma.tload.desc");
-      const uint64_t Dim0 = requirePositiveDim(LB0, "tma.tload.desc", "lb0");
-      const uint64_t Dim1 = requirePositiveDim(LB1, "tma.tload.desc", "lb1");
-      validateTileByteBudget("tma.tload.desc", Dim0, Dim1, /*dim2=*/1u,
-                             dtypeElementBitsForTileCheck(DType), SizeCode);
+          requireConstSImmOperand(N, 8, "tlsu.tload.desc", "stride_bytes");
+      validateStrictTileTSize(TSize, "tlsu.tload.desc");
+      validateTileDataTypeU5(DType, "tlsu.tload.desc");
+      const uint64_t Dim0 = requirePositiveDim(LB0, "tlsu.tload.desc", "lb0");
+      const uint64_t Dim1 = requirePositiveDim(LB1, "tlsu.tload.desc", "lb1");
+      validateTileByteBudget("tlsu.tload.desc", Dim0, Dim1, /*dim2=*/1u,
+                             dtypeElementBitsForTileCheck(DType), TSize);
       if (StrideBytes < 0) {
-        report_fatal_error("Linx: tma.tload.desc requires stride_bytes >= 0");
+        report_fatal_error("Linx: tlsu.tload.desc requires stride_bytes >= 0");
       }
       if (StrideBytes != 0) {
         const uint64_t ElemBits = dtypeElementBitsForTileCheck(DType);
         const uint64_t ElemBytes = (ElemBits + 7u) / 8u;
         const uint64_t RowSpanBytes = computeTileBytesOrDie(
-            "tma.tload.desc stride", Dim0, 1u, 1u, ElemBits);
+            "tlsu.tload.desc stride", Dim0, 1u, 1u, ElemBits);
         const uint64_t StrideU64 = static_cast<uint64_t>(StrideBytes);
         if ((StrideU64 % ElemBytes) != 0u || StrideU64 < RowSpanBytes) {
           report_fatal_error(
-              "Linx: tma.tload.desc stride_bytes must be element-aligned and "
+              "Linx: tlsu.tload.desc stride_bytes must be element-aligned and "
               ">= lb0*elem_bytes(rounded)");
         }
       }
@@ -1059,68 +1000,59 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue LayoutImm = CurDAG->getTargetConstant(Layout, DL, MVT::i64);
       SDValue LB0Imm = CurDAG->getTargetConstant(LB0, DL, MVT::i64);
       SDValue LB1Imm = CurDAG->getTargetConstant(LB1, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue Stride = forceGpr(N->getOperand(8));
       SDValue Ops[] = {Base,   DTypeImm, LayoutImm, LB0Imm,
                        LB1Imm, SizeImm,  Stride,    Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TLOAD_DESC, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TLOAD_DESC, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
     if (IntrID == Intrinsic::linx_tile_tmov ||
-        IntrID == Intrinsic::linx_tile_tmov_legacy) {
-      // (chain, id, src, immMode, immSizeCode, immDType, immLayout,
-      //  immHasLayout)
-      const uint64_t Mode = requireConstUImmOperand(N, 3, "tile.tmov", "mode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tile.tmov", "size_code");
+        IntrID == Intrinsic::linx_tile_tmov_vec) {
+      // (chain, id, src, immTSize, immDType, immLayout, immHasLayout)
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 3, "tile.tmov", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tile.tmov", "dtype");
+          requireConstUImmOperand(N, 4, "tile.tmov", "dtype");
       const int64_t Layout =
-          requireConstSImmOperand(N, 6, "tile.tmov", "layout");
+          requireConstSImmOperand(N, 5, "tile.tmov", "layout");
       const uint64_t HasLayout =
-          requireConstUImmOperand(N, 7, "tile.tmov", "has_layout");
-      if (Mode > 1)
-        report_fatal_error("Linx: tile.tmov mode must be 0(V2V) or 1(A2V)");
-      validateStrictTileSizeCode(SizeCode, "tile.tmov");
+          requireConstUImmOperand(N, 6, "tile.tmov", "has_layout");
+      validateStrictTileTSize(TSize, "tile.tmov");
       validateTileDataTypeU5(DType, "tile.tmov");
       if (HasLayout > 1)
         report_fatal_error("Linx: tile.tmov has_layout must be 0 or 1");
 
       SDValue Chain = N->getOperand(0);
       SDValue Src = N->getOperand(2);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue LayoutImm = CurDAG->getTargetConstant(Layout, DL, MVT::i64);
       SDValue HasLayoutImm = CurDAG->getTargetConstant(HasLayout, DL, MVT::i64);
-      SDValue ModeImm = CurDAG->getTargetConstant(Mode, DL, MVT::i64);
       SDValue SrcReuseImm = CurDAG->getTargetConstant(0, DL, MVT::i64);
-      SDValue Ops[] = {Src,          SizeImm, DTypeImm,    LayoutImm,
-                       HasLayoutImm, ModeImm, SrcReuseImm, Chain};
+      SDValue Ops[] = {Src,          SizeImm,     DTypeImm, LayoutImm,
+                       HasLayoutImm, SrcReuseImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TMOV, DL, ResVT,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TMOV, DL, ResVT,
                                            MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_cube_mamulb ||
-        IntrID == Intrinsic::linx_cube_mamulb_legacy) {
+    if (IntrID == Intrinsic::linx_cube_tmatmul ||
+        IntrID == Intrinsic::linx_cube_tmatmul_vec) {
       // (chain, id, a, b, immM, immN, immK)
-      const uint64_t M = requireConstUImmOperand(N, 4, "cube.mamulb", "m");
-      const uint64_t NDim = requireConstUImmOperand(N, 5, "cube.mamulb", "n");
-      const uint64_t K = requireConstUImmOperand(N, 6, "cube.mamulb", "k");
-      validateCubeDimU17(M, "cube.mamulb", "m");
-      validateCubeDimU17(NDim, "cube.mamulb", "n");
-      validateCubeDimU17(K, "cube.mamulb", "k");
-      if (M == 0 || NDim == 0 || K == 0) {
-        report_fatal_error(
-            "Linx: cube.mamulb requires m/n/k > 0 for tile-byte validation");
-      }
-      validateTileByteBudget("cube.mamulb", M, NDim, K,
+      const uint64_t M = requireConstUImmOperand(N, 4, "cube.tmatmul", "m");
+      const uint64_t NDim = requireConstUImmOperand(N, 5, "cube.tmatmul", "n");
+      const uint64_t K = requireConstUImmOperand(N, 6, "cube.tmatmul", "k");
+      validateCubeDimU17(M, "cube.tmatmul", "m");
+      validateCubeDimU17(NDim, "cube.tmatmul", "n");
+      validateCubeDimU17(K, "cube.tmatmul", "k");
+      validateTileByteBudget("cube.tmatmul", M, NDim, K,
                              dtypeElementBitsForTileCheck(/*DType=*/17),
                              std::nullopt);
 
@@ -1132,31 +1064,25 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue KImm = CurDAG->getTargetConstant(K, DL, MVT::i64);
       SDValue Ops[] = {A, B, MImm, NImm, KImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_CUBE_MAMULB, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_CUBE_TMATMUL, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_cube_mamulb_acc ||
-        IntrID == Intrinsic::linx_cube_mamulb_acc_legacy) {
+    if (IntrID == Intrinsic::linx_cube_tmatmul_acc ||
+        IntrID == Intrinsic::linx_cube_tmatmul_acc_vec) {
       // (chain, id, acc, a, b, immM, immN, immK)
-      const uint64_t M = requireConstUImmOperand(N, 5, "cube.mamulb.acc", "m");
+      const uint64_t M = requireConstUImmOperand(N, 5, "cube.tmatmul.acc", "m");
       const uint64_t NDim =
-          requireConstUImmOperand(N, 6, "cube.mamulb.acc", "n");
-      const uint64_t K = requireConstUImmOperand(N, 7, "cube.mamulb.acc", "k");
-      validateCubeDimU17(M, "cube.mamulb.acc", "m");
-      validateCubeDimU17(NDim, "cube.mamulb.acc", "n");
-      validateCubeDimU17(K, "cube.mamulb.acc", "k");
-      if (M == 0 || NDim == 0 || K == 0) {
-        report_fatal_error(
-            "Linx: cube.mamulb.acc requires m/n/k > 0 for tile-byte "
-            "validation");
-      }
-      validateTileByteBudget("cube.mamulb.acc", M, NDim, K,
+          requireConstUImmOperand(N, 6, "cube.tmatmul.acc", "n");
+      const uint64_t K = requireConstUImmOperand(N, 7, "cube.tmatmul.acc", "k");
+      validateCubeDimU17(M, "cube.tmatmul.acc", "m");
+      validateCubeDimU17(NDim, "cube.tmatmul.acc", "n");
+      validateCubeDimU17(K, "cube.tmatmul.acc", "k");
+      validateTileByteBudget("cube.tmatmul.acc", M, NDim, K,
                              dtypeElementBitsForTileCheck(/*DType=*/17),
                              std::nullopt);
-      validateCubeAccumulatorOperandChain(N->getOperand(2), "cube.mamulb.acc");
 
       SDValue Chain = N->getOperand(0);
       SDValue Acc = N->getOperand(2);
@@ -1167,185 +1093,148 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue KImm = CurDAG->getTargetConstant(K, DL, MVT::i64);
       SDValue Ops[] = {Acc, A, B, MImm, NImm, KImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_CUBE_MAMULB_ACC, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_CUBE_TMATMUL_ACC, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_cube_acccvt ||
-        IntrID == Intrinsic::linx_cube_acccvt_legacy) {
-      // (chain, id, acc, immSizeCode, immDType, immQArg0, immQArg1)
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 3, "cube.acccvt", "size_code");
-      const uint64_t DType =
-          requireConstUImmOperand(N, 4, "cube.acccvt", "dtype");
-      const int64_t QArg0 =
-          requireConstSImmOperand(N, 5, "cube.acccvt", "qarg0");
-      const int64_t QArg1 =
-          requireConstSImmOperand(N, 6, "cube.acccvt", "qarg1");
-      validateStrictTileSizeCode(SizeCode, "cube.acccvt");
-      validateTileDataTypeU5(DType, "cube.acccvt");
-      if (QArg0 != 0 || QArg1 != 0)
-        report_fatal_error(
-            "Linx: cube.acccvt requires retired qarg0/qarg1 operands to be "
-            "zero in PTO ISA 0.57.1");
-      validateCubeAccumulatorOperandChain(N->getOperand(2), "cube.acccvt");
-
-      SDValue Chain = N->getOperand(0);
-      SDValue Acc = N->getOperand(2);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
-      SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
-      SDValue QArg0Imm = CurDAG->getTargetConstant(QArg0, DL, MVT::i64);
-      SDValue QArg1Imm = CurDAG->getTargetConstant(QArg1, DL, MVT::i64);
-      SDValue Ops[] = {Acc, SizeImm, DTypeImm, QArg0Imm, QArg1Imm, Chain};
-      EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_CUBE_ACCCVT, DL,
-                                           ResVT, MVT::Other, Ops);
-      ReplaceNode(N, Res);
-      return;
-    }
-
-    if (IntrID == Intrinsic::linx_tepl_tadd) {
-      // (chain, id, a, b, immSizeCode, immDType)
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tepl.tadd", "size_code");
-      const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tepl.tadd", "dtype");
-      validateStrictTileSizeCode(SizeCode, "tepl.tadd");
-      validateTileDataTypeU5(DType, "tepl.tadd");
+    if (IntrID == Intrinsic::linx_vec_tadd) {
+      // (chain, id, a, b, immTSize, immDType)
+      const uint64_t TSize = requireConstUImmOperand(N, 4, "vec.tadd", "tsize");
+      const uint64_t DType = requireConstUImmOperand(N, 5, "vec.tadd", "dtype");
+      validateStrictTileTSize(TSize, "vec.tadd");
+      validateTileDataTypeU5(DType, "vec.tadd");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
       SDValue B = N->getOperand(3);
-      SDValue TileOpImm =
-          CurDAG->getTargetConstant(TEPL_TILEOP_TADD, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue TileOpImm = CurDAG->getTargetConstant(TILEOP_TADD, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue Ops[] = {A, B, TileOpImm, SizeImm, DTypeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_BINARY, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_BINARY, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_tsub) {
-      // (chain, id, a, b, immSizeCode, immDType)
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tepl.tsub", "size_code");
-      const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tepl.tsub", "dtype");
-      validateStrictTileSizeCode(SizeCode, "tepl.tsub");
-      validateTileDataTypeU5(DType, "tepl.tsub");
+    if (IntrID == Intrinsic::linx_vec_tsub) {
+      // (chain, id, a, b, immTSize, immDType)
+      const uint64_t TSize = requireConstUImmOperand(N, 4, "vec.tsub", "tsize");
+      const uint64_t DType = requireConstUImmOperand(N, 5, "vec.tsub", "dtype");
+      validateStrictTileTSize(TSize, "vec.tsub");
+      validateTileDataTypeU5(DType, "vec.tsub");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
       SDValue B = N->getOperand(3);
-      SDValue TileOpImm =
-          CurDAG->getTargetConstant(TEPL_TILEOP_TSUB, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue TileOpImm = CurDAG->getTargetConstant(TILEOP_TSUB, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue Ops[] = {A, B, TileOpImm, SizeImm, DTypeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_BINARY, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_BINARY, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_trowmax) {
-      // (chain, id, src, immSizeCode, immDType)
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 3, "tepl.trowmax", "size_code");
+    if (IntrID == Intrinsic::linx_sfu_trowmax) {
+      // (chain, id, src, immTSize, immDType)
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 3, "sfu.trowmax", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 4, "tepl.trowmax", "dtype");
-      validateStrictTileSizeCode(SizeCode, "tepl.trowmax");
-      validateTileDataTypeU5(DType, "tepl.trowmax");
+          requireConstUImmOperand(N, 4, "sfu.trowmax", "dtype");
+      validateStrictTileTSize(TSize, "sfu.trowmax");
+      validateTileDataTypeU5(DType, "sfu.trowmax");
 
       SDValue Chain = N->getOperand(0);
       SDValue Src = N->getOperand(2);
       SDValue TileOpImm =
-          CurDAG->getTargetConstant(TEPL_TILEOP_TROWMAX, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+          CurDAG->getTargetConstant(TILEOP_TROWMAX, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue Ops[] = {Src, TileOpImm, SizeImm, DTypeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_UNARY, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_UNARY, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_unary_shape) {
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 3, "tepl.unary.shape", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tepl.unary.shape", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_unary_shape) {
+      const uint64_t TileOperation =
+          requireConstUImmOperand(N, 3, "tileop.unary.shape", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 4, "tileop.unary.shape", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tepl.unary.shape", "dtype");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.unary.shape");
-      validateStrictTileSizeCode(SizeCode, "tepl.unary.shape");
-      validateTileDataTypeU5(DType, "tepl.unary.shape");
+          requireConstUImmOperand(N, 5, "tileop.unary.shape", "dtype");
+      validateCanonicalTileOperation(TileOperation, "tileop.unary.shape");
+      validateStrictTileTSize(TSize, "tileop.unary.shape");
+      validateTileDataTypeU5(DType, "tileop.unary.shape");
       SDValue Ops[] = {N->getOperand(2),
-                       CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64),
-                       CurDAG->getTargetConstant(SizeCode, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TileOperation, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TSize, DL, MVT::i64),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        forceGpr(N->getOperand(6)),
                        forceGpr(N->getOperand(7)),
                        forceGpr(N->getOperand(8)),
                        N->getOperand(0)};
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_UNARY_SHAPE, DL,
-                                           N->getValueType(0), MVT::Other, Ops);
+      SDNode *Res =
+          CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_UNARY_SHAPE, DL,
+                                 N->getValueType(0), MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_binary_shape) {
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 4, "tepl.binary.shape", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 5, "tepl.binary.shape", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_binary_shape) {
+      const uint64_t TileOperation = requireConstUImmOperand(
+          N, 4, "tileop.binary.shape", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 5, "tileop.binary.shape", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 6, "tepl.binary.shape", "dtype");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.binary.shape");
-      validateStrictTileSizeCode(SizeCode, "tepl.binary.shape");
-      validateTileDataTypeU5(DType, "tepl.binary.shape");
+          requireConstUImmOperand(N, 6, "tileop.binary.shape", "dtype");
+      validateCanonicalTileOperation(TileOperation, "tileop.binary.shape");
+      validateStrictTileTSize(TSize, "tileop.binary.shape");
+      validateTileDataTypeU5(DType, "tileop.binary.shape");
       SDValue Ops[] = {N->getOperand(2),
                        N->getOperand(3),
-                       CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64),
-                       CurDAG->getTargetConstant(SizeCode, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TileOperation, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TSize, DL, MVT::i64),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        forceGpr(N->getOperand(7)),
                        forceGpr(N->getOperand(8)),
                        forceGpr(N->getOperand(9)),
                        N->getOperand(0)};
       SDNode *Res =
-          CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_BINARY_SHAPE, DL,
+          CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_BINARY_SHAPE, DL,
                                  N->getValueType(0), MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_binary_scalar_shape) {
-      const uint64_t TileOpcode = requireConstUImmOperand(
-          N, 4, "tepl.binary.scalar.shape", "tile_opcode");
-      const uint64_t SizeCode = requireConstUImmOperand(
-          N, 5, "tepl.binary.scalar.shape", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_binary_scalar_shape) {
+      const uint64_t TileOperation = requireConstUImmOperand(
+          N, 4, "tileop.binary.scalar.shape", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 5, "tileop.binary.scalar.shape", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 6, "tepl.binary.scalar.shape", "dtype");
+          requireConstUImmOperand(N, 6, "tileop.binary.scalar.shape", "dtype");
       const uint64_t Mode =
-          requireConstUImmOperand(N, 7, "tepl.binary.scalar.shape", "mode");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.binary.scalar.shape");
-      validateStrictTileSizeCode(SizeCode, "tepl.binary.scalar.shape");
-      validateTileDataTypeU5(DType, "tepl.binary.scalar.shape");
-      if (Mode != TEPL_MODE_VS)
+          requireConstUImmOperand(N, 7, "tileop.binary.scalar.shape", "mode");
+      validateCanonicalTileOperation(TileOperation,
+                                     "tileop.binary.scalar.shape");
+      validateStrictTileTSize(TSize, "tileop.binary.scalar.shape");
+      validateTileDataTypeU5(DType, "tileop.binary.scalar.shape");
+      if (Mode != TILEOP_MODE_VS)
         report_fatal_error(
-            "Linx: tepl.binary.scalar.shape requires mode=1 (VS)");
+            "Linx: tileop.binary.scalar.shape requires mode=1 (VS)");
       SDValue Ops[] = {N->getOperand(2),
                        N->getOperand(3),
-                       CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64),
-                       CurDAG->getTargetConstant(SizeCode, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TileOperation, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TSize, DL, MVT::i64),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        CurDAG->getTargetConstant(Mode, DL, MVT::i64),
                        forceGpr(N->getOperand(8)),
@@ -1353,160 +1242,167 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
                        forceGpr(N->getOperand(10)),
                        N->getOperand(0)};
       SDNode *Res =
-          CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_BINARY_SCALAR_SHAPE, DL,
+          CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_BINARY_SCALAR_SHAPE, DL,
                                  N->getValueType(0), MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_splat_shape) {
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 3, "tepl.splat.shape", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tepl.splat.shape", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_splat_shape) {
+      const uint64_t TileOperation =
+          requireConstUImmOperand(N, 3, "tileop.splat.shape", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 4, "tileop.splat.shape", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tepl.splat.shape", "dtype");
+          requireConstUImmOperand(N, 5, "tileop.splat.shape", "dtype");
       const uint64_t Mode =
-          requireConstUImmOperand(N, 6, "tepl.splat.shape", "mode");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.splat.shape");
-      validateStrictTileSizeCode(SizeCode, "tepl.splat.shape");
-      validateTileDataTypeU5(DType, "tepl.splat.shape");
-      if (Mode != TEPL_MODE_SV)
-        report_fatal_error("Linx: tepl.splat.shape requires mode=2 (SV)");
+          requireConstUImmOperand(N, 6, "tileop.splat.shape", "mode");
+      validateCanonicalTileOperation(TileOperation, "tileop.splat.shape");
+      validateStrictTileTSize(TSize, "tileop.splat.shape");
+      validateTileDataTypeU5(DType, "tileop.splat.shape");
+      if (Mode != TILEOP_MODE_SV)
+        report_fatal_error("Linx: tileop.splat.shape requires mode=2 (SV)");
       SDValue Ops[] = {N->getOperand(2),
-                       CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64),
-                       CurDAG->getTargetConstant(SizeCode, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TileOperation, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TSize, DL, MVT::i64),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        CurDAG->getTargetConstant(Mode, DL, MVT::i64),
                        forceGpr(N->getOperand(7)),
                        forceGpr(N->getOperand(8)),
                        forceGpr(N->getOperand(9)),
                        N->getOperand(0)};
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_SPLAT_SHAPE, DL,
-                                           N->getValueType(0), MVT::Other, Ops);
+      SDNode *Res =
+          CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_SPLAT_SHAPE, DL,
+                                 N->getValueType(0), MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_unary) {
-      // (chain, id, src, immTileOpcode, immSizeCode, immDType)
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 3, "tepl.unary", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tepl.unary", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_unary) {
+      // (chain, id, src, immTileOperation, immTSize, immDType)
+      const uint64_t TileOperation =
+          requireConstUImmOperand(N, 3, "tileop.unary", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 4, "tileop.unary", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tepl.unary", "dtype");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.unary");
-      validateStrictTileSizeCode(SizeCode, "tepl.unary");
-      validateTileDataTypeU5(DType, "tepl.unary");
+          requireConstUImmOperand(N, 5, "tileop.unary", "dtype");
+      validateCanonicalTileOperation(TileOperation, "tileop.unary");
+      validateStrictTileTSize(TSize, "tileop.unary");
+      validateTileDataTypeU5(DType, "tileop.unary");
 
       SDValue Chain = N->getOperand(0);
       SDValue Src = N->getOperand(2);
-      SDValue TileOpImm = CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue TileOpImm =
+          CurDAG->getTargetConstant(TileOperation, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue Ops[] = {Src, TileOpImm, SizeImm, DTypeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_UNARY, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_UNARY, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_binary) {
-      // (chain, id, a, b, immTileOpcode, immSizeCode, immDType)
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 4, "tepl.binary", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 5, "tepl.binary", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_binary) {
+      // (chain, id, a, b, immTileOperation, immTSize, immDType)
+      const uint64_t TileOperation =
+          requireConstUImmOperand(N, 4, "tileop.binary", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 5, "tileop.binary", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 6, "tepl.binary", "dtype");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.binary");
-      validateStrictTileSizeCode(SizeCode, "tepl.binary");
-      validateTileDataTypeU5(DType, "tepl.binary");
+          requireConstUImmOperand(N, 6, "tileop.binary", "dtype");
+      validateCanonicalTileOperation(TileOperation, "tileop.binary");
+      validateStrictTileTSize(TSize, "tileop.binary");
+      validateTileDataTypeU5(DType, "tileop.binary");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
       SDValue B = N->getOperand(3);
-      SDValue TileOpImm = CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue TileOpImm =
+          CurDAG->getTargetConstant(TileOperation, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue Ops[] = {A, B, TileOpImm, SizeImm, DTypeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_BINARY, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_BINARY, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_binary_scalar) {
-      // (chain, id, a, scalar, immTileOpcode, immSizeCode, immDType, immMode)
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 4, "tepl.binary.scalar", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 5, "tepl.binary.scalar", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_binary_scalar) {
+      // (chain, id, a, scalar, immTileOperation, immTSize, immDType, immMode)
+      const uint64_t TileOperation = requireConstUImmOperand(
+          N, 4, "tileop.binary.scalar", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 5, "tileop.binary.scalar", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 6, "tepl.binary.scalar", "dtype");
+          requireConstUImmOperand(N, 6, "tileop.binary.scalar", "dtype");
       const uint64_t Mode =
-          requireConstUImmOperand(N, 7, "tepl.binary.scalar", "mode");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.binary.scalar");
-      validateStrictTileSizeCode(SizeCode, "tepl.binary.scalar");
-      validateTileDataTypeU5(DType, "tepl.binary.scalar");
-      if (Mode != TEPL_MODE_VS)
-        report_fatal_error("Linx: tepl.binary.scalar requires operand mode=1 "
-                           "(VS) in canonical v0.4");
+          requireConstUImmOperand(N, 7, "tileop.binary.scalar", "mode");
+      validateCanonicalTileOperation(TileOperation, "tileop.binary.scalar");
+      validateStrictTileTSize(TSize, "tileop.binary.scalar");
+      validateTileDataTypeU5(DType, "tileop.binary.scalar");
+      if (Mode != TILEOP_MODE_VS)
+        report_fatal_error("Linx: tileop.binary.scalar requires operand mode=1 "
+                           "(VS) in canonical LinxISA 0.58");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
       SDValue Scalar = N->getOperand(3);
-      SDValue TileOpImm = CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue TileOpImm =
+          CurDAG->getTargetConstant(TileOperation, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue ModeImm = CurDAG->getTargetConstant(Mode, DL, MVT::i64);
       SDValue Ops[] = {A, Scalar, TileOpImm, SizeImm, DTypeImm, ModeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_BINARY_SCALAR,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_BINARY_SCALAR,
                                            DL, ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tepl_splat) {
-      // (chain, id, scalar, immTileOpcode, immSizeCode, immDType, immMode)
-      const uint64_t TileOpcode =
-          requireConstUImmOperand(N, 3, "tepl.splat", "tile_opcode");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tepl.splat", "size_code");
+    if (IntrID == Intrinsic::linx_tileop_splat) {
+      // (chain, id, scalar, immTileOperation, immTSize, immDType, immMode)
+      const uint64_t TileOperation =
+          requireConstUImmOperand(N, 3, "tileop.splat", "tile_operation");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 4, "tileop.splat", "tsize");
       const uint64_t DType =
-          requireConstUImmOperand(N, 5, "tepl.splat", "dtype");
-      const uint64_t Mode = requireConstUImmOperand(N, 6, "tepl.splat", "mode");
-      validateWhitelistedTEPLTileOpcode(TileOpcode, "tepl.splat");
-      validateStrictTileSizeCode(SizeCode, "tepl.splat");
-      validateTileDataTypeU5(DType, "tepl.splat");
-      if (Mode != TEPL_MODE_SV)
-        report_fatal_error(
-            "Linx: tepl.splat requires operand mode=2 (SV) in canonical v0.4");
+          requireConstUImmOperand(N, 5, "tileop.splat", "dtype");
+      const uint64_t Mode =
+          requireConstUImmOperand(N, 6, "tileop.splat", "mode");
+      validateCanonicalTileOperation(TileOperation, "tileop.splat");
+      validateStrictTileTSize(TSize, "tileop.splat");
+      validateTileDataTypeU5(DType, "tileop.splat");
+      if (Mode != TILEOP_MODE_SV)
+        report_fatal_error("Linx: tileop.splat requires operand mode=2 (SV) in "
+                           "canonical LinxISA 0.58");
 
       SDValue Chain = N->getOperand(0);
       SDValue Scalar = N->getOperand(2);
-      SDValue TileOpImm = CurDAG->getTargetConstant(TileOpcode, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue TileOpImm =
+          CurDAG->getTargetConstant(TileOperation, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue DTypeImm = CurDAG->getTargetConstant(DType, DL, MVT::i64);
       SDValue ModeImm = CurDAG->getTargetConstant(Mode, DL, MVT::i64);
       SDValue Ops[] = {Scalar, TileOpImm, SizeImm, DTypeImm, ModeImm, Chain};
       EVT ResVT = N->getValueType(0);
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TEPL_SPLAT, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TILEOP_SPLAT, DL,
                                            ResVT, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
     if (IntrID == Intrinsic::linx_vpar_tadd ||
-        IntrID == Intrinsic::linx_vpar_tadd_legacy) {
-      // (chain, id, a, b, immSizeCode)
+        IntrID == Intrinsic::linx_vpar_tadd_vec) {
+      // (chain, id, a, b, immTSize)
       auto *SizeC = dyn_cast<ConstantSDNode>(N->getOperand(4));
       if (!SizeC)
-        report_fatal_error("Linx: vpar.tadd requires constant SizeCode");
+        report_fatal_error("Linx: vpar.tadd requires constant TSize");
+      validateStrictTileTSize(SizeC->getZExtValue(), "vpar.tadd");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
@@ -1522,11 +1418,12 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     }
 
     if (IntrID == Intrinsic::linx_vpar_tsub ||
-        IntrID == Intrinsic::linx_vpar_tsub_legacy) {
-      // (chain, id, a, b, immSizeCode)
+        IntrID == Intrinsic::linx_vpar_tsub_vec) {
+      // (chain, id, a, b, immTSize)
       auto *SizeC = dyn_cast<ConstantSDNode>(N->getOperand(4));
       if (!SizeC)
-        report_fatal_error("Linx: vpar.tsub requires constant SizeCode");
+        report_fatal_error("Linx: vpar.tsub requires constant TSize");
+      validateStrictTileTSize(SizeC->getZExtValue(), "vpar.tsub");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
@@ -1608,10 +1505,10 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
     };
 
     if (IntrID == Intrinsic::linx_tile_tstore) {
-      // (chain, id, base, tile, immSizeCode, immDType, immLayout, immLB0,
+      // (chain, id, base, tile, immTSize, immDType, immLayout, immLB0,
       //  immLB1, immStrideBytes)
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 4, "tile.tstore", "size_code");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 4, "tile.tstore", "tsize");
       const uint64_t DType =
           requireConstUImmOperand(N, 5, "tile.tstore", "dtype");
       const int64_t Layout =
@@ -1620,12 +1517,12 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const int64_t LB1 = requireConstSImmOperand(N, 8, "tile.tstore", "lb1");
       const int64_t StrideBytes =
           requireConstSImmOperand(N, 9, "tile.tstore", "stride_bytes");
-      validateStrictTileSizeCode(SizeCode, "tile.tstore");
+      validateStrictTileTSize(TSize, "tile.tstore");
       validateTileDataTypeU5(DType, "tile.tstore");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tile.tstore", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tile.tstore", "lb1");
       validateTileByteBudget("tile.tstore", Dim0, Dim1, /*dim2=*/1u,
-                             dtypeElementBitsForTileCheck(DType), SizeCode);
+                             dtypeElementBitsForTileCheck(DType), TSize);
       if (StrideBytes < 0) {
         report_fatal_error("Linx: tile.tstore requires stride_bytes >= 0");
       }
@@ -1649,49 +1546,49 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue LayoutImm = CurDAG->getTargetConstant(Layout, DL, MVT::i64);
       SDValue LB0Imm = CurDAG->getTargetConstant(LB0, DL, MVT::i64);
       SDValue LB1Imm = CurDAG->getTargetConstant(LB1, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue Stride = forceGpr(N->getOperand(9));
       SDValue Ops[] = {Base,   Tile,    DTypeImm, LayoutImm, LB0Imm,
                        LB1Imm, SizeImm, Stride,   Chain};
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TSTORE_DESC, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TSTORE_DESC, DL,
                                            MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tma_tstore_desc) {
+    if (IntrID == Intrinsic::linx_tlsu_tstore_desc) {
       // (chain, id, base, tile, immDType, immLayout, immLB0, immLB1,
-      //  immSizeCode, immStrideBytes)
+      //  immTSize, immStrideBytes)
       const uint64_t DType =
-          requireConstUImmOperand(N, 4, "tma.tstore.desc", "dtype");
+          requireConstUImmOperand(N, 4, "tlsu.tstore.desc", "dtype");
       const int64_t Layout =
-          requireConstSImmOperand(N, 5, "tma.tstore.desc", "layout");
+          requireConstSImmOperand(N, 5, "tlsu.tstore.desc", "layout");
       const int64_t LB0 =
-          requireConstSImmOperand(N, 6, "tma.tstore.desc", "lb0");
+          requireConstSImmOperand(N, 6, "tlsu.tstore.desc", "lb0");
       const int64_t LB1 =
-          requireConstSImmOperand(N, 7, "tma.tstore.desc", "lb1");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 8, "tma.tstore.desc", "size_code");
+          requireConstSImmOperand(N, 7, "tlsu.tstore.desc", "lb1");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 8, "tlsu.tstore.desc", "tsize");
       const int64_t StrideBytes =
-          requireConstSImmOperand(N, 9, "tma.tstore.desc", "stride_bytes");
-      validateStrictTileSizeCode(SizeCode, "tma.tstore.desc");
-      validateTileDataTypeU5(DType, "tma.tstore.desc");
-      const uint64_t Dim0 = requirePositiveDim(LB0, "tma.tstore.desc", "lb0");
-      const uint64_t Dim1 = requirePositiveDim(LB1, "tma.tstore.desc", "lb1");
-      validateTileByteBudget("tma.tstore.desc", Dim0, Dim1, /*dim2=*/1u,
-                             dtypeElementBitsForTileCheck(DType), SizeCode);
+          requireConstSImmOperand(N, 9, "tlsu.tstore.desc", "stride_bytes");
+      validateStrictTileTSize(TSize, "tlsu.tstore.desc");
+      validateTileDataTypeU5(DType, "tlsu.tstore.desc");
+      const uint64_t Dim0 = requirePositiveDim(LB0, "tlsu.tstore.desc", "lb0");
+      const uint64_t Dim1 = requirePositiveDim(LB1, "tlsu.tstore.desc", "lb1");
+      validateTileByteBudget("tlsu.tstore.desc", Dim0, Dim1, /*dim2=*/1u,
+                             dtypeElementBitsForTileCheck(DType), TSize);
       if (StrideBytes < 0) {
-        report_fatal_error("Linx: tma.tstore.desc requires stride_bytes >= 0");
+        report_fatal_error("Linx: tlsu.tstore.desc requires stride_bytes >= 0");
       }
       if (StrideBytes != 0) {
         const uint64_t ElemBits = dtypeElementBitsForTileCheck(DType);
         const uint64_t ElemBytes = (ElemBits + 7u) / 8u;
         const uint64_t RowSpanBytes = computeTileBytesOrDie(
-            "tma.tstore.desc stride", Dim0, 1u, 1u, ElemBits);
+            "tlsu.tstore.desc stride", Dim0, 1u, 1u, ElemBits);
         const uint64_t StrideU64 = static_cast<uint64_t>(StrideBytes);
         if ((StrideU64 % ElemBytes) != 0u || StrideU64 < RowSpanBytes) {
           report_fatal_error(
-              "Linx: tma.tstore.desc stride_bytes must be element-aligned and "
+              "Linx: tlsu.tstore.desc stride_bytes must be element-aligned and "
               ">= lb0*elem_bytes(rounded)");
         }
       }
@@ -1703,25 +1600,25 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue LayoutImm = CurDAG->getTargetConstant(Layout, DL, MVT::i64);
       SDValue LB0Imm = CurDAG->getTargetConstant(LB0, DL, MVT::i64);
       SDValue LB1Imm = CurDAG->getTargetConstant(LB1, DL, MVT::i64);
-      SDValue SizeImm = CurDAG->getTargetConstant(SizeCode, DL, MVT::i64);
+      SDValue SizeImm = CurDAG->getTargetConstant(TSize, DL, MVT::i64);
       SDValue Stride = forceGpr(N->getOperand(9));
       SDValue Ops[] = {Base,   Tile,    DTypeImm, LayoutImm, LB0Imm,
                        LB1Imm, SizeImm, Stride,   Chain};
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TSTORE_DESC, DL,
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TSTORE_DESC, DL,
                                            MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }
 
-    if (IntrID == Intrinsic::linx_tma_tstore_shape) {
+    if (IntrID == Intrinsic::linx_tlsu_tstore_shape) {
       const uint64_t DType =
-          requireConstUImmOperand(N, 4, "tma.tstore.shape", "dtype");
+          requireConstUImmOperand(N, 4, "tlsu.tstore.shape", "dtype");
       const int64_t Layout =
-          requireConstSImmOperand(N, 5, "tma.tstore.shape", "layout");
-      const uint64_t SizeCode =
-          requireConstUImmOperand(N, 9, "tma.tstore.shape", "size_code");
-      validateStrictTileSizeCode(SizeCode, "tma.tstore.shape");
-      validateTileDataTypeU5(DType, "tma.tstore.shape");
+          requireConstSImmOperand(N, 5, "tlsu.tstore.shape", "layout");
+      const uint64_t TSize =
+          requireConstUImmOperand(N, 9, "tlsu.tstore.shape", "tsize");
+      validateStrictTileTSize(TSize, "tlsu.tstore.shape");
+      validateTileDataTypeU5(DType, "tlsu.tstore.shape");
       SDValue Ops[] = {N->getOperand(2),
                        N->getOperand(3),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
@@ -1729,11 +1626,11 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
                        forceGpr(N->getOperand(6)),
                        forceGpr(N->getOperand(7)),
                        forceGpr(N->getOperand(8)),
-                       CurDAG->getTargetConstant(SizeCode, DL, MVT::i64),
+                       CurDAG->getTargetConstant(TSize, DL, MVT::i64),
                        forceGpr(N->getOperand(10)),
                        N->getOperand(0)};
-      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TMA_TSTORE_SHAPE, DL,
-                                           MVT::Other, Ops);
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TSTORE_SHAPE,
+                                           DL, MVT::Other, Ops);
       ReplaceNode(N, Res);
       return;
     }

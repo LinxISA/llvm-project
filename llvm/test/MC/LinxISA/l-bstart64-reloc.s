@@ -47,7 +47,7 @@ cross_section:
 # POSRANGE: error: L.BSTART target out of range
 
 #--- overflow-negative.s
-	L.BSTART.FP FALL, -4398046511106
+	L.BSTART.STD FALL, -4398046511106
 # NEGRANGE: error: L.BSTART target out of range
 
 #--- invalid-kind.s
@@ -60,4 +60,4 @@ cross_section:
 
 #--- legacy.s
 	L.ADD a0, a1, ->a2
-# LEGACY: error: legacy 'L.*' mnemonics are not allowed in canonical v0.57
+# LEGACY: error: legacy 'L.*' mnemonics are not allowed in canonical PTO 0.58

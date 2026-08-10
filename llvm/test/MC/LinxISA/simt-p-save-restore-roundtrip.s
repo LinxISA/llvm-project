@@ -6,7 +6,7 @@
 test_simt_p_save_restore_roundtrip:
 	BSTART.MSEQ 0
 	B.TEXT .body
-	B.IOT last, ->t<1KB>
+	B.IOT mask=1111, last, ->t<1KB>
 	C.B.DIMI 8, ->lb0
 	C.B.DIMI 1, ->lb1
 	C.BSTART
@@ -20,7 +20,7 @@ test_simt_p_save_restore_roundtrip:
 # CHECK-LABEL: <test_simt_p_save_restore_roundtrip>:
 # CHECK: BSTART.MSEQ
 # CHECK: B.TEXT
-# CHECK: B.IOT{{[[:space:]]+}}last,{{[[:space:]]+}}->t<1KB>
+# CHECK: B.IOT{{[[:space:]]+}}mask=1111, last,{{[[:space:]]+}}->t<1KB>
 # CHECK: C.B.DIMI{{[[:space:]]+}}8, {{[[:space:]]*}}->lb0
 # CHECK: C.B.DIMI{{[[:space:]]+}}1, {{[[:space:]]*}}->lb1
 # CHECK: C.BSTART

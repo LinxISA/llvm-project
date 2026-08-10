@@ -478,160 +478,162 @@ let hasSideEffects = 1, isBarrier = 1, isTerminator = 1, Size = 4 in
 def BSTOP : LinxISAInst<(outs), (ins), "", []>;
 
 //===----------------------------------------------------------------------===//
-// Tile blocks (TAU) - bring-up (selected manually from intrinsics)
+// PTO/Linx 0.58 tile block pseudos selected from intrinsics.
 //
 // These are expanded very late (pre-emit) into block-structured sequences:
-//   named TMA / BSTART.CUBE headers + B.IOT/B.IOT/B.DIM descriptors.
+//   operation-specific TLSU/CUBE headers + B.IOR/B.IOT/B.DIM descriptors.
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
-def PSEUDO_TMA_TLOAD : Pseudo<(outs TILE_TU:$dst), (ins GPR_Arch:$base, i64imm:$size),
-                              "# PSEUDO_TMA_TLOAD", []>;
+def PSEUDO_TLSU_TLOAD : Pseudo<(outs TILE_TU:$dst), (ins GPR_Arch:$base, i64imm:$size),
+                              "# PSEUDO_TLSU_TLOAD", []>;
 
 // Spill/reload helper: allow TLOAD into any architectural tile register bank.
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
-def PSEUDO_TMA_TLOAD_ANY : Pseudo<(outs TILE:$dst), (ins GPR_Arch:$base, i64imm:$size),
-                                  "# PSEUDO_TMA_TLOAD_ANY", []>;
+def PSEUDO_TLSU_TLOAD_ANY : Pseudo<(outs TILE:$dst), (ins GPR_Arch:$base, i64imm:$size),
+                                  "# PSEUDO_TLSU_TLOAD_ANY", []>;
 
 let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
-def PSEUDO_TMA_TLOAD_DESC : Pseudo<(outs TILE_TU:$dst),
+def PSEUDO_TLSU_TLOAD_DESC : Pseudo<(outs TILE_TU:$dst),
                                    (ins GPR_Arch:$base, i64imm:$dtype,
                                         i64imm:$layout, i64imm:$lb0,
                                         i64imm:$lb1, i64imm:$size,
                                         GPR_Arch:$stride_bytes),
-                                   "# PSEUDO_TMA_TLOAD_DESC", []>;
+                                   "# PSEUDO_TLSU_TLOAD_DESC", []>;
 
 let hasSideEffects = 1, isBarrier = 1, mayStore = 1, Size = 4 in
-def PSEUDO_TMA_TSTORE : Pseudo<(outs), (ins GPR_Arch:$base, TILE:$src, i64imm:$size),
-                               "# PSEUDO_TMA_TSTORE", []>;
+def PSEUDO_TLSU_TSTORE : Pseudo<(outs), (ins GPR_Arch:$base, TILE:$src, i64imm:$size),
+                               "# PSEUDO_TLSU_TSTORE", []>;
 
 let hasSideEffects = 1, isBarrier = 1, mayStore = 1, Size = 4 in
-def PSEUDO_TMA_TSTORE_DESC : Pseudo<(outs),
+def PSEUDO_TLSU_TSTORE_DESC : Pseudo<(outs),
                                     (ins GPR_Arch:$base, TILE:$src,
                                          i64imm:$dtype, i64imm:$layout,
                                          i64imm:$lb0, i64imm:$lb1,
                                          i64imm:$size, GPR_Arch:$stride_bytes),
-                                    "# PSEUDO_TMA_TSTORE_DESC", []>;
+                                    "# PSEUDO_TLSU_TSTORE_DESC", []>;
 
 let hasSideEffects = 1, mayLoad = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TMA_TLOAD_SHAPE : Pseudo<
+def PSEUDO_TLSU_TLOAD_SHAPE : Pseudo<
     (outs TILE_TU:$dst),
     (ins GPR_Arch:$base, i64imm:$dtype, i64imm:$layout,
          GPR_Arch:$lb0, GPR_Arch:$lb1, GPR_Arch:$lb2,
          i64imm:$size, GPR_Arch:$stride),
-    "# PSEUDO_TMA_TLOAD_SHAPE", []>;
+    "# PSEUDO_TLSU_TLOAD_SHAPE", []>;
 
 let hasSideEffects = 1, mayStore = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TMA_TSTORE_SHAPE : Pseudo<
+def PSEUDO_TLSU_TSTORE_SHAPE : Pseudo<
     (outs),
     (ins GPR_Arch:$base, TILE:$src, i64imm:$dtype, i64imm:$layout,
          GPR_Arch:$lb0, GPR_Arch:$lb1, GPR_Arch:$lb2,
          i64imm:$size, GPR_Arch:$stride),
-    "# PSEUDO_TMA_TSTORE_SHAPE", []>;
+    "# PSEUDO_TLSU_TSTORE_SHAPE", []>;
 
 // Compiler-inserted tile SSA edge balancing pseudo.
 //
+// PSEUDO_TILE_EDGE_COPY is inserted before register allocation to preserve a
+// concrete operation on every tile PHI edge. Generic identity COPYs may be
+// deleted after physical register assignment, which would make only some
+// predecessors update the architectural tile queue.
+let hasSideEffects = 1, isBarrier = 1 in
+def PSEUDO_TILE_EDGE_COPY : Pseudo<(outs TILE:$dst), (ins TILE:$src),
+                                  "# PSEUDO_TILE_EDGE_COPY", []>;
+
+// Post-register-allocation TMOV contract.
+//
 // Operand contract:
 //   dst/src       : tile destination/source values
-//   size          : SizeCode propagated from source tile metadata
+//   size          : TSize propagated from source tile metadata
 //   dtype         : DataType (0 when unknown; strict mismatch checking happens
 //                   in LinxISATileSSABalance before this pseudo is emitted)
 //   layout        : layout payload (valid when has_layout=1)
 //   has_layout    : 0/1 bit
-//   mode          : TMOV mode (PR2 defaults to V2V=0)
 //   src_reuse     : 0/1 bit derived from COPY kill semantics
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TMA_TMOV : Pseudo<(outs TILE:$dst),
+def PSEUDO_TLSU_TMOV : Pseudo<(outs TILE:$dst),
                              (ins TILE:$src, i64imm:$size, i64imm:$dtype,
                                   i64imm:$layout, i64imm:$has_layout,
-                                  i64imm:$mode, i64imm:$src_reuse),
-                             "# PSEUDO_TMA_TMOV", []>;
+                                  i64imm:$src_reuse),
+                             "# PSEUDO_TLSU_TMOV", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_CUBE_MAMULB : Pseudo<(outs TILE_MN:$dst),
+def PSEUDO_CUBE_TMATMUL : Pseudo<(outs TILE_MN:$dst),
                                 (ins TILE:$srcA, TILE:$srcB,
                                      i64imm:$m, i64imm:$n, i64imm:$k),
-                                "# PSEUDO_CUBE_MAMULB", []>;
+                                "# PSEUDO_CUBE_TMATMUL", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_CUBE_MAMULB_ACC : Pseudo<(outs TILE_MN:$dst),
+def PSEUDO_CUBE_TMATMUL_ACC : Pseudo<(outs TILE_MN:$dst),
                                     (ins TILE:$acc, TILE:$srcA, TILE:$srcB,
                                          i64imm:$m, i64imm:$n, i64imm:$k),
-                                    "# PSEUDO_CUBE_MAMULB_ACC", []>;
+                                    "# PSEUDO_CUBE_TMATMUL_ACC", []>;
 
-// PR5 roadmap stub: explicit CUBE ACCCVT stage for frontend intrinsic use.
+// PTO tile-operation dispatch pseudos.  The final encoder uses TEPL only as
+// the stable Mode/Function carrier and classifies each operation as VEC/SFU.
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_CUBE_ACCCVT : Pseudo<(outs TILE_MN:$dst),
-                                (ins TILE:$acc,
-                                     i64imm:$size, i64imm:$dtype,
-                                     i64imm:$qarg0, i64imm:$qarg1),
-                                "# PSEUDO_CUBE_ACCCVT", []>;
-
-// PR5 TEPL template-op dispatch pseudos.
-let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_UNARY : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_UNARY : Pseudo<(outs TILE:$dst),
                                (ins TILE:$src, i64imm:$tileop,
                                     i64imm:$size, i64imm:$dtype),
-                               "# PSEUDO_TEPL_UNARY", []>;
+                               "# PSEUDO_TILEOP_UNARY", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_BINARY : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_BINARY : Pseudo<(outs TILE:$dst),
                                 (ins TILE:$srcA, TILE:$srcB, i64imm:$tileop,
                                      i64imm:$size, i64imm:$dtype),
-                                "# PSEUDO_TEPL_BINARY", []>;
+                                "# PSEUDO_TILEOP_BINARY", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_BINARY_SCALAR : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_BINARY_SCALAR : Pseudo<(outs TILE:$dst),
                                        (ins TILE:$srcA, GPR_Arch:$srcS,
                                             i64imm:$tileop, i64imm:$size,
                                             i64imm:$dtype, i64imm:$mode),
-                                       "# PSEUDO_TEPL_BINARY_SCALAR", []>;
+                                       "# PSEUDO_TILEOP_BINARY_SCALAR", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_SPLAT : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_SPLAT : Pseudo<(outs TILE:$dst),
                                (ins GPR_Arch:$srcS, i64imm:$tileop,
                                     i64imm:$size, i64imm:$dtype,
                                     i64imm:$mode),
-                               "# PSEUDO_TEPL_SPLAT", []>;
+                               "# PSEUDO_TILEOP_SPLAT", []>;
 
-// Canonical v0.57 shape-carrying TEPL pseudos.  Shape registers map directly
+// Canonical PTO 0.58 shape-carrying tile-operation pseudos. Shape registers map directly
 // to B.DIM LB0=ValidCol, LB1=ValidRow, LB2=physical Col.
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_UNARY_SHAPE : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_UNARY_SHAPE : Pseudo<(outs TILE:$dst),
                                      (ins TILE:$src, i64imm:$tileop,
                                           i64imm:$size, i64imm:$dtype,
                                           GPR_Arch:$validcol,
                                           GPR_Arch:$validrow,
                                           GPR_Arch:$physicalcol),
-                                     "# PSEUDO_TEPL_UNARY_SHAPE", []>;
+                                     "# PSEUDO_TILEOP_UNARY_SHAPE", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_BINARY_SHAPE : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_BINARY_SHAPE : Pseudo<(outs TILE:$dst),
                                       (ins TILE:$srcA, TILE:$srcB,
                                            i64imm:$tileop, i64imm:$size,
                                            i64imm:$dtype,
                                            GPR_Arch:$validcol,
                                            GPR_Arch:$validrow,
                                            GPR_Arch:$physicalcol),
-                                      "# PSEUDO_TEPL_BINARY_SHAPE", []>;
+                                      "# PSEUDO_TILEOP_BINARY_SHAPE", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_BINARY_SCALAR_SHAPE : Pseudo<
+def PSEUDO_TILEOP_BINARY_SCALAR_SHAPE : Pseudo<
     (outs TILE:$dst),
     (ins TILE:$srcA, GPR_Arch:$srcS, i64imm:$tileop, i64imm:$size,
          i64imm:$dtype, i64imm:$mode, GPR_Arch:$validcol,
          GPR_Arch:$validrow, GPR_Arch:$physicalcol),
-    "# PSEUDO_TEPL_BINARY_SCALAR_SHAPE", []>;
+    "# PSEUDO_TILEOP_BINARY_SCALAR_SHAPE", []>;
 
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in
-def PSEUDO_TEPL_SPLAT_SHAPE : Pseudo<(outs TILE:$dst),
+def PSEUDO_TILEOP_SPLAT_SHAPE : Pseudo<(outs TILE:$dst),
                                      (ins GPR_Arch:$srcS, i64imm:$tileop,
                                           i64imm:$size, i64imm:$dtype,
                                           i64imm:$mode,
                                           GPR_Arch:$validcol,
                                           GPR_Arch:$validrow,
                                           GPR_Arch:$physicalcol),
-                                     "# PSEUDO_TEPL_SPLAT_SHAPE", []>;
+                                     "# PSEUDO_TILEOP_SPLAT_SHAPE", []>;
 
 // Vector decoupled blocks (bring-up): lowered late into BSTART.VSEQ/VPAR headers
 // with B.TEXT + B.DIM descriptors and a per-function empty body stub.
@@ -678,7 +680,7 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
 
 // Vector body pseudo ops. These carry lane-register encodings (ri*/vt/vu/vm/vn
 // namespace IDs) as immediates and are lowered in MCInstLower to canonical
-// strict-v0.3 V.* encodings.
+// canonical LinxISA 0.58 V.* encodings.
 	let hasSideEffects = 1, Size = 4 in {
 	  def PSEUDO_V_ADD : Pseudo<(outs),
 	                            (ins i64imm:$dst, i64imm:$srcL, i64imm:$srcR,
@@ -845,7 +847,7 @@ def PSEUDO_V_J : Pseudo<(outs), (ins BrTarget:$target), "# PSEUDO_V_J", []>;
 
 // Scalar body pseudo ops. These carry scalar register encodings as immediates
 // (same namespace used in vector bodies) and are lowered in MCInstLower to
-// strict-v0.3 scalar encodings.
+// canonical LinxISA 0.58 scalar encodings.
 let hasSideEffects = 1, Size = 2 in {
   def PSEUDO_V_C_MOVR : Pseudo<(outs), (ins i64imm:$dst, i64imm:$srcL),
                                "# PSEUDO_V_C_MOVR", []>;
@@ -853,7 +855,7 @@ let hasSideEffects = 1, Size = 2 in {
 
 // Real tile-block descriptor instructions (emitted after register allocation).
 let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
-  def BSTART_TMA  : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
+  def BSTART_TLSU  : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
   def BSTART_CUBE : LinxISAInst<(outs), (ins uimm5:$dtype, uimm5:$func), "", []>;
   def BSTART_TEPL : LinxISAInst<(outs), (ins uimm5:$dtype, uimm7:$tileop), "", []>;
 
@@ -869,9 +871,9 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   // Decoupled-body pointer for tile/vector headers (see ISA manual: decoupled blocks).
   def B_TEXT : LinxISAInst<(outs), (ins BrTarget:$dst), "", []>;
 
-  // Canonical v0.57 splits control and data attributes.  Keep these as
-  // separate MachineInstrs so the backend cannot recreate the retired
-  // canonical split B.CATR/B.DATR surface.
+  // Canonical PTO 0.58 splits control and data attributes.  Keep these as
+  // separate MachineInstrs so the backend cannot recreate the retired fused
+  // B.ATTR surface.
   def B_CATR : LinxISAInst<(outs), (ins i64imm:$trap, i64imm:$dr,
                                        i64imm:$aq, i64imm:$atom,
                                        i64imm:$far, i64imm:$rl), "", []>;
@@ -890,19 +892,17 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
                                        GPR_Arch:$regsrc1,
                                        GPR_Arch:$regsrc2), "", []>;
 
-  // Canonical B.IOT always carries an immediate size.  The validity operands
-  // select the zero-, one-, or two-source canonical form; the opcode selects
-  // the architectural L (last) bit.
-  def B_IOT_SIZE_G0 : LinxISAInst<(outs), (ins i64imm:$dst,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
+  // PTO 0.58 B.IOT carries an explicit four-PE mask and TSize. The validity
+  // operands select the zero-, one-, or two-source form; the opcode selects
+  // the architectural L (last) bit. Reuse operands do not exist.
+  def B_IOT_G0 : LinxISAInst<(outs), (ins i64imm:$dst, i64imm:$pe_mask,
+                                       i64imm:$s0v, i64imm:$s1v,
                                        i64imm:$src0, i64imm:$src1,
-                                       i64imm:$size), "", []>;
-  def B_IOT_SIZE_G1 : LinxISAInst<(outs), (ins i64imm:$dst,
-                                       i64imm:$s0r, i64imm:$s0v,
-                                       i64imm:$s1r, i64imm:$s1v,
+                                       i64imm:$tsize), "", []>;
+  def B_IOT_G1 : LinxISAInst<(outs), (ins i64imm:$dst, i64imm:$pe_mask,
+                                       i64imm:$s0v, i64imm:$s1v,
                                        i64imm:$src0, i64imm:$src1,
-                                       i64imm:$size), "", []>;
+                                       i64imm:$tsize), "", []>;
 }
 
 // Branch-condition setters used by BlockISA (no explicit branch instructions).
