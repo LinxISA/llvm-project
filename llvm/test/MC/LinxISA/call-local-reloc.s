@@ -4,8 +4,9 @@
 	.globl caller
 	.type caller,@function
 caller:
-	# Local returning call must keep relocations so the linker can recompute
-	# both call and return immediates after relaxation/layout.
+		# Local returning call keeps the BSTART relocation so the linker can
+		# recompute the call target after relaxation/layout. The return address is
+		# encoded directly by the PTO/Linx 0.58 CALL form.
 	BSTART CALL, callee, ra=.Lret
 .Lret:
 	C.BSTOP
@@ -19,5 +20,4 @@ callee:
 	.size callee, .-callee
 
 # CHECK: RELOCATION RECORDS FOR [.text]:
-# CHECK: R_LINX_B17_PCREL{{[[:space:]]+}}callee
-# CHECK: R_LINX_CSETRET5_PCREL{{[[:space:]]+}}.Lret
+# CHECK: R_LINX_HL_BSTART30_PCREL{{[[:space:]]+}}callee

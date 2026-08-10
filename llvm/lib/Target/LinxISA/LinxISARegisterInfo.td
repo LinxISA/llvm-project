@@ -44,7 +44,7 @@ def U2  : LinxISAReg<29, "u#2">;
 def U3  : LinxISAReg<30, "u#3">;
 def U4  : LinxISAReg<31, "u#4">;
 
-// Tile registers (TAU): 4 hands (T/U/M/N) × depth 8 = 32 tiles.
+// Tile registers: 4 hands (T/U/M/N) × depth 8 = 32 tiles.
 // The current ISA encoding uses 5-bit tile indices for sources (0..31) and a
 // 3-bit destination depth (0..7) plus a 1-bit group selector. The backend maps
 // physical tile registers TILE0..TILE31 to hands as:
@@ -111,14 +111,14 @@ def TILE : RegisterClass<"Linx", [linxtile, v1024i32], 32768,
     (sequence "TILE%i", 0, 31)>;
 
 // Sub-classes for encodable destination banks used by block types:
-// - TMA blocks write into T/U hands (TILE0..TILE15) selected by group.
+// - TLSU blocks write into T/U hands (TILE0..TILE15) selected by group.
 // - CUBE blocks write into M/N hands (TILE16..TILE31) selected by group.
 def TILE_TU : RegisterClass<"Linx", [linxtile, v1024i32], 32768,
     (sequence "TILE%i", 0, 15)>;
 def TILE_MN : RegisterClass<"Linx", [linxtile, v1024i32], 32768,
     (sequence "TILE%i", 16, 31)>;
 
-// Hand-specific classes (v0.3 auto-mode canonical policy).
+// Hand-specific classes for the canonical LinxISA 0.58 policy.
 //
 // These are used to enforce deterministic hand placement in post-isel MIR and
 // when constructing spill/reload sequences for tile pressure scenarios.

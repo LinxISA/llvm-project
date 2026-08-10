@@ -36,7 +36,7 @@ using namespace llvm;
 namespace {
 
 constexpr StringLiteral PTOISAIdentity =
-    R"({"encoding_abi":"pto-isa-0.57.1-mode-function-v1","encoding_projection_sha256":"9705a984e2e48e0d4e856d3fbcfa07041c8578dd326d81f1c90279e826354c32","release":"0.57.1"})";
+    R"({"encoding_abi":"pto-isa-0.58.0-mode-function-v1","encoding_projection_sha256":"0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa","release":"0.58.0"})";
 
 class LinxISAObjectTargetStreamer final : public MCTargetStreamer {
 public:
@@ -119,7 +119,8 @@ static MCInstrInfo *createLinxISAMCInstrInfo() {
       Desc.Flags = 0;
       Desc.TSFlags = 0;
 
-      // MCInstrInfo indexes from the end: get(Opcode) returns *(LastDesc-Opcode).
+      // MCInstrInfo indexes from the end: get(Opcode) returns
+      // *(LastDesc-Opcode).
       D[N - 1 - Opcode] = Desc;
     }
 
@@ -142,9 +143,8 @@ static MCRegisterInfo *createLinxISAMCRegisterInfo(const Triple & /*TT*/) {
   return X;
 }
 
-static MCSubtargetInfo *createLinxISAMCSubtargetInfo(const Triple &TT,
-                                                     StringRef CPU,
-                                                     StringRef FS) {
+static MCSubtargetInfo *
+createLinxISAMCSubtargetInfo(const Triple &TT, StringRef CPU, StringRef FS) {
   return createLinxISAMCSubtargetInfoImpl(TT, CPU, /*TuneCPU=*/CPU, FS);
 }
 

@@ -7,7 +7,7 @@
 # SCALAR: error: destination register does not fit field width
 # SCALAR: add t, zero, ->p
 
-# LEGACYL: error: legacy 'L.*' mnemonics are not allowed in canonical v0.4
+# LEGACYL: error: legacy 'L.*' mnemonics are not allowed in canonical PTO 0.58
 # LEGACYL: l.add p, zero, ->t
 
 #--- scalar_add_p.s

@@ -101,6 +101,10 @@ public:
     return false;
   }
 
+  // Preserve every tile PHI edge as a target pseudo before generic register
+  // allocation can erase an identity COPY on only one predecessor.
+  void addPreRegAlloc() override { addPass(createLinxISATileSSABalancePass()); }
+
   // Run once before ExpandPostRA so tile PHI/COPY traffic is materialized as
   // target pseudos and never reaches generic reg-to-reg COPY expansion.
   void addPostRegAlloc() override { addPass(createLinxISATileSSABalancePass()); }

@@ -1,10 +1,10 @@
 #include "MCTargetDesc/LinxISAInstPrinter.h"
+#include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
-#include "LinxISATileOpcodesV057.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/Support/raw_ostream.h"
@@ -83,10 +83,10 @@ static void printReg10Name(raw_ostream &OS, unsigned Code) {
 static void printTileRef(raw_ostream &OS, unsigned TileId) {
   const unsigned Hand = (TileId >> 4) & 0x3u;
   const unsigned Depth = TileId & 0xfu;
-  const char Prefix = (Hand == 0) ? 't'
-                     : (Hand == 1) ? 'u'
-                     : (Hand == 2) ? 'm'
-                                   : 'n';
+  const char Prefix = (Hand == 0)   ? 't'
+                      : (Hand == 1) ? 'u'
+                      : (Hand == 2) ? 'm'
+                                    : 'n';
   OS << Prefix << "#" << utostr(Depth + 1u);
 }
 
@@ -97,47 +97,57 @@ static StringRef dtypeName(unsigned DT) {
   case 1:
     return "FP32";
   case 2:
-    return "FP16";
+    return "TF32";
   case 3:
-    return "FP8";
-  case 6:
+    return "HF32";
+  case 4:
+    return "FP16";
+  case 5:
     return "BF16";
+  case 6:
+    return "HiF8";
   case 7:
-    return "FPL8";
+    return "E4M3";
+  case 8:
+    return "E5M2";
+  case 9:
+    return "E3M2";
+  case 10:
+    return "E2M3";
   case 11:
-    return "FP4";
+    return "E2M1X2";
   case 12:
-    return "FPL4";
+    return "E1M2X2";
+  case 13:
+    return "E8M0";
+  case 14:
+    return "HiF4X2";
   case 16:
-    return "INT64";
+    return "S64";
   case 17:
-    return "INT32";
+    return "S32";
   case 18:
-    return "INT16";
+    return "S16";
   case 19:
-    return "INT8";
+    return "S8";
   case 20:
-    return "INT4";
+    return "S4X2";
   case 24:
-    return "UINT64";
+    return "U64";
   case 25:
-    return "UINT32";
+    return "U32";
   case 26:
-    return "UINT16";
+    return "U16";
   case 27:
-    return "UINT8";
+    return "U8";
   case 28:
-    return "UINT4";
+    return "U4X2";
   default:
     return StringRef();
   }
 }
 
-static StringRef teplAliasMnemonic(unsigned Selector) {
-  return LinxISA::canonicalTEPLAliasMnemonicV057(Selector & 0x7fu);
-}
-
-static unsigned tmaStateOpFromFunction(unsigned Func) {
+static unsigned tlsuStateOpFromFunction(unsigned Func) {
   switch (Func & 0x1fu) {
   case 0:
     return 33u;
@@ -241,8 +251,9 @@ static StringRef blockTypeSuffix(unsigned BlockType) {
 }
 
 static const char *ssrIdSymbol(uint64_t Id) {
-  // SSR_ID is encoded as a 12-bit field in the base forms (SSRGET/SSRSET/SSRSWAP).
-  // Keep this mapping aligned with isa.txt (and the ISA manual SSR table).
+  // SSR_ID is encoded as a 12-bit field in the base forms
+  // (SSRGET/SSRSET/SSRSWAP). Keep this mapping aligned with isa.txt (and the
+  // ISA manual SSR table).
   unsigned V = static_cast<unsigned>(Id) & 0xfffu;
 
   // Debug SSRs (v0.2 bring-up subset).
@@ -461,8 +472,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   const linxisa_inst_form &Form = linxisa_inst_forms[Opcode];
   StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
-  const StringRef RawTok = AsmFmt.empty() ? StringRef()
-                                          : AsmFmt.split(' ').first.rtrim(",");
+  const StringRef RawTok =
+      AsmFmt.empty() ? StringRef() : AsmFmt.split(' ').first.rtrim(",");
 
   auto stripAngleSuffix = [&](StringRef Tok) -> StringRef {
     if (size_t Pos = Tok.find('<'); Pos != StringRef::npos)
@@ -470,9 +481,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return Tok;
   };
 
-  const bool IsVector =
-      Form.length_bits == 64 &&
-      stripAngleSuffix(RawTok).starts_with_insensitive("v.");
+  const bool IsVector = Form.length_bits == 64 &&
+                        stripAngleSuffix(RawTok).starts_with_insensitive("v.");
 
   // Map field name -> operand (immediate or expression) from MCInst operands in
   // spec field order.
@@ -743,8 +753,9 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return PrintedMnemonicTok;
     }
 
-    // Canonical v0.4 vector bridge: `<.local>` is a mnemonic qualifier driven
-    // by the L bit, while bridged/global forms stay on the base mnemonic.
+    // Canonical PTO 0.58 vector bridge: `<.local>` is a mnemonic qualifier
+    // driven by the L bit, while bridged/global forms stay on the base
+    // mnemonic.
     if (AsmFmt.contains("<.local>")) {
       if (auto L = findFieldImm("L")) {
         if (((*L) & 1) != 0) {
@@ -756,10 +767,14 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     }
 
     if (AsmFmt.contains("<.{")) {
-      const unsigned Aq = static_cast<unsigned>(findFieldImm("aq").value_or(0)) & 0x1u;
-      const unsigned Rl = static_cast<unsigned>(findFieldImm("rl").value_or(0)) & 0x1u;
-      const unsigned Far = static_cast<unsigned>(findFieldImm("far").value_or(0)) & 0x1u;
-      const unsigned Rd = static_cast<unsigned>(findFieldImm("rd").value_or(0)) & 0x1u;
+      const unsigned Aq =
+          static_cast<unsigned>(findFieldImm("aq").value_or(0)) & 0x1u;
+      const unsigned Rl =
+          static_cast<unsigned>(findFieldImm("rl").value_or(0)) & 0x1u;
+      const unsigned Far =
+          static_cast<unsigned>(findFieldImm("far").value_or(0)) & 0x1u;
+      const unsigned Rd =
+          static_cast<unsigned>(findFieldImm("rd").value_or(0)) & 0x1u;
 
       SmallString<8> Qual;
       if (findField("aq")) {
@@ -820,7 +835,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       int64_t SignedTarget = static_cast<int64_t>(Address) + Delta;
       Target = static_cast<uint64_t>(SignedTarget);
     } else {
-      uint64_t Delta = shlUnsigned64(static_cast<uint64_t>(Op->getImm()), Shift);
+      uint64_t Delta =
+          shlUnsigned64(static_cast<uint64_t>(Op->getImm()), Shift);
       Target = Address + Delta;
     }
 
@@ -854,7 +870,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       return emitPcRelTargetHex("simm17", /*Signed=*/true);
     if (findField("simm12"))
       return emitPcRelTargetHex("simm12", /*Signed=*/true);
-    // HL.BSTART uses an instruction-aligned byte offset (simm[0] is implicit 0).
+    // HL.BSTART uses an instruction-aligned byte offset (simm[0] is implicit
+    // 0).
     if (findField("simm"))
       return emitPcRelTargetHexScaled("simm", /*Signed=*/true, /*Shift=*/0);
     return false;
@@ -876,15 +893,15 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   // Special-case: accelerator/tile block-start instructions.
   //
-  // Canonical v0.57 disassembly uses direct named TMA/CUBE/TEPL forms where
-  // the selector has an architectural name.
+  // PTO 0.58 keeps TEPL as the binary carrier and prints its named VEC/SFU
+  // execution-engine alias. TLSU and CUBE retain their direct start names.
   const bool IsTypedTEPL = AsmFmt.starts_with("BSTART.TEPL");
   const bool IsTypedVPAR = AsmFmt.starts_with("BSTART.VPAR");
   const bool IsTypedVSEQ = AsmFmt.starts_with("BSTART.VSEQ");
   const bool IsTypedMPAR = AsmFmt.starts_with("BSTART.MPAR");
   const bool IsTypedMSEQ = AsmFmt.starts_with("BSTART.MSEQ");
   const StringRef TypedTok = stripAngleSuffix(RawTok);
-  const std::optional<unsigned> DirectTMAFunc =
+  const std::optional<unsigned> DirectTLSUFunc =
       StringSwitch<std::optional<unsigned>>(TypedTok)
           .Case("BSTART.TLOAD", 0u)
           .Case("BSTART.TSTORE", 1u)
@@ -904,7 +921,6 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           .Case("BSTART.TMATMULMX", 4u)
           .Case("BSTART.TMATMULMX.BIAS", 5u)
           .Case("BSTART.TMATMULMX.ACC", 6u)
-          .Case("BSTART.ACCCVT", 8u)
           .Case("BSTART.TGEMV", 16u)
           .Case("BSTART.TGEMV.BIAS", 17u)
           .Case("BSTART.TGEMV.ACC", 18u)
@@ -912,16 +928,10 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           .Case("BSTART.TGEMVMX.BIAS", 21u)
           .Case("BSTART.TGEMVMX.ACC", 22u)
           .Default(std::nullopt);
-  std::optional<unsigned> DirectTEPLOpcode;
-  if (TypedTok.starts_with("BSTART."))
-    DirectTEPLOpcode = LinxISA::parseCanonicalTEPLTileOpcodeV057(
-        TypedTok.drop_front(StringRef("BSTART.").size()));
-  const bool IsDirectTMAAlias = DirectTMAFunc.has_value();
+  const bool IsDirectTLSUAlias = DirectTLSUFunc.has_value();
   const bool IsDirectCUBEAlias = DirectCUBEFunc.has_value();
-  const bool IsDirectTEPLAlias = DirectTEPLOpcode.has_value();
-  if (IsTypedTEPL || IsTypedVPAR || IsTypedVSEQ || IsTypedMPAR ||
-      IsTypedMSEQ || IsDirectTMAAlias || IsDirectCUBEAlias ||
-      IsDirectTEPLAlias) {
+  if (IsTypedTEPL || IsTypedVPAR || IsTypedVSEQ || IsTypedMPAR || IsTypedMSEQ ||
+      IsDirectTLSUAlias || IsDirectCUBEAlias) {
     const unsigned DT = static_cast<unsigned>(
                             findFieldImm("DataType")
                                 .value_or(findFieldImm("dtype").value_or(0))) &
@@ -936,19 +946,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     unsigned ParStateOp = 0u;
 
-    if (IsDirectTMAAlias || IsDirectCUBEAlias || IsDirectTEPLAlias) {
+    if (IsDirectTLSUAlias || IsDirectCUBEAlias) {
       OS << TypedTok << "\t";
       printDataType();
 
-      if (IsDirectTMAAlias) {
-        LastTileHeader = LastTileHeaderKind::TMA;
-        ParStateOp = tmaStateOpFromFunction(*DirectTMAFunc);
+      if (IsDirectTLSUAlias) {
+        LastTileHeader = LastTileHeaderKind::TLSU;
+        ParStateOp = tlsuStateOpFromFunction(*DirectTLSUFunc);
       } else if (IsDirectCUBEAlias) {
         LastTileHeader = LastTileHeaderKind::CUBE;
         ParStateOp = cubeStateOpFromFunction(*DirectCUBEFunc);
-      } else {
-        LastTileHeader = LastTileHeaderKind::TEPL;
-        ParStateOp = *DirectTEPLOpcode;
       }
 
       LastParTileOp = ParStateOp;
@@ -979,14 +986,13 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned Selector = (Mode << 5) | Function;
     ParStateOp = Selector;
 
-    StringRef Alias;
-    if (IsTypedTEPL) {
-      Alias = teplAliasMnemonic(Selector);
-      LastTileHeader = LastTileHeaderKind::TEPL;
-    }
+    StringRef OperationName = LinxISA::canonicalTileOperationNameV058(Selector);
+    auto Engine = LinxISA::tileEngineV058(Selector);
+    LastTileHeader = LastTileHeaderKind::TILEOP;
 
-    if (!Alias.empty()) {
-      OS << Alias << "\t";
+    if (!OperationName.empty() && Engine) {
+      OS << LinxISA::tileOperationAssemblyAliasV058(*Engine) << "\t"
+         << OperationName << ", ";
       printDataType();
     } else {
       OS << "BSTART.TEPL\t" << utostr(Mode) << ", " << utostr(Function) << ", ";
@@ -1076,8 +1082,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                (AsmFmt.contains(" DIRECT") || AsmFmt.contains(" COND"))) {
       // These encodings are scalar-block forms; the default BlockType is STD.
       OS << "C.BSTART";
-    } else if (FirstTokBase == "BSTART" &&
-               (AsmFmt.contains("{DIRECT, CALL}") || AsmFmt.contains(" COND"))) {
+    } else if (FirstTokBase == "BSTART" && (AsmFmt.contains("{DIRECT, CALL}") ||
+                                            AsmFmt.contains(" COND"))) {
       // These encodings are scalar-block forms; the default BlockType is STD.
       OS << "BSTART";
     } else {
@@ -1329,12 +1335,13 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   // Must check BEFORE memory operand check since these also contain '['.
   if (AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
       AsmFmt.contains("[RegDst0 ~ RegDstn]")) {
-    StringRef Tok = Form.mnemonic ? StringRef(Form.mnemonic) : StringRef("FENTRY");
+    StringRef Tok =
+        Form.mnemonic ? StringRef(Form.mnemonic) : StringRef("FENTRY");
     OS << Tok;
     OS << "\t[";
-    
+
     // Get register range from SrcBegin/SrcEnd or DstBegin/DstEnd fields
-    unsigned RegBegin = 10, RegEnd = 14;  // defaults: ra ~ s2
+    unsigned RegBegin = 10, RegEnd = 14; // defaults: ra ~ s2
     if (auto V = findFieldImm("SrcBegin"))
       RegBegin = static_cast<unsigned>(*V);
     else if (auto V = findFieldImm("DstBegin"))
@@ -1343,10 +1350,10 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       RegEnd = static_cast<unsigned>(*V);
     else if (auto V = findFieldImm("DstEnd"))
       RegEnd = static_cast<unsigned>(*V);
-    
+
     OS << reg5Name(RegBegin & 0x1F) << " ~ " << reg5Name(RegEnd & 0x1F);
     OS << "], sp!, ";
-    
+
     // Get stack size from uimm field
     if (auto V = findFieldImm("uimm")) {
       // uimm is already in bytes (reconstructed from split encoding)
@@ -1354,7 +1361,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     } else {
       OS << "0";
     }
-    
+
     printAnnotation(OS, Annot);
     return;
   }
@@ -1370,48 +1377,63 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned Src2 =
         static_cast<unsigned>(findFieldImm("RegSrc2").value_or(0)) & 0x1fu;
 
-    auto printRegList = [&](ArrayRef<unsigned> Regs) {
-      bool First = true;
-      for (unsigned R : Regs) {
-        if (R == 0)
-          continue;
-        if (!First)
-          OS << ",";
-        OS << reg5Name(R);
-        First = false;
-      }
-    };
+    OS << "B.IOR\t[" << reg5Name(Src0) << ", " << reg5Name(Src1) << ", "
+       << reg5Name(Src2) << "], ->" << reg5Name(Dst);
+    printAnnotation(OS, Annot);
+    return;
+  }
 
-    OS << "B.IOR\t[";
-    printRegList({Src1, Src0, Src2});
-    OS << "],[";
-    printRegList({Dst});
-    OS << "]";
+  if (AsmFmt.starts_with("B.IOS")) {
+    const unsigned PEMask =
+        static_cast<unsigned>(findFieldImm("PE_MASK").value_or(0)) & 0xfu;
+    const unsigned SharedTID =
+        static_cast<unsigned>(findFieldImm("SharedTID").value_or(0)) & 0xffu;
+    const unsigned TSize =
+        static_cast<unsigned>(findFieldImm("TSize").value_or(0)) & 0x7u;
+
+    auto printPEMask = [&]() {
+      for (int Bit = 3; Bit >= 0; --Bit)
+        OS << ((PEMask >> Bit) & 1u);
+    };
+    OS << "B.IOS\t";
+    if (TSize == 0) {
+      OS << "S" << SharedTID << ", mask=";
+      printPEMask();
+    } else {
+      OS << "mask=";
+      printPEMask();
+      OS << ", ->S" << SharedTID << "<";
+      const uint64_t Bytes = 1ull << (TSize + 6u);
+      if (Bytes >= 1024u)
+        OS << (Bytes / 1024u) << "KB";
+      else
+        OS << Bytes << "B";
+      OS << ">";
+    }
     printAnnotation(OS, Annot);
     return;
   }
 
   if (AsmFmt.starts_with("ERCOV") || AsmFmt.starts_with("ESAVE") ||
       AsmFmt.starts_with("MCOPY") || AsmFmt.starts_with("MSET")) {
-    const unsigned Src0 = static_cast<unsigned>(
-                              findFieldImm("RegSrc0")
-                                  .value_or(findFieldImm("RegSrc0=BasePtr")
-                                                .value_or(findFieldImm("RegSrc0=DstAddr")
-                                                              .value_or(0)))) &
-                          0x1fu;
-    const unsigned Src1 = static_cast<unsigned>(
-                              findFieldImm("RegSrc1")
-                                  .value_or(findFieldImm("RegSrc1=LenBytes")
-                                                .value_or(findFieldImm("RegSrc1=SrcAddr")
-                                                              .value_or(findFieldImm("RegSrc1=Value")
-                                                                            .value_or(0))))) &
-                          0x1fu;
-    const unsigned Src2 = static_cast<unsigned>(
-                              findFieldImm("RegSrc2")
-                                  .value_or(findFieldImm("RegSrc2=Kind")
-                                                .value_or(findFieldImm("RegSrc2=Size")
-                                                              .value_or(0)))) &
-                          0x1fu;
+    const unsigned Src0 =
+        static_cast<unsigned>(findFieldImm("RegSrc0").value_or(
+            findFieldImm("RegSrc0=BasePtr")
+                .value_or(findFieldImm("RegSrc0=DstAddr").value_or(0)))) &
+        0x1fu;
+    const unsigned Src1 =
+        static_cast<unsigned>(findFieldImm("RegSrc1").value_or(
+            findFieldImm("RegSrc1=LenBytes")
+                .value_or(
+                    findFieldImm("RegSrc1=SrcAddr")
+                        .value_or(
+                            findFieldImm("RegSrc1=Value").value_or(0))))) &
+        0x1fu;
+    const unsigned Src2 =
+        static_cast<unsigned>(findFieldImm("RegSrc2").value_or(
+            findFieldImm("RegSrc2=Kind")
+                .value_or(findFieldImm("RegSrc2=Size").value_or(0)))) &
+        0x1fu;
     OS << mnemonicTok("<op>") << "\t[";
     OS << reg5Name(Src0) << ", " << reg5Name(Src1) << ", " << reg5Name(Src2)
        << "]";
@@ -1429,21 +1451,18 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Special-case: canonical B.IOT descriptors, including v0.57 source-only
-  // forms with no destination suffix.
+  // Special-case: canonical PTO 0.58 B.IOT descriptors.
   if (AsmFmt.starts_with("B.IOT")) {
-    const unsigned S0R =
-        static_cast<unsigned>(findFieldImm("S0R").value_or(0)) & 0x1u;
-    const unsigned S1R =
-        static_cast<unsigned>(findFieldImm("S1R").value_or(0)) & 0x1u;
     const unsigned DstTile =
-        static_cast<unsigned>(findFieldImm("DstTile").value_or(0)) & 0x7u;
+        static_cast<unsigned>(findFieldImm("DstTile").value_or(0)) & 0x3u;
+    const unsigned PEMask =
+        static_cast<unsigned>(findFieldImm("PE_MASK").value_or(0)) & 0xfu;
     const unsigned Src0 =
         static_cast<unsigned>(findFieldImm("SrcTile0").value_or(0)) & 0x3fu;
     const unsigned Src1 =
         static_cast<unsigned>(findFieldImm("SrcTile1").value_or(0)) & 0x3fu;
-    const unsigned Size =
-        static_cast<unsigned>(findFieldImm("imm4").value_or(0)) & 0xfu;
+    const unsigned TSize =
+        static_cast<unsigned>(findFieldImm("TSize").value_or(0)) & 0x7u;
     const bool Src0Present = AsmFmt.contains("SrcTile0");
     const bool Src1Present = AsmFmt.contains("SrcTile1");
     const bool HasDestination = AsmFmt.contains("->DstTile");
@@ -1452,17 +1471,21 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     bool First = true;
     if (Src0Present) {
       printTileRef(OS, Src0);
-      if (S0R)
-        OS << ".reuse";
       First = false;
     }
     if (Src1Present) {
       if (!First)
         OS << ", ";
       printTileRef(OS, Src1);
-      if (S1R)
-        OS << ".reuse";
+      First = false;
     }
+
+    if (!First)
+      OS << ", ";
+    OS << "mask=";
+    for (int Bit = 3; Bit >= 0; --Bit)
+      OS << ((PEMask >> Bit) & 1u);
+    First = false;
 
     if ((static_cast<unsigned>(findFieldImm("L").value_or(0)) & 1u) != 0u) {
       if (!First)
@@ -1479,49 +1502,36 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       OS << ", ";
 
     static constexpr const char *DstKinds[] = {"t", "u", "m", "n"};
-    const char *DstKind = DstTile < std::size(DstKinds) ? DstKinds[DstTile] : "t";
-    OS << "->" << DstKind << "<";
-    if (Size < 3u || Size > 9u) {
-      // Preserve architecturally reserved raw values numerically in dumps.
-      // Preserve other raw imm4 encodings as numeric size codes so objdump
-      // output remains byte-stable when passed back through llvm-mc.
-      OS << utostr(Size);
-    } else {
-      const uint64_t Bytes = 1ull << (Size + 4u);
-      if (Bytes >= 1024u && (Bytes % 1024u) == 0u)
-        OS << utostr(static_cast<unsigned>(Bytes / 1024u)) << "KB";
-      else
-        OS << utostr(static_cast<unsigned>(Bytes)) << "B";
-    }
+    OS << "->" << DstKinds[DstTile] << "<";
+    const uint64_t Bytes = 1ull << (TSize + 6u);
+    if (Bytes >= 1024u)
+      OS << utostr(static_cast<unsigned>(Bytes / 1024u)) << "KB";
+    else
+      OS << utostr(static_cast<unsigned>(Bytes)) << "B";
     OS << ">";
 
     printAnnotation(OS, Annot);
     return;
   }
 
-  // Canonical v0.57 control attributes.
+  // Canonical PTO 0.58 control attributes.
   if (AsmFmt.starts_with("B.CATR")) {
     const unsigned Trap =
         static_cast<unsigned>(findFieldImm("trap").value_or(0)) & 0x1u;
-    const unsigned DR = static_cast<unsigned>(
-                            findFieldImm("DR")
-                                .value_or(findFieldImm("dr").value_or(0))) &
+    const unsigned DR = static_cast<unsigned>(findFieldImm("DR").value_or(
+                            findFieldImm("dr").value_or(0))) &
                         0x1u;
-    const unsigned Aq = static_cast<unsigned>(
-                            findFieldImm("aq")
-                                .value_or(findFieldImm("AQ").value_or(0))) &
+    const unsigned Aq = static_cast<unsigned>(findFieldImm("aq").value_or(
+                            findFieldImm("AQ").value_or(0))) &
                         0x1u;
-    const unsigned Atom = static_cast<unsigned>(
-                              findFieldImm("atom")
-                                  .value_or(findFieldImm("atomic").value_or(0))) &
+    const unsigned Atom = static_cast<unsigned>(findFieldImm("atom").value_or(
+                              findFieldImm("atomic").value_or(0))) &
                           0x1u;
-    const unsigned Far = static_cast<unsigned>(
-                             findFieldImm("far")
-                                 .value_or(findFieldImm("FAR").value_or(0))) &
+    const unsigned Far = static_cast<unsigned>(findFieldImm("far").value_or(
+                             findFieldImm("FAR").value_or(0))) &
                          0x1u;
-    const unsigned Rl = static_cast<unsigned>(
-                            findFieldImm("rl")
-                                .value_or(findFieldImm("RL").value_or(0))) &
+    const unsigned Rl = static_cast<unsigned>(findFieldImm("rl").value_or(
+                            findFieldImm("RL").value_or(0))) &
                         0x1u;
 
     StringRef OrderName;
@@ -1553,7 +1563,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
-  // Canonical v0.57 data attributes.
+  // Canonical PTO 0.58 data attributes.
   if (AsmFmt.starts_with("B.DATR")) {
     const unsigned CMode =
         static_cast<unsigned>(findFieldImm("CMode").value_or(0)) & 0x7u;
@@ -1622,7 +1632,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   }
 
   // Special-case: compressed block dimensions.
-  if (AsmFmt.starts_with("C.B.DIM ") || AsmFmt == "C.B.DIM RegSrc, ->{LB0, LB1, LB2}") {
+  if (AsmFmt.starts_with("C.B.DIM ") ||
+      AsmFmt == "C.B.DIM RegSrc, ->{LB0, LB1, LB2}") {
     const unsigned LoopNest =
         static_cast<unsigned>(findFieldImm("LoopNest").value_or(0)) & 0x3u;
     const unsigned Reg =
@@ -1673,15 +1684,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       TempName = "hot";
       break;
     }
-    OS << "B.HINT\t{BR." << (Likely ? "likely" : "unlikely")
-       << ", TEMP." << TempName << ", " << Prefetch << "}";
+    OS << "B.HINT\t{BR." << (Likely ? "likely" : "unlikely") << ", TEMP."
+       << TempName << ", " << Prefetch << "}";
     printAnnotation(OS, Annot);
     return;
   }
 
   // Pretty printer for memory operands.
   if (AsmFmt.contains('[')) {
-    const StringRef Mnem = Form.mnemonic ? StringRef(Form.mnemonic) : StringRef();
+    const StringRef Mnem =
+        Form.mnemonic ? StringRef(Form.mnemonic) : StringRef();
     const bool IsPcr = Mnem.ends_with(".PCR");
     if (IsPcr) {
       // Prefer a symbol-first syntax for PC-relative accesses:
@@ -1698,8 +1710,9 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           if (Op->isExpr())
             MAI.printExpr(OS, *Op->getExpr());
           else
-            OS << "0x" << utohexstr(static_cast<uint64_t>(Op->getImm()),
-                                    /*LowerCase=*/true);
+            OS << "0x"
+               << utohexstr(static_cast<uint64_t>(Op->getImm()),
+                            /*LowerCase=*/true);
           OS << "]";
           return true;
         }
@@ -1707,8 +1720,9 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           if (Op->isExpr())
             MAI.printExpr(OS, *Op->getExpr());
           else
-            OS << "0x" << utohexstr(static_cast<uint64_t>(Op->getImm()),
-                                    /*LowerCase=*/true);
+            OS << "0x"
+               << utohexstr(static_cast<uint64_t>(Op->getImm()),
+                            /*LowerCase=*/true);
           OS << "]";
           return true;
         }
@@ -1748,9 +1762,9 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           BaseField = "SrcR";
         else if (BasePart.starts_with_insensitive("srcl"))
           BaseField = "SrcL";
-        VecUsesIndex =
-            findField("SrcR") && !Inside.contains_insensitive("simm") &&
-            !Inside.contains_insensitive("uimm");
+        VecUsesIndex = findField("SrcR") &&
+                       !Inside.contains_insensitive("simm") &&
+                       !Inside.contains_insensitive("uimm");
       }
 
       std::optional<StringRef> ValueField;
@@ -1928,8 +1942,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     StringRef PostMemFmt;
     if (size_t R = AsmFmt.find(']'); R != StringRef::npos)
       PostMemFmt = AsmFmt.drop_front(R + 1);
-    const bool HasPostMemSrcR =
-        !IsRegOffset && findField("SrcR") && PostMemFmt.contains_insensitive("SrcR");
+    const bool HasPostMemSrcR = !IsRegOffset && findField("SrcR") &&
+                                PostMemFmt.contains_insensitive("SrcR");
     const bool HasPostMemSrcD =
         findField("SrcD") && PostMemFmt.contains_insensitive("SrcD");
     const bool HasPostMemSrcD1 =
@@ -2069,9 +2083,9 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   else
     OS << "<invalid>";
 
-  const bool IsSetcImm =
-      AsmFmt.starts_with_insensitive("setc.") && findField("shamt") &&
-      (findField("simm12") || findField("uimm12"));
+  const bool IsSetcImm = AsmFmt.starts_with_insensitive("setc.") &&
+                         findField("shamt") &&
+                         (findField("simm12") || findField("uimm12"));
   const bool HasSplitImm12 = findField("imml") && findField("imms");
 
   bool FirstOp = true;
@@ -2091,12 +2105,12 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   // Common immediates / shift amounts.
   for (auto &KV : Fields) {
     StringRef Name = KV.first;
-    if (Name == "RegDst" || Name == "SrcL" || Name == "SrcR" || Name == "SrcD" ||
-        Name == "SrcP" || Name == "SrcA")
+    if (Name == "RegDst" || Name == "SrcL" || Name == "SrcR" ||
+        Name == "SrcD" || Name == "SrcP" || Name == "SrcA")
       continue;
-    if (IsSetcImm &&
-        (Name.equals_insensitive("shamt") || Name.equals_insensitive("simm12") ||
-         Name.equals_insensitive("uimm12")))
+    if (IsSetcImm && (Name.equals_insensitive("shamt") ||
+                      Name.equals_insensitive("simm12") ||
+                      Name.equals_insensitive("uimm12")))
       continue;
     if (HasSplitImm12 &&
         (Name.equals_insensitive("imml") || Name.equals_insensitive("imms")))
@@ -2104,24 +2118,28 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     if (Name.starts_with_insensitive("imm") ||
         Name.starts_with_insensitive("simm") ||
         Name.starts_with_insensitive("uimm") ||
-        Name.starts_with_insensitive("shamt") || Name.equals_insensitive("BrType") ||
-        Name.equals_insensitive("BlockType") || Name.equals_insensitive("SSR_ID") ||
-        Name.equals_insensitive("SSRID") || Name.equals_insensitive("LSR_ID") ||
+        Name.starts_with_insensitive("shamt") ||
+        Name.equals_insensitive("BrType") ||
+        Name.equals_insensitive("BlockType") ||
+        Name.equals_insensitive("SSR_ID") || Name.equals_insensitive("SSRID") ||
+        Name.equals_insensitive("LSR_ID") ||
         Name.equals_insensitive("ACR-ID") || Name.equals_insensitive("C-ID")) {
       sep();
       const MCOperand &Op = KV.second;
       if (Op.isImm()) {
-        if (Name.equals_insensitive("SSR_ID") || Name.equals_insensitive("SSRID")) {
-          if (const char *Sym = ssrIdSymbol(static_cast<uint64_t>(Op.getImm()))) {
+        if (Name.equals_insensitive("SSR_ID") ||
+            Name.equals_insensitive("SSRID")) {
+          if (const char *Sym =
+                  ssrIdSymbol(static_cast<uint64_t>(Op.getImm()))) {
             OS << Sym;
           } else {
-            OS << "0x" << utohexstr(static_cast<uint64_t>(Op.getImm()) & 0xfffu);
+            OS << "0x"
+               << utohexstr(static_cast<uint64_t>(Op.getImm()) & 0xfffu);
           }
         } else {
           OS << Op.getImm();
         }
-      }
-      else if (Op.isExpr())
+      } else if (Op.isExpr())
         MAI.printExpr(OS, *Op.getExpr());
     }
   }

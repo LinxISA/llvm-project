@@ -80,7 +80,7 @@ LinxISATargetLowering::LinxISATargetLowering(const TargetMachine &TM,
   addRegisterClass(MVT::i32, &LinxISA::GPRRegClass);
   addRegisterClass(MVT::f64, &LinxISA::GPRRegClass);
   addRegisterClass(MVT::f32, &LinxISA::GPRRegClass);
-  // Tile registers (TAU): model hardware tiles as an opaque tile payload.
+  // Model hardware tile registers as opaque tile payloads.
   //
   // Bring-up rule: tile values are expected to be produced/consumed only by
   // Linx tile intrinsics (e.g. llvm.linx.tile.* / llvm.linx.cube.*). Keep all
@@ -285,7 +285,7 @@ LinxISATargetLowering::LinxISATargetLowering(const TargetMachine &TM,
 }
 
 SDValue LinxISATargetLowering::LowerOperation(SDValue Op,
-                                             SelectionDAG &DAG) const {
+                                              SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
   case ISD::BR:
     return LowerBR(Op, DAG);
@@ -389,7 +389,7 @@ SDValue LinxISATargetLowering::LowerBRIND(SDValue Op, SelectionDAG &DAG) const {
 }
 
 SDValue LinxISATargetLowering::LowerJumpTable(SDValue Op,
-                                             SelectionDAG &DAG) const {
+                                              SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT Ty = Op.getValueType();
 
@@ -400,8 +400,7 @@ SDValue LinxISATargetLowering::LowerJumpTable(SDValue Op,
   SDValue JTI = DAG.getTargetJumpTable(JT->getIndex(), Ty);
 
   SDValue Page = SDValue(DAG.getMachineNode(LinxISA::ADDTPC, DL, Ty, JTI), 0);
-  const unsigned AddOpc =
-      (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
+  const unsigned AddOpc = (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
   return SDValue(DAG.getMachineNode(AddOpc, DL, Ty, Page, JTI), 0);
 }
 
@@ -413,8 +412,7 @@ static SDValue lowerMulHU64(SDLoc DL, SelectionDAG &DAG, SDValue A, SDValue B) {
     return DAG.getNode(ISD::ZERO_EXTEND, DL, VT, Lo32);
   };
   auto getHi32 = [&](SDValue V) -> SDValue {
-    SDValue Sh = DAG.getNode(ISD::SRL, DL, VT, V,
-                             DAG.getConstant(32, DL, VT));
+    SDValue Sh = DAG.getNode(ISD::SRL, DL, VT, V, DAG.getConstant(32, DL, VT));
     SDValue Hi32 = DAG.getNode(ISD::TRUNCATE, DL, MVT::i32, Sh);
     return DAG.getNode(ISD::ZERO_EXTEND, DL, VT, Hi32);
   };
@@ -434,22 +432,22 @@ static SDValue lowerMulHU64(SDLoc DL, SelectionDAG &DAG, SDValue A, SDValue B) {
   SDValue Mid = DAG.getNode(ISD::ADD, DL, VT, P01, P10);
   SDValue MidCarry = DAG.getSetCC(DL, VT, Mid, P01, ISD::SETULT); // carry out
 
-  SDValue MidHi = DAG.getNode(ISD::SRL, DL, VT, Mid, DAG.getConstant(32, DL, VT));
+  SDValue MidHi =
+      DAG.getNode(ISD::SRL, DL, VT, Mid, DAG.getConstant(32, DL, VT));
   SDValue MidCarrySh =
       DAG.getNode(ISD::SHL, DL, VT, MidCarry, DAG.getConstant(32, DL, VT));
   MidHi = DAG.getNode(ISD::ADD, DL, VT, MidHi, MidCarrySh);
 
-  SDValue LowAdd =
-      DAG.getNode(ISD::ADD, DL, VT, P00,
-                  DAG.getNode(ISD::SHL, DL, VT, Mid, DAG.getConstant(32, DL, VT)));
+  SDValue LowAdd = DAG.getNode(
+      ISD::ADD, DL, VT, P00,
+      DAG.getNode(ISD::SHL, DL, VT, Mid, DAG.getConstant(32, DL, VT)));
   SDValue LowCarry = DAG.getSetCC(DL, VT, LowAdd, P00, ISD::SETULT);
 
   SDValue High = DAG.getNode(ISD::ADD, DL, VT, P11, MidHi);
   return DAG.getNode(ISD::ADD, DL, VT, High, LowCarry);
 }
 
-SDValue LinxISATargetLowering::LowerMULHU(SDValue Op,
-                                         SelectionDAG &DAG) const {
+SDValue LinxISATargetLowering::LowerMULHU(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue A = Op.getOperand(0);
   SDValue B = Op.getOperand(1);
@@ -470,8 +468,7 @@ SDValue LinxISATargetLowering::LowerMULHU(SDValue Op,
   return SDValue();
 }
 
-SDValue LinxISATargetLowering::LowerMULHS(SDValue Op,
-                                         SelectionDAG &DAG) const {
+SDValue LinxISATargetLowering::LowerMULHS(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue A = Op.getOperand(0);
   SDValue B = Op.getOperand(1);
@@ -507,11 +504,10 @@ SDValue LinxISATargetLowering::LowerBlockAddress(SDValue Op,
   EVT Ty = Op.getValueType();
   auto *BA = cast<BlockAddressSDNode>(Op);
 
-  SDValue TBA = DAG.getTargetBlockAddress(BA->getBlockAddress(), Ty,
-                                         BA->getOffset());
+  SDValue TBA =
+      DAG.getTargetBlockAddress(BA->getBlockAddress(), Ty, BA->getOffset());
   SDValue Page = SDValue(DAG.getMachineNode(LinxISA::ADDTPC, DL, Ty, TBA), 0);
-  const unsigned AddOpc =
-      (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
+  const unsigned AddOpc = (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
   return SDValue(DAG.getMachineNode(AddOpc, DL, Ty, Page, TBA), 0);
 }
 
@@ -633,8 +629,8 @@ static SDValue buildExtendInReg(SDValue Val, unsigned FromBits, bool IsSigned,
   // survives into isel and becomes unselectable.
   SDValue Zero = DAG.getRegister(LinxISA::R0, MVT::i64);
   SDValue ShImm = DAG.getTargetConstant(Shift, DL, MVT::i64);
-  SDValue ShAmt =
-      SDValue(DAG.getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm), 0);
+  SDValue ShAmt = SDValue(
+      DAG.getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm), 0);
 
   SDValue Shl =
       SDValue(DAG.getMachineNode(LinxISA::SLLrr, DL, MVT::i64, Val, ShAmt), 0);
@@ -658,8 +654,8 @@ SDValue LinxISATargetLowering::LowerSIGN_EXTEND(SDValue Op,
   if (FromVT == MVT::i32) {
     SDValue Wide = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Val);
     SDValue Zero = DAG.getRegister(LinxISA::R0, MVT::i64);
-    return SDValue(DAG.getMachineNode(LinxISA::ADDWrr, DL, MVT::i64, Wide, Zero),
-                   0);
+    return SDValue(
+        DAG.getMachineNode(LinxISA::ADDWrr, DL, MVT::i64, Wide, Zero), 0);
   }
 
   SDValue Wide = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Val);
@@ -683,23 +679,21 @@ SDValue LinxISATargetLowering::LowerZERO_EXTEND(SDValue Op,
     SDValue Wide = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Val);
     SDValue Zero = DAG.getRegister(LinxISA::R0, MVT::i64);
     SDValue ShImm = DAG.getTargetConstant(32, DL, MVT::i64);
-    SDValue ShAmt =
-        SDValue(DAG.getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm),
-                0);
+    SDValue ShAmt = SDValue(
+        DAG.getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm), 0);
 
-    SDValue Shl =
-        SDValue(DAG.getMachineNode(LinxISA::SLLrr, DL, MVT::i64, Wide, ShAmt),
-                0);
-    return SDValue(
-        DAG.getMachineNode(LinxISA::SRLrr, DL, MVT::i64, Shl, ShAmt), 0);
+    SDValue Shl = SDValue(
+        DAG.getMachineNode(LinxISA::SLLrr, DL, MVT::i64, Wide, ShAmt), 0);
+    return SDValue(DAG.getMachineNode(LinxISA::SRLrr, DL, MVT::i64, Shl, ShAmt),
+                   0);
   }
 
   SDValue Wide = DAG.getNode(ISD::ANY_EXTEND, DL, MVT::i64, Val);
   return buildExtendInReg(Wide, FromBits, /*IsSigned=*/false, DL, DAG);
 }
 
-SDValue LinxISATargetLowering::LowerSIGN_EXTEND_INREG(
-    SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxISATargetLowering::LowerSIGN_EXTEND_INREG(SDValue Op,
+                                                      SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue Val = Op.getOperand(0);
   EVT FromVT = cast<VTSDNode>(Op.getOperand(1))->getVT();
@@ -726,7 +720,8 @@ SDValue LinxISATargetLowering::LowerSIGN_EXTEND_INREG(
   return SDValue();
 }
 
-SDValue LinxISATargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxISATargetLowering::LowerSELECT(SDValue Op,
+                                           SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT VT = Op.getValueType();
 
@@ -755,8 +750,7 @@ SDValue LinxISATargetLowering::LowerSELECT(SDValue Op, SelectionDAG &DAG) const 
       DAG.getMachineNode(LinxISA::CSELrrr, DL, VT, Pred, TrueVal, FalseVal), 0);
 }
 
-SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
-                                         SelectionDAG &DAG) const {
+SDValue LinxISATargetLowering::LowerSETCC(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue LHS = Op.getOperand(0);
   SDValue RHS = Op.getOperand(1);
@@ -770,15 +764,14 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
     const EVT ResVT = Op.getValueType();
 
     auto emitCmp = [&](unsigned Opc, SDValue A, SDValue B) -> SDValue {
-      return SDValue(
-          DAG.getMachineNode(Opc, DL, ResVT, A, B, SrcTypeImm), 0);
+      return SDValue(DAG.getMachineNode(Opc, DL, ResVT, A, B, SrcTypeImm), 0);
     };
 
     auto invertBool = [&](SDValue V) -> SDValue {
       const unsigned XorOpc =
           (ResVT == MVT::i32) ? LinxISA::XORIWri : LinxISA::XORIri;
-      SDValue One =
-          DAG.getTargetConstant(1, DL, (ResVT == MVT::i32) ? MVT::i32 : MVT::i64);
+      SDValue One = DAG.getTargetConstant(
+          1, DL, (ResVT == MVT::i32) ? MVT::i32 : MVT::i64);
       return SDValue(DAG.getMachineNode(XorOpc, DL, ResVT, V, One), 0);
     };
 
@@ -930,7 +923,8 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
     return SDValue(DAG.getMachineNode(Opc, DL, ResVT, A, ImmOp), 0);
   };
   auto emitRUI = [&](unsigned Opc, SDValue A, uint64_t Imm) -> SDValue {
-    SDValue ImmOp = DAG.getTargetConstant(static_cast<int64_t>(Imm), DL, MVT::i64);
+    SDValue ImmOp =
+        DAG.getTargetConstant(static_cast<int64_t>(Imm), DL, MVT::i64);
     return SDValue(DAG.getMachineNode(Opc, DL, ResVT, A, ImmOp), 0);
   };
 
@@ -967,9 +961,9 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
           return C->isZero();
         return false;
       };
-      auto matchLogic = [&](SDValue V, unsigned &OutOpcRR,
-                            unsigned &OutOpcRI32, unsigned &OutOpcRI48,
-                            SDValue &A, SDValue &BOrImm, bool &IsImm) -> bool {
+      auto matchLogic = [&](SDValue V, unsigned &OutOpcRR, unsigned &OutOpcRI32,
+                            unsigned &OutOpcRI48, SDValue &A, SDValue &BOrImm,
+                            bool &IsImm) -> bool {
         if (V.getOpcode() != ISD::AND && V.getOpcode() != ISD::OR)
           return false;
 
@@ -1030,9 +1024,10 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
       if (isInt<12>(Imm))
         return emitRI(OpcRI32, A, Imm);
       if (isInt<24>(Imm))
-        return SDValue(DAG.getMachineNode(OpcRI48, DL, ResVT, A,
-                                         DAG.getTargetConstant(Imm, DL, MVT::i64)),
-                       0);
+        return SDValue(
+            DAG.getMachineNode(OpcRI48, DL, ResVT, A,
+                               DAG.getTargetConstant(Imm, DL, MVT::i64)),
+            0);
       return SDValue();
     };
 
@@ -1048,25 +1043,25 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
   case ISD::SETLT: {
     if (auto Imm = getImmS(RHS); Imm && isInt<12>(*Imm))
       return emitRI(LinxISA::CMPLTI, LHS, *Imm);
-    if (auto Imm = getImmS(LHS);
-        Imm && *Imm != std::numeric_limits<int64_t>::max() &&
-        isInt<12>(*Imm + 1))
+    if (auto Imm = getImmS(LHS); Imm &&
+                                 *Imm != std::numeric_limits<int64_t>::max() &&
+                                 isInt<12>(*Imm + 1))
       return emitRI(LinxISA::CMPGEI, RHS, *Imm + 1); // C < x  <=>  x >= C+1
     return emitRR(LinxISA::CMPLT, LHS, RHS);
   }
   case ISD::SETLE: {
-    if (auto Imm = getImmS(RHS);
-        Imm && *Imm != std::numeric_limits<int64_t>::max() &&
-        isInt<12>(*Imm + 1))
+    if (auto Imm = getImmS(RHS); Imm &&
+                                 *Imm != std::numeric_limits<int64_t>::max() &&
+                                 isInt<12>(*Imm + 1))
       return emitRI(LinxISA::CMPLTI, LHS, *Imm + 1); // x <= C  <=>  x < C+1
     if (auto Imm = getImmS(LHS); Imm && isInt<12>(*Imm))
       return emitRI(LinxISA::CMPGEI, RHS, *Imm); // C <= x  <=>  x >= C
     return emitRR(LinxISA::CMPGE, RHS, LHS);     // x <= y  <=>  y >= x
   }
   case ISD::SETGT: {
-    if (auto Imm = getImmS(RHS);
-        Imm && *Imm != std::numeric_limits<int64_t>::max() &&
-        isInt<12>(*Imm + 1))
+    if (auto Imm = getImmS(RHS); Imm &&
+                                 *Imm != std::numeric_limits<int64_t>::max() &&
+                                 isInt<12>(*Imm + 1))
       return emitRI(LinxISA::CMPGEI, LHS, *Imm + 1); // x > C  <=>  x >= C+1
     if (auto Imm = getImmS(LHS); Imm && isInt<12>(*Imm))
       return emitRI(LinxISA::CMPLTI, RHS, *Imm); // C > x  <=>  x < C
@@ -1075,34 +1070,34 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
   case ISD::SETGE: {
     if (auto Imm = getImmS(RHS); Imm && isInt<12>(*Imm))
       return emitRI(LinxISA::CMPGEI, LHS, *Imm);
-    if (auto Imm = getImmS(LHS);
-        Imm && *Imm != std::numeric_limits<int64_t>::max() &&
-        isInt<12>(*Imm + 1))
+    if (auto Imm = getImmS(LHS); Imm &&
+                                 *Imm != std::numeric_limits<int64_t>::max() &&
+                                 isInt<12>(*Imm + 1))
       return emitRI(LinxISA::CMPLTI, RHS, *Imm + 1); // C >= x  <=>  x < C+1
     return emitRR(LinxISA::CMPGE, LHS, RHS);
   }
   case ISD::SETULT: {
     if (auto Imm = getImmU(RHS); Imm && isUInt<12>(*Imm))
       return emitRUI(LinxISA::CMPLTUI, LHS, *Imm);
-    if (auto Imm = getImmU(LHS);
-        Imm && *Imm != std::numeric_limits<uint64_t>::max() &&
-        isUInt<12>(*Imm + 1))
+    if (auto Imm = getImmU(LHS); Imm &&
+                                 *Imm != std::numeric_limits<uint64_t>::max() &&
+                                 isUInt<12>(*Imm + 1))
       return emitRUI(LinxISA::CMPGEUI, RHS, *Imm + 1); // C <u x  <=>  x >=u C+1
     return emitRR(LinxISA::CMPLTU, LHS, RHS);
   }
   case ISD::SETULE: {
-    if (auto Imm = getImmU(RHS);
-        Imm && *Imm != std::numeric_limits<uint64_t>::max() &&
-        isUInt<12>(*Imm + 1))
+    if (auto Imm = getImmU(RHS); Imm &&
+                                 *Imm != std::numeric_limits<uint64_t>::max() &&
+                                 isUInt<12>(*Imm + 1))
       return emitRUI(LinxISA::CMPLTUI, LHS, *Imm + 1); // x <=u C  <=>  x <u C+1
     if (auto Imm = getImmU(LHS); Imm && isUInt<12>(*Imm))
       return emitRUI(LinxISA::CMPGEUI, RHS, *Imm); // C <=u x  <=>  x >=u C
     return emitRR(LinxISA::CMPGEU, RHS, LHS);      // x <=u y  <=>  y >=u x
   }
   case ISD::SETUGT: {
-    if (auto Imm = getImmU(RHS);
-        Imm && *Imm != std::numeric_limits<uint64_t>::max() &&
-        isUInt<12>(*Imm + 1))
+    if (auto Imm = getImmU(RHS); Imm &&
+                                 *Imm != std::numeric_limits<uint64_t>::max() &&
+                                 isUInt<12>(*Imm + 1))
       return emitRUI(LinxISA::CMPGEUI, LHS, *Imm + 1); // x >u C  <=>  x >=u C+1
     if (auto Imm = getImmU(LHS); Imm && isUInt<12>(*Imm))
       return emitRUI(LinxISA::CMPLTUI, RHS, *Imm); // C >u x  <=>  x <u C
@@ -1111,9 +1106,9 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
   case ISD::SETUGE: {
     if (auto Imm = getImmU(RHS); Imm && isUInt<12>(*Imm))
       return emitRUI(LinxISA::CMPGEUI, LHS, *Imm);
-    if (auto Imm = getImmU(LHS);
-        Imm && *Imm != std::numeric_limits<uint64_t>::max() &&
-        isUInt<12>(*Imm + 1))
+    if (auto Imm = getImmU(LHS); Imm &&
+                                 *Imm != std::numeric_limits<uint64_t>::max() &&
+                                 isUInt<12>(*Imm + 1))
       return emitRUI(LinxISA::CMPLTUI, RHS, *Imm + 1); // C >=u x  <=>  x <u C+1
     return emitRR(LinxISA::CMPGEU, LHS, RHS);
   }
@@ -1123,29 +1118,28 @@ SDValue LinxISATargetLowering::LowerSETCC(SDValue Op,
 }
 
 SDValue LinxISATargetLowering::LowerFPBinOp(SDValue Op, SelectionDAG &DAG,
+                                            unsigned Opc) const {
+  SDLoc DL(Op);
+  EVT VT = Op.getValueType();
+  const int64_t SrcType = linxEncodeFpSrcType(VT);
+  SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
+  return SDValue(DAG.getMachineNode(Opc, DL, VT, Op.getOperand(0),
+                                    Op.getOperand(1), SrcTypeImm),
+                 0);
+}
+
+SDValue LinxISATargetLowering::LowerFPUnOp(SDValue Op, SelectionDAG &DAG,
                                            unsigned Opc) const {
   SDLoc DL(Op);
   EVT VT = Op.getValueType();
   const int64_t SrcType = linxEncodeFpSrcType(VT);
   SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(Opc, DL, VT, Op.getOperand(0), Op.getOperand(1),
-                         SrcTypeImm),
-      0);
-}
-
-SDValue LinxISATargetLowering::LowerFPUnOp(SDValue Op, SelectionDAG &DAG,
-                                          unsigned Opc) const {
-  SDLoc DL(Op);
-  EVT VT = Op.getValueType();
-  const int64_t SrcType = linxEncodeFpSrcType(VT);
-  SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(Opc, DL, VT, Op.getOperand(0), SrcTypeImm), 0);
+  return SDValue(DAG.getMachineNode(Opc, DL, VT, Op.getOperand(0), SrcTypeImm),
+                 0);
 }
 
 SDValue LinxISATargetLowering::LowerFP_TO_SINT(SDValue Op,
-                                              SelectionDAG &DAG) const {
+                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT DstVT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -1156,14 +1150,13 @@ SDValue LinxISATargetLowering::LowerFP_TO_SINT(SDValue Op,
 
   SDValue DstTypeImm = DAG.getTargetConstant(DstType, DL, MVT::i64);
   SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(LinxISA::FCVTZ, DL, DstVT, Src, DstTypeImm,
-                         SrcTypeImm),
-      0);
+  return SDValue(DAG.getMachineNode(LinxISA::FCVTZ, DL, DstVT, Src, DstTypeImm,
+                                    SrcTypeImm),
+                 0);
 }
 
 SDValue LinxISATargetLowering::LowerFP_TO_UINT(SDValue Op,
-                                              SelectionDAG &DAG) const {
+                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT DstVT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -1174,14 +1167,13 @@ SDValue LinxISATargetLowering::LowerFP_TO_UINT(SDValue Op,
 
   SDValue DstTypeImm = DAG.getTargetConstant(DstType, DL, MVT::i64);
   SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(LinxISA::FCVTZ, DL, DstVT, Src, DstTypeImm,
-                         SrcTypeImm),
-      0);
+  return SDValue(DAG.getMachineNode(LinxISA::FCVTZ, DL, DstVT, Src, DstTypeImm,
+                                    SrcTypeImm),
+                 0);
 }
 
 SDValue LinxISATargetLowering::LowerSINT_TO_FP(SDValue Op,
-                                              SelectionDAG &DAG) const {
+                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT DstVT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -1192,13 +1184,13 @@ SDValue LinxISATargetLowering::LowerSINT_TO_FP(SDValue Op,
 
   SDValue DstTypeImm = DAG.getTargetConstant(DstType, DL, MVT::i64);
   SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(LinxISA::SCVTF, DL, DstVT, Src, DstTypeImm, SrcTypeImm),
-      0);
+  return SDValue(DAG.getMachineNode(LinxISA::SCVTF, DL, DstVT, Src, DstTypeImm,
+                                    SrcTypeImm),
+                 0);
 }
 
 SDValue LinxISATargetLowering::LowerUINT_TO_FP(SDValue Op,
-                                              SelectionDAG &DAG) const {
+                                               SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT DstVT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -1209,13 +1201,13 @@ SDValue LinxISATargetLowering::LowerUINT_TO_FP(SDValue Op,
 
   SDValue DstTypeImm = DAG.getTargetConstant(DstType, DL, MVT::i64);
   SDValue SrcTypeImm = DAG.getTargetConstant(SrcType, DL, MVT::i64);
-  return SDValue(
-      DAG.getMachineNode(LinxISA::UCVTF, DL, DstVT, Src, DstTypeImm, SrcTypeImm),
-      0);
+  return SDValue(DAG.getMachineNode(LinxISA::UCVTF, DL, DstVT, Src, DstTypeImm,
+                                    SrcTypeImm),
+                 0);
 }
 
 SDValue LinxISATargetLowering::LowerFP_ROUND(SDValue Op,
-                                            SelectionDAG &DAG) const {
+                                             SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT DstVT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -1232,7 +1224,7 @@ SDValue LinxISATargetLowering::LowerFP_ROUND(SDValue Op,
 }
 
 SDValue LinxISATargetLowering::LowerFP_EXTEND(SDValue Op,
-                                             SelectionDAG &DAG) const {
+                                              SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT DstVT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -1259,7 +1251,8 @@ SDValue LinxISATargetLowering::LowerGlobalAddress(SDValue Op,
 
   // In PIC mode, non-DSO-local globals must be addressed through the GOT to
   // avoid text relocations in shared objects.
-  const bool UseGOT = TM.isPositionIndependent() && !TM.shouldAssumeDSOLocal(GV);
+  const bool UseGOT =
+      TM.isPositionIndependent() && !TM.shouldAssumeDSOLocal(GV);
   const unsigned Flags = UseGOT ? LinxII::MO_GOT : LinxII::MO_NO_FLAG;
 
   // PC-relative global address materialization.
@@ -1270,8 +1263,7 @@ SDValue LinxISATargetLowering::LowerGlobalAddress(SDValue Op,
   SDValue GA = DAG.getTargetGlobalAddress(GV, DL, Ty, Offset, Flags);
 
   SDValue Page = SDValue(DAG.getMachineNode(LinxISA::ADDTPC, DL, Ty, GA), 0);
-  const unsigned AddOpc =
-      (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
+  const unsigned AddOpc = (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
   SDValue Addr = SDValue(DAG.getMachineNode(AddOpc, DL, Ty, Page, GA), 0);
 
   if (!UseGOT)
@@ -1282,8 +1274,8 @@ SDValue LinxISATargetLowering::LowerGlobalAddress(SDValue Op,
   return SDValue(DAG.getMachineNode(LoadOpc, DL, Ty, Addr, ZeroOff), 0);
 }
 
-SDValue LinxISATargetLowering::LowerGlobalTLSAddress(
-    SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxISATargetLowering::LowerGlobalTLSAddress(SDValue Op,
+                                                     SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT Ty = Op.getValueType();
   // SelectionDAG uses GlobalAddressSDNode for both GlobalAddress and
@@ -1297,8 +1289,7 @@ SDValue LinxISATargetLowering::LowerGlobalTLSAddress(
   // the TLS ABI is finalized.
   SDValue GA = DAG.getTargetGlobalAddress(GV, DL, Ty, Offset);
   SDValue Page = SDValue(DAG.getMachineNode(LinxISA::ADDTPC, DL, Ty, GA), 0);
-  const unsigned AddOpc =
-      (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
+  const unsigned AddOpc = (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
   return SDValue(DAG.getMachineNode(AddOpc, DL, Ty, Page, GA), 0);
 }
 
@@ -1311,10 +1302,9 @@ SDValue LinxISATargetLowering::LowerConstantPool(SDValue Op,
   // PC-relative constant pool address materialization:
   //   ADDTPC (page of CPI) + ADDI/ADDIW (low 12 bits).
   SDValue CPI = DAG.getTargetConstantPool(CP->getConstVal(), Ty, CP->getAlign(),
-                                         CP->getOffset());
+                                          CP->getOffset());
   SDValue Page = SDValue(DAG.getMachineNode(LinxISA::ADDTPC, DL, Ty, CPI), 0);
-  const unsigned AddOpc =
-      (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
+  const unsigned AddOpc = (Ty == MVT::i32) ? LinxISA::ADDIWri : LinxISA::ADDIri;
   return SDValue(DAG.getMachineNode(AddOpc, DL, Ty, Page, CPI), 0);
 }
 
@@ -1325,8 +1315,7 @@ SDValue LinxISATargetLowering::LowerVASTART(SDValue Op,
 
   SDLoc DL(Op);
   EVT PtrVT = getPointerTy(MF.getDataLayout());
-  SDValue FI =
-      DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
+  SDValue FI = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
 
   // VASTART stores the address of the first vararg slot into the va_list
   // object.
@@ -1351,7 +1340,8 @@ static SDValue convertLocVTToValVT(SDValue V, MVT ValVT,
                            DAG.getConstant(0, DL, MVT::i32));
       }
       if (CurVT.isFloatingPoint() && DstVT.isInteger()) {
-        EVT CurIntVT = EVT::getIntegerVT(*DAG.getContext(), CurVT.getSizeInBits());
+        EVT CurIntVT =
+            EVT::getIntegerVT(*DAG.getContext(), CurVT.getSizeInBits());
         SDValue Bits = DAG.getNode(ISD::BITCAST, DL, CurIntVT, In);
         if (Bits.getValueType() == DstVT)
           return Bits;
@@ -1362,7 +1352,8 @@ static SDValue convertLocVTToValVT(SDValue V, MVT ValVT,
         return DAG.getNode(ISD::ZERO_EXTEND, DL, DstVT, Bits);
       }
       if (CurVT.isInteger() && DstVT.isFloatingPoint()) {
-        EVT DstIntVT = EVT::getIntegerVT(*DAG.getContext(), DstVT.getSizeInBits());
+        EVT DstIntVT =
+            EVT::getIntegerVT(*DAG.getContext(), DstVT.getSizeInBits());
         SDValue Bits = In;
         if (Bits.getValueType().bitsGT(DstIntVT))
           Bits = DAG.getNode(ISD::TRUNCATE, DL, DstIntVT, Bits);
@@ -1395,7 +1386,8 @@ static SDValue convertLocVTToValVT(SDValue V, MVT ValVT,
     if (SrcVT == ValVT)
       return V;
     if (SrcVT.getSizeInBits() != ValVT.getSizeInBits())
-      report_fatal_error("Linx: BCvt requires matching source/destination width");
+      report_fatal_error(
+          "Linx: BCvt requires matching source/destination width");
     return DAG.getNode(ISD::BITCAST, DL, ValVT, V);
   case CCValAssign::Trunc:
     if (SrcVT == ValVT)
@@ -1412,7 +1404,8 @@ static SDValue convertLocVTToValVT(SDValue V, MVT ValVT,
       return castToValVT(V, ValVT, LocInfo == CCValAssign::SExtUpper);
     unsigned Shift = SrcVT.getSizeInBits() - ValVT.getSizeInBits();
     if (Shift) {
-      unsigned ShiftOpc = (LocInfo == CCValAssign::SExtUpper) ? ISD::SRA : ISD::SRL;
+      unsigned ShiftOpc =
+          (LocInfo == CCValAssign::SExtUpper) ? ISD::SRA : ISD::SRL;
       V = DAG.getNode(ShiftOpc, DL, SrcVT, V,
                       DAG.getConstant(Shift, DL, SrcVT));
     }
@@ -1441,7 +1434,8 @@ static SDValue convertValVTToLocVT(SDValue V, MVT LocVT,
                            DAG.getConstant(0, DL, MVT::i32));
       }
       if (CurVT.isFloatingPoint() && DstVT.isInteger()) {
-        EVT CurIntVT = EVT::getIntegerVT(*DAG.getContext(), CurVT.getSizeInBits());
+        EVT CurIntVT =
+            EVT::getIntegerVT(*DAG.getContext(), CurVT.getSizeInBits());
         SDValue Bits = DAG.getNode(ISD::BITCAST, DL, CurIntVT, In);
         if (Bits.getValueType() == DstVT)
           return Bits;
@@ -1462,7 +1456,8 @@ static SDValue convertValVTToLocVT(SDValue V, MVT LocVT,
         }
       }
       if (CurVT.isInteger() && DstVT.isFloatingPoint()) {
-        EVT DstIntVT = EVT::getIntegerVT(*DAG.getContext(), DstVT.getSizeInBits());
+        EVT DstIntVT =
+            EVT::getIntegerVT(*DAG.getContext(), DstVT.getSizeInBits());
         SDValue Bits = In;
         if (Bits.getValueType().bitsGT(DstIntVT))
           Bits = DAG.getNode(ISD::TRUNCATE, DL, DstIntVT, Bits);
@@ -1517,7 +1512,8 @@ static SDValue convertValVTToLocVT(SDValue V, MVT LocVT,
     if (SrcVT == LocVT)
       return V;
     if (SrcVT.getSizeInBits() != LocVT.getSizeInBits())
-      report_fatal_error("Linx: BCvt requires matching source/destination width");
+      report_fatal_error(
+          "Linx: BCvt requires matching source/destination width");
     return DAG.getNode(ISD::BITCAST, DL, LocVT, V);
   case CCValAssign::Trunc:
     if (SrcVT == LocVT)
@@ -1535,7 +1531,8 @@ static SDValue convertValVTToLocVT(SDValue V, MVT LocVT,
     unsigned DstBits = LocVT.getSizeInBits();
     if (DstBits > SrcBits) {
       unsigned Shift = DstBits - SrcBits;
-      E = DAG.getNode(ISD::SHL, DL, LocVT, E, DAG.getConstant(Shift, DL, LocVT));
+      E = DAG.getNode(ISD::SHL, DL, LocVT, E,
+                      DAG.getConstant(Shift, DL, LocVT));
     }
     return E;
   }
@@ -1559,7 +1556,8 @@ SDValue LinxISATargetLowering::LowerFormalArguments(
   // Varargs support is limited during bring-up.
   // All varargs must be passed on stack.
   if (IsVarArg && CallConv != CallingConv::C) {
-    report_fatal_error("Linx: varargs not supported for non-C calling conventions");
+    report_fatal_error(
+        "Linx: varargs not supported for non-C calling conventions");
   }
 
   MachineFunction &MF = DAG.getMachineFunction();
@@ -1587,8 +1585,7 @@ SDValue LinxISATargetLowering::LowerFormalArguments(
       Chain = Copy.getValue(1);
     } else {
       assert(VA.isMemLoc() && "Unknown argument location");
-      int FI = MFI.CreateFixedObject(LocVT.getStoreSize(),
-                                     VA.getLocMemOffset(),
+      int FI = MFI.CreateFixedObject(LocVT.getStoreSize(), VA.getLocMemOffset(),
                                      /*IsImmutable=*/true);
       SDValue FIN = DAG.getFrameIndex(FI, PtrVT);
       SDValue Load = DAG.getLoad(LocVT, DL, Chain, FIN,
@@ -1650,8 +1647,9 @@ static SDValue lowerCallResult(SDValue Chain, SDValue InGlue,
   return Chain;
 }
 
-SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
-                                        SmallVectorImpl<SDValue> &InVals) const {
+SDValue
+LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
+                                 SmallVectorImpl<SDValue> &InVals) const {
   SelectionDAG &DAG = CLI.DAG;
   SDLoc DL(CLI.DL);
 
@@ -1667,7 +1665,8 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
   // Varargs support is limited during bring-up.
   // Allow varargs calls but they must use stack passing only.
   if (IsVarArg && CallConv != CallingConv::C) {
-    report_fatal_error("Linx: varargs calls not supported for non-C calling conventions");
+    report_fatal_error(
+        "Linx: varargs calls not supported for non-C calling conventions");
   }
 
   // Analyze operands of the call, assigning locations to each operand.
@@ -1687,14 +1686,16 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
   SmallVector<SDValue, 8> ByValArgs;
   if (UseTailCall) {
     if (NumBytes != 0) {
-      report_fatal_error("Linx: musttail with stack arguments is not supported");
+      report_fatal_error(
+          "Linx: musttail with stack arguments is not supported");
     }
     if (IsVarArg) {
       report_fatal_error("Linx: musttail varargs calls are not supported");
     }
     for (const ISD::OutputArg &Out : CLI.Outs) {
       if (Out.Flags.isByVal())
-        report_fatal_error("Linx: musttail with byval arguments is not supported");
+        report_fatal_error(
+            "Linx: musttail with byval arguments is not supported");
     }
   } else {
     // A byval operand is a pointer to caller storage; copy it before passing
@@ -1710,11 +1711,11 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
       SDValue FIPtr = DAG.getFrameIndex(FI, PtrVT);
       SDValue SizeNode = DAG.getConstant(Size, DL, PtrVT);
 
-      Chain = DAG.getMemcpy(Chain, DL, FIPtr, CLI.OutVals[i], SizeNode,
-                            Alignment, /*IsVolatile=*/false,
-                            /*AlwaysInline=*/false, /*CI=*/nullptr,
-                            std::nullopt, MachinePointerInfo(),
-                            MachinePointerInfo());
+      Chain =
+          DAG.getMemcpy(Chain, DL, FIPtr, CLI.OutVals[i], SizeNode, Alignment,
+                        /*IsVolatile=*/false,
+                        /*AlwaysInline=*/false, /*CI=*/nullptr, std::nullopt,
+                        MachinePointerInfo(), MachinePointerInfo());
       ByValArgs.push_back(FIPtr);
     }
 
@@ -1741,7 +1742,8 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
 
     assert(VA.isMemLoc() && "Unknown call argument location");
     if (UseTailCall)
-      report_fatal_error("Linx: musttail with memory argument location is not supported");
+      report_fatal_error(
+          "Linx: musttail with memory argument location is not supported");
 
     if (!StackPtr.getNode())
       StackPtr = DAG.getCopyFromReg(Chain, DL, LinxISA::R1, PtrVT);
@@ -1798,7 +1800,8 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
     DAG.getMachineFunction().getFrameInfo().setHasTailCall();
   const unsigned CallOpc =
       UseTailCall
-          ? (IsIndirectCall ? LinxISA::PSEUDO_TAILICALL : LinxISA::PSEUDO_TAILCALL)
+          ? (IsIndirectCall ? LinxISA::PSEUDO_TAILICALL
+                            : LinxISA::PSEUDO_TAILCALL)
           : (IsIndirectCall ? LinxISA::PSEUDO_ICALL : LinxISA::PSEUDO_CALL);
   MachineSDNode *Call = DAG.getMachineNode(CallOpc, DL, NodeTys, Ops);
   Chain = SDValue(Call, 0);
@@ -1815,16 +1818,18 @@ SDValue LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
                          InVals);
 }
 
-SDValue LinxISATargetLowering::LowerReturn(
-    SDValue Chain, CallingConv::ID CallConv, bool IsVarArg,
-    const SmallVectorImpl<ISD::OutputArg> &Outs,
-    const SmallVectorImpl<SDValue> &OutVals, const SDLoc &DL, SelectionDAG &DAG)
-    const {
+SDValue
+LinxISATargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
+                                   bool IsVarArg,
+                                   const SmallVectorImpl<ISD::OutputArg> &Outs,
+                                   const SmallVectorImpl<SDValue> &OutVals,
+                                   const SDLoc &DL, SelectionDAG &DAG) const {
   if (!Chain.getNode())
     report_fatal_error("Linx: LowerReturn called with null chain");
   // Varargs return support is limited during bring-up.
   if (IsVarArg && CallConv != CallingConv::C) {
-    report_fatal_error("Linx: varargs not supported for non-C calling conventions");
+    report_fatal_error(
+        "Linx: varargs not supported for non-C calling conventions");
   }
 
   SmallVector<CCValAssign, 16> RVLocs;
@@ -1853,8 +1858,8 @@ SDValue LinxISATargetLowering::LowerReturn(
   RetOps.push_back(Chain);
   if (Glue.getNode())
     RetOps.push_back(Glue);
-  return SDValue(DAG.getMachineNode(LinxISA::PSEUDO_RET, DL, MVT::Other, RetOps),
-                 0);
+  return SDValue(
+      DAG.getMachineNode(LinxISA::PSEUDO_RET, DL, MVT::Other, RetOps), 0);
 }
 
 const char *LinxISATargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -1879,9 +1884,9 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
     switch (Constraint[0]) {
     case 'r':
       if (VT.isVector() || VT == MVT::linxtile)
-        // v0.57 uses the ordinary register constraint for typed tile carriers;
-        // the value type, rather than a retired multi-letter constraint,
-        // selects the architectural TILE register file.
+        // PTO 0.58 uses the ordinary register constraint for typed tile
+        // carriers; the value type, rather than a retired multi-letter
+        // constraint, selects the architectural TILE register file.
         return std::make_pair(0u, &LinxISA::TILERegClass);
       // The Linx GPR encoding space includes queue pseudo-registers
       // (t#k/u#k and the special RegDst encodings for ->t/->u). These are not

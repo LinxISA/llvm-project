@@ -12,20 +12,20 @@ public:
                      const MCRegisterInfo &MRI)
       : MCInstPrinter(MAI, MII, MRI) {}
 
-  std::pair<const char *, uint64_t> getMnemonic(const MCInst &MI) const override;
+  std::pair<const char *, uint64_t>
+  getMnemonic(const MCInst &MI) const override;
 
   void printRegName(raw_ostream &OS, MCRegister Reg) override;
 
   void printInst(const MCInst *MI, uint64_t Address, StringRef Annot,
-                 const MCSubtargetInfo &STI,
-                 raw_ostream &OS) override;
+                 const MCSubtargetInfo &STI, raw_ostream &OS) override;
 
 private:
   enum class LastTileHeaderKind : uint8_t {
     None,
-    TMA,
+    TLSU,
     CUBE,
-    TEPL,
+    TILEOP,
   };
 
   unsigned LastParTileOp = 0;

@@ -10,9 +10,9 @@
 #include "LinxISA.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
@@ -25,9 +25,9 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsLinx.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -179,12 +179,10 @@ static void emitRemark(StringRef FunctionName, StringRef LoopName,
      << "\"canonical\":" << (IsCanonical ? "true" : "false") << ","
      << "\"single_block\":" << (IsSingleBlock ? "true" : "false") << ","
      << "\"has_store\":" << (HasStore ? "true" : "false") << ","
-     << "\"has_loop_carried_phi\":" << (HasExtraPhi ? "true" : "false")
-     << ","
+     << "\"has_loop_carried_phi\":" << (HasExtraPhi ? "true" : "false") << ","
      << "\"lane_count\":" << LaneCount << ","
      << "\"group_count\":" << GroupCount << ","
-     << "\"force_scalar_lane\":" << (ForceScalarLane ? "true" : "false")
-     << ","
+     << "\"force_scalar_lane\":" << (ForceScalarLane ? "true" : "false") << ","
      << "\"has_recurrence\":" << (HasRecurrence ? "true" : "false") << ","
      << "\"header_kind\":\"" << jsonEscape(HeaderKind) << "\",";
   if (TouchesMemoryState < 0) {
@@ -272,9 +270,9 @@ static bool hasLinxTileIntrinsicCalls(Loop *L) {
         continue;
       StringRef Name = Callee->getName();
       if (Name.starts_with("llvm.linx.tile.") ||
-          Name.starts_with("llvm.linx.tepl.") ||
+          Name.starts_with("llvm.linx.tileop.") ||
           Name.starts_with("llvm.linx.cube.") ||
-          Name.starts_with("llvm.linx.tma.") ||
+          Name.starts_with("llvm.linx.tlsu.") ||
           Name.starts_with("llvm.linx.vpar.") ||
           Name.starts_with("llvm.linx.vseq."))
         return true;
@@ -681,7 +679,8 @@ static StringRef reductionMnemonic(ReductionKind Kind) {
     return "v.rdfadd";
   case ReductionKind::MulI:
   case ReductionKind::MulF:
-    llvm_unreachable("mul reductions are not supported in v0.3 bring-up");
+    llvm_unreachable(
+        "mul reductions are not supported by LinxISA 0.58 auto-vectorization");
   case ReductionKind::AndI:
     return "v.rdand";
   case ReductionKind::OrI:
@@ -749,13 +748,12 @@ public:
       collectLoops(Top, Loops);
 
     if (Loops.empty()) {
-      emitRemark(F.getName(), "<none>", "reject", "no_loop_candidate",
-                 ConfigMode,
-                 (LinxSIMTAutoVecMode == SIMTAutoVecMode::MParSafe) ? "mpar"
-                                                                     : "mseq",
-                 false, false, false, false, false, 0, 0, false, false,
-                 "none", -1, "none", "unknown",
-                 layoutPolicyName(LinxSIMTAutoVecLayout), "none", "none");
+      emitRemark(
+          F.getName(), "<none>", "reject", "no_loop_candidate", ConfigMode,
+          (LinxSIMTAutoVecMode == SIMTAutoVecMode::MParSafe) ? "mpar" : "mseq",
+          false, false, false, false, false, 0, 0, false, false, "none", -1,
+          "none", "unknown", layoutPolicyName(LinxSIMTAutoVecLayout), "none",
+          "none");
       return Changed;
     }
 
@@ -808,8 +806,7 @@ public:
         if (!HasCalls && !HasInnerCF && HasParallelHint) {
           SelectedMode = "mpar";
         } else {
-          SelectedMode = (!HasExtraPhi && !HasCalls && !HasInnerCF &&
-                          !HasStore)
+          SelectedMode = (!HasExtraPhi && !HasCalls && !HasInnerCF && !HasStore)
                              ? "mpar"
                              : "mseq";
         }
@@ -833,7 +830,7 @@ public:
           return false;
         }
         if (HasLinxTileIntrinsicCalls) {
-          // Tile/CUBE/TEPL semantics are explicitly modeled by Linx intrinsics;
+          // Tile/CUBE semantics are explicitly modeled by Linx intrinsics;
           // do not remap those loops through generic SIMT autovec.
           reject("linx_tile_intrinsic_loop");
           return false;
@@ -1063,7 +1060,8 @@ public:
                 C = dyn_cast<ConstantInt>(RHS);
                 Other = LHS;
               }
-              if (C && matchAddOne(Other) && C->getValue().isStrictlyPositive() &&
+              if (C && matchAddOne(Other) &&
+                  C->getValue().isStrictlyPositive() &&
                   C->getValue().ule(UINT64_MAX)) {
                 return C->getZExtValue();
               }
@@ -1117,9 +1115,8 @@ public:
         const SCEV *TripCountExpr = nullptr;
         Value *TripCountV = nullptr;
 
-        auto setTripCountFromBackedgeCount =
-            [&](const SCEV *BackedgeCount,
-                StringRef Source) -> bool {
+        auto setTripCountFromBackedgeCount = [&](const SCEV *BackedgeCount,
+                                                 StringRef Source) -> bool {
           if (!BackedgeCount || isa<SCEVCouldNotCompute>(BackedgeCount))
             return false;
 
@@ -1145,8 +1142,8 @@ public:
         };
 
         if (!isa<SCEVCouldNotCompute>(BackedgeTaken)) {
-          TripCountExpr = SE.getAddExpr(BackedgeTaken,
-                                        SE.getOne(BackedgeTaken->getType()));
+          TripCountExpr =
+              SE.getAddExpr(BackedgeTaken, SE.getOne(BackedgeTaken->getType()));
           Type *TripExprTy = TripCountExpr->getType();
           TripCountV = Exp.expandCodeFor(TripCountExpr, TripExprTy,
                                          Preheader->getTerminator());
@@ -1168,7 +1165,8 @@ public:
             reject("no_tripcount_expr");
             return false;
           }
-          if (!StepV->getType()->isIntegerTy() || !InitV->getType()->isIntegerTy() ||
+          if (!StepV->getType()->isIntegerTy() ||
+              !InitV->getType()->isIntegerTy() ||
               !FinalV->getType()->isIntegerTy()) {
             reject("no_tripcount_expr");
             return false;
@@ -1283,7 +1281,8 @@ public:
           BasicBlock *MergeBB = nullptr;
         };
         DenseMap<BasicBlock *, IfConvertibleSplitInfo> IfConvertibleSplits;
-        DenseMap<BasicBlock *, IfConvertibleStoreMergePlan> IfConvertibleStoreMerges;
+        DenseMap<BasicBlock *, IfConvertibleStoreMergePlan>
+            IfConvertibleStoreMerges;
         DenseMap<BasicBlock *, ReplayMaskSplitInfo> ReplayMaskSplits;
         SmallPtrSet<BasicBlock *, 16> IfConvertibleRegionBlocks;
         struct IfConvertibleRegionInfo {
@@ -1320,7 +1319,8 @@ public:
 
           return true;
         };
-        auto isPhiBridgeBlock = [&](BasicBlock *BB, BasicBlock *MergeBB) -> bool {
+        auto isPhiBridgeBlock = [&](BasicBlock *BB,
+                                    BasicBlock *MergeBB) -> bool {
           if (!BB || !MergeBB || BB == MergeBB)
             return false;
           auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
@@ -1405,9 +1405,9 @@ public:
         std::function<std::optional<IfConvertibleRegionInfo>(
             BasicBlock *, BasicBlock *, SmallPtrSetImpl<BasicBlock *> &)>
             analyzeIfConvertibleRegion;
-        analyzeIfConvertibleRegion =
-            [&](BasicBlock *EntryBB, BasicBlock *FinalMergeBB,
-                SmallPtrSetImpl<BasicBlock *> &Visited)
+        analyzeIfConvertibleRegion = [&](BasicBlock *EntryBB,
+                                         BasicBlock *FinalMergeBB,
+                                         SmallPtrSetImpl<BasicBlock *> &Visited)
             -> std::optional<IfConvertibleRegionInfo> {
           if (!EntryBB || !FinalMergeBB || EntryBB == FinalMergeBB ||
               !L->contains(EntryBB) || !L->contains(FinalMergeBB))
@@ -1435,7 +1435,8 @@ public:
               continue;
             SmallPtrSet<BasicBlock *, 16> LeftVisited(Visited.begin(),
                                                       Visited.end());
-            auto Left = analyzeIfConvertibleRegion(S0, CandidateMerge, LeftVisited);
+            auto Left =
+                analyzeIfConvertibleRegion(S0, CandidateMerge, LeftVisited);
             if (!Left)
               continue;
             SmallPtrSet<BasicBlock *, 16> RightVisited(Visited.begin(),
@@ -1475,14 +1476,14 @@ public:
             if (S0 && S1 && L->contains(S0) && L->contains(S1)) {
               auto *S0BI = dyn_cast_or_null<BranchInst>(S0->getTerminator());
               auto *S1BI = dyn_cast_or_null<BranchInst>(S1->getTerminator());
-              BasicBlock *StoreMerge0 =
-                  (S0BI && !S0BI->isConditional() && S0BI->getNumSuccessors() == 1)
-                      ? S0BI->getSuccessor(0)
-                      : nullptr;
-              BasicBlock *StoreMerge1 =
-                  (S1BI && !S1BI->isConditional() && S1BI->getNumSuccessors() == 1)
-                      ? S1BI->getSuccessor(0)
-                      : nullptr;
+              BasicBlock *StoreMerge0 = (S0BI && !S0BI->isConditional() &&
+                                         S0BI->getNumSuccessors() == 1)
+                                            ? S0BI->getSuccessor(0)
+                                            : nullptr;
+              BasicBlock *StoreMerge1 = (S1BI && !S1BI->isConditional() &&
+                                         S1BI->getNumSuccessors() == 1)
+                                            ? S1BI->getSuccessor(0)
+                                            : nullptr;
               if (StoreMerge0 && StoreMerge0 == StoreMerge1 &&
                   L->contains(StoreMerge0)) {
                 auto TrueStore = analyzeStoreMergeSideBlock(S0, StoreMerge0);
@@ -1514,16 +1515,17 @@ public:
                 if (!FalseRegion)
                   continue;
 
-                IfConvertibleSplits[BB] = {BB, S0, TrueRegion->ExitBB, S1,
-                                           FalseRegion->ExitBB, MergeBB};
+                IfConvertibleSplits[BB] = {
+                    BB,     S0, TrueRegion->ExitBB, S1, FalseRegion->ExitBB,
+                    MergeBB};
                 for (BasicBlock *RB : TrueRegion->Blocks)
                   IfConvertibleRegionBlocks.insert(RB);
                 for (BasicBlock *RB : FalseRegion->Blocks)
                   IfConvertibleRegionBlocks.insert(RB);
                 goto found_ifconvertible_split;
               }
-              if (NeedsActiveReplay && StoreMerge0 && StoreMerge0 == StoreMerge1 &&
-                  L->contains(StoreMerge0)) {
+              if (NeedsActiveReplay && StoreMerge0 &&
+                  StoreMerge0 == StoreMerge1 && L->contains(StoreMerge0)) {
                 ReplayMaskSplits[BB] = {BB, S0, S1, StoreMerge0};
                 goto found_ifconvertible_split;
               }
@@ -1567,7 +1569,8 @@ public:
             }
           }
         }
-        RemarkTouchesMemoryState = ((!Stores.empty() || !Loads.empty()) ? 1 : 0);
+        RemarkTouchesMemoryState =
+            ((!Stores.empty() || !Loads.empty()) ? 1 : 0);
 
         struct ReductionPlan {
           PHINode *Phi = nullptr;
@@ -1588,7 +1591,8 @@ public:
           PHINode *Phi = nullptr;
           Instruction *Update = nullptr;
           Value *InitValue = nullptr;
-          Type *SlotTy = nullptr; // storage type for v.lw/v.sw (must be 32-bit or f32)
+          Type *SlotTy =
+              nullptr; // storage type for v.lw/v.sw (must be 32-bit or f32)
           AllocaInst *Slot = nullptr;
           unsigned SlotBind = 0;
           std::optional<uint64_t> LocalWordBase;
@@ -1825,7 +1829,7 @@ public:
           llvm_unreachable("invalid reduction kind");
         };
 
-        // Only keep reductions that we can lower via a v0.3 reduction op.
+        // Only keep reductions that LinxISA 0.58 auto-vectorization can lower.
         // Unsupported patterns are handled via recurrence slots instead.
         SmallVector<ReductionPlan, 4> SupportedReductionPlans;
         SmallPtrSet<const PHINode *, 8> SupportedReductionPhis;
@@ -1864,9 +1868,9 @@ public:
             if (Bits <= 32) {
               SlotTy = PhiTy;
             } else if (Bits <= 64) {
-              // Bring-up support: vblock only has 32-bit lane-wide loads/stores.
-              // For widened index-like recurrences (common in TSVC), store the
-              // low 32 bits and treat the value as unsigned.
+              // Bring-up support: vblock only has 32-bit lane-wide
+              // loads/stores. For widened index-like recurrences (common in
+              // TSVC), store the low 32 bits and treat the value as unsigned.
               SlotTy = I32Ty;
             } else {
               return false;
@@ -1915,11 +1919,11 @@ public:
           AllowedLiveOutValues.insert(Plan.Phi);
           AllowedLiveOutValues.insert(Plan.Update);
         }
-	        for (const RecurrencePlan &Plan : RecurrencePlans) {
-	          AllowedLiveOutValues.insert(Plan.Phi);
-	          AllowedLiveOutValues.insert(Plan.Update);
-	        }
-	        RemarkHasRecurrence = !RecurrencePlans.empty();
+        for (const RecurrencePlan &Plan : RecurrencePlans) {
+          AllowedLiveOutValues.insert(Plan.Phi);
+          AllowedLiveOutValues.insert(Plan.Update);
+        }
+        RemarkHasRecurrence = !RecurrencePlans.empty();
 
         // Scalar-lane replay preserves recurrence order only under sequential
         // group execution. A parallel-safe loop hint must not retain MPAR once
@@ -1927,14 +1931,14 @@ public:
         if (!RecurrencePlans.empty())
           SelectedMode = "mseq";
 
-	        SmallVector<Instruction *, 8> LiveOutInsts;
-	        SmallPtrSet<const Instruction *, 8> LiveOutInstSet;
+        SmallVector<Instruction *, 8> LiveOutInsts;
+        SmallPtrSet<const Instruction *, 8> LiveOutInstSet;
 
-	        if (Stores.empty() && ReductionPlans.empty() && RecurrencePlans.empty() &&
-              !NeedsActiveReplay && !ExitHasPhi) {
-	          reject("no_store_in_loop");
-	          return false;
-	        }
+        if (Stores.empty() && ReductionPlans.empty() &&
+            RecurrencePlans.empty() && !NeedsActiveReplay && !ExitHasPhi) {
+          reject("no_store_in_loop");
+          return false;
+        }
 
         auto underlyingObj = [](Value *Ptr) -> const Value * {
           return getUnderlyingObject(Ptr->stripPointerCasts());
@@ -1955,8 +1959,8 @@ public:
         };
 
         auto matchGEPIndexForElemBytes =
-            [&](Value *Ptr, uint64_t ElemBytes)
-            -> std::optional<std::pair<Value *, bool>> {
+            [&](Value *Ptr,
+                uint64_t ElemBytes) -> std::optional<std::pair<Value *, bool>> {
           auto *GEP = dyn_cast_or_null<GEPOperator>(Ptr);
           if (!GEP && Ptr)
             GEP = dyn_cast<GEPOperator>(Ptr->stripPointerCasts());
@@ -1990,7 +1994,8 @@ public:
         };
 
         auto matchDirectSelectBaseGEP =
-            [&](Value *Ptr, uint64_t ElemBytes) -> std::optional<SelectStorePtrInfo> {
+            [&](Value *Ptr,
+                uint64_t ElemBytes) -> std::optional<SelectStorePtrInfo> {
           if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
             return std::nullopt;
           auto *GEP = dyn_cast_or_null<GetElementPtrInst>(Ptr);
@@ -2014,8 +2019,7 @@ public:
           };
         };
 
-        auto matchInvariantBaseGEP =
-            [&](Value *Ptr, uint64_t ElemBytes)
+        auto matchInvariantBaseGEP = [&](Value *Ptr, uint64_t ElemBytes)
             -> std::optional<std::pair<GEPOperator *, Value *>> {
           if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
             return std::nullopt;
@@ -2033,7 +2037,8 @@ public:
         };
 
         auto matchSelectBaseGEP =
-            [&](Value *Ptr, uint64_t ElemBytes) -> std::optional<SelectBaseGEPInfo> {
+            [&](Value *Ptr,
+                uint64_t ElemBytes) -> std::optional<SelectBaseGEPInfo> {
           if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
             return std::nullopt;
           auto *GEP = dyn_cast_or_null<GEPOperator>(Ptr);
@@ -2064,7 +2069,8 @@ public:
         };
 
         auto matchSelectStorePtr =
-            [&](Value *Ptr, uint64_t ElemBytes) -> std::optional<SelectStorePtrInfo> {
+            [&](Value *Ptr,
+                uint64_t ElemBytes) -> std::optional<SelectStorePtrInfo> {
           if (auto Direct = matchDirectSelectBaseGEP(Ptr, ElemBytes))
             return Direct;
           if (auto BaseSelect = matchSelectBaseGEP(Ptr, ElemBytes)) {
@@ -2089,11 +2095,8 @@ public:
           if (!TrueMatch || !FalseMatch)
             return std::nullopt;
           return SelectStorePtrInfo{
-              Sel->getCondition(),
-              TrueMatch->first,
-              TrueMatch->second,
-              FalseMatch->first,
-              FalseMatch->second,
+              Sel->getCondition(), TrueMatch->first,   TrueMatch->second,
+              FalseMatch->first,   FalseMatch->second,
           };
         };
 
@@ -2152,8 +2155,7 @@ public:
           if (!AR || AR->getLoop() != L || !AR->isAffine())
             return false;
           const auto *StartC = dyn_cast<SCEVConstant>(AR->getStart());
-          const auto *StepC =
-              dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+          const auto *StepC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
           if (!StartC || !StepC)
             return false;
           if (!StartC->getAPInt().isZero())
@@ -2233,18 +2235,19 @@ public:
         // prefer a small grouped-lane mapping so the shift can be expressed
         // as the group index (lc1). This is needed by TSVC kernels that use
         // patterns like c[i/2].
-        if (HasConstTripCount && ConstTripCount > 2 && (ConstTripCount % 2) == 0 &&
-            hasIVShiftByConst(1)) {
+        if (HasConstTripCount && ConstTripCount > 2 &&
+            (ConstTripCount % 2) == 0 && hasIVShiftByConst(1)) {
           ForcedLaneCount = 2;
         }
 
         auto selectGroupedLayout = [&](uint64_t ChosenLaneCount) {
           LaneCount = ChosenLaneCount;
-          GroupCount = (ChosenLaneCount == 0) ? 1 : (ConstTripCount / ChosenLaneCount);
+          GroupCount =
+              (ChosenLaneCount == 0) ? 1 : (ConstTripCount / ChosenLaneCount);
           UseGroupedDims = (GroupCount > 1);
           ForceScalarLane = false;
-          RemarkLayoutKind = UseGroupedDims ? "grouped-strip-mined"
-                                            : "grouped-single-group";
+          RemarkLayoutKind =
+              UseGroupedDims ? "grouped-strip-mined" : "grouped-single-group";
         };
 
         auto isShiftFriendlyGroupedPtr = [&](Value *Ptr, uint64_t ElemBytes,
@@ -2276,7 +2279,8 @@ public:
           const DataLayout &DL = F.getParent()->getDataLayout();
           if (DL.getTypeStoreSize(ElemTy) != ElemBytes)
             return false;
-          if (!L->isLoopInvariant(GEP->getPointerOperand()->stripPointerCasts()))
+          if (!L->isLoopInvariant(
+                  GEP->getPointerOperand()->stripPointerCasts()))
             return false;
 
           const uint64_t ShiftImm = Log2_64(CandidateLaneCount);
@@ -2295,7 +2299,7 @@ public:
             if (isUnitStridePtr(SI->getPointerOperand(), ElemBytes))
               continue;
             if (isShiftFriendlyGroupedPtr(SI->getPointerOperand(), ElemBytes,
-                                         CandidateLaneCount))
+                                          CandidateLaneCount))
               continue;
             return false;
           }
@@ -2305,7 +2309,7 @@ public:
             if (isUnitStridePtr(LI->getPointerOperand(), ElemBytes))
               continue;
             if (isShiftFriendlyGroupedPtr(LI->getPointerOperand(), ElemBytes,
-                                         CandidateLaneCount))
+                                          CandidateLaneCount))
               continue;
             return false;
           }
@@ -2319,7 +2323,8 @@ public:
           // independent per-lane states and combined after grouped execution.
           if (!RecurrencePlans.empty())
             return false;
-          if (!HasConstTripCount || ConstTripCount == 0 || CandidateLaneCount <= 1)
+          if (!HasConstTripCount || ConstTripCount == 0 ||
+              CandidateLaneCount <= 1)
             return false;
           if (!isPowerOf2_64(CandidateLaneCount))
             return false;
@@ -2367,8 +2372,7 @@ public:
           return false;
         }
 
-        if (PreferredGroupedLaneCount > 0 &&
-            !NeedsExecMaskSaveRestore &&
+        if (PreferredGroupedLaneCount > 0 && !NeedsExecMaskSaveRestore &&
             LayoutPolicy != SIMTLayoutPolicy::ScalarReplay) {
           selectGroupedLayout(PreferredGroupedLaneCount);
         } else {
@@ -2388,7 +2392,8 @@ public:
         // extent is statically bounded. Dynamic scalar-replay still uses lc1
         // for addressing, so route those cases through invariant slots instead
         // of allocating undersized TS-backed scratch.
-        const bool HasBoundedGroupedScratch = UseGroupedDims && HasConstTripCount;
+        const bool HasBoundedGroupedScratch =
+            UseGroupedDims && HasConstTripCount;
         if (NeedsExecMaskSaveRestore) {
           RemarkCFStrategy = "exec-mask-save-restore-required";
         } else if (NeedsActiveReplay) {
@@ -2410,42 +2415,41 @@ public:
         (void)StoreObjByInst;
         (void)StoreObjects;
 
-	        // Reject loop bodies that compute values used outside the loop,
-	        // except for recognized reduction values.
-	        for (BasicBlock *BB : L->blocks()) {
-	          for (Instruction &I : *BB) {
-	            if (isa<BranchInst>(I) || isa<ICmpInst>(I) || isa<PHINode>(I))
-	              continue;
-	            if (isa<StoreInst>(I))
-	              continue;
-	            for (User *U : I.users()) {
-	              auto *UI = dyn_cast<Instruction>(U);
-	              if (!UI)
-	                continue;
-	              if (!L->contains(UI)) {
-                  // Values that only flow to exit PHIs are handled via the
-                  // exit-phi lowering (stored on the exit edge + loaded in the
-                  // launch block). Do not treat them as generic live-outs.
-                  if (auto *PN = dyn_cast<PHINode>(UI)) {
-                    if (PN->getParent() == Exit)
-                      continue;
-                  }
-	                if (AllowedLiveOutValues.contains(&I))
-	                  continue;
-	                Type *Ty = I.getType();
-	                if (!Ty->isFloatTy() &&
-	                    !(Ty->isIntegerTy() &&
-	                      Ty->getScalarSizeInBits() <= 32)) {
-	                  reject("value_live_out_unsupported_type");
-	                  return false;
-	                }
-	                if (LiveOutInstSet.insert(&I).second)
-	                  LiveOutInsts.push_back(&I);
-	                break;
-	              }
-	            }
-	          }
-	        }
+        // Reject loop bodies that compute values used outside the loop,
+        // except for recognized reduction values.
+        for (BasicBlock *BB : L->blocks()) {
+          for (Instruction &I : *BB) {
+            if (isa<BranchInst>(I) || isa<ICmpInst>(I) || isa<PHINode>(I))
+              continue;
+            if (isa<StoreInst>(I))
+              continue;
+            for (User *U : I.users()) {
+              auto *UI = dyn_cast<Instruction>(U);
+              if (!UI)
+                continue;
+              if (!L->contains(UI)) {
+                // Values that only flow to exit PHIs are handled via the
+                // exit-phi lowering (stored on the exit edge + loaded in the
+                // launch block). Do not treat them as generic live-outs.
+                if (auto *PN = dyn_cast<PHINode>(UI)) {
+                  if (PN->getParent() == Exit)
+                    continue;
+                }
+                if (AllowedLiveOutValues.contains(&I))
+                  continue;
+                Type *Ty = I.getType();
+                if (!Ty->isFloatTy() &&
+                    !(Ty->isIntegerTy() && Ty->getScalarSizeInBits() <= 32)) {
+                  reject("value_live_out_unsupported_type");
+                  return false;
+                }
+                if (LiveOutInstSet.insert(&I).second)
+                  LiveOutInsts.push_back(&I);
+                break;
+              }
+            }
+          }
+        }
 
         DenseMap<const SCEV *, Value *> ExpandedStarts;
 
@@ -2470,7 +2474,8 @@ public:
 
         static constexpr uint64_t kMaxSIMTLocalWords = 1024u;
         uint64_t LocalScratchWordCount = 0;
-        auto reserveLocalWords = [&](uint64_t Words) -> std::optional<uint64_t> {
+        auto reserveLocalWords =
+            [&](uint64_t Words) -> std::optional<uint64_t> {
           if (Words == 0)
             return std::nullopt;
           if (Words > kMaxSIMTLocalWords - LocalScratchWordCount)
@@ -2492,13 +2497,12 @@ public:
             BasicBlock &EntryBB = F.getEntryBlock();
             Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
             IRBuilder<> EB(EntryIP);
-            auto *ActiveSlot = EB.CreateAlloca(
-                I32Ty, ConstantInt::get(I32Ty, ActiveSlotElems),
-                "linx.simt.active");
+            auto *ActiveSlot =
+                EB.CreateAlloca(I32Ty, ConstantInt::get(I32Ty, ActiveSlotElems),
+                                "linx.simt.active");
             for (uint64_t Elem = 0; Elem < ActiveSlotElems; ++Elem) {
-              Value *ElemPtr =
-                  EB.CreateInBoundsGEP(I32Ty, ActiveSlot,
-                                       ConstantInt::get(I32Ty, Elem));
+              Value *ElemPtr = EB.CreateInBoundsGEP(
+                  I32Ty, ActiveSlot, ConstantInt::get(I32Ty, Elem));
               EB.CreateStore(ConstantInt::get(I32Ty, 1), ElemPtr);
             }
             Value *SlotI64 = PB.CreatePtrToInt(ActiveSlot, I64Ty);
@@ -2537,8 +2541,7 @@ public:
             // (it may sit just outside the loop), so attribute those incoming
             // values to the unique in-loop predecessor of that block.
 
-            auto findUniqueInLoopPred =
-                [&](BasicBlock *BB) -> BasicBlock * {
+            auto findUniqueInLoopPred = [&](BasicBlock *BB) -> BasicBlock * {
               if (!BB)
                 return nullptr;
               BasicBlock *Unique = nullptr;
@@ -2618,8 +2621,7 @@ public:
               Value *VIn = Pair.second;
               if (!KeyBB || KeyBB == Latch)
                 continue;
-              ExitPhiStoresByBlock[KeyBB].push_back(
-                  std::make_pair(*Bind, VIn));
+              ExitPhiStoresByBlock[KeyBB].push_back(std::make_pair(*Bind, VIn));
             }
 
             ExitPhiPlan Plan;
@@ -2678,8 +2680,7 @@ public:
           if (!AR || AR->getLoop() != L || !AR->isAffine())
             return std::nullopt;
           const auto *StartC = dyn_cast<SCEVConstant>(AR->getStart());
-          const auto *StepC =
-              dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+          const auto *StepC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
           if (!StartC || !StepC)
             return std::nullopt;
           const int64_t StartI = StartC->getAPInt().getSExtValue();
@@ -2695,8 +2696,8 @@ public:
           Plan.Cast = Cast;
           Plan.Start = StartI;
           Plan.Step = StepI;
-          Plan.Slot = EB.CreateAlloca(Type::getFloatTy(Ctx), nullptr,
-                                      "linx.simt.fiv");
+          Plan.Slot =
+              EB.CreateAlloca(Type::getFloatTy(Ctx), nullptr, "linx.simt.fiv");
           PB.CreateStore(ConstantFP::get(Type::getFloatTy(Ctx), (double)StartI),
                          Plan.Slot);
           Value *SlotI64 = PB.CreatePtrToInt(Plan.Slot, I64Ty);
@@ -2711,55 +2712,54 @@ public:
           return Idx;
         };
 
-	        DenseMap<const PHINode *, unsigned> RecurrencePlanByPhi;
-	        DenseMap<const Instruction *, SmallVector<unsigned, 2>>
-	            RecurrencePlansByUpdate;
-	        if (!RecurrencePlans.empty()) {
-	          BasicBlock &EntryBB = F.getEntryBlock();
-	          Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
-	          IRBuilder<> EB(EntryIP);
-	          for (unsigned RI = 0; RI < RecurrencePlans.size(); RI++) {
-	            RecurrencePlan &Plan = RecurrencePlans[RI];
-              if (!Plan.SlotTy) {
-                reject("invalid_recurrence_slot_type");
+        DenseMap<const PHINode *, unsigned> RecurrencePlanByPhi;
+        DenseMap<const Instruction *, SmallVector<unsigned, 2>>
+            RecurrencePlansByUpdate;
+        if (!RecurrencePlans.empty()) {
+          BasicBlock &EntryBB = F.getEntryBlock();
+          Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
+          IRBuilder<> EB(EntryIP);
+          for (unsigned RI = 0; RI < RecurrencePlans.size(); RI++) {
+            RecurrencePlan &Plan = RecurrencePlans[RI];
+            if (!Plan.SlotTy) {
+              reject("invalid_recurrence_slot_type");
+              return false;
+            }
+            const uint64_t RecurrenceSlotElems =
+                (LaneCount > 1) ? LaneCount
+                                : ((GroupCount != 0) ? (1u + GroupCount) : 1u);
+            Plan.Slot = EB.CreateAlloca(
+                Plan.SlotTy, ConstantInt::get(I32Ty, RecurrenceSlotElems),
+                "linx.simt.rec");
+            Value *InitStored = Plan.InitValue;
+            if (!InitStored) {
+              reject("invalid_recurrence_init");
+              return false;
+            }
+            if (InitStored->getType() != Plan.SlotTy) {
+              if (InitStored->getType()->isIntegerTy() &&
+                  Plan.SlotTy->isIntegerTy()) {
+                InitStored = PB.CreateZExtOrTrunc(InitStored, Plan.SlotTy);
+              } else if (InitStored->getType()->isFloatTy() &&
+                         Plan.SlotTy->isFloatTy()) {
+                InitStored = PB.CreateFPCast(InitStored, Plan.SlotTy);
+              } else {
+                reject("invalid_recurrence_init_cast");
                 return false;
               }
-              const uint64_t RecurrenceSlotElems =
-                  (LaneCount > 1) ? LaneCount
-                                  : ((GroupCount != 0) ? (1u + GroupCount) : 1u);
-	            Plan.Slot =
-	                EB.CreateAlloca(Plan.SlotTy,
-                                    ConstantInt::get(I32Ty, RecurrenceSlotElems),
-                                    "linx.simt.rec");
-              Value *InitStored = Plan.InitValue;
-              if (!InitStored) {
-                reject("invalid_recurrence_init");
-                return false;
-              }
-              if (InitStored->getType() != Plan.SlotTy) {
-                if (InitStored->getType()->isIntegerTy() &&
-                    Plan.SlotTy->isIntegerTy()) {
-                  InitStored = PB.CreateZExtOrTrunc(InitStored, Plan.SlotTy);
-                } else if (InitStored->getType()->isFloatTy() &&
-                           Plan.SlotTy->isFloatTy()) {
-                  InitStored = PB.CreateFPCast(InitStored, Plan.SlotTy);
-                } else {
-                  reject("invalid_recurrence_init_cast");
-                  return false;
-                }
-              }
-	            PB.CreateStore(InitStored, Plan.Slot);
-	            Value *SlotI64 = PB.CreatePtrToInt(Plan.Slot, I64Ty);
-	            auto Bind = bindI64(SlotI64);
-	            if (!Bind) {
-	              reject("recurrence_bind_exhausted");
-	              return false;
-	            }
-		            Plan.SlotBind = *Bind;
-		            RecurrencePlanByPhi[Plan.Phi] = RI;
-		            RecurrencePlansByUpdate[Plan.Update].push_back(RI);
-	          }
-	        }
+            }
+            PB.CreateStore(InitStored, Plan.Slot);
+            Value *SlotI64 = PB.CreatePtrToInt(Plan.Slot, I64Ty);
+            auto Bind = bindI64(SlotI64);
+            if (!Bind) {
+              reject("recurrence_bind_exhausted");
+              return false;
+            }
+            Plan.SlotBind = *Bind;
+            RecurrencePlanByPhi[Plan.Phi] = RI;
+            RecurrencePlansByUpdate[Plan.Update].push_back(RI);
+          }
+        }
 
         struct LiveOutPlan {
           Instruction *Inst = nullptr;
@@ -2767,20 +2767,20 @@ public:
           unsigned SlotBind = 0;
           std::optional<uint64_t> LocalWordBase;
         };
-	        SmallVector<LiveOutPlan, 8> LiveOutPlans;
+        SmallVector<LiveOutPlan, 8> LiveOutPlans;
         if (!LiveOutInsts.empty()) {
-	          BasicBlock &EntryBB = F.getEntryBlock();
-	          Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
-	          IRBuilder<> EB(EntryIP);
-	          for (Instruction *I : LiveOutInsts) {
-	            if (!I)
-	              continue;
-	            LiveOutPlan Plan;
-	            Plan.Inst = I;
-	            Plan.Slot = EB.CreateAlloca(I->getType(), nullptr,
-	                                       "linx.simt.liveout");
-	            Value *SlotI64 = PB.CreatePtrToInt(Plan.Slot, I64Ty);
-	            auto Bind = bindI64(SlotI64);
+          BasicBlock &EntryBB = F.getEntryBlock();
+          Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
+          IRBuilder<> EB(EntryIP);
+          for (Instruction *I : LiveOutInsts) {
+            if (!I)
+              continue;
+            LiveOutPlan Plan;
+            Plan.Inst = I;
+            Plan.Slot =
+                EB.CreateAlloca(I->getType(), nullptr, "linx.simt.liveout");
+            Value *SlotI64 = PB.CreatePtrToInt(Plan.Slot, I64Ty);
+            auto Bind = bindI64(SlotI64);
             if (!Bind) {
               reject("liveout_bind_exhausted");
               return false;
@@ -2796,15 +2796,15 @@ public:
         }
 
         struct AddressBinding {
-	          unsigned BaseRi;
-	          int64_t IndexFactor;
-	          unsigned Shift;
+          unsigned BaseRi;
+          int64_t IndexFactor;
+          unsigned Shift;
           int64_t StepElems;
         };
 
-        auto bindPtrStartForElem = [&](Value *Ptr,
-                                       uint64_t ElemBytes)
-            -> std::optional<AddressBinding> {
+        auto bindPtrStartForElem =
+            [&](Value *Ptr,
+                uint64_t ElemBytes) -> std::optional<AddressBinding> {
           if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
             return std::nullopt;
           Ptr = Ptr->stripPointerCasts();
@@ -2843,17 +2843,16 @@ public:
           if (!BaseOpt)
             return std::nullopt;
 
-          AddressBinding Binding = {/*BaseRi=*/ *BaseOpt,
-                                    /*IndexFactor=*/ 0,
-                                    /*Shift=*/ 0,
-                                    /*StepElems=*/ StepElems};
+          AddressBinding Binding = {/*BaseRi=*/*BaseOpt,
+                                    /*IndexFactor=*/0,
+                                    /*Shift=*/0,
+                                    /*StepElems=*/StepElems};
           const int64_t Delta = StepBytes - static_cast<int64_t>(ElemBytes);
           if (Delta == 0)
             return Binding;
 
-          const uint64_t AbsDelta =
-              Delta < 0 ? static_cast<uint64_t>(-Delta)
-                        : static_cast<uint64_t>(Delta);
+          const uint64_t AbsDelta = Delta < 0 ? static_cast<uint64_t>(-Delta)
+                                              : static_cast<uint64_t>(Delta);
           const unsigned Shift = countr_zero(AbsDelta);
           if (Shift > 31)
             return std::nullopt;
@@ -2866,183 +2865,180 @@ public:
           return Binding;
         };
 
-        auto bindPtrStart = [&](Value *Ptr) -> std::optional<AddressBinding> {
-          return bindPtrStartForElem(Ptr, /*ElemBytes=*/4);
+        struct VecPipeToken {
+          unsigned Class = 0;
+          unsigned Index = 0;
         };
 
-	        struct VecPipeToken {
-	          unsigned Class = 0;
-	          unsigned Index = 0;
-	        };
+        auto parseVecPipeToken =
+            [&](StringRef Tok) -> std::optional<VecPipeToken> {
+          Tok = Tok.trim();
+          if (Tok.size() < 4)
+            return std::nullopt;
+          unsigned Class = 0;
+          if (Tok.starts_with("vt#"))
+            Class = 0;
+          else if (Tok.starts_with("vu#"))
+            Class = 1;
+          else if (Tok.starts_with("vm#"))
+            Class = 2;
+          else if (Tok.starts_with("vn#"))
+            Class = 3;
+          else
+            return std::nullopt;
+          StringRef Tail = Tok.drop_front(3);
+          unsigned Index = 0;
+          if (Tail.getAsInteger(10, Index) || Index == 0)
+            return std::nullopt;
+          return VecPipeToken{Class, Index};
+        };
 
-	        auto parseVecPipeToken = [&](StringRef Tok)
-	            -> std::optional<VecPipeToken> {
-	          Tok = Tok.trim();
-	          if (Tok.size() < 4)
-	            return std::nullopt;
-	          unsigned Class = 0;
-	          if (Tok.starts_with("vt#"))
-	            Class = 0;
-	          else if (Tok.starts_with("vu#"))
-	            Class = 1;
-	          else if (Tok.starts_with("vm#"))
-	            Class = 2;
-	          else if (Tok.starts_with("vn#"))
-	            Class = 3;
-	          else
-	            return std::nullopt;
-	          StringRef Tail = Tok.drop_front(3);
-	          unsigned Index = 0;
-	          if (Tail.getAsInteger(10, Index) || Index == 0)
-	            return std::nullopt;
-	          return VecPipeToken{Class, Index};
-	        };
+        auto formatVecPipeToken = [&](const VecPipeToken &Tok) {
+          static constexpr const char *kClassPrefix[] = {"vt#", "vu#", "vm#",
+                                                         "vn#"};
+          return std::string(kClassPrefix[Tok.Class]) +
+                 std::to_string(Tok.Index);
+        };
 
-	        auto formatVecPipeToken = [&](const VecPipeToken &Tok) {
-	          static constexpr const char *kClassPrefix[] = {"vt#", "vu#", "vm#",
-	                                                         "vn#"};
-	          return std::string(kClassPrefix[Tok.Class]) + std::to_string(Tok.Index);
-	        };
+        auto formatVecPipeHead = [&](const VecPipeToken &Tok,
+                                     StringRef Suffix) {
+          static constexpr const char *kHeadPrefix[] = {"vt", "vu", "vm", "vn"};
+          return std::string(kHeadPrefix[Tok.Class]) + Suffix.str();
+        };
 
-	        auto formatVecPipeHead = [&](const VecPipeToken &Tok, StringRef Suffix) {
-	          static constexpr const char *kHeadPrefix[] = {"vt", "vu", "vm", "vn"};
-	          return std::string(kHeadPrefix[Tok.Class]) + Suffix.str();
-	        };
+        unsigned NextVecReg = 0;
+        auto allocVec = [&]() -> std::optional<std::string> {
+          static constexpr unsigned kMaxIndex = 31;
+          static constexpr unsigned kNumClasses = 4;
+          if (NextVecReg >= (kMaxIndex * kNumClasses))
+            return std::nullopt;
+          const unsigned Class = NextVecReg / kMaxIndex;
+          const unsigned Index = (NextVecReg % kMaxIndex) + 1u;
+          ++NextVecReg;
+          return formatVecPipeToken(VecPipeToken{Class, Index});
+        };
 
-	        unsigned NextVecReg = 0;
-	        auto allocVec = [&]() -> std::optional<std::string> {
-	          static constexpr unsigned kMaxIndex = 31;
-	          static constexpr unsigned kNumClasses = 4;
-	          if (NextVecReg >= (kMaxIndex * kNumClasses))
-	            return std::nullopt;
-	          const unsigned Class = NextVecReg / kMaxIndex;
-	          const unsigned Index = (NextVecReg % kMaxIndex) + 1u;
-	          ++NextVecReg;
-	          return formatVecPipeToken(VecPipeToken{Class, Index});
-	        };
+        unsigned NextAsmLabel = 0;
+        auto freshAsmLabel = [&](StringRef Prefix) -> std::string {
+          std::string S;
+          raw_string_ostream SS(S);
+          SS << Prefix << NextAsmLabel++;
+          return SS.str();
+        };
 
-	        unsigned NextAsmLabel = 0;
-	        auto freshAsmLabel = [&](StringRef Prefix) -> std::string {
-	          std::string S;
-	          raw_string_ostream SS(S);
-	          SS << Prefix << NextAsmLabel++;
-	          return SS.str();
-	        };
+        auto isLaneCounterToken = [](StringRef Tok) {
+          Tok = Tok.trim();
+          return Tok == "lc0" || Tok == "lc1";
+        };
 
-	        auto isLaneCounterToken = [](StringRef Tok) {
-	          Tok = Tok.trim();
-	          return Tok == "lc0" || Tok == "lc1";
-	        };
+        auto formatPipeDest = [&](StringRef Tok, StringRef Suffix) {
+          Tok = Tok.trim();
+          auto PipeTok = parseVecPipeToken(Tok);
+          if (!PipeTok)
+            return Tok.str();
+          return formatVecPipeHead(*PipeTok, Suffix);
+        };
 
-	        auto formatPipeDest = [&](StringRef Tok, StringRef Suffix) {
-	          Tok = Tok.trim();
-	          auto PipeTok = parseVecPipeToken(Tok);
-	          if (!PipeTok)
-	            return Tok.str();
-	          return formatVecPipeHead(*PipeTok, Suffix);
-	        };
+        auto formatIntSrc = [&](StringRef Tok) {
+          Tok = Tok.trim();
+          if (parseVecPipeToken(Tok))
+            return (Tok + ".sw").str();
+          if (isLaneCounterToken(Tok))
+            return (Tok + ".uh").str();
+          return Tok.str();
+        };
 
-	        auto formatIntSrc = [&](StringRef Tok) {
-	          Tok = Tok.trim();
-	          if (parseVecPipeToken(Tok))
-	            return (Tok + ".sw").str();
-	          if (isLaneCounterToken(Tok))
-	            return (Tok + ".uh").str();
-	          return Tok.str();
-	        };
+        auto formatFloatSrc = [&](StringRef Tok) {
+          Tok = Tok.trim();
+          if (parseVecPipeToken(Tok))
+            return (Tok + ".fs").str();
+          if (isLaneCounterToken(Tok))
+            return (Tok + ".uh").str();
+          return Tok.str();
+        };
 
-	        auto formatFloatSrc = [&](StringRef Tok) {
-	          Tok = Tok.trim();
-	          if (parseVecPipeToken(Tok))
-	            return (Tok + ".fs").str();
-	          if (isLaneCounterToken(Tok))
-	            return (Tok + ".uh").str();
-	          return Tok.str();
-	        };
+        auto formatMaskSrc = [&](StringRef Tok) {
+          Tok = Tok.trim();
+          if (parseVecPipeToken(Tok))
+            return (Tok + ".ud").str();
+          if (isLaneCounterToken(Tok))
+            return (Tok + ".uh").str();
+          return Tok.str();
+        };
 
-	        auto formatMaskSrc = [&](StringRef Tok) {
-	          Tok = Tok.trim();
-	          if (parseVecPipeToken(Tok))
-	            return (Tok + ".ud").str();
-	          if (isLaneCounterToken(Tok))
-	            return (Tok + ".uh").str();
-	          return Tok.str();
-	        };
+        auto formatWordDest = [&](StringRef Tok) {
+          return formatPipeDest(Tok, ".w");
+        };
 
-	        auto formatWordDest = [&](StringRef Tok) {
-	          return formatPipeDest(Tok, ".w");
-	        };
+        auto formatMaskDest = [&](StringRef Tok) {
+          return formatPipeDest(Tok, ".d");
+        };
 
-	        auto formatMaskDest = [&](StringRef Tok) {
-	          return formatPipeDest(Tok, ".d");
-	        };
+        auto formatAssignedDest = [&](StringRef Tok, StringRef Suffix) {
+          Tok = Tok.trim();
+          if (parseVecPipeToken(Tok))
+            return (Tok + Suffix).str();
+          return Tok.str();
+        };
 
-	        auto formatAssignedDest = [&](StringRef Tok, StringRef Suffix) {
-	          Tok = Tok.trim();
-	          if (parseVecPipeToken(Tok))
-	            return (Tok + Suffix).str();
-	          return Tok.str();
-	        };
+        auto formatAssignedWordDest = [&](StringRef Tok) {
+          return formatAssignedDest(Tok, ".w");
+        };
 
-		        auto formatAssignedWordDest = [&](StringRef Tok) {
-		          return formatAssignedDest(Tok, ".w");
-		        };
+        DenseMap<BasicBlock *, std::string> ReplayMaskSaveRegByBranch;
+        DenseMap<BasicBlock *, SmallVector<std::string, 2>>
+            ReplayMaskRestoreRegsByMerge;
+        std::optional<unsigned> ExecMaskSaveOneBind;
+        if (!ReplayMaskSplits.empty()) {
+          ExecMaskSaveOneBind = bindI64(ConstantInt::get(I64Ty, 1));
+          if (!ExecMaskSaveOneBind) {
+            reject("exec_mask_bind_exhausted");
+            return false;
+          }
+          for (const auto &It : ReplayMaskSplits) {
+            auto SaveReg = allocVec();
+            if (!SaveReg) {
+              reject("vector_reg_exhausted");
+              return false;
+            }
+            ReplayMaskSaveRegByBranch[It.first] = *SaveReg;
+            ReplayMaskRestoreRegsByMerge[It.second.MergeBB].push_back(*SaveReg);
+          }
+        }
 
-		        DenseMap<BasicBlock *, std::string> ReplayMaskSaveRegByBranch;
-		        DenseMap<BasicBlock *, SmallVector<std::string, 2>>
-		            ReplayMaskRestoreRegsByMerge;
-		        std::optional<unsigned> ExecMaskSaveOneBind;
-		        if (!ReplayMaskSplits.empty()) {
-		          ExecMaskSaveOneBind =
-		              bindI64(ConstantInt::get(I64Ty, 1));
-		          if (!ExecMaskSaveOneBind) {
-		            reject("exec_mask_bind_exhausted");
-		            return false;
-		          }
-		          for (const auto &It : ReplayMaskSplits) {
-		            auto SaveReg = allocVec();
-		            if (!SaveReg) {
-		              reject("vector_reg_exhausted");
-		              return false;
-		            }
-		            ReplayMaskSaveRegByBranch[It.first] = *SaveReg;
-		            ReplayMaskRestoreRegsByMerge[It.second.MergeBB].push_back(*SaveReg);
-		          }
-		        }
+        auto formatAddrExpr = [&](StringRef Expr) {
+          Expr = Expr.trim();
+          const size_t ShiftPos = Expr.find("<<");
+          StringRef Base =
+              ShiftPos == StringRef::npos ? Expr : Expr.substr(0, ShiftPos);
+          StringRef Shift =
+              ShiftPos == StringRef::npos ? StringRef() : Expr.substr(ShiftPos);
+          Base = Base.trim();
+          std::string Out;
+          if (parseVecPipeToken(Base))
+            Out = (Base + ".sw").str();
+          else if (isLaneCounterToken(Base))
+            Out = (Base + ".uh").str();
+          else
+            Out = Base.str();
+          if (!Shift.empty())
+            Out += Shift.str();
+          return Out;
+        };
 
-		        auto formatAddrExpr = [&](StringRef Expr) {
-		          Expr = Expr.trim();
-	          const size_t ShiftPos = Expr.find("<<");
-	          StringRef Base =
-	              ShiftPos == StringRef::npos ? Expr : Expr.substr(0, ShiftPos);
-	          StringRef Shift =
-	              ShiftPos == StringRef::npos ? StringRef() : Expr.substr(ShiftPos);
-	          Base = Base.trim();
-	          std::string Out;
-	          if (parseVecPipeToken(Base))
-	            Out = (Base + ".sw").str();
-	          else if (isLaneCounterToken(Base))
-	            Out = (Base + ".uh").str();
-	          else
-	            Out = Base.str();
-	          if (!Shift.empty())
-	            Out += Shift.str();
-	          return Out;
-	        };
+        auto formatShiftedAddr = [&](StringRef Tok, unsigned Shift) {
+          std::string Expr = Tok.trim().str();
+          if (Shift)
+            Expr += "<<" + std::to_string(Shift);
+          return formatAddrExpr(Expr);
+        };
 
-	        auto formatShiftedAddr = [&](StringRef Tok, unsigned Shift) {
-	          std::string Expr = Tok.trim().str();
-	          if (Shift)
-	            Expr += "<<" + std::to_string(Shift);
-	          return formatAddrExpr(Expr);
-	        };
-
-	        struct PtrPhiPlan {
-	          std::string SelReg; // Small integer selector in a vector register.
-	          SmallVector<unsigned, 4> BaseRis; // sel_id -> base RI bind
-	          DenseMap<const BasicBlock *, unsigned> SelByPred; // pred -> sel_id
-	        };
-	        DenseMap<const PHINode *, PtrPhiPlan> PtrPhiPlans;
+        struct PtrPhiPlan {
+          std::string SelReg; // Small integer selector in a vector register.
+          SmallVector<unsigned, 4> BaseRis; // sel_id -> base RI bind
+          DenseMap<const BasicBlock *, unsigned> SelByPred; // pred -> sel_id
+        };
+        DenseMap<const PHINode *, PtrPhiPlan> PtrPhiPlans;
         DenseMap<unsigned, std::string> PendingRecurrenceValues;
 
         DenseMap<Value *, std::string> ValOp;
@@ -3052,17 +3048,17 @@ public:
         std::string LinearIndexReg = "lc0";
         const unsigned GroupShift =
             UseGroupedDims ? static_cast<unsigned>(Log2_64(LaneCount)) : 0u;
-	        if (UseGroupedDims) {
-	          auto Lin = allocVec();
-	          if (!Lin) {
-	            reject("vector_reg_exhausted");
-	            return false;
-	          }
-	          OS << "  v.add " << formatIntSrc("lc0") << ", "
-	             << formatAddrExpr(("lc1<<" + std::to_string(GroupShift)).c_str())
-	             << ", ->" << formatWordDest(*Lin) << "\n";
-	          LinearIndexReg = *Lin;
-	        }
+        if (UseGroupedDims) {
+          auto Lin = allocVec();
+          if (!Lin) {
+            reject("vector_reg_exhausted");
+            return false;
+          }
+          OS << "  v.add " << formatIntSrc("lc0") << ", "
+             << formatAddrExpr(("lc1<<" + std::to_string(GroupShift)).c_str())
+             << ", ->" << formatWordDest(*Lin) << "\n";
+          LinearIndexReg = *Lin;
+        }
 
         DenseMap<int64_t, std::string> IndexRegByFactor;
         IndexRegByFactor[0] = "zero";
@@ -3082,22 +3078,21 @@ public:
               return Cached->second;
           }
 
-	          if (Factor == -1) {
-	            auto NegReg = allocVec();
-	            if (!NegReg)
-	              return std::nullopt;
-	            OS << "  v.sub zero, " << formatIntSrc(LinearIndexReg) << ", ->"
-	               << formatWordDest(*NegReg) << "\n";
-              if (CacheVecIndexRegs) {
-	            IndexRegByFactor[Factor] = *NegReg;
-              }
-	            return *NegReg;
-	          }
+          if (Factor == -1) {
+            auto NegReg = allocVec();
+            if (!NegReg)
+              return std::nullopt;
+            OS << "  v.sub zero, " << formatIntSrc(LinearIndexReg) << ", ->"
+               << formatWordDest(*NegReg) << "\n";
+            if (CacheVecIndexRegs) {
+              IndexRegByFactor[Factor] = *NegReg;
+            }
+            return *NegReg;
+          }
 
           const bool IsNegative = Factor < 0;
-          const uint64_t AbsFactor =
-              IsNegative ? static_cast<uint64_t>(-Factor)
-                         : static_cast<uint64_t>(Factor);
+          const uint64_t AbsFactor = IsNegative ? static_cast<uint64_t>(-Factor)
+                                                : static_cast<uint64_t>(Factor);
           if (AbsFactor == 0)
             return std::string("zero");
           if (AbsFactor > 4096)
@@ -3110,14 +3105,14 @@ public:
             auto Prev = Pow2Regs.find(Bit - 1);
             if (Prev == Pow2Regs.end())
               return std::nullopt;
-	            auto Next = allocVec();
-	            if (!Next)
-	              return std::nullopt;
-	            OS << "  v.add " << formatIntSrc(Prev->second) << ", "
-	               << formatIntSrc(Prev->second) << ", ->"
-	               << formatWordDest(*Next) << "\n";
-	            Pow2Regs[Bit] = *Next;
-	          }
+            auto Next = allocVec();
+            if (!Next)
+              return std::nullopt;
+            OS << "  v.add " << formatIntSrc(Prev->second) << ", "
+               << formatIntSrc(Prev->second) << ", ->" << formatWordDest(*Next)
+               << "\n";
+            Pow2Regs[Bit] = *Next;
+          }
 
           std::optional<std::string> AccumReg;
           for (unsigned Bit = 0; Bit <= HighestBit; ++Bit) {
@@ -3130,26 +3125,26 @@ public:
               AccumReg = Part->second;
               continue;
             }
-	            auto Sum = allocVec();
-	            if (!Sum)
-	              return std::nullopt;
-	            OS << "  v.add " << formatIntSrc(*AccumReg) << ", "
-	               << formatIntSrc(Part->second) << ", ->"
-	               << formatWordDest(*Sum) << "\n";
-	            AccumReg = *Sum;
-	          }
+            auto Sum = allocVec();
+            if (!Sum)
+              return std::nullopt;
+            OS << "  v.add " << formatIntSrc(*AccumReg) << ", "
+               << formatIntSrc(Part->second) << ", ->" << formatWordDest(*Sum)
+               << "\n";
+            AccumReg = *Sum;
+          }
 
           if (!AccumReg)
             return std::nullopt;
 
-	          if (IsNegative) {
-	            auto NegReg = allocVec();
-	            if (!NegReg)
-	              return std::nullopt;
-	            OS << "  v.sub zero, " << formatIntSrc(*AccumReg) << ", ->"
-	               << formatWordDest(*NegReg) << "\n";
-	            AccumReg = *NegReg;
-	          }
+          if (IsNegative) {
+            auto NegReg = allocVec();
+            if (!NegReg)
+              return std::nullopt;
+            OS << "  v.sub zero, " << formatIntSrc(*AccumReg) << ", ->"
+               << formatWordDest(*NegReg) << "\n";
+            AccumReg = *NegReg;
+          }
 
           if (CacheVecIndexRegs)
             IndexRegByFactor[Factor] = *AccumReg;
@@ -3167,38 +3162,37 @@ public:
           auto StepScaled = emitScaledLc0(StepElems);
           if (!StepScaled)
             return std::nullopt;
-	          auto Idx = allocVec();
-	          if (!Idx)
-	            return std::nullopt;
-	          OS << "  v.sub " << formatIntSrc(*StepScaled) << ", "
-	             << formatIntSrc("lc0") << ", ->" << formatWordDest(*Idx)
-	             << "\n";
+          auto Idx = allocVec();
+          if (!Idx)
+            return std::nullopt;
+          OS << "  v.sub " << formatIntSrc(*StepScaled) << ", "
+             << formatIntSrc("lc0") << ", ->" << formatWordDest(*Idx) << "\n";
           if (CacheVecIndexRegs) {
-	          GroupedIndexRegByStepElems[StepElems] = *Idx;
+            GroupedIndexRegByStepElems[StepElems] = *Idx;
           }
-	          return *Idx;
-	        };
+          return *Idx;
+        };
 
         auto emitGroupWordIndexReg = [&]() -> std::optional<std::string> {
           if (!UseGroupedDims)
             return std::nullopt;
           if (CacheVecIndexRegs && GroupWordIndexReg)
             return GroupWordIndexReg;
-	          auto Dst = allocVec();
-	          if (!Dst)
-	            return std::nullopt;
-	          if (GroupShift == 0) {
-	            OS << "  v.add zero, " << formatIntSrc("lc1") << ", ->"
-	               << formatWordDest(*Dst) << "\n";
-	          } else {
-	            OS << "  v.add zero, "
-	               << formatAddrExpr(("lc1<<" + std::to_string(GroupShift)).c_str())
-	               << ", ->" << formatWordDest(*Dst) << "\n";
-	          }
-          if (CacheVecIndexRegs) {
-	          GroupWordIndexReg = *Dst;
+          auto Dst = allocVec();
+          if (!Dst)
+            return std::nullopt;
+          if (GroupShift == 0) {
+            OS << "  v.add zero, " << formatIntSrc("lc1") << ", ->"
+               << formatWordDest(*Dst) << "\n";
+          } else {
+            OS << "  v.add zero, "
+               << formatAddrExpr(("lc1<<" + std::to_string(GroupShift)).c_str())
+               << ", ->" << formatWordDest(*Dst) << "\n";
           }
-	          return *Dst;
+          if (CacheVecIndexRegs) {
+            GroupWordIndexReg = *Dst;
+          }
+          return *Dst;
         };
 
         auto emitLocalSlotMemOffset =
@@ -3210,9 +3204,9 @@ public:
           }
 
           if (WordBase == 0) {
-            std::string Tok =
-                UseGroupedDims ? ("lc1<<" + std::to_string(GroupShift + 2u))
-                               : "zero<<2";
+            std::string Tok = UseGroupedDims
+                                  ? ("lc1<<" + std::to_string(GroupShift + 2u))
+                                  : "zero<<2";
             if (CacheVecIndexRegs)
               LocalSlotMemOffsetByWordBase[WordBase] = Tok;
             return Tok;
@@ -3232,349 +3226,341 @@ public:
           auto GroupReg = emitGroupWordIndexReg();
           if (!GroupReg)
             return std::nullopt;
-	          auto Dst = allocVec();
-	          if (!Dst)
-	            return std::nullopt;
-	          OS << "  v.add " << formatIntSrc(*GroupReg) << ", ri" << *ConstBind
-	             << ", ->" << formatWordDest(*Dst) << "\n";
-	          std::string Tok = *Dst + "<<2";
+          auto Dst = allocVec();
+          if (!Dst)
+            return std::nullopt;
+          OS << "  v.add " << formatIntSrc(*GroupReg) << ", ri" << *ConstBind
+             << ", ->" << formatWordDest(*Dst) << "\n";
+          std::string Tok = *Dst + "<<2";
           if (CacheVecIndexRegs) {
-	          LocalSlotMemOffsetByWordBase[WordBase] = Tok;
+            LocalSlotMemOffsetByWordBase[WordBase] = Tok;
           }
-	          return Tok;
+          return Tok;
         };
 
         auto emitNegLc0 = [&]() -> std::optional<std::string> {
           if (CacheVecIndexRegs && NegLc0Reg)
             return NegLc0Reg;
-	          auto Neg = allocVec();
-	          if (!Neg)
-	            return std::nullopt;
-	          OS << "  v.sub zero, " << formatIntSrc("lc0") << ", ->"
-	             << formatWordDest(*Neg) << "\n";
+          auto Neg = allocVec();
+          if (!Neg)
+            return std::nullopt;
+          OS << "  v.sub zero, " << formatIntSrc("lc0") << ", ->"
+             << formatWordDest(*Neg) << "\n";
           if (CacheVecIndexRegs) {
-	          NegLc0Reg = *Neg;
+            NegLc0Reg = *Neg;
           }
-	          return *Neg;
-	        };
+          return *Neg;
+        };
 
-	        auto emitIndexDeltaFromLc0 =
-	            [&](StringRef IndexExpr) -> std::optional<std::string> {
-	          StringRef Expr = IndexExpr.trim();
-	          if (Expr == "lc0")
-	            return std::string("zero");
-	          if (Expr == "zero")
-	            return emitNegLc0();
-	          auto Delta = allocVec();
-	          if (!Delta)
-	            return std::nullopt;
-	          OS << "  v.sub " << formatIntSrc(Expr) << ", " << formatIntSrc("lc0")
-	             << ", ->" << formatWordDest(*Delta) << "\n";
-	          return *Delta;
-	        };
+        auto emitIndexDeltaFromLc0 =
+            [&](StringRef IndexExpr) -> std::optional<std::string> {
+          StringRef Expr = IndexExpr.trim();
+          if (Expr == "lc0")
+            return std::string("zero");
+          if (Expr == "zero")
+            return emitNegLc0();
+          auto Delta = allocVec();
+          if (!Delta)
+            return std::nullopt;
+          OS << "  v.sub " << formatIntSrc(Expr) << ", " << formatIntSrc("lc0")
+             << ", ->" << formatWordDest(*Delta) << "\n";
+          return *Delta;
+        };
 
-	        // Convert a byte-based induction/index expression (e.g. i8 GEP index)
-	        // into an element index suitable for v.l*/v.s* addressing.
-	        auto emitElemIndexFromByteIndex =
-	            [&](Value *ByteIndex,
-                  uint64_t ElemBytes) -> std::optional<std::string> {
-	          if (!ByteIndex)
-	            return std::nullopt;
-            if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
+        // Convert a byte-based induction/index expression (e.g. i8 GEP index)
+        // into an element index suitable for v.l*/v.s* addressing.
+        auto emitElemIndexFromByteIndex =
+            [&](Value *ByteIndex,
+                uint64_t ElemBytes) -> std::optional<std::string> {
+          if (!ByteIndex)
+            return std::nullopt;
+          if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
+            return std::nullopt;
+          if (!ByteIndex->getType()->isIntegerTy() ||
+              ByteIndex->getType()->getScalarSizeInBits() > 64) {
+            return std::nullopt;
+          }
+
+          const SCEV *IS = SE.getSCEVAtScope(ByteIndex, L);
+          const auto *AR = dyn_cast<SCEVAddRecExpr>(IS);
+          if (!AR || AR->getLoop() != L || !AR->isAffine())
+            return std::nullopt;
+          const auto *StartC = dyn_cast<SCEVConstant>(AR->getStart());
+          const auto *StepC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+          if (!StartC || !StepC)
+            return std::nullopt;
+
+          const int64_t StartB = StartC->getAPInt().getSExtValue();
+          const int64_t StepB = StepC->getAPInt().getSExtValue();
+          const int64_t ElemStride = static_cast<int64_t>(ElemBytes);
+          if ((StartB % ElemStride) != 0 || (StepB % ElemStride) != 0)
+            return std::nullopt;
+
+          const int64_t StartElems = StartB / ElemStride;
+          const int64_t StepElems = StepB / ElemStride;
+          if (StepElems == 0)
+            return std::nullopt;
+          if (StepElems > 4096 || StepElems < -4096)
+            return std::nullopt;
+
+          std::optional<std::string> ScaledIndex;
+          if (StepElems == 1) {
+            ScaledIndex = LinearIndexReg;
+          } else {
+            ScaledIndex = emitScaledLc0(StepElems);
+          }
+          if (!ScaledIndex)
+            return std::nullopt;
+
+          if (StartElems == 0)
+            return *ScaledIndex;
+
+          auto *C64 = ConstantInt::get(I64Ty, (uint64_t)StartElems);
+          auto Bind = bindI64(C64);
+          if (!Bind)
+            return std::nullopt;
+          std::string StartTok = "ri" + std::to_string(*Bind);
+
+          auto Dst = allocVec();
+          if (!Dst)
+            return std::nullopt;
+          OS << "  v.add " << formatIntSrc(*ScaledIndex) << ", " << StartTok
+             << ", ->" << formatWordDest(*Dst) << "\n";
+          return *Dst;
+        };
+
+        std::function<std::optional<std::string>(Value *)> emitValue;
+        std::function<std::optional<std::string>(Value *)> emitCondition;
+        std::function<std::optional<std::string>(Value *)> emitF32;
+
+        auto emitIntegerAffineAddRecValue =
+            [&](Value *IV, bool EdgeFresh) -> std::optional<std::string> {
+          if (!IV || !IV->getType()->isIntegerTy() ||
+              IV->getType()->getScalarSizeInBits() > 64) {
+            return std::nullopt;
+          }
+
+          if (!EdgeFresh) {
+            auto It = ValOp.find(IV);
+            if (It != ValOp.end())
+              return It->second;
+          }
+
+          const SCEV *PS = SE.getSCEVAtScope(IV, L);
+          const auto *AR = dyn_cast<SCEVAddRecExpr>(PS);
+          if (!AR || AR->getLoop() != L || !AR->isAffine()) {
+            return std::nullopt;
+          }
+          const SCEV *StartS = AR->getStart();
+          const SCEV *StepS = AR->getStepRecurrence(SE);
+          if (!StartS || !StepS)
+            return std::nullopt;
+
+          // Prefer constant-step lowering when available; fall back to a
+          // vector multiply for dynamic step values.
+          std::optional<int64_t> StepConst;
+          if (auto *StepC = dyn_cast<SCEVConstant>(StepS)) {
+            StepConst = StepC->getAPInt().getSExtValue();
+            if (*StepConst == 0)
               return std::nullopt;
-	          if (!ByteIndex->getType()->isIntegerTy() ||
-	              ByteIndex->getType()->getScalarSizeInBits() > 64) {
-	            return std::nullopt;
-	          }
+            if (*StepConst > 4096 || *StepConst < -4096)
+              StepConst.reset();
+          }
 
-	          const SCEV *IS = SE.getSCEVAtScope(ByteIndex, L);
-	          const auto *AR = dyn_cast<SCEVAddRecExpr>(IS);
-	          if (!AR || AR->getLoop() != L || !AR->isAffine())
-	            return std::nullopt;
-	          const auto *StartC = dyn_cast<SCEVConstant>(AR->getStart());
-	          const auto *StepC =
-	              dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
-	          if (!StartC || !StepC)
-	            return std::nullopt;
+          std::optional<std::string> ScaledIndex;
+          if (StepConst) {
+            if (*StepConst == 1) {
+              ScaledIndex = LinearIndexReg;
+            } else {
+              ScaledIndex = emitScaledLc0(*StepConst);
+            }
+          } else {
+            Value *StepV = Exp.expandCodeFor(StepS, StepS->getType(),
+                                             Preheader->getTerminator());
+            if (!StepV)
+              return std::nullopt;
+            if (!StepV->getType()->isIntegerTy())
+              return std::nullopt;
+            if (StepV->getType()->getScalarSizeInBits() > 64)
+              return std::nullopt;
+            if (StepV->getType() != I64Ty)
+              StepV = PB.CreateSExtOrTrunc(StepV, I64Ty);
+            auto StepTok = emitValue(StepV);
+            if (!StepTok)
+              return std::nullopt;
+            auto Mul = allocVec();
+            if (!Mul)
+              return std::nullopt;
+            OS << "  v.mul " << formatIntSrc(LinearIndexReg) << ", "
+               << formatIntSrc(*StepTok) << ", ->" << formatWordDest(*Mul)
+               << "\n";
+            ScaledIndex = *Mul;
+          }
+          if (!ScaledIndex)
+            return std::nullopt;
 
-	          const int64_t StartB = StartC->getAPInt().getSExtValue();
-	          const int64_t StepB = StepC->getAPInt().getSExtValue();
-            const int64_t ElemStride = static_cast<int64_t>(ElemBytes);
-	          if ((StartB % ElemStride) != 0 || (StepB % ElemStride) != 0)
-	            return std::nullopt;
+          std::optional<int64_t> StartConst;
+          if (auto *StartC = dyn_cast<SCEVConstant>(StartS))
+            StartConst = StartC->getAPInt().getSExtValue();
 
-	          const int64_t StartElems = StartB / ElemStride;
-	          const int64_t StepElems = StepB / ElemStride;
-	          if (StepElems == 0)
-	            return std::nullopt;
-	          if (StepElems > 4096 || StepElems < -4096)
-	            return std::nullopt;
+          if (StartConst && *StartConst == 0) {
+            if (!EdgeFresh)
+              ValOp[IV] = *ScaledIndex;
+            return *ScaledIndex;
+          }
 
-	          std::optional<std::string> ScaledIndex;
-	          if (StepElems == 1) {
-	            ScaledIndex = LinearIndexReg;
-	          } else {
-	            ScaledIndex = emitScaledLc0(StepElems);
-	          }
-	          if (!ScaledIndex)
-	            return std::nullopt;
+          std::optional<std::string> StartTok;
+          if (StartConst) {
+            auto *C64 = ConstantInt::get(I64Ty, (uint64_t)*StartConst);
+            auto Bind = bindI64(C64);
+            if (!Bind)
+              return std::nullopt;
+            StartTok = "ri" + std::to_string(*Bind);
+          } else {
+            Value *StartV = Exp.expandCodeFor(StartS, StartS->getType(),
+                                              Preheader->getTerminator());
+            if (!StartV)
+              return std::nullopt;
+            if (!StartV->getType()->isIntegerTy())
+              return std::nullopt;
+            if (StartV->getType()->getScalarSizeInBits() > 64)
+              return std::nullopt;
+            if (StartV->getType() != I64Ty)
+              StartV = PB.CreateSExtOrTrunc(StartV, I64Ty);
+            StartTok = emitValue(StartV);
+          }
+          if (!StartTok)
+            return std::nullopt;
 
-	          if (StartElems == 0)
-	            return *ScaledIndex;
+          auto Dst = allocVec();
+          if (!Dst)
+            return std::nullopt;
+          OS << "  v.add " << formatIntSrc(*ScaledIndex) << ", "
+             << formatIntSrc(*StartTok) << ", ->" << formatWordDest(*Dst)
+             << "\n";
+          if (!EdgeFresh)
+            ValOp[IV] = *Dst;
+          return *Dst;
+        };
 
-	          auto *C64 = ConstantInt::get(I64Ty, (uint64_t)StartElems);
-	          auto Bind = bindI64(C64);
-	          if (!Bind)
-	            return std::nullopt;
-	          std::string StartTok = "ri" + std::to_string(*Bind);
-
-	          auto Dst = allocVec();
-	          if (!Dst)
-	            return std::nullopt;
-	          OS << "  v.add " << formatIntSrc(*ScaledIndex) << ", " << StartTok
-	             << ", ->" << formatWordDest(*Dst) << "\n";
-	          return *Dst;
-	        };
-
-	        std::function<std::optional<std::string>(Value *)> emitValue;
-	        std::function<std::optional<std::string>(Value *)> emitCondition;
-	        std::function<std::optional<std::string>(Value *)> emitF32;
-
-	        auto emitIntegerAffineAddRecValue =
-	            [&](Value *IV, bool EdgeFresh) -> std::optional<std::string> {
-	              if (!IV || !IV->getType()->isIntegerTy() ||
-	                  IV->getType()->getScalarSizeInBits() > 64) {
-	                return std::nullopt;
-	              }
-
-	              if (!EdgeFresh) {
-	                auto It = ValOp.find(IV);
-	                if (It != ValOp.end())
-	                  return It->second;
-	              }
-
-	              const SCEV *PS = SE.getSCEVAtScope(IV, L);
-	              const auto *AR = dyn_cast<SCEVAddRecExpr>(PS);
-	              if (!AR || AR->getLoop() != L || !AR->isAffine()) {
-	                return std::nullopt;
-	              }
-	              const SCEV *StartS = AR->getStart();
-	              const SCEV *StepS = AR->getStepRecurrence(SE);
-	              if (!StartS || !StepS)
-	                return std::nullopt;
-
-	              // Prefer constant-step lowering when available; fall back to a
-	              // vector multiply for dynamic step values.
-	              std::optional<int64_t> StepConst;
-	              if (auto *StepC = dyn_cast<SCEVConstant>(StepS)) {
-	                StepConst = StepC->getAPInt().getSExtValue();
-	                if (*StepConst == 0)
-	                  return std::nullopt;
-	                if (*StepConst > 4096 || *StepConst < -4096)
-	                  StepConst.reset();
-	              }
-
-	              std::optional<std::string> ScaledIndex;
-	              if (StepConst) {
-	                if (*StepConst == 1) {
-	                  ScaledIndex = LinearIndexReg;
-	                } else {
-	                  ScaledIndex = emitScaledLc0(*StepConst);
-	                }
-	              } else {
-	                Value *StepV = Exp.expandCodeFor(StepS, StepS->getType(),
-	                                                 Preheader->getTerminator());
-	                if (!StepV)
-	                  return std::nullopt;
-	                if (!StepV->getType()->isIntegerTy())
-	                  return std::nullopt;
-	                if (StepV->getType()->getScalarSizeInBits() > 64)
-	                  return std::nullopt;
-	                if (StepV->getType() != I64Ty)
-	                  StepV = PB.CreateSExtOrTrunc(StepV, I64Ty);
-	                auto StepTok = emitValue(StepV);
-	                if (!StepTok)
-	                  return std::nullopt;
-	                auto Mul = allocVec();
-	                if (!Mul)
-	                  return std::nullopt;
-	                OS << "  v.mul " << formatIntSrc(LinearIndexReg) << ", "
-	                   << formatIntSrc(*StepTok) << ", ->"
-	                   << formatWordDest(*Mul) << "\n";
-	                ScaledIndex = *Mul;
-	              }
-	              if (!ScaledIndex)
-	                return std::nullopt;
-
-	              std::optional<int64_t> StartConst;
-	              if (auto *StartC = dyn_cast<SCEVConstant>(StartS))
-	                StartConst = StartC->getAPInt().getSExtValue();
-
-	              if (StartConst && *StartConst == 0) {
-	                if (!EdgeFresh)
-	                  ValOp[IV] = *ScaledIndex;
-	                return *ScaledIndex;
-	              }
-
-	              std::optional<std::string> StartTok;
-	              if (StartConst) {
-	                auto *C64 = ConstantInt::get(I64Ty, (uint64_t)*StartConst);
-	                auto Bind = bindI64(C64);
-	                if (!Bind)
-	                  return std::nullopt;
-	                StartTok = "ri" + std::to_string(*Bind);
-	              } else {
-	                Value *StartV = Exp.expandCodeFor(StartS, StartS->getType(),
-	                                                  Preheader->getTerminator());
-	                if (!StartV)
-	                  return std::nullopt;
-	                if (!StartV->getType()->isIntegerTy())
-	                  return std::nullopt;
-	                if (StartV->getType()->getScalarSizeInBits() > 64)
-	                  return std::nullopt;
-	                if (StartV->getType() != I64Ty)
-	                  StartV = PB.CreateSExtOrTrunc(StartV, I64Ty);
-	                StartTok = emitValue(StartV);
-	              }
-	              if (!StartTok)
-	                return std::nullopt;
-
-	              auto Dst = allocVec();
-	              if (!Dst)
-	                return std::nullopt;
-	              OS << "  v.add " << formatIntSrc(*ScaledIndex) << ", "
-	                 << formatIntSrc(*StartTok) << ", ->"
-	                 << formatWordDest(*Dst) << "\n";
-	              if (!EdgeFresh)
-	                ValOp[IV] = *Dst;
-	              return *Dst;
-	            };
-
-		        auto bindPtrGeneralForElem = [&](Value *Ptr, uint64_t ElemBytes)
-		            -> std::optional<std::pair<unsigned, std::string>> {
-              if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
-                return std::nullopt;
-		          Ptr = Ptr->stripPointerCasts();
-		          if (auto *GEP = dyn_cast<GEPOperator>(Ptr)) {
-		            auto Try = [&]() -> std::optional<std::pair<unsigned, std::string>> {
-		              // Accept both the canonical pointer GEP form:
-		              //   gep <elt>, <ptr>, <idx>
-		              // and the common global-array form:
-		              //   gep [N x <elt>], <ptr>, 0, <idx>
-		              // TSVC frequently uses the latter for global arrays.
-		              Value *Index = nullptr;
-		              const unsigned NumIdx = GEP->getNumIndices();
-		              if (NumIdx == 1) {
-		                Index = GEP->getOperand(1);
-		              } else if (NumIdx == 2) {
-		                auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
-		                if (!Z || !Z->isZero())
-		                  return std::nullopt;
-		                Index = GEP->getOperand(2);
-		              } else {
-		                return std::nullopt;
-		              }
-
-		              Type *ElemTy = GEP->getResultElementType();
-		              if (!ElemTy)
-		                return std::nullopt;
-		              const DataLayout &DL = F.getParent()->getDataLayout();
-		              if (DL.getTypeStoreSize(ElemTy) != ElemBytes)
-		                return std::nullopt;
-                      if (!(ElemTy->isIntegerTy() &&
-                            ElemTy->getScalarSizeInBits() <= 32) &&
-                          !(ElemTy->isFloatTy() && ElemBytes == 4))
-                        return std::nullopt;
-
-		              Value *BasePtr = GEP->getPointerOperand()->stripPointerCasts();
-		              if (!L->isLoopInvariant(BasePtr))
-		                return std::nullopt;
-		              Value *BaseI64 = PB.CreatePtrToInt(BasePtr, I64Ty);
-		              auto BaseOpt = bindI64(BaseI64);
-		              if (!BaseOpt)
-		                return std::nullopt;
-
-		              if (!Index || !Index->getType()->isIntegerTy())
-		                return std::nullopt;
-		              if (Index->getType()->getScalarSizeInBits() > 64)
-		                return std::nullopt;
-
-		              // Keep loop-variant casts inside the body emission rather than
-		              // inserting them in the IR preheader (which may not dominate the
-		              // value definition).
-		              auto IdxExpr = emitValue(Index);
-		              if (!IdxExpr)
-		                return std::nullopt;
-		              auto DeltaExpr = emitIndexDeltaFromLc0(*IdxExpr);
-		              if (!DeltaExpr)
-		                return std::nullopt;
-		              return std::make_pair(*BaseOpt, *DeltaExpr);
-		            };
-
-		            if (auto Res = Try())
-		              return Res;
-		          }
-
-		          // Pointer induction variable: accept affine AddRec pointers even
-		          // when the step is dynamic (e.g. i += inc).
-	          const SCEV *PtrS = SE.getSCEVAtScope(Ptr, L);
-	          const auto *AR = dyn_cast<SCEVAddRecExpr>(PtrS);
-	          if (!AR || AR->getLoop() != L || !AR->isAffine())
-	            return std::nullopt;
-
-	          const SCEV *Start = AR->getStart();
-	          Value *StartV = ExpandedStarts.lookup(Start);
-	          if (!StartV) {
-	            StartV = Exp.expandCodeFor(Start, Start->getType(),
-	                                       Preheader->getTerminator());
-	            if (!StartV)
-	              return std::nullopt;
-	            ExpandedStarts[Start] = StartV;
-	          }
-	          Value *BaseI64 = nullptr;
-	          if (StartV->getType()->isPointerTy()) {
-	            BaseI64 = PB.CreatePtrToInt(StartV, I64Ty);
-	          } else if (StartV->getType()->isIntegerTy()) {
-	            BaseI64 = PB.CreateZExtOrTrunc(StartV, I64Ty);
-	          } else {
-	            return std::nullopt;
-	          }
-	          auto BaseOpt = bindI64(BaseI64);
-	          if (!BaseOpt)
-	            return std::nullopt;
-
-	          const SCEV *StepS = AR->getStepRecurrence(SE);
-	          if (!StepS)
-	            return std::nullopt;
-	          Value *StepBytesV =
-	              Exp.expandCodeFor(StepS, StepS->getType(),
-	                                Preheader->getTerminator());
-	          if (!StepBytesV || !StepBytesV->getType()->isIntegerTy())
-	            return std::nullopt;
-	          if (StepBytesV->getType() != I64Ty)
-	            StepBytesV = PB.CreateSExtOrTrunc(StepBytesV, I64Ty);
-	          Value *StepElemsV =
-	              PB.CreateAShr(StepBytesV,
-                              ConstantInt::get(I64Ty,
-                                               Log2_64(ElemBytes)));
-	          auto StepTok = emitValue(StepElemsV);
-	          if (!StepTok)
-	            return std::nullopt;
-	          auto Mul = allocVec();
-	          auto Idx = allocVec();
-	          if (!Mul || !Idx)
-	            return std::nullopt;
-	          OS << "  v.mul " << formatIntSrc(LinearIndexReg) << ", "
-	             << formatIntSrc(*StepTok) << ", ->" << formatWordDest(*Mul)
-	             << "\n";
-	          OS << "  v.sub " << formatIntSrc(*Mul) << ", " << formatIntSrc("lc0")
-	             << ", ->" << formatWordDest(*Idx) << "\n";
-	          return std::make_pair(*BaseOpt, *Idx);
-	        };
-
-        auto bindPtrGeneral = [&](Value *Ptr)
+        auto bindPtrGeneralForElem = [&](Value *Ptr, uint64_t ElemBytes)
             -> std::optional<std::pair<unsigned, std::string>> {
-          return bindPtrGeneralForElem(Ptr, /*ElemBytes=*/4);
+          if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
+            return std::nullopt;
+          Ptr = Ptr->stripPointerCasts();
+          if (auto *GEP = dyn_cast<GEPOperator>(Ptr)) {
+            auto Try =
+                [&]() -> std::optional<std::pair<unsigned, std::string>> {
+              // Accept both the canonical pointer GEP form:
+              //   gep <elt>, <ptr>, <idx>
+              // and the common global-array form:
+              //   gep [N x <elt>], <ptr>, 0, <idx>
+              // TSVC frequently uses the latter for global arrays.
+              Value *Index = nullptr;
+              const unsigned NumIdx = GEP->getNumIndices();
+              if (NumIdx == 1) {
+                Index = GEP->getOperand(1);
+              } else if (NumIdx == 2) {
+                auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
+                if (!Z || !Z->isZero())
+                  return std::nullopt;
+                Index = GEP->getOperand(2);
+              } else {
+                return std::nullopt;
+              }
+
+              Type *ElemTy = GEP->getResultElementType();
+              if (!ElemTy)
+                return std::nullopt;
+              const DataLayout &DL = F.getParent()->getDataLayout();
+              if (DL.getTypeStoreSize(ElemTy) != ElemBytes)
+                return std::nullopt;
+              if (!(ElemTy->isIntegerTy() &&
+                    ElemTy->getScalarSizeInBits() <= 32) &&
+                  !(ElemTy->isFloatTy() && ElemBytes == 4))
+                return std::nullopt;
+
+              Value *BasePtr = GEP->getPointerOperand()->stripPointerCasts();
+              if (!L->isLoopInvariant(BasePtr))
+                return std::nullopt;
+              Value *BaseI64 = PB.CreatePtrToInt(BasePtr, I64Ty);
+              auto BaseOpt = bindI64(BaseI64);
+              if (!BaseOpt)
+                return std::nullopt;
+
+              if (!Index || !Index->getType()->isIntegerTy())
+                return std::nullopt;
+              if (Index->getType()->getScalarSizeInBits() > 64)
+                return std::nullopt;
+
+              // Keep loop-variant casts inside the body emission rather than
+              // inserting them in the IR preheader (which may not dominate the
+              // value definition).
+              auto IdxExpr = emitValue(Index);
+              if (!IdxExpr)
+                return std::nullopt;
+              auto DeltaExpr = emitIndexDeltaFromLc0(*IdxExpr);
+              if (!DeltaExpr)
+                return std::nullopt;
+              return std::make_pair(*BaseOpt, *DeltaExpr);
+            };
+
+            if (auto Res = Try())
+              return Res;
+          }
+
+          // Pointer induction variable: accept affine AddRec pointers even
+          // when the step is dynamic (e.g. i += inc).
+          const SCEV *PtrS = SE.getSCEVAtScope(Ptr, L);
+          const auto *AR = dyn_cast<SCEVAddRecExpr>(PtrS);
+          if (!AR || AR->getLoop() != L || !AR->isAffine())
+            return std::nullopt;
+
+          const SCEV *Start = AR->getStart();
+          Value *StartV = ExpandedStarts.lookup(Start);
+          if (!StartV) {
+            StartV = Exp.expandCodeFor(Start, Start->getType(),
+                                       Preheader->getTerminator());
+            if (!StartV)
+              return std::nullopt;
+            ExpandedStarts[Start] = StartV;
+          }
+          Value *BaseI64 = nullptr;
+          if (StartV->getType()->isPointerTy()) {
+            BaseI64 = PB.CreatePtrToInt(StartV, I64Ty);
+          } else if (StartV->getType()->isIntegerTy()) {
+            BaseI64 = PB.CreateZExtOrTrunc(StartV, I64Ty);
+          } else {
+            return std::nullopt;
+          }
+          auto BaseOpt = bindI64(BaseI64);
+          if (!BaseOpt)
+            return std::nullopt;
+
+          const SCEV *StepS = AR->getStepRecurrence(SE);
+          if (!StepS)
+            return std::nullopt;
+          Value *StepBytesV = Exp.expandCodeFor(StepS, StepS->getType(),
+                                                Preheader->getTerminator());
+          if (!StepBytesV || !StepBytesV->getType()->isIntegerTy())
+            return std::nullopt;
+          if (StepBytesV->getType() != I64Ty)
+            StepBytesV = PB.CreateSExtOrTrunc(StepBytesV, I64Ty);
+          Value *StepElemsV = PB.CreateAShr(
+              StepBytesV, ConstantInt::get(I64Ty, Log2_64(ElemBytes)));
+          auto StepTok = emitValue(StepElemsV);
+          if (!StepTok)
+            return std::nullopt;
+          auto Mul = allocVec();
+          auto Idx = allocVec();
+          if (!Mul || !Idx)
+            return std::nullopt;
+          OS << "  v.mul " << formatIntSrc(LinearIndexReg) << ", "
+             << formatIntSrc(*StepTok) << ", ->" << formatWordDest(*Mul)
+             << "\n";
+          OS << "  v.sub " << formatIntSrc(*Mul) << ", " << formatIntSrc("lc0")
+             << ", ->" << formatWordDest(*Idx) << "\n";
+          return std::make_pair(*BaseOpt, *Idx);
         };
 
         auto unsupportedValueReason = [&](Value *V) -> std::string {
@@ -3650,7 +3636,8 @@ public:
           return SawSignedExtUse;
         };
 
-        auto getSIMTLoadMnemonic = [&](Type *Ty, Value *SemanticV) -> const char * {
+        auto getSIMTLoadMnemonic = [&](Type *Ty,
+                                       Value *SemanticV) -> const char * {
           const bool SignedLoad = prefersSignedSIMTLoad(SemanticV);
           switch (getSIMTMemElemBytes(Ty)) {
           case 1:
@@ -3666,8 +3653,7 @@ public:
 
         std::function<std::optional<std::string>(Value *, Type *, Value *)>
             emitLoadFromPtr;
-        emitLoadFromPtr = [&](Value *Ptr,
-                              Type *LoadTy,
+        emitLoadFromPtr = [&](Value *Ptr, Type *LoadTy,
                               Value *SemanticV) -> std::optional<std::string> {
           const uint64_t ElemBytes = getSIMTMemElemBytes(LoadTy);
           const char *LoadMnemonic = getSIMTLoadMnemonic(LoadTy, SemanticV);
@@ -3689,8 +3675,9 @@ public:
               // The textual asm is not a scalar base+index syntax; it feeds the
               // block/vector address machinery through the clock-hand/register
               // pipe contract. `emitGroupedIndexReg()` materializes the word
-              // offset that preserves the intended linear `(lane + group*lanes)`
-              // iteration mapping for both unit and non-unit stride patterns.
+              // offset that preserves the intended linear `(lane +
+              // group*lanes)` iteration mapping for both unit and non-unit
+              // stride patterns.
               auto Idx = emitGroupedIndexReg(Address->StepElems);
               if (!Idx)
                 return std::nullopt;
@@ -3712,125 +3699,121 @@ public:
               }
             }
           } else {
-	            auto General = bindPtrGeneralForElem(Ptr, ElemBytes);
-	            if (!General) {
-	              Value *Stripped = Ptr ? Ptr->stripPointerCasts() : nullptr;
-	              auto *GEP = dyn_cast_or_null<GEPOperator>(Stripped);
-	              if (GEP) {
-	                Value *Base = GEP->getPointerOperand()->stripPointerCasts();
-	                if (auto *Phi = dyn_cast<PHINode>(Base)) {
-		                  auto PlanIt = PtrPhiPlans.find(Phi);
-		                  if (PlanIt != PtrPhiPlans.end()) {
-		                    // Pointer sink PHI: dispatch load based on the selector
-		                    // written on the incoming edge.
-		                    Value *Index = nullptr;
-		                    const unsigned NumIdx = GEP->getNumIndices();
-		                    if (NumIdx == 1) {
-		                      Index = GEP->getOperand(1);
-	                    } else if (NumIdx == 2) {
-	                      auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
-	                      if (!Z || !Z->isZero())
-	                        return std::nullopt;
-	                      Index = GEP->getOperand(2);
-	                    } else {
-	                      return std::nullopt;
-	                    }
-		                    if (!Index || !Index->getType()->isIntegerTy() ||
-		                        Index->getType()->getScalarSizeInBits() > 64) {
-		                      return std::nullopt;
-		                    }
+            auto General = bindPtrGeneralForElem(Ptr, ElemBytes);
+            if (!General) {
+              Value *Stripped = Ptr ? Ptr->stripPointerCasts() : nullptr;
+              auto *GEP = dyn_cast_or_null<GEPOperator>(Stripped);
+              if (GEP) {
+                Value *Base = GEP->getPointerOperand()->stripPointerCasts();
+                if (auto *Phi = dyn_cast<PHINode>(Base)) {
+                  auto PlanIt = PtrPhiPlans.find(Phi);
+                  if (PlanIt != PtrPhiPlans.end()) {
+                    // Pointer sink PHI: dispatch load based on the selector
+                    // written on the incoming edge.
+                    Value *Index = nullptr;
+                    const unsigned NumIdx = GEP->getNumIndices();
+                    if (NumIdx == 1) {
+                      Index = GEP->getOperand(1);
+                    } else if (NumIdx == 2) {
+                      auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
+                      if (!Z || !Z->isZero())
+                        return std::nullopt;
+                      Index = GEP->getOperand(2);
+                    } else {
+                      return std::nullopt;
+                    }
+                    if (!Index || !Index->getType()->isIntegerTy() ||
+                        Index->getType()->getScalarSizeInBits() > 64) {
+                      return std::nullopt;
+                    }
 
-		                    const DataLayout &DL =
-		                        F.getParent()->getDataLayout();
-		                    Type *ElemTy = GEP->getResultElementType();
-		                    const uint64_t PtrElemBytes =
-		                        ElemTy ? DL.getTypeStoreSize(ElemTy) : 0;
+                    const DataLayout &DL = F.getParent()->getDataLayout();
+                    Type *ElemTy = GEP->getResultElementType();
+                    const uint64_t PtrElemBytes =
+                        ElemTy ? DL.getTypeStoreSize(ElemTy) : 0;
 
-		                    std::optional<std::string> IdxExpr;
-		                    if (PtrElemBytes == ElemBytes &&
-                                (ElemBytes == 1 || ElemBytes == 2 ||
-                                 ElemBytes == 4)) {
-		                      IdxExpr = emitValue(Index);
-		                    } else {
-		                      return std::nullopt;
-		                    }
-		                    if (!IdxExpr)
-		                      return std::nullopt;
+                    std::optional<std::string> IdxExpr;
+                    if (PtrElemBytes == ElemBytes &&
+                        (ElemBytes == 1 || ElemBytes == 2 || ElemBytes == 4)) {
+                      IdxExpr = emitValue(Index);
+                    } else {
+                      return std::nullopt;
+                    }
+                    if (!IdxExpr)
+                      return std::nullopt;
 
-		                    auto DeltaExpr = emitIndexDeltaFromLc0(*IdxExpr);
-		                    if (!DeltaExpr)
-		                      return std::nullopt;
-		                    auto Dst = allocVec();
-	                    if (!Dst)
-	                      return std::nullopt;
+                    auto DeltaExpr = emitIndexDeltaFromLc0(*IdxExpr);
+                    if (!DeltaExpr)
+                      return std::nullopt;
+                    auto Dst = allocVec();
+                    if (!Dst)
+                      return std::nullopt;
 
-	                    PtrPhiPlan &Plan = PlanIt->second;
-	                    if (Plan.BaseRis.empty())
-	                      return std::nullopt;
+                    PtrPhiPlan &Plan = PlanIt->second;
+                    if (Plan.BaseRis.empty())
+                      return std::nullopt;
 
-	                    const std::string EndLbl = freshAsmLabel("L_ptrphi_end");
-	                    SmallVector<std::pair<std::string, unsigned>, 4> CaseLabels;
-	                    CaseLabels.reserve(Plan.BaseRis.size());
-	                    for (unsigned SelId = 0; SelId < Plan.BaseRis.size();
-	                         ++SelId) {
-	                      std::string CaseLbl = freshAsmLabel("L_ptrphi_case");
-	                      CaseLabels.push_back(std::make_pair(CaseLbl, SelId));
+                    const std::string EndLbl = freshAsmLabel("L_ptrphi_end");
+                    SmallVector<std::pair<std::string, unsigned>, 4> CaseLabels;
+                    CaseLabels.reserve(Plan.BaseRis.size());
+                    for (unsigned SelId = 0; SelId < Plan.BaseRis.size();
+                         ++SelId) {
+                      std::string CaseLbl = freshAsmLabel("L_ptrphi_case");
+                      CaseLabels.push_back(std::make_pair(CaseLbl, SelId));
 
-	                      std::string SelTok = "zero";
-	                      if (SelId != 0) {
-	                        auto Tok =
-	                            emitValue(ConstantInt::get(I64Ty, SelId));
-	                        if (!Tok)
-	                          return std::nullopt;
-	                        SelTok = *Tok;
-	                      }
+                      std::string SelTok = "zero";
+                      if (SelId != 0) {
+                        auto Tok = emitValue(ConstantInt::get(I64Ty, SelId));
+                        if (!Tok)
+                          return std::nullopt;
+                        SelTok = *Tok;
+                      }
 
-		                      auto Pred = allocVec();
-		                      if (!Pred)
-		                        return std::nullopt;
-			                      OS << "  v.cmp.eq " << formatIntSrc(Plan.SelReg)
-			                         << ", " << formatIntSrc(SelTok) << ", ->"
-			                         << formatMaskDest(*Pred) << "\n";
-			                      // Reduce ops accumulate into the destination register; seed
-			                      // our scratch reduce destination before each use.
-			                      // NOTE: C.MOVR cannot write to a specific t#k entry; it can
-			                      // only push to `t`/`u` or write a global GPR.
-			                      OS << "  c.movr zero, ->t\n";
-			                      OS << "  v.rdor " << formatMaskSrc(*Pred)
-			                         << ", ->t#1\n";
-			                      OS << "  b.ne t#1, zero, " << CaseLbl << "\n";
-			                    }
+                      auto Pred = allocVec();
+                      if (!Pred)
+                        return std::nullopt;
+                      OS << "  v.cmp.eq " << formatIntSrc(Plan.SelReg) << ", "
+                         << formatIntSrc(SelTok) << ", ->"
+                         << formatMaskDest(*Pred) << "\n";
+                      // Reduce ops accumulate into the destination register;
+                      // seed our scratch reduce destination before each use.
+                      // NOTE: C.MOVR cannot write to a specific t#k entry; it
+                      // can only push to `t`/`u` or write a global GPR.
+                      OS << "  c.movr zero, ->t\n";
+                      OS << "  v.rdor " << formatMaskSrc(*Pred) << ", ->t#1\n";
+                      OS << "  b.ne t#1, zero, " << CaseLbl << "\n";
+                    }
 
-	                    OS << "  j " << CaseLabels.front().first << "\n";
-	                    for (auto &C : CaseLabels) {
-	                      const unsigned SelId = C.second;
-	                      if (SelId >= Plan.BaseRis.size())
-	                        return std::nullopt;
-	                      const unsigned Ri = Plan.BaseRis[SelId];
-	                      OS << C.first << ":\n";
-		                      OS << "  " << LoadMnemonic << " [ri" << Ri << ", "
-		                         << formatAddrExpr(LaneExpr) << ", "
-		                         << formatShiftedAddr(*DeltaExpr, ElemShift)
-		                         << "], ->" << formatWordDest(*Dst) << "\n";
-	                      OS << "  j " << EndLbl << "\n";
-	                    }
-	                    OS << EndLbl << ":\n";
-	                    return *Dst;
-	                  }
-	                }
-	              }
-	              if (GEP && GEP->getNumIndices() == 1) {
-	                Value *Base = GEP->getPointerOperand()->stripPointerCasts();
-	                auto *Sel = dyn_cast<SelectInst>(Base);
-	                if (Sel && Sel->getType()->isPointerTy()) {
+                    OS << "  j " << CaseLabels.front().first << "\n";
+                    for (auto &C : CaseLabels) {
+                      const unsigned SelId = C.second;
+                      if (SelId >= Plan.BaseRis.size())
+                        return std::nullopt;
+                      const unsigned Ri = Plan.BaseRis[SelId];
+                      OS << C.first << ":\n";
+                      OS << "  " << LoadMnemonic << " [ri" << Ri << ", "
+                         << formatAddrExpr(LaneExpr) << ", "
+                         << formatShiftedAddr(*DeltaExpr, ElemShift) << "], ->"
+                         << formatWordDest(*Dst) << "\n";
+                      OS << "  j " << EndLbl << "\n";
+                    }
+                    OS << EndLbl << ":\n";
+                    return *Dst;
+                  }
+                }
+              }
+              if (GEP && GEP->getNumIndices() == 1) {
+                Value *Base = GEP->getPointerOperand()->stripPointerCasts();
+                auto *Sel = dyn_cast<SelectInst>(Base);
+                if (Sel && Sel->getType()->isPointerTy()) {
                   auto IdxIt = GEP->idx_begin();
                   Value *Index =
                       (IdxIt == GEP->idx_end()) ? nullptr : IdxIt->get();
                   if (Index) {
-                    Value *TruePtr = PB.CreateGEP(
-                        GEP->getSourceElementType(), Sel->getTrueValue(), Index);
-                    Value *FalsePtr = PB.CreateGEP(
-                        GEP->getSourceElementType(), Sel->getFalseValue(), Index);
+                    Value *TruePtr = PB.CreateGEP(GEP->getSourceElementType(),
+                                                  Sel->getTrueValue(), Index);
+                    Value *FalsePtr = PB.CreateGEP(GEP->getSourceElementType(),
+                                                   Sel->getFalseValue(), Index);
                     auto Pred = emitCondition(Sel->getCondition());
                     auto TV = emitLoadFromPtr(TruePtr, LoadTy, SemanticV);
                     auto FV = emitLoadFromPtr(FalsePtr, LoadTy, SemanticV);
@@ -3838,9 +3821,9 @@ public:
                       auto Dst = allocVec();
                       if (!Dst)
                         return std::nullopt;
-	                      OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
-	                         << formatFloatSrc(*TV) << ", " << formatFloatSrc(*FV)
-	                         << ", ->" << formatWordDest(*Dst) << "\n";
+                      OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
+                         << formatFloatSrc(*TV) << ", " << formatFloatSrc(*FV)
+                         << ", ->" << formatWordDest(*Dst) << "\n";
                       return *Dst;
                     }
                   }
@@ -3855,12 +3838,12 @@ public:
           auto Dst = allocVec();
           if (!Dst)
             return std::nullopt;
-	          OS << "  " << LoadMnemonic << " [ri" << BaseRi << ", "
-	             << formatAddrExpr(LaneExpr) << ", "
-	             << formatShiftedAddr(IndexReg, IndexShift) << "], ->"
-	             << formatWordDest(*Dst) << "\n";
-	          return *Dst;
-	        };
+          OS << "  " << LoadMnemonic << " [ri" << BaseRi << ", "
+             << formatAddrExpr(LaneExpr) << ", "
+             << formatShiftedAddr(IndexReg, IndexShift) << "], ->"
+             << formatWordDest(*Dst) << "\n";
+          return *Dst;
+        };
 
         auto emitLoadFromInvariantPtr =
             [&](Value *Ptr, Type *LoadTy,
@@ -3884,12 +3867,12 @@ public:
           auto Dst = allocVec();
           if (!Dst)
             return std::nullopt;
-	          OS << "  " << LoadMnemonic << " [ri" << *Base << ", "
-	             << formatAddrExpr(LaneExpr) << ", "
-	             << formatShiftedAddr(*Neg, ElemShift) << "], ->"
-	             << formatWordDest(*Dst) << "\n";
-	          return *Dst;
-	        };
+          OS << "  " << LoadMnemonic << " [ri" << *Base << ", "
+             << formatAddrExpr(LaneExpr) << ", "
+             << formatShiftedAddr(*Neg, ElemShift) << "], ->"
+             << formatWordDest(*Dst) << "\n";
+          return *Dst;
+        };
 
         auto emitLoadFromInvariantBindInto = [&](unsigned BaseRi,
                                                  StringRef Dst) -> bool {
@@ -3902,11 +3885,11 @@ public:
           auto Neg = emitNegLc0();
           if (!Neg)
             return false;
-	          OS << "  v.lw.brg [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
-	             << ", " << formatShiftedAddr(*Neg, 2) << "], ->"
-	             << formatAssignedWordDest(Dst) << "\n";
-	          return true;
-	        };
+          OS << "  v.lw.brg [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
+             << ", " << formatShiftedAddr(*Neg, 2) << "], ->"
+             << formatAssignedWordDest(Dst) << "\n";
+          return true;
+        };
 
         auto emitLoadFromInvariantBind =
             [&](unsigned BaseRi) -> std::optional<std::string> {
@@ -3918,43 +3901,42 @@ public:
           return *Dst;
         };
 
-	        auto emitStoreToInvariantBind = [&](StringRef Src, unsigned BaseRi,
-	                                            bool IsFloat = false) {
+        auto emitStoreToInvariantBind = [&](StringRef Src, unsigned BaseRi,
+                                            bool IsFloat = false) {
           if (LaneCount == 1u) {
             OS << "  v.sw.brg "
-               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-               << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
+               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src)) << ", [ri"
+               << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
                << formatAddrExpr("zero<<2") << "]\n";
             return true;
           }
-	          auto Neg = emitNegLc0();
-	          if (!Neg)
-	            return false;
-	          OS << "  v.sw.brg "
-	             << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-		             << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
-		             << formatShiftedAddr(*Neg, 2) << "]\n";
-		          return true;
-		        };
+          auto Neg = emitNegLc0();
+          if (!Neg)
+            return false;
+          OS << "  v.sw.brg "
+             << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src)) << ", [ri"
+             << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
+             << formatShiftedAddr(*Neg, 2) << "]\n";
+          return true;
+        };
 
         auto emitLoadFromLocalWordBaseInto = [&](uint64_t WordBase,
                                                  StringRef Dst) -> bool {
           constexpr uint64_t MaxSImm24Bytes = (1ull << 23) - 1ull;
           if (!UseGroupedDims && (WordBase * 4ull) <= MaxSImm24Bytes) {
             OS << "  v.lwi.u.local [ts, " << formatAddrExpr("lc0<<2") << ", "
-               << (WordBase * 4ull) << "], ->"
-               << formatAssignedWordDest(Dst) << "\n";
+               << (WordBase * 4ull) << "], ->" << formatAssignedWordDest(Dst)
+               << "\n";
             return true;
           }
           auto Offset = emitLocalSlotMemOffset(WordBase);
           if (!Offset)
             return false;
-	          OS << "  v.lw.local [ts, " << formatAddrExpr("lc0<<2") << ", "
+          OS << "  v.lw.local [ts, " << formatAddrExpr("lc0<<2") << ", "
              << formatAddrExpr(*Offset) << "], ->"
-             << formatAssignedWordDest(Dst)
-             << "\n";
-	          return true;
-	        };
+             << formatAssignedWordDest(Dst) << "\n";
+          return true;
+        };
 
         auto emitLoadFromLocalWordBase =
             [&](uint64_t WordBase) -> std::optional<std::string> {
@@ -4028,37 +4010,37 @@ public:
           return *Dst;
         };
 
-	          auto emitStoreToLocalWordBase = [&](StringRef Src, uint64_t WordBase,
-	                                              bool IsFloat = false) {
-	          constexpr uint64_t MaxSImm24Bytes = (1ull << 23) - 1ull;
-	          if (!UseGroupedDims && (WordBase * 4ull) <= MaxSImm24Bytes) {
-	            OS << "  v.swi.u.local "
-	               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-	               << ", [ts, " << formatAddrExpr("lc0<<2") << ", "
-	               << (WordBase * 4ull) << "]\n";
-	            return true;
-	          }
-	          auto Offset = emitLocalSlotMemOffset(WordBase);
-	          if (!Offset)
-	            return false;
-	          OS << "  v.sw.local "
-	             << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-	             << ", [ts, " << formatAddrExpr("lc0<<2") << ", "
-	             << formatAddrExpr(*Offset) << "]\n";
-	          return true;
-	        };
-
-        auto emitStoreToSharedLocalWordBase = [&](StringRef Src, uint64_t WordBase,
-                                                  bool IsFloat = false) {
-          auto Offset = emitSharedLocalWordOffsetReg(WordBase);
+        auto emitStoreToLocalWordBase = [&](StringRef Src, uint64_t WordBase,
+                                            bool IsFloat = false) {
+          constexpr uint64_t MaxSImm24Bytes = (1ull << 23) - 1ull;
+          if (!UseGroupedDims && (WordBase * 4ull) <= MaxSImm24Bytes) {
+            OS << "  v.swi.u.local "
+               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
+               << ", [ts, " << formatAddrExpr("lc0<<2") << ", "
+               << (WordBase * 4ull) << "]\n";
+            return true;
+          }
+          auto Offset = emitLocalSlotMemOffset(WordBase);
           if (!Offset)
             return false;
           OS << "  v.sw.local "
-             << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-             << ", [ts, " << formatAddrExpr("lc0<<2") << ", "
-             << formatShiftedAddr(*Offset, 2) << "]\n";
+             << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src)) << ", [ts, "
+             << formatAddrExpr("lc0<<2") << ", " << formatAddrExpr(*Offset)
+             << "]\n";
           return true;
         };
+
+        auto emitStoreToSharedLocalWordBase =
+            [&](StringRef Src, uint64_t WordBase, bool IsFloat = false) {
+              auto Offset = emitSharedLocalWordOffsetReg(WordBase);
+              if (!Offset)
+                return false;
+              OS << "  v.sw.local "
+                 << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
+                 << ", [ts, " << formatAddrExpr("lc0<<2") << ", "
+                 << formatShiftedAddr(*Offset, 2) << "]\n";
+              return true;
+            };
 
         auto emitLoadFromActiveBind =
             [&](unsigned BaseRi) -> std::optional<std::string> {
@@ -4071,45 +4053,44 @@ public:
             auto Idx = emitGroupedIndexReg(1);
             if (!Idx)
               return std::nullopt;
-	            OS << "  v.lw.brg [ri" << BaseRi << ", "
-	               << formatAddrExpr("lc0<<2") << ", "
-	               << formatShiftedAddr(*Idx, 2) << "], ->"
-	               << formatWordDest(*Dst) << "\n";
-	          } else {
-	            OS << "  v.lw.brg [ri" << BaseRi << ", "
-	               << formatAddrExpr("lc0<<2") << ", " << formatAddrExpr("zero<<2")
-	               << "], ->" << formatWordDest(*Dst) << "\n";
-	          }
-	          return *Dst;
-	        };
+            OS << "  v.lw.brg [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
+               << ", " << formatShiftedAddr(*Idx, 2) << "], ->"
+               << formatWordDest(*Dst) << "\n";
+          } else {
+            OS << "  v.lw.brg [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
+               << ", " << formatAddrExpr("zero<<2") << "], ->"
+               << formatWordDest(*Dst) << "\n";
+          }
+          return *Dst;
+        };
 
-	        auto emitStoreToActiveBind = [&](StringRef Src, unsigned BaseRi,
-	                                         bool IsFloat = false) {
-	          if (!ActiveSlotPerLane)
-	            return emitStoreToInvariantBind(Src, BaseRi, IsFloat);
-	          if (UseGroupedDims) {
-	            auto Idx = emitGroupedIndexReg(1);
-	            if (!Idx)
-	              return false;
-	            OS << "  v.sw.brg "
-	               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-	               << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
-	               << ", " << formatShiftedAddr(*Idx, 2) << "]\n";
-	          } else {
-	            OS << "  v.sw.brg "
-	               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src))
-	               << ", [ri" << BaseRi << ", " << formatAddrExpr("lc0<<2")
-	               << ", " << formatAddrExpr("zero<<2") << "]\n";
-	          }
-	          return true;
-	        };
+        auto emitStoreToActiveBind = [&](StringRef Src, unsigned BaseRi,
+                                         bool IsFloat = false) {
+          if (!ActiveSlotPerLane)
+            return emitStoreToInvariantBind(Src, BaseRi, IsFloat);
+          if (UseGroupedDims) {
+            auto Idx = emitGroupedIndexReg(1);
+            if (!Idx)
+              return false;
+            OS << "  v.sw.brg "
+               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src)) << ", [ri"
+               << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
+               << formatShiftedAddr(*Idx, 2) << "]\n";
+          } else {
+            OS << "  v.sw.brg "
+               << (IsFloat ? formatFloatSrc(Src) : formatIntSrc(Src)) << ", [ri"
+               << BaseRi << ", " << formatAddrExpr("lc0<<2") << ", "
+               << formatAddrExpr("zero<<2") << "]\n";
+          }
+          return true;
+        };
 
         auto canScalarizeInvariantLoad = [&](const LoadInst *LI) -> bool {
           if (!L->isLoopInvariant(LI->getPointerOperand())) {
             return false;
           }
-          const SCEV *LoadS =
-              SE.getSCEVAtScope(SE.getSCEV(const_cast<Value *>(LI->getPointerOperand())), L);
+          const SCEV *LoadS = SE.getSCEVAtScope(
+              SE.getSCEV(const_cast<Value *>(LI->getPointerOperand())), L);
           for (StoreInst *SI : Stores) {
             const SCEV *StoreS = SE.getSCEVAtScope(SI->getPointerOperand(), L);
             if (!SE.isKnownPredicate(CmpInst::ICMP_NE, LoadS, StoreS)) {
@@ -4119,7 +4100,7 @@ public:
           return true;
         };
 
-	        emitCondition = [&](Value *Cond) -> std::optional<std::string> {
+        emitCondition = [&](Value *Cond) -> std::optional<std::string> {
           if (auto *CI = dyn_cast<ConstantInt>(Cond)) {
             if (CI->isZero()) {
               ValOp[Cond] = "zero";
@@ -4209,8 +4190,7 @@ public:
             }
 
             OS << "  " << Mn << " " << A << ", " << B << ", ->"
-               << formatMaskDest(*Dst)
-               << "\n";
+               << formatMaskDest(*Dst) << "\n";
             ValOp[Cond] = *Dst;
             return *Dst;
           }
@@ -4266,310 +4246,316 @@ public:
              << formatMaskDest(*Dst) << "\n";
           ValOp[Cond] = *Dst;
           return *Dst;
-	        };
+        };
 
-	        emitF32 = [&](Value *V) -> std::optional<std::string> {
-	          if (!V)
-	            return std::nullopt;
-	          if (V->getType() == Type::getFloatTy(Ctx))
-	            return emitValue(V);
-	          if (!V->getType()->isDoubleTy())
-	            return std::nullopt;
-
-	          auto It = ValOp.find(V);
-	          if (It != ValOp.end())
-	            return It->second;
-
-	          if (auto *Cast = dyn_cast<CastInst>(V)) {
-	            if (Cast->getOpcode() == Instruction::FPExt &&
-	                Cast->getOperand(0)->getType() == Type::getFloatTy(Ctx)) {
-	              auto Tok = emitValue(Cast->getOperand(0));
-	              if (Tok)
-	                ValOp[V] = *Tok;
-	              return Tok;
-	            }
-	          }
-
-	          if (auto *CF = dyn_cast<ConstantFP>(V)) {
-	            APFloat F = CF->getValueAPF();
-	            bool LosesInfo = false;
-	            F.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven,
-	                      &LosesInfo);
-	            APInt Bits = F.bitcastToAPInt();
-	            if (Bits.getBitWidth() != 32)
-	              return std::nullopt;
-	            const uint64_t U = Bits.getZExtValue();
-	            if (U == 0) {
-	              ValOp[V] = "zero";
-	              return "zero";
-	            }
-	            auto *CI = ConstantInt::get(I64Ty, U);
-	            auto Bind = bindI64(CI);
-	            if (!Bind)
-	              return std::nullopt;
-	            std::string Name = "ri" + std::to_string(*Bind);
-	            ValOp[V] = Name;
-	            return Name;
-	          }
-
-	          if (auto *BO = dyn_cast<BinaryOperator>(V)) {
-	            unsigned Opc = BO->getOpcode();
-	            if (Opc == Instruction::FAdd || Opc == Instruction::FSub ||
-	                Opc == Instruction::FMul || Opc == Instruction::FDiv) {
-	              auto Lhs = emitF32(BO->getOperand(0));
-	              auto Rhs = emitF32(BO->getOperand(1));
-	              if (!Lhs || !Rhs)
-	                return std::nullopt;
-	              auto Dst = allocVec();
-	              if (!Dst)
-	                return std::nullopt;
-	              StringRef Mn = (Opc == Instruction::FAdd)   ? "v.fadd"
-	                            : (Opc == Instruction::FSub) ? "v.fsub"
-	                            : (Opc == Instruction::FMul) ? "v.fmul"
-	                                                         : "v.fdiv";
-		              OS << "  " << Mn << " " << formatFloatSrc(*Lhs) << ", "
-		                 << formatFloatSrc(*Rhs) << ", ->"
-		                 << formatWordDest(*Dst) << "\n";
-	              ValOp[V] = *Dst;
-	              return *Dst;
-	            }
-	          }
-
-	          return std::nullopt;
-	        };
-
-	        emitValue = [&](Value *V) -> std::optional<std::string> {
-	              if (!V)
-	                return std::nullopt;
+        emitF32 = [&](Value *V) -> std::optional<std::string> {
+          if (!V)
+            return std::nullopt;
+          if (V->getType() == Type::getFloatTy(Ctx))
+            return emitValue(V);
+          if (!V->getType()->isDoubleTy())
+            return std::nullopt;
 
           auto It = ValOp.find(V);
           if (It != ValOp.end())
             return It->second;
 
-	          if (auto *PN = dyn_cast<PHINode>(V)) {
-	            auto RecIt = RecurrencePlanByPhi.find(PN);
-	            if (RecIt != RecurrencePlanByPhi.end()) {
-                const unsigned RecIdx = RecIt->second;
-		              const RecurrencePlan &Plan = RecurrencePlans[RecIdx];
-                if (!Plan.LocalWordBase) {
-		                auto Dst = emitLoadFromInvariantBind(Plan.SlotBind);
-		                if (!Dst)
-		                  return std::nullopt;
-	                ValOp[V] = *Dst;
-	                return *Dst;
+          if (auto *Cast = dyn_cast<CastInst>(V)) {
+            if (Cast->getOpcode() == Instruction::FPExt &&
+                Cast->getOperand(0)->getType() == Type::getFloatTy(Ctx)) {
+              auto Tok = emitValue(Cast->getOperand(0));
+              if (Tok)
+                ValOp[V] = *Tok;
+              return Tok;
+            }
+          }
+
+          if (auto *CF = dyn_cast<ConstantFP>(V)) {
+            APFloat F = CF->getValueAPF();
+            bool LosesInfo = false;
+            F.convert(APFloat::IEEEsingle(), APFloat::rmNearestTiesToEven,
+                      &LosesInfo);
+            APInt Bits = F.bitcastToAPInt();
+            if (Bits.getBitWidth() != 32)
+              return std::nullopt;
+            const uint64_t U = Bits.getZExtValue();
+            if (U == 0) {
+              ValOp[V] = "zero";
+              return "zero";
+            }
+            auto *CI = ConstantInt::get(I64Ty, U);
+            auto Bind = bindI64(CI);
+            if (!Bind)
+              return std::nullopt;
+            std::string Name = "ri" + std::to_string(*Bind);
+            ValOp[V] = Name;
+            return Name;
+          }
+
+          if (auto *BO = dyn_cast<BinaryOperator>(V)) {
+            unsigned Opc = BO->getOpcode();
+            if (Opc == Instruction::FAdd || Opc == Instruction::FSub ||
+                Opc == Instruction::FMul || Opc == Instruction::FDiv) {
+              auto Lhs = emitF32(BO->getOperand(0));
+              auto Rhs = emitF32(BO->getOperand(1));
+              if (!Lhs || !Rhs)
+                return std::nullopt;
+              auto Dst = allocVec();
+              if (!Dst)
+                return std::nullopt;
+              StringRef Mn = (Opc == Instruction::FAdd)   ? "v.fadd"
+                             : (Opc == Instruction::FSub) ? "v.fsub"
+                             : (Opc == Instruction::FMul) ? "v.fmul"
+                                                          : "v.fdiv";
+              OS << "  " << Mn << " " << formatFloatSrc(*Lhs) << ", "
+                 << formatFloatSrc(*Rhs) << ", ->" << formatWordDest(*Dst)
+                 << "\n";
+              ValOp[V] = *Dst;
+              return *Dst;
+            }
+          }
+
+          return std::nullopt;
+        };
+
+        emitValue = [&](Value *V) -> std::optional<std::string> {
+          if (!V)
+            return std::nullopt;
+
+          auto It = ValOp.find(V);
+          if (It != ValOp.end())
+            return It->second;
+
+          if (auto *PN = dyn_cast<PHINode>(V)) {
+            auto RecIt = RecurrencePlanByPhi.find(PN);
+            if (RecIt != RecurrencePlanByPhi.end()) {
+              const unsigned RecIdx = RecIt->second;
+              const RecurrencePlan &Plan = RecurrencePlans[RecIdx];
+              if (!Plan.LocalWordBase) {
+                auto Dst = emitLoadFromInvariantBind(Plan.SlotBind);
+                if (!Dst)
+                  return std::nullopt;
+                ValOp[V] = *Dst;
+                return *Dst;
+              }
+
+              auto Dst = allocVec();
+              if (!Dst)
+                return std::nullopt;
+              const std::string BindLabel = freshAsmLabel("L_recurrence_bind");
+              const std::string DoneLabel = freshAsmLabel("L_recurrence_done");
+              OS << "  v.cmp.eq " << formatIntSrc(LinearIndexReg)
+                 << ", zero, ->p\n";
+              OS << "  b.nz " << BindLabel << "\n";
+              if (!emitLoadFromLocalWordBaseInto(*Plan.LocalWordBase, *Dst))
+                return std::nullopt;
+              OS << "  j " << DoneLabel << "\n";
+              OS << BindLabel << ":\n";
+              auto Neg = allocVec();
+              if (!Neg)
+                return std::nullopt;
+              OS << "  v.sub zero, " << formatIntSrc("lc0") << ", ->"
+                 << formatWordDest(*Neg) << "\n";
+              OS << "  v.lw.brg [ri" << Plan.SlotBind << ", "
+                 << formatAddrExpr("lc0<<2") << ", "
+                 << formatShiftedAddr(*Neg, 2) << "], ->"
+                 << formatAssignedWordDest(*Dst) << "\n";
+              OS << DoneLabel << ":\n";
+              ValOp[V] = *Dst;
+              return *Dst;
+            }
+
+            auto tryEmitPhiSelectCsel = [&]() -> std::optional<std::string> {
+              if (PN->getNumIncomingValues() != 2)
+                return std::nullopt;
+
+              auto tryEmitPhiSelect =
+                  [&](BasicBlock *BranchBB,
+                      BasicBlock *OtherBB) -> std::optional<std::string> {
+                if (!BranchBB || !OtherBB || BranchBB == OtherBB)
+                  return std::nullopt;
+                auto *BI = dyn_cast<BranchInst>(BranchBB->getTerminator());
+                auto *OBI = dyn_cast<BranchInst>(OtherBB->getTerminator());
+                if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2)
+                  return std::nullopt;
+                if (!OBI || OBI->isConditional() ||
+                    OBI->getNumSuccessors() != 1)
+                  return std::nullopt;
+                if (OBI->getSuccessor(0) != PN->getParent())
+                  return std::nullopt;
+
+                const bool TrueToMerge =
+                    (BI->getSuccessor(0) == PN->getParent());
+                const bool FalseToMerge =
+                    (BI->getSuccessor(1) == PN->getParent());
+                if (!(TrueToMerge || FalseToMerge))
+                  return std::nullopt;
+
+                if (TrueToMerge) {
+                  if (BI->getSuccessor(1) != OtherBB)
+                    return std::nullopt;
+                } else {
+                  if (BI->getSuccessor(0) != OtherBB)
+                    return std::nullopt;
                 }
+
+                Value *VTrue = PN->getIncomingValueForBlock(
+                    TrueToMerge ? BranchBB : OtherBB);
+                Value *VFalse = PN->getIncomingValueForBlock(
+                    TrueToMerge ? OtherBB : BranchBB);
+                if (!VTrue || !VFalse || VTrue == PN || VFalse == PN)
+                  return std::nullopt;
+
+                auto Pred = emitCondition(BI->getCondition());
+                auto TV = emitValue(VTrue);
+                auto FV = emitValue(VFalse);
+                if (!Pred || !TV || !FV)
+                  return std::nullopt;
 
                 auto Dst = allocVec();
                 if (!Dst)
                   return std::nullopt;
-                const std::string BindLabel = freshAsmLabel("L_recurrence_bind");
-                const std::string DoneLabel = freshAsmLabel("L_recurrence_done");
-                OS << "  v.cmp.eq " << formatIntSrc(LinearIndexReg)
-                   << ", zero, ->p\n";
-                OS << "  b.nz " << BindLabel << "\n";
-                if (!emitLoadFromLocalWordBaseInto(*Plan.LocalWordBase, *Dst))
+                const bool IsFloat = PN->getType() == Type::getFloatTy(Ctx);
+                OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
+                   << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV))
+                   << ", "
+                   << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
+                   << ", ->" << formatWordDest(*Dst) << "\n";
+                return *Dst;
+              };
+
+              auto tryEmitPhiSelectViaSplit =
+                  [&](BasicBlock *TruePred,
+                      BasicBlock *FalsePred) -> std::optional<std::string> {
+                if (!TruePred || !FalsePred || TruePred == FalsePred)
                   return std::nullopt;
-                OS << "  j " << DoneLabel << "\n";
-                OS << BindLabel << ":\n";
-                auto Neg = allocVec();
-                if (!Neg)
+                auto *TPredBI = dyn_cast<BranchInst>(TruePred->getTerminator());
+                auto *FPredBI =
+                    dyn_cast<BranchInst>(FalsePred->getTerminator());
+                if (!TPredBI || !FPredBI)
                   return std::nullopt;
-                OS << "  v.sub zero, " << formatIntSrc("lc0") << ", ->"
-                   << formatWordDest(*Neg) << "\n";
-                OS << "  v.lw.brg [ri" << Plan.SlotBind << ", "
-                   << formatAddrExpr("lc0<<2") << ", "
-	                   << formatShiftedAddr(*Neg, 2) << "], ->"
-	                   << formatAssignedWordDest(*Dst) << "\n";
-                OS << DoneLabel << ":\n";
+                if (TPredBI->isConditional() || FPredBI->isConditional())
+                  return std::nullopt;
+                if (TPredBI->getNumSuccessors() != 1 ||
+                    FPredBI->getNumSuccessors() != 1)
+                  return std::nullopt;
+                if (TPredBI->getSuccessor(0) != PN->getParent() ||
+                    FPredBI->getSuccessor(0) != PN->getParent())
+                  return std::nullopt;
+
+                BasicBlock *BranchBB = TruePred->getSinglePredecessor();
+                if (!BranchBB || BranchBB != FalsePred->getSinglePredecessor())
+                  return std::nullopt;
+                auto *BI = dyn_cast<BranchInst>(BranchBB->getTerminator());
+                if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2)
+                  return std::nullopt;
+                if (BI->getSuccessor(0) != TruePred ||
+                    BI->getSuccessor(1) != FalsePred)
+                  return std::nullopt;
+
+                Value *VTrue = PN->getIncomingValueForBlock(TruePred);
+                Value *VFalse = PN->getIncomingValueForBlock(FalsePred);
+                if (!VTrue || !VFalse || VTrue == PN || VFalse == PN)
+                  return std::nullopt;
+
+                auto Pred = emitCondition(BI->getCondition());
+                auto TV = emitValue(VTrue);
+                auto FV = emitValue(VFalse);
+                if (!Pred || !TV || !FV)
+                  return std::nullopt;
+
+                auto Dst = allocVec();
+                if (!Dst)
+                  return std::nullopt;
+                const bool IsFloat = PN->getType() == Type::getFloatTy(Ctx);
+                OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
+                   << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV))
+                   << ", "
+                   << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
+                   << ", ->" << formatWordDest(*Dst) << "\n";
+                return *Dst;
+              };
+
+              auto tryEmitPhiSelectViaRegion =
+                  [&]() -> std::optional<std::string> {
+                for (auto &KV : IfConvertibleSplits) {
+                  const IfConvertibleSplitInfo &Split = KV.second;
+                  if (Split.MergeBB != PN->getParent())
+                    continue;
+                  if (!Split.BranchBB || !Split.TrueExitBB ||
+                      !Split.FalseExitBB)
+                    continue;
+
+                  Value *VTrue = PN->getIncomingValueForBlock(Split.TrueExitBB);
+                  Value *VFalse =
+                      PN->getIncomingValueForBlock(Split.FalseExitBB);
+                  if (!VTrue || !VFalse || VTrue == PN || VFalse == PN)
+                    continue;
+
+                  auto *BI =
+                      dyn_cast<BranchInst>(Split.BranchBB->getTerminator());
+                  if (!BI || !BI->isConditional() ||
+                      BI->getNumSuccessors() != 2)
+                    continue;
+
+                  auto Pred = emitCondition(BI->getCondition());
+                  auto TV = emitValue(VTrue);
+                  auto FV = emitValue(VFalse);
+                  if (!Pred || !TV || !FV)
+                    return std::nullopt;
+
+                  auto Dst = allocVec();
+                  if (!Dst)
+                    return std::nullopt;
+                  const bool IsFloat = PN->getType() == Type::getFloatTy(Ctx);
+                  OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
+                     << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV))
+                     << ", "
+                     << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
+                     << ", ->" << formatWordDest(*Dst) << "\n";
+                  return *Dst;
+                }
+                return std::nullopt;
+              };
+
+              BasicBlock *Pred0 = PN->getIncomingBlock(0);
+              BasicBlock *Pred1 = PN->getIncomingBlock(1);
+              if (!L->contains(Pred0) || !L->contains(Pred1))
+                return std::nullopt;
+
+              if (auto Dst = tryEmitPhiSelect(Pred0, Pred1))
+                return Dst;
+              if (auto Dst = tryEmitPhiSelect(Pred1, Pred0))
+                return Dst;
+              if (auto Dst = tryEmitPhiSelectViaSplit(Pred0, Pred1))
+                return Dst;
+              if (auto Dst = tryEmitPhiSelectViaSplit(Pred1, Pred0))
+                return Dst;
+              if (auto Dst = tryEmitPhiSelectViaRegion())
+                return Dst;
+
+              return std::nullopt;
+            };
+
+            if (PN->getType() == Type::getFloatTy(Ctx) ||
+                (PN->getType()->isIntegerTy() &&
+                 PN->getType()->getScalarSizeInBits() <= 64)) {
+              if (auto Dst = tryEmitPhiSelectCsel()) {
                 ValOp[V] = *Dst;
                 return *Dst;
-	            }
+              }
+            }
 
-	            auto tryEmitPhiSelectCsel = [&]() -> std::optional<std::string> {
-	              if (PN->getNumIncomingValues() != 2)
-	                return std::nullopt;
+            auto It = ValOp.find(V);
+            if (It != ValOp.end())
+              return It->second;
 
-	              auto tryEmitPhiSelect = [&](BasicBlock *BranchBB,
-	                                          BasicBlock *OtherBB)
-	                  -> std::optional<std::string> {
-	                if (!BranchBB || !OtherBB || BranchBB == OtherBB)
-	                  return std::nullopt;
-	                auto *BI = dyn_cast<BranchInst>(BranchBB->getTerminator());
-	                auto *OBI = dyn_cast<BranchInst>(OtherBB->getTerminator());
-	                if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2)
-	                  return std::nullopt;
-	                if (!OBI || OBI->isConditional() || OBI->getNumSuccessors() != 1)
-	                  return std::nullopt;
-	                if (OBI->getSuccessor(0) != PN->getParent())
-	                  return std::nullopt;
-
-	                const bool TrueToMerge = (BI->getSuccessor(0) == PN->getParent());
-	                const bool FalseToMerge = (BI->getSuccessor(1) == PN->getParent());
-	                if (!(TrueToMerge || FalseToMerge))
-	                  return std::nullopt;
-
-	                if (TrueToMerge) {
-	                  if (BI->getSuccessor(1) != OtherBB)
-	                    return std::nullopt;
-	                } else {
-	                  if (BI->getSuccessor(0) != OtherBB)
-	                    return std::nullopt;
-	                }
-
-	                Value *VTrue = PN->getIncomingValueForBlock(
-	                    TrueToMerge ? BranchBB : OtherBB);
-	                Value *VFalse = PN->getIncomingValueForBlock(
-	                    TrueToMerge ? OtherBB : BranchBB);
-	                if (!VTrue || !VFalse || VTrue == PN || VFalse == PN)
-	                  return std::nullopt;
-
-	                auto Pred = emitCondition(BI->getCondition());
-	                auto TV = emitValue(VTrue);
-	                auto FV = emitValue(VFalse);
-	                if (!Pred || !TV || !FV)
-	                  return std::nullopt;
-
-	                auto Dst = allocVec();
-	                if (!Dst)
-	                  return std::nullopt;
-		                const bool IsFloat = PN->getType() == Type::getFloatTy(Ctx);
-		                OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
-		                   << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV))
-		                   << ", "
-		                   << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
-		                   << ", ->" << formatWordDest(*Dst) << "\n";
-	                return *Dst;
-	              };
-
-	              auto tryEmitPhiSelectViaSplit = [&](BasicBlock *TruePred,
-	                                                  BasicBlock *FalsePred)
-	                  -> std::optional<std::string> {
-	                if (!TruePred || !FalsePred || TruePred == FalsePred)
-	                  return std::nullopt;
-	                auto *TPredBI = dyn_cast<BranchInst>(TruePred->getTerminator());
-	                auto *FPredBI = dyn_cast<BranchInst>(FalsePred->getTerminator());
-	                if (!TPredBI || !FPredBI)
-	                  return std::nullopt;
-	                if (TPredBI->isConditional() || FPredBI->isConditional())
-	                  return std::nullopt;
-	                if (TPredBI->getNumSuccessors() != 1 ||
-	                    FPredBI->getNumSuccessors() != 1)
-	                  return std::nullopt;
-	                if (TPredBI->getSuccessor(0) != PN->getParent() ||
-	                    FPredBI->getSuccessor(0) != PN->getParent())
-	                  return std::nullopt;
-
-	                BasicBlock *BranchBB = TruePred->getSinglePredecessor();
-	                if (!BranchBB || BranchBB != FalsePred->getSinglePredecessor())
-	                  return std::nullopt;
-	                auto *BI = dyn_cast<BranchInst>(BranchBB->getTerminator());
-	                if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2)
-	                  return std::nullopt;
-	                if (BI->getSuccessor(0) != TruePred ||
-	                    BI->getSuccessor(1) != FalsePred)
-	                  return std::nullopt;
-
-	                Value *VTrue = PN->getIncomingValueForBlock(TruePred);
-	                Value *VFalse = PN->getIncomingValueForBlock(FalsePred);
-	                if (!VTrue || !VFalse || VTrue == PN || VFalse == PN)
-	                  return std::nullopt;
-
-	                auto Pred = emitCondition(BI->getCondition());
-	                auto TV = emitValue(VTrue);
-	                auto FV = emitValue(VFalse);
-	                if (!Pred || !TV || !FV)
-	                  return std::nullopt;
-
-	                auto Dst = allocVec();
-	                if (!Dst)
-	                  return std::nullopt;
-		                const bool IsFloat = PN->getType() == Type::getFloatTy(Ctx);
-		                OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
-		                   << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV))
-		                   << ", "
-		                   << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
-		                   << ", ->" << formatWordDest(*Dst) << "\n";
-	                return *Dst;
-	              };
-
-	              auto tryEmitPhiSelectViaRegion = [&]() -> std::optional<std::string> {
-	                for (auto &KV : IfConvertibleSplits) {
-	                  const IfConvertibleSplitInfo &Split = KV.second;
-	                  if (Split.MergeBB != PN->getParent())
-	                    continue;
-	                  if (!Split.BranchBB || !Split.TrueExitBB || !Split.FalseExitBB)
-	                    continue;
-
-	                  Value *VTrue =
-	                      PN->getIncomingValueForBlock(Split.TrueExitBB);
-	                  Value *VFalse =
-	                      PN->getIncomingValueForBlock(Split.FalseExitBB);
-	                  if (!VTrue || !VFalse || VTrue == PN || VFalse == PN)
-	                    continue;
-
-	                  auto *BI =
-	                      dyn_cast<BranchInst>(Split.BranchBB->getTerminator());
-	                  if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2)
-	                    continue;
-
-	                  auto Pred = emitCondition(BI->getCondition());
-	                  auto TV = emitValue(VTrue);
-	                  auto FV = emitValue(VFalse);
-	                  if (!Pred || !TV || !FV)
-	                    return std::nullopt;
-
-	                  auto Dst = allocVec();
-	                  if (!Dst)
-	                    return std::nullopt;
-	                  const bool IsFloat = PN->getType() == Type::getFloatTy(Ctx);
-	                  OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
-	                     << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV))
-	                     << ", "
-	                     << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
-	                     << ", ->" << formatWordDest(*Dst) << "\n";
-	                  return *Dst;
-	                }
-	                return std::nullopt;
-	              };
-
-	              BasicBlock *Pred0 = PN->getIncomingBlock(0);
-	              BasicBlock *Pred1 = PN->getIncomingBlock(1);
-	              if (!L->contains(Pred0) || !L->contains(Pred1))
-	                return std::nullopt;
-
-	              if (auto Dst = tryEmitPhiSelect(Pred0, Pred1))
-	                return Dst;
-	              if (auto Dst = tryEmitPhiSelect(Pred1, Pred0))
-	                return Dst;
-	              if (auto Dst = tryEmitPhiSelectViaSplit(Pred0, Pred1))
-	                return Dst;
-	              if (auto Dst = tryEmitPhiSelectViaSplit(Pred1, Pred0))
-	                return Dst;
-	              if (auto Dst = tryEmitPhiSelectViaRegion())
-	                return Dst;
-
-	              return std::nullopt;
-	            };
-
-	            if (PN->getType() == Type::getFloatTy(Ctx) ||
-	                (PN->getType()->isIntegerTy() &&
-	                 PN->getType()->getScalarSizeInBits() <= 64)) {
-	              if (auto Dst = tryEmitPhiSelectCsel()) {
-	                ValOp[V] = *Dst;
-	                return *Dst;
-	              }
-	            }
-
-	            auto It = ValOp.find(V);
-	            if (It != ValOp.end())
-	              return It->second;
-
-	            if (PN->getType() == Type::getFloatTy(Ctx)) {
-	              Value *LoopIncoming = nullptr;
-	              Value *PreIncoming = nullptr;
-	              for (unsigned I = 0; I < 2; I++) {
-	                BasicBlock *IncomingBB = PN->getIncomingBlock(I);
-	                if (L->contains(IncomingBB)) {
+            if (PN->getType() == Type::getFloatTy(Ctx)) {
+              Value *LoopIncoming = nullptr;
+              Value *PreIncoming = nullptr;
+              for (unsigned I = 0; I < 2; I++) {
+                BasicBlock *IncomingBB = PN->getIncomingBlock(I);
+                if (L->contains(IncomingBB)) {
                   if (LoopIncoming)
                     return std::nullopt;
                   LoopIncoming = PN->getIncomingValue(I);
@@ -4585,17 +4571,20 @@ public:
 
               auto *LoopLI = dyn_cast_or_null<LoadInst>(LoopIncoming);
               auto *PreLI = dyn_cast_or_null<LoadInst>(PreIncoming);
-              if (!LoopLI || !PreLI || LoopLI->isVolatile() || LoopLI->isAtomic() ||
-                  PreLI->isVolatile() || PreLI->isAtomic()) {
+              if (!LoopLI || !PreLI || LoopLI->isVolatile() ||
+                  LoopLI->isAtomic() || PreLI->isVolatile() ||
+                  PreLI->isAtomic()) {
                 return std::nullopt;
               }
 
-              const SCEV *PS = SE.getSCEVAtScope(LoopLI->getPointerOperand(), L);
+              const SCEV *PS =
+                  SE.getSCEVAtScope(LoopLI->getPointerOperand(), L);
               const auto *AR = dyn_cast<SCEVAddRecExpr>(PS);
               if (!AR || AR->getLoop() != L || !AR->isAffine()) {
                 return std::nullopt;
               }
-              const auto *StepC = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+              const auto *StepC =
+                  dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
               if (!StepC) {
                 return std::nullopt;
               }
@@ -4605,64 +4594,66 @@ public:
               }
               const SCEV *ExpectedPre =
                   SE.getMinusSCEV(AR->getStart(), AR->getStepRecurrence(SE));
-              const SCEV *PreS = SE.getSCEVAtScope(PreLI->getPointerOperand(), L);
+              const SCEV *PreS =
+                  SE.getSCEVAtScope(PreLI->getPointerOperand(), L);
               if (!SE.isKnownPredicate(CmpInst::ICMP_EQ, PreS, ExpectedPre)) {
                 return std::nullopt;
               }
-              Value *AdjPtr = PB.CreateGEP(
-                  PB.getInt8Ty(), LoopLI->getPointerOperand(),
-                  ConstantInt::get(I64Ty, -StepBytes));
+              Value *AdjPtr =
+                  PB.CreateGEP(PB.getInt8Ty(), LoopLI->getPointerOperand(),
+                               ConstantInt::get(I64Ty, -StepBytes));
               auto Dst = emitLoadFromPtr(AdjPtr, LoopLI->getType(), LoopLI);
               if (!Dst) {
                 return std::nullopt;
               }
               ValOp[V] = *Dst;
               return *Dst;
-
             }
 
-	            if (PN->getType()->isIntegerTy() &&
-	                PN->getType()->getScalarSizeInBits() <= 64) {
-	              if (auto Dst = emitIntegerAffineAddRecValue(PN, /*EdgeFresh=*/false))
-	                return Dst;
-	            }
+            if (PN->getType()->isIntegerTy() &&
+                PN->getType()->getScalarSizeInBits() <= 64) {
+              if (auto Dst =
+                      emitIntegerAffineAddRecValue(PN, /*EdgeFresh=*/false))
+                return Dst;
+            }
 
-	            // Loop-invariant PHIs can appear in nested loops (outer IVs). Treat
-	            // them like any other loop-invariant value and bind them.
-	            if (L->isLoopInvariant(PN)) {
-	              if (PN->getType()->isPointerTy()) {
-	                Value *I64V = PB.CreatePtrToInt(const_cast<Value *>(V), I64Ty);
-	                auto Bind = bindI64(I64V);
-	                if (!Bind)
-	                  return std::nullopt;
-	                std::string Name = "ri" + std::to_string(*Bind);
-	                ValOp[V] = Name;
-	                return Name;
-	              }
-	              if (PN->getType()->isIntegerTy() &&
-	                  PN->getType()->getScalarSizeInBits() <= 64) {
-	                Value *I64V = PB.CreateZExtOrTrunc(const_cast<Value *>(V), I64Ty);
-	                auto Bind = bindI64(I64V);
-	                if (!Bind)
-	                  return std::nullopt;
-	                std::string Name = "ri" + std::to_string(*Bind);
-	                ValOp[V] = Name;
-	                return Name;
-	              }
-	              if (PN->getType() == Type::getFloatTy(Ctx)) {
-	                auto *Bits32 = PB.CreateBitCast(const_cast<Value *>(V), I32Ty);
-	                auto *I64V = PB.CreateZExt(Bits32, I64Ty);
-	                auto Bind = bindI64(I64V);
-	                if (!Bind)
-	                  return std::nullopt;
-	                std::string Name = "ri" + std::to_string(*Bind);
-	                ValOp[V] = Name;
-	                return Name;
-	              }
-	            }
+            // Loop-invariant PHIs can appear in nested loops (outer IVs). Treat
+            // them like any other loop-invariant value and bind them.
+            if (L->isLoopInvariant(PN)) {
+              if (PN->getType()->isPointerTy()) {
+                Value *I64V = PB.CreatePtrToInt(const_cast<Value *>(V), I64Ty);
+                auto Bind = bindI64(I64V);
+                if (!Bind)
+                  return std::nullopt;
+                std::string Name = "ri" + std::to_string(*Bind);
+                ValOp[V] = Name;
+                return Name;
+              }
+              if (PN->getType()->isIntegerTy() &&
+                  PN->getType()->getScalarSizeInBits() <= 64) {
+                Value *I64V =
+                    PB.CreateZExtOrTrunc(const_cast<Value *>(V), I64Ty);
+                auto Bind = bindI64(I64V);
+                if (!Bind)
+                  return std::nullopt;
+                std::string Name = "ri" + std::to_string(*Bind);
+                ValOp[V] = Name;
+                return Name;
+              }
+              if (PN->getType() == Type::getFloatTy(Ctx)) {
+                auto *Bits32 = PB.CreateBitCast(const_cast<Value *>(V), I32Ty);
+                auto *I64V = PB.CreateZExt(Bits32, I64Ty);
+                auto Bind = bindI64(I64V);
+                if (!Bind)
+                  return std::nullopt;
+                std::string Name = "ri" + std::to_string(*Bind);
+                ValOp[V] = Name;
+                return Name;
+              }
+            }
 
-	            return std::nullopt;
-	          }
+            return std::nullopt;
+          }
 
           if (auto *CF = dyn_cast<ConstantFP>(V)) {
             APInt Bits = CF->getValueAPF().bitcastToAPInt();
@@ -4775,7 +4766,8 @@ public:
                 return std::nullopt;
               }
               if (canScalarizeInvariantLoad(LI)) {
-                Value *ScalarLoad = PB.CreateLoad(LI->getType(), LI->getPointerOperand());
+                Value *ScalarLoad =
+                    PB.CreateLoad(LI->getType(), LI->getPointerOperand());
                 Value *I64V = nullptr;
                 if (LI->getType()->isFloatTy()) {
                   auto *Bits32 = PB.CreateBitCast(ScalarLoad, I32Ty);
@@ -4806,24 +4798,24 @@ public:
               return std::nullopt;
             if (auto *SelPtr = dyn_cast<SelectInst>(LI->getPointerOperand())) {
               auto Pred = emitCondition(SelPtr->getCondition());
-              auto TV = emitLoadFromPtr(SelPtr->getTrueValue(), LI->getType(),
-                                        LI);
-              auto FV = emitLoadFromPtr(SelPtr->getFalseValue(), LI->getType(),
-                                        LI);
+              auto TV =
+                  emitLoadFromPtr(SelPtr->getTrueValue(), LI->getType(), LI);
+              auto FV =
+                  emitLoadFromPtr(SelPtr->getFalseValue(), LI->getType(), LI);
               if (!Pred || !TV || !FV)
                 return std::nullopt;
               auto Dst = allocVec();
               if (!Dst)
                 return std::nullopt;
               OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
-                 << formatFloatSrc(*TV) << ", " << formatFloatSrc(*FV)
-                 << ", ->" << formatWordDest(*Dst) << "\n";
+                 << formatFloatSrc(*TV) << ", " << formatFloatSrc(*FV) << ", ->"
+                 << formatWordDest(*Dst) << "\n";
               ValOp[V] = *Dst;
               return *Dst;
             }
 
-            auto Dst = emitLoadFromPtr(LI->getPointerOperand(), LI->getType(),
-                                       LI);
+            auto Dst =
+                emitLoadFromPtr(LI->getPointerOperand(), LI->getType(), LI);
             if (!Dst)
               return std::nullopt;
             ValOp[V] = *Dst;
@@ -4842,83 +4834,84 @@ public:
             const bool IsFloat = SI->getType() == Type::getFloatTy(Ctx);
             OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
                << (IsFloat ? formatFloatSrc(*TV) : formatIntSrc(*TV)) << ", "
-               << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV))
-               << ", ->" << formatWordDest(*Dst) << "\n";
+               << (IsFloat ? formatFloatSrc(*FV) : formatIntSrc(*FV)) << ", ->"
+               << formatWordDest(*Dst) << "\n";
             ValOp[V] = *Dst;
             return *Dst;
           }
 
-	          if (auto *Cast = dyn_cast<CastInst>(V)) {
-	            switch (Cast->getOpcode()) {
-	            case Instruction::Trunc:
-	            case Instruction::ZExt:
-	            case Instruction::SExt:
-	              return emitValue(Cast->getOperand(0));
-	            case Instruction::SIToFP:
-	            case Instruction::UIToFP:
-	            case Instruction::FPExt:
-	            case Instruction::FPTrunc: {
-	              if (Cast->getOpcode() == Instruction::FPExt &&
-	                  Cast->getOperand(0)->getType() == Type::getFloatTy(Ctx) &&
-	                  Cast->getType()->isDoubleTy()) {
-	                // TSVC frequently promotes floats to double due to literal
-	                // constants (e.g. "/1.9") and truncates back to float.
-	                // We model the computation in float32 and treat these casts
-	                // as no-ops in bring-up mode.
-	                return emitValue(Cast->getOperand(0));
-	              }
-	              if (Cast->getOpcode() == Instruction::FPTrunc &&
-	                  Cast->getType() == Type::getFloatTy(Ctx) &&
-	                  Cast->getOperand(0)->getType()->isDoubleTy()) {
-	                auto Tok = emitF32(Cast->getOperand(0));
-	                if (Tok)
-	                  ValOp[V] = *Tok;
-	                return Tok;
-	              }
+          if (auto *Cast = dyn_cast<CastInst>(V)) {
+            switch (Cast->getOpcode()) {
+            case Instruction::Trunc:
+            case Instruction::ZExt:
+            case Instruction::SExt:
+              return emitValue(Cast->getOperand(0));
+            case Instruction::SIToFP:
+            case Instruction::UIToFP:
+            case Instruction::FPExt:
+            case Instruction::FPTrunc: {
+              if (Cast->getOpcode() == Instruction::FPExt &&
+                  Cast->getOperand(0)->getType() == Type::getFloatTy(Ctx) &&
+                  Cast->getType()->isDoubleTy()) {
+                // TSVC frequently promotes floats to double due to literal
+                // constants (e.g. "/1.9") and truncates back to float.
+                // We model the computation in float32 and treat these casts
+                // as no-ops in bring-up mode.
+                return emitValue(Cast->getOperand(0));
+              }
+              if (Cast->getOpcode() == Instruction::FPTrunc &&
+                  Cast->getType() == Type::getFloatTy(Ctx) &&
+                  Cast->getOperand(0)->getType()->isDoubleTy()) {
+                auto Tok = emitF32(Cast->getOperand(0));
+                if (Tok)
+                  ValOp[V] = *Tok;
+                return Tok;
+              }
 
-	              if (Cast->getType() != Type::getFloatTy(Ctx))
-	                return std::nullopt;
-	              Value *Src = Cast->getOperand(0);
-                if (UseGroupedDims && LaneCount > 1 &&
-                    (Cast->getOpcode() == Instruction::SIToFP ||
-                     Cast->getOpcode() == Instruction::UIToFP)) {
-                  if (!Src->getType()->isIntegerTy() ||
-                      Src->getType()->getScalarSizeInBits() > 32) {
-                    return std::nullopt;
-                  }
-                  if (Cast->getOpcode() == Instruction::UIToFP) {
-                    const SCEV *SrcS = SE.getSCEVAtScope(Src, L);
-                    if (!SE.isKnownNonNegative(SrcS)) {
-                      return std::nullopt;
-                    }
-                  }
-                  auto IntTok = emitValue(Src);
-                  if (!IntTok)
-                    return std::nullopt;
-                  auto Dst = allocVec();
-                  if (!Dst)
-                    return std::nullopt;
-                  // The vector convert surface only exposes signed integer
-                  // lanes. Reuse it for unsigned casts when SCEV proves the
-                  // source non-negative, which holds for TSVC induction paths.
-                  OS << "  v.icvtf.sw2fs " << formatIntSrc(*IntTok) << ", ->"
-                     << formatWordDest(*Dst) << "\n";
-                  ValOp[V] = *Dst;
-                  return *Dst;
+              if (Cast->getType() != Type::getFloatTy(Ctx))
+                return std::nullopt;
+              Value *Src = Cast->getOperand(0);
+              if (UseGroupedDims && LaneCount > 1 &&
+                  (Cast->getOpcode() == Instruction::SIToFP ||
+                   Cast->getOpcode() == Instruction::UIToFP)) {
+                if (!Src->getType()->isIntegerTy() ||
+                    Src->getType()->getScalarSizeInBits() > 32) {
+                  return std::nullopt;
                 }
-	              if (!L->isLoopInvariant(Src)) {
-	                // Support affine int induction to float in scalar-lane replay
-	                // mode by synthesizing a float induction slot.
-	                auto PlanIdx = getOrCreateF32InductionPlan(Cast);
-	                if (!PlanIdx)
-	                  return std::nullopt;
-	                const F32InductionPlan &Plan = F32InductionPlans[*PlanIdx];
-	                auto Tok = emitLoadFromInvariantBind(Plan.SlotBind);
-	                if (Tok)
-	                  ValOp[V] = *Tok;
-	                return Tok;
-	              }
-              Value *Scalar = PB.CreateCast(Cast->getOpcode(), Src, Cast->getType());
+                if (Cast->getOpcode() == Instruction::UIToFP) {
+                  const SCEV *SrcS = SE.getSCEVAtScope(Src, L);
+                  if (!SE.isKnownNonNegative(SrcS)) {
+                    return std::nullopt;
+                  }
+                }
+                auto IntTok = emitValue(Src);
+                if (!IntTok)
+                  return std::nullopt;
+                auto Dst = allocVec();
+                if (!Dst)
+                  return std::nullopt;
+                // The vector convert surface only exposes signed integer
+                // lanes. Reuse it for unsigned casts when SCEV proves the
+                // source non-negative, which holds for TSVC induction paths.
+                OS << "  v.icvtf.sw2fs " << formatIntSrc(*IntTok) << ", ->"
+                   << formatWordDest(*Dst) << "\n";
+                ValOp[V] = *Dst;
+                return *Dst;
+              }
+              if (!L->isLoopInvariant(Src)) {
+                // Support affine int induction to float in scalar-lane replay
+                // mode by synthesizing a float induction slot.
+                auto PlanIdx = getOrCreateF32InductionPlan(Cast);
+                if (!PlanIdx)
+                  return std::nullopt;
+                const F32InductionPlan &Plan = F32InductionPlans[*PlanIdx];
+                auto Tok = emitLoadFromInvariantBind(Plan.SlotBind);
+                if (Tok)
+                  ValOp[V] = *Tok;
+                return Tok;
+              }
+              Value *Scalar =
+                  PB.CreateCast(Cast->getOpcode(), Src, Cast->getType());
               auto *Bits32 = PB.CreateBitCast(Scalar, I32Ty);
               auto *I64V = PB.CreateZExt(Bits32, I64Ty);
               auto Bind = bindI64(I64V);
@@ -4962,9 +4955,9 @@ public:
               if (!Dst)
                 return std::nullopt;
               StringRef Mn = (Opc == Instruction::FAdd)   ? "v.fadd"
-                            : (Opc == Instruction::FSub) ? "v.fsub"
-                            : (Opc == Instruction::FMul) ? "v.fmul"
-                                                         : "v.fdiv";
+                             : (Opc == Instruction::FSub) ? "v.fsub"
+                             : (Opc == Instruction::FMul) ? "v.fmul"
+                                                          : "v.fdiv";
               OS << "  " << Mn << " " << formatFloatSrc(*Lhs) << ", "
                  << formatFloatSrc(*Rhs) << ", ->" << formatWordDest(*Dst)
                  << "\n";
@@ -5046,11 +5039,11 @@ public:
               if (!Dst)
                 return std::nullopt;
               StringRef Mn = (Opc == Instruction::Add)   ? "v.add"
-                            : (Opc == Instruction::Sub) ? "v.sub"
-                                                        : "v.mul";
-	              OS << "  " << Mn << " " << formatIntSrc(*Lhs) << ", "
-	                 << formatIntSrc(*Rhs) << ", ->" << formatWordDest(*Dst)
-	                 << "\n";
+                             : (Opc == Instruction::Sub) ? "v.sub"
+                                                         : "v.mul";
+              OS << "  " << Mn << " " << formatIntSrc(*Lhs) << ", "
+                 << formatIntSrc(*Rhs) << ", ->" << formatWordDest(*Dst)
+                 << "\n";
               ValOp[V] = *Dst;
               return *Dst;
             }
@@ -5091,198 +5084,194 @@ public:
           return std::nullopt;
         };
 
-	        auto emitStoreValueToPtr = [&](Value *Ptr, StringRef ValTok,
-                                          bool IsFloat,
-                                          uint64_t ElemBytes) -> bool {
-	          if (!Ptr)
-	            return false;
-            if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
+        auto emitStoreValueToPtr = [&](Value *Ptr, StringRef ValTok,
+                                       bool IsFloat,
+                                       uint64_t ElemBytes) -> bool {
+          if (!Ptr)
+            return false;
+          if (!isPowerOf2_64(ElemBytes) || ElemBytes == 0 || ElemBytes > 8)
+            return false;
+
+          const unsigned ElemShift = Log2_64(ElemBytes);
+          const std::string LaneExpr =
+              ElemShift == 0 ? "lc0" : ("lc0<<" + std::to_string(ElemShift));
+          const char *StoreMnemonic = (ElemBytes == 1)   ? "v.sb.brg"
+                                      : (ElemBytes == 2) ? "v.sh.brg"
+                                      : (ElemBytes == 4) ? "v.sw.brg"
+                                                         : "v.sd.brg";
+
+          auto isVectorValueToken = [&](StringRef Tok) {
+            Tok = Tok.trim();
+            return parseVecPipeToken(Tok).has_value() ||
+                   isLaneCounterToken(Tok);
+          };
+
+          std::string StoreTok = ValTok.trim().str();
+          if (!isVectorValueToken(StoreTok)) {
+            auto Dst = allocVec();
+            if (!Dst) {
+              reject("vector_reg_exhausted");
               return false;
+            }
+            OS << "  v.add zero, " << formatIntSrc(StoreTok) << ", ->"
+               << formatWordDest(*Dst) << "\n";
+            StoreTok = *Dst;
+          }
 
-            const unsigned ElemShift = Log2_64(ElemBytes);
-            const std::string LaneExpr =
-                ElemShift == 0 ? "lc0" : ("lc0<<" + std::to_string(ElemShift));
-            const char *StoreMnemonic =
-                (ElemBytes == 1) ? "v.sb.brg"
-                : (ElemBytes == 2) ? "v.sh.brg"
-                : (ElemBytes == 4) ? "v.sw.brg"
-                                   : "v.sd.brg";
+          // Pointer sink PHI store: dispatch by selector written on the
+          // incoming edge (classic if/switch sinks in TSVC).
+          if (auto *GEP =
+                  dyn_cast_or_null<GEPOperator>(Ptr->stripPointerCasts())) {
+            Value *Base = GEP->getPointerOperand()->stripPointerCasts();
+            if (auto *Phi = dyn_cast<PHINode>(Base)) {
+              auto PlanIt = PtrPhiPlans.find(Phi);
+              if (PlanIt != PtrPhiPlans.end()) {
+                Value *Index = nullptr;
+                const unsigned NumIdx = GEP->getNumIndices();
+                if (NumIdx == 1) {
+                  Index = GEP->getOperand(1);
+                } else if (NumIdx == 2) {
+                  auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
+                  if (!Z || !Z->isZero()) {
+                    reject("unsupported_ptr_phi_store_gep");
+                    return false;
+                  }
+                  Index = GEP->getOperand(2);
+                } else {
+                  reject("unsupported_ptr_phi_store_gep");
+                  return false;
+                }
+                if (!Index || !Index->getType()->isIntegerTy() ||
+                    Index->getType()->getScalarSizeInBits() > 64) {
+                  reject("unsupported_ptr_phi_store_gep");
+                  return false;
+                }
 
-            auto isVectorValueToken = [&](StringRef Tok) {
-              Tok = Tok.trim();
-              return parseVecPipeToken(Tok).has_value() ||
-                     isLaneCounterToken(Tok);
-            };
+                const DataLayout &DL = F.getParent()->getDataLayout();
+                Type *ElemTy = GEP->getResultElementType();
+                const uint64_t ElemBytes =
+                    ElemTy ? DL.getTypeStoreSize(ElemTy) : 0;
+                std::optional<std::string> IdxExpr;
+                if (ElemBytes == 4) {
+                  IdxExpr = emitValue(Index);
+                } else if (ElemBytes == 1) {
+                  IdxExpr = emitElemIndexFromByteIndex(Index, /*ElemBytes=*/4);
+                } else {
+                  reject("unsupported_ptr_phi_store_gep");
+                  return false;
+                }
 
-            std::string StoreTok = ValTok.trim().str();
-            if (!isVectorValueToken(StoreTok)) {
-              auto Dst = allocVec();
-              if (!Dst) {
-                reject("vector_reg_exhausted");
+                if (!IdxExpr) {
+                  reject("unsupported_ptr_phi_store_index");
+                  return false;
+                }
+                auto DeltaExpr = emitIndexDeltaFromLc0(*IdxExpr);
+                if (!DeltaExpr) {
+                  reject("unsupported_ptr_phi_store_index");
+                  return false;
+                }
+
+                PtrPhiPlan &Plan = PlanIt->second;
+                if (Plan.BaseRis.empty()) {
+                  reject("invalid_ptr_phi_plan");
+                  return false;
+                }
+
+                const std::string EndLbl = freshAsmLabel("L_ptrphi_st_end");
+                SmallVector<std::pair<std::string, unsigned>, 4> CaseLabels;
+                CaseLabels.reserve(Plan.BaseRis.size());
+                for (unsigned SelId = 0; SelId < Plan.BaseRis.size(); ++SelId) {
+                  std::string CaseLbl = freshAsmLabel("L_ptrphi_st_case");
+                  CaseLabels.push_back(std::make_pair(CaseLbl, SelId));
+
+                  std::string SelTok = "zero";
+                  if (SelId != 0) {
+                    auto Tok = emitValue(ConstantInt::get(I64Ty, SelId));
+                    if (!Tok) {
+                      reject("ptr_phi_sel_emit_failed");
+                      return false;
+                    }
+                    SelTok = *Tok;
+                  }
+
+                  OS << "  v.cmp.eq " << formatIntSrc(Plan.SelReg) << ", "
+                     << formatIntSrc(SelTok) << ", ->p\n";
+                  OS << "  b.nz " << CaseLbl << "\n";
+                }
+
+                OS << "  j " << CaseLabels.front().first << "\n";
+                for (auto &C : CaseLabels) {
+                  const unsigned SelId = C.second;
+                  if (SelId >= Plan.BaseRis.size()) {
+                    reject("invalid_ptr_phi_plan");
+                    return false;
+                  }
+                  const unsigned Ri = Plan.BaseRis[SelId];
+                  OS << C.first << ":\n";
+                  OS << "  " << StoreMnemonic << " "
+                     << (IsFloat ? formatFloatSrc(StoreTok)
+                                 : formatIntSrc(StoreTok))
+                     << ", [ri" << Ri << ", " << formatAddrExpr(LaneExpr)
+                     << ", " << formatShiftedAddr(*DeltaExpr, ElemShift)
+                     << "]\n";
+                  OS << "  j " << EndLbl << "\n";
+                }
+                OS << EndLbl << ":\n";
+                return true;
+              }
+            }
+          }
+
+          auto Address = bindPtrStartForElem(Ptr, ElemBytes);
+          unsigned BaseRi = 0;
+          std::string IndexReg;
+          unsigned StoreShift = 0;
+          if (Address) {
+            BaseRi = Address->BaseRi;
+            if (UseGroupedDims) {
+              auto Idx = emitGroupedIndexReg(Address->StepElems);
+              if (!Idx) {
+                reject("unsupported_store_stride");
                 return false;
               }
-              OS << "  v.add zero, " << formatIntSrc(StoreTok) << ", ->"
-                 << formatWordDest(*Dst) << "\n";
-              StoreTok = *Dst;
+              IndexReg = *Idx;
+              StoreShift = ElemShift;
+            } else {
+              if (Address->StepElems < 0) {
+                auto Idx = emitGroupedIndexReg(Address->StepElems);
+                if (!Idx) {
+                  reject("unsupported_store_stride");
+                  return false;
+                }
+                IndexReg = *Idx;
+                StoreShift = ElemShift;
+              } else {
+                StoreShift = Address->Shift;
+                auto IndexRegOpt = emitScaledLc0(Address->IndexFactor);
+                if (!IndexRegOpt) {
+                  reject("unsupported_store_stride");
+                  return false;
+                }
+                IndexReg = *IndexRegOpt;
+              }
             }
+          } else {
+            auto General = bindPtrGeneralForElem(Ptr, ElemBytes);
+            if (!General) {
+              reject("non_affine_store_address");
+              return false;
+            }
+            BaseRi = General->first;
+            IndexReg = General->second;
+            StoreShift = ElemShift;
+          }
 
-	          // Pointer sink PHI store: dispatch by selector written on the incoming
-	          // edge (classic if/switch sinks in TSVC).
-		          if (auto *GEP =
-	                  dyn_cast_or_null<GEPOperator>(Ptr->stripPointerCasts())) {
-	            Value *Base = GEP->getPointerOperand()->stripPointerCasts();
-	            if (auto *Phi = dyn_cast<PHINode>(Base)) {
-	              auto PlanIt = PtrPhiPlans.find(Phi);
-	              if (PlanIt != PtrPhiPlans.end()) {
-	                Value *Index = nullptr;
-	                const unsigned NumIdx = GEP->getNumIndices();
-	                if (NumIdx == 1) {
-	                  Index = GEP->getOperand(1);
-	                } else if (NumIdx == 2) {
-	                  auto *Z = dyn_cast<ConstantInt>(GEP->getOperand(1));
-	                  if (!Z || !Z->isZero()) {
-	                    reject("unsupported_ptr_phi_store_gep");
-	                    return false;
-	                  }
-	                  Index = GEP->getOperand(2);
-	                } else {
-	                  reject("unsupported_ptr_phi_store_gep");
-	                  return false;
-	                }
-	                if (!Index || !Index->getType()->isIntegerTy() ||
-	                    Index->getType()->getScalarSizeInBits() > 64) {
-	                  reject("unsupported_ptr_phi_store_gep");
-	                  return false;
-	                }
-
-	                const DataLayout &DL = F.getParent()->getDataLayout();
-	                Type *ElemTy = GEP->getResultElementType();
-	                const uint64_t ElemBytes =
-	                    ElemTy ? DL.getTypeStoreSize(ElemTy) : 0;
-	                std::optional<std::string> IdxExpr;
-	                if (ElemBytes == 4) {
-	                  IdxExpr = emitValue(Index);
-	                } else if (ElemBytes == 1) {
-	                  IdxExpr = emitElemIndexFromByteIndex(Index, /*ElemBytes=*/4);
-	                } else {
-	                  reject("unsupported_ptr_phi_store_gep");
-	                  return false;
-	                }
-
-	                if (!IdxExpr) {
-	                  reject("unsupported_ptr_phi_store_index");
-	                  return false;
-	                }
-	                auto DeltaExpr = emitIndexDeltaFromLc0(*IdxExpr);
-	                if (!DeltaExpr) {
-	                  reject("unsupported_ptr_phi_store_index");
-	                  return false;
-	                }
-
-	                PtrPhiPlan &Plan = PlanIt->second;
-	                if (Plan.BaseRis.empty()) {
-	                  reject("invalid_ptr_phi_plan");
-	                  return false;
-	                }
-
-	                const std::string EndLbl = freshAsmLabel("L_ptrphi_st_end");
-	                SmallVector<std::pair<std::string, unsigned>, 4> CaseLabels;
-	                CaseLabels.reserve(Plan.BaseRis.size());
-	                for (unsigned SelId = 0; SelId < Plan.BaseRis.size(); ++SelId) {
-	                  std::string CaseLbl = freshAsmLabel("L_ptrphi_st_case");
-	                  CaseLabels.push_back(std::make_pair(CaseLbl, SelId));
-
-	                  std::string SelTok = "zero";
-	                  if (SelId != 0) {
-	                    auto Tok = emitValue(ConstantInt::get(I64Ty, SelId));
-	                    if (!Tok) {
-	                      reject("ptr_phi_sel_emit_failed");
-	                      return false;
-	                    }
-	                    SelTok = *Tok;
-	                  }
-
-	                  OS << "  v.cmp.eq " << formatIntSrc(Plan.SelReg) << ", "
-	                     << formatIntSrc(SelTok)
-	                     << ", ->p\n";
-	                  OS << "  b.nz " << CaseLbl << "\n";
-	                }
-
-	                OS << "  j " << CaseLabels.front().first << "\n";
-	                for (auto &C : CaseLabels) {
-	                  const unsigned SelId = C.second;
-	                  if (SelId >= Plan.BaseRis.size()) {
-	                    reject("invalid_ptr_phi_plan");
-	                    return false;
-	                  }
-	                  const unsigned Ri = Plan.BaseRis[SelId];
-	                  OS << C.first << ":\n";
-		                  OS << "  " << StoreMnemonic << " "
-                       << (IsFloat ? formatFloatSrc(StoreTok)
-                                   : formatIntSrc(StoreTok))
-                       << ", [ri"
-		                     << Ri << ", " << formatAddrExpr(LaneExpr) << ", "
-		                     << formatShiftedAddr(*DeltaExpr, ElemShift) << "]\n";
-	                  OS << "  j " << EndLbl << "\n";
-	                }
-	                OS << EndLbl << ":\n";
-	                return true;
-	              }
-	            }
-	          }
-
-		          auto Address = bindPtrStartForElem(Ptr, ElemBytes);
-	          unsigned BaseRi = 0;
-	          std::string IndexReg;
-	          unsigned StoreShift = 0;
-	            if (Address) {
-	            BaseRi = Address->BaseRi;
-	            if (UseGroupedDims) {
-	              auto Idx = emitGroupedIndexReg(Address->StepElems);
-	              if (!Idx) {
-	                reject("unsupported_store_stride");
-	                return false;
-	              }
-	              IndexReg = *Idx;
-	              StoreShift = ElemShift;
-	            } else {
-	              if (Address->StepElems < 0) {
-	                auto Idx = emitGroupedIndexReg(Address->StepElems);
-	                if (!Idx) {
-	                  reject("unsupported_store_stride");
-	                  return false;
-	                }
-	                IndexReg = *Idx;
-	                StoreShift = ElemShift;
-	              } else {
-	                StoreShift = Address->Shift;
-	                auto IndexRegOpt = emitScaledLc0(Address->IndexFactor);
-	                if (!IndexRegOpt) {
-	                  reject("unsupported_store_stride");
-	                  return false;
-	                }
-	                IndexReg = *IndexRegOpt;
-	              }
-	            }
-	          } else {
-	            auto General = bindPtrGeneralForElem(Ptr, ElemBytes);
-	            if (!General) {
-	              reject("non_affine_store_address");
-	              return false;
-	            }
-	            BaseRi = General->first;
-	            IndexReg = General->second;
-	            StoreShift = ElemShift;
-	          }
-
-		          OS << "  " << StoreMnemonic << " "
-                 << (IsFloat ? formatFloatSrc(StoreTok)
-                             : formatIntSrc(StoreTok))
-                 << ", [ri"
-			             << BaseRi << ", " << formatAddrExpr(LaneExpr) << ", "
-			             << formatShiftedAddr(IndexReg, StoreShift) << "]\n";
-	          return true;
-	        };
+          OS << "  " << StoreMnemonic << " "
+             << (IsFloat ? formatFloatSrc(StoreTok) : formatIntSrc(StoreTok))
+             << ", [ri" << BaseRi << ", " << formatAddrExpr(LaneExpr) << ", "
+             << formatShiftedAddr(IndexReg, StoreShift) << "]\n";
+          return true;
+        };
 
         auto emitStoreValueToInvariantBaseGEP =
             [&](GEPOperator *GEP, Value *BasePtr, StringRef StoreTok,
@@ -5331,11 +5320,10 @@ public:
           const unsigned ElemShift = Log2_64(ElemBytes);
           const std::string LaneExpr =
               ElemShift == 0 ? "lc0" : ("lc0<<" + std::to_string(ElemShift));
-          const char *StoreMnemonic =
-              (ElemBytes == 1) ? "v.sb.brg"
-              : (ElemBytes == 2) ? "v.sh.brg"
-              : (ElemBytes == 4) ? "v.sw.brg"
-                                 : "v.sd.brg";
+          const char *StoreMnemonic = (ElemBytes == 1)   ? "v.sb.brg"
+                                      : (ElemBytes == 2) ? "v.sh.brg"
+                                      : (ElemBytes == 4) ? "v.sw.brg"
+                                                         : "v.sd.brg";
           OS << "  " << StoreMnemonic << " "
              << (IsFloat ? formatFloatSrc(StoreTok) : formatIntSrc(StoreTok))
              << ", [ri" << *BaseOpt << ", " << formatAddrExpr(LaneExpr) << ", "
@@ -5343,8 +5331,9 @@ public:
           return true;
         };
 
-        auto emitSelectBaseStoreSplit = [&](StoreInst *SI, bool IsFloat,
-                                            uint64_t ElemBytes) -> std::optional<bool> {
+        auto emitSelectBaseStoreSplit =
+            [&](StoreInst *SI, bool IsFloat,
+                uint64_t ElemBytes) -> std::optional<bool> {
           auto SelectGEP =
               matchSelectStorePtr(SI->getPointerOperand(), ElemBytes);
           if (!SelectGEP)
@@ -5509,20 +5498,18 @@ public:
           emitBranchOnExecMaskLocal(TrueLabel, FalseLabel);
 
           OS << TrueLabel << ":\n";
-          if (!emitStoreValueToInvariantBaseGEP(
-                  SelectGEP->TrueGEP,
-                  SelectGEP->TrueBase,
-                  *TrueTok, IsFloat, ElemBytes)) {
+          if (!emitStoreValueToInvariantBaseGEP(SelectGEP->TrueGEP,
+                                                SelectGEP->TrueBase, *TrueTok,
+                                                IsFloat, ElemBytes)) {
             reject("non_affine_store_address");
             return false;
           }
           OS << "  j " << EndLabel << "\n";
 
           OS << FalseLabel << ":\n";
-          if (!emitStoreValueToInvariantBaseGEP(
-                  SelectGEP->FalseGEP,
-                  SelectGEP->FalseBase,
-                  *FalseTok, IsFloat, ElemBytes)) {
+          if (!emitStoreValueToInvariantBaseGEP(SelectGEP->FalseGEP,
+                                                SelectGEP->FalseBase, *FalseTok,
+                                                IsFloat, ElemBytes)) {
             reject("non_affine_store_address");
             return false;
           }
@@ -5532,24 +5519,25 @@ public:
           return true;
         };
 
-	        auto emitStoreInst = [&](StoreInst *SI) -> bool {
-            Type *StoreTy = SI->getValueOperand()->getType();
-            const bool IsFloat = StoreTy == Type::getFloatTy(Ctx);
-            uint64_t ElemBytes = 0;
-            if (StoreTy->isIntegerTy(1) || StoreTy->isIntegerTy(8))
-              ElemBytes = 1;
-            else if (StoreTy->isIntegerTy(16))
-              ElemBytes = 2;
-            else if (IsFloat || StoreTy->isIntegerTy(32))
-              ElemBytes = 4;
-            else if (StoreTy->isIntegerTy(64))
-              ElemBytes = 8;
-            if (ElemBytes == 0) {
-              reject("non_float_store_value");
-              return false;
-            }
+        auto emitStoreInst = [&](StoreInst *SI) -> bool {
+          Type *StoreTy = SI->getValueOperand()->getType();
+          const bool IsFloat = StoreTy == Type::getFloatTy(Ctx);
+          uint64_t ElemBytes = 0;
+          if (StoreTy->isIntegerTy(1) || StoreTy->isIntegerTy(8))
+            ElemBytes = 1;
+          else if (StoreTy->isIntegerTy(16))
+            ElemBytes = 2;
+          else if (IsFloat || StoreTy->isIntegerTy(32))
+            ElemBytes = 4;
+          else if (StoreTy->isIntegerTy(64))
+            ElemBytes = 8;
+          if (ElemBytes == 0) {
+            reject("non_float_store_value");
+            return false;
+          }
 
-          if (auto SelectStore = emitSelectBaseStoreSplit(SI, IsFloat, ElemBytes))
+          if (auto SelectStore =
+                  emitSelectBaseStoreSplit(SI, IsFloat, ElemBytes))
             return *SelectStore;
 
           auto Val = emitValue(SI->getValueOperand());
@@ -5557,8 +5545,7 @@ public:
             reject(unsupportedValueReason(SI->getValueOperand()));
             return false;
           }
-          if (auto *UpdateI =
-                  dyn_cast<Instruction>(SI->getValueOperand())) {
+          if (auto *UpdateI = dyn_cast<Instruction>(SI->getValueOperand())) {
             auto RecIt = RecurrencePlansByUpdate.find(UpdateI);
             if (RecIt != RecurrencePlansByUpdate.end()) {
               for (unsigned RecIdx : RecIt->second) {
@@ -5570,9 +5557,9 @@ public:
               }
             }
           }
-	          return emitStoreValueToPtr(SI->getPointerOperand(), *Val, IsFloat,
-                                       ElemBytes);
-	        };
+          return emitStoreValueToPtr(SI->getPointerOperand(), *Val, IsFloat,
+                                     ElemBytes);
+        };
 
         auto emitBodyInstructions = [&](BasicBlock *BB) -> bool {
           for (Instruction &I : *BB) {
@@ -5626,465 +5613,460 @@ public:
           return true;
         };
 
-	        auto emitInnerControlFlowBody = [&]() -> bool {
-	          // Linearize the loop's inner CFG for one "iteration" of the vblock
-	          // body. The vblock launch (B.DIM replay) provides loop iteration,
-	          // so edges to Header are treated as "end of iteration".
-	          //
-	          // Use a stable topological order over the acyclic inner CFG so we
-	          // don't reject structured control flow due to an unlucky traversal
-	          // order.
-	          DenseMap<BasicBlock *, unsigned> FuncOrder;
-	          unsigned FuncIdx = 0;
-	          for (BasicBlock &BB : F)
-	            FuncOrder[&BB] = FuncIdx++;
+        auto emitInnerControlFlowBody = [&]() -> bool {
+          // Linearize the loop's inner CFG for one "iteration" of the vblock
+          // body. The vblock launch (B.DIM replay) provides loop iteration,
+          // so edges to Header are treated as "end of iteration".
+          //
+          // Use a stable topological order over the acyclic inner CFG so we
+          // don't reject structured control flow due to an unlucky traversal
+          // order.
+          DenseMap<BasicBlock *, unsigned> FuncOrder;
+          unsigned FuncIdx = 0;
+          for (BasicBlock &BB : F)
+            FuncOrder[&BB] = FuncIdx++;
 
-	          auto isBodyBlock = [&](BasicBlock *BB) -> bool {
-	            if (!BB || !L->contains(BB))
-	              return false;
-	            if (IfConvertibleRegionBlocks.contains(BB))
-	              return false;
-	            // Header is always emitted first. Include the latch block as part
-	            // of the linearized body so we don't drop iteration-tail side
-	            // effects (stores/recurrence updates) that are commonly placed in
-	            // the latch after if/else lowering under -O2.
-	            if (BB == Header)
-	              return false;
-	            return true;
-	          };
+          auto isBodyBlock = [&](BasicBlock *BB) -> bool {
+            if (!BB || !L->contains(BB))
+              return false;
+            if (IfConvertibleRegionBlocks.contains(BB))
+              return false;
+            // Header is always emitted first. Include the latch block as part
+            // of the linearized body so we don't drop iteration-tail side
+            // effects (stores/recurrence updates) that are commonly placed in
+            // the latch after if/else lowering under -O2.
+            if (BB == Header)
+              return false;
+            return true;
+          };
 
-	          SmallVector<BasicBlock *, 16> Nodes;
-	          SmallPtrSet<BasicBlock *, 16> NodeSet;
-	          Nodes.push_back(Header);
-	          NodeSet.insert(Header);
+          SmallVector<BasicBlock *, 16> Nodes;
+          SmallPtrSet<BasicBlock *, 16> NodeSet;
+          Nodes.push_back(Header);
+          NodeSet.insert(Header);
 
-	          auto addNode = [&](BasicBlock *BB) {
-	            if (!isBodyBlock(BB))
-	              return;
-	            if (NodeSet.insert(BB).second)
-	              Nodes.push_back(BB);
-	          };
+          auto addNode = [&](BasicBlock *BB) {
+            if (!isBodyBlock(BB))
+              return;
+            if (NodeSet.insert(BB).second)
+              Nodes.push_back(BB);
+          };
 
-	          auto forEachDiscoveredBodySucc =
-	              [&](BasicBlock *BB, function_ref<void(BasicBlock *)> Fn) {
-	                auto SplitIt = IfConvertibleSplits.find(BB);
-	                if (SplitIt != IfConvertibleSplits.end()) {
-	                  Fn(SplitIt->second.MergeBB);
-	                  return;
-	                }
-	                auto *TI = BB ? BB->getTerminator() : nullptr;
-	                if (!TI)
-	                  return;
-	                if (auto *BI = dyn_cast<BranchInst>(TI)) {
-	                  for (unsigned SI = 0; SI < BI->getNumSuccessors(); ++SI)
-	                    Fn(BI->getSuccessor(SI));
-	                  return;
-	                }
-	                if (auto *SI = dyn_cast<SwitchInst>(TI)) {
-	                  Fn(SI->getDefaultDest());
-	                  for (auto Case : SI->cases())
-	                    Fn(Case.getCaseSuccessor());
-	                }
-	              };
+          auto forEachDiscoveredBodySucc =
+              [&](BasicBlock *BB, function_ref<void(BasicBlock *)> Fn) {
+                auto SplitIt = IfConvertibleSplits.find(BB);
+                if (SplitIt != IfConvertibleSplits.end()) {
+                  Fn(SplitIt->second.MergeBB);
+                  return;
+                }
+                auto *TI = BB ? BB->getTerminator() : nullptr;
+                if (!TI)
+                  return;
+                if (auto *BI = dyn_cast<BranchInst>(TI)) {
+                  for (unsigned SI = 0; SI < BI->getNumSuccessors(); ++SI)
+                    Fn(BI->getSuccessor(SI));
+                  return;
+                }
+                if (auto *SI = dyn_cast<SwitchInst>(TI)) {
+                  Fn(SI->getDefaultDest());
+                  for (auto Case : SI->cases())
+                    Fn(Case.getCaseSuccessor());
+                }
+              };
 
-	          // Discover all blocks reachable from Header within the "iteration"
-	          // CFG (excluding edges to Header/Latch).
-	          for (unsigned NI = 0; NI < Nodes.size(); ++NI) {
-	            BasicBlock *BB = Nodes[NI];
-	            auto *TI = BB->getTerminator();
-	            if (!TI) {
-	              reject("missing_terminator");
-	              return false;
-	            }
-	            if (isa<BranchInst>(TI) || isa<SwitchInst>(TI)) {
-	              forEachDiscoveredBodySucc(BB, [&](BasicBlock *Succ) {
-	                addNode(Succ);
-	              });
-	              continue;
-	            }
-	            reject("unsupported_terminator");
-	            return false;
-	          }
+          // Discover all blocks reachable from Header within the "iteration"
+          // CFG (excluding edges to Header/Latch).
+          for (unsigned NI = 0; NI < Nodes.size(); ++NI) {
+            BasicBlock *BB = Nodes[NI];
+            auto *TI = BB->getTerminator();
+            if (!TI) {
+              reject("missing_terminator");
+              return false;
+            }
+            if (isa<BranchInst>(TI) || isa<SwitchInst>(TI)) {
+              forEachDiscoveredBodySucc(
+                  BB, [&](BasicBlock *Succ) { addNode(Succ); });
+              continue;
+            }
+            reject("unsupported_terminator");
+            return false;
+          }
 
-	          auto forEachBodySucc = [&](BasicBlock *BB,
-	                                    function_ref<void(BasicBlock *)> Fn) {
-	            auto SplitIt = IfConvertibleSplits.find(BB);
-	            if (SplitIt != IfConvertibleSplits.end()) {
-	              BasicBlock *Succ = SplitIt->second.MergeBB;
-	              if (NodeSet.count(Succ) && Succ != Header)
-	                Fn(Succ);
-	              return;
-	            }
-	            auto *TI = BB ? BB->getTerminator() : nullptr;
-	            if (!TI)
-	              return;
-	            if (auto *BI = dyn_cast<BranchInst>(TI)) {
-	              for (unsigned SI = 0; SI < BI->getNumSuccessors(); ++SI) {
-	                BasicBlock *Succ = BI->getSuccessor(SI);
-	                if (NodeSet.count(Succ) && Succ != Header)
-	                  Fn(Succ);
-	              }
-	              return;
-	            }
-	            if (auto *SI = dyn_cast<SwitchInst>(TI)) {
-	              BasicBlock *Def = SI->getDefaultDest();
-	              if (NodeSet.count(Def) && Def != Header)
-	                Fn(Def);
-	              for (auto Case : SI->cases()) {
-	                BasicBlock *Succ = Case.getCaseSuccessor();
-	                if (NodeSet.count(Succ) && Succ != Header)
-	                  Fn(Succ);
-	              }
-	              return;
-	            }
-	          };
+          auto forEachBodySucc = [&](BasicBlock *BB,
+                                     function_ref<void(BasicBlock *)> Fn) {
+            auto SplitIt = IfConvertibleSplits.find(BB);
+            if (SplitIt != IfConvertibleSplits.end()) {
+              BasicBlock *Succ = SplitIt->second.MergeBB;
+              if (NodeSet.count(Succ) && Succ != Header)
+                Fn(Succ);
+              return;
+            }
+            auto *TI = BB ? BB->getTerminator() : nullptr;
+            if (!TI)
+              return;
+            if (auto *BI = dyn_cast<BranchInst>(TI)) {
+              for (unsigned SI = 0; SI < BI->getNumSuccessors(); ++SI) {
+                BasicBlock *Succ = BI->getSuccessor(SI);
+                if (NodeSet.count(Succ) && Succ != Header)
+                  Fn(Succ);
+              }
+              return;
+            }
+            if (auto *SI = dyn_cast<SwitchInst>(TI)) {
+              BasicBlock *Def = SI->getDefaultDest();
+              if (NodeSet.count(Def) && Def != Header)
+                Fn(Def);
+              for (auto Case : SI->cases()) {
+                BasicBlock *Succ = Case.getCaseSuccessor();
+                if (NodeSet.count(Succ) && Succ != Header)
+                  Fn(Succ);
+              }
+              return;
+            }
+          };
 
-	          DenseMap<BasicBlock *, unsigned> Indegree;
-	          for (BasicBlock *BB : Nodes)
-	            Indegree[BB] = 0;
-	          for (BasicBlock *BB : Nodes)
-	            forEachBodySucc(BB, [&](BasicBlock *Succ) { ++Indegree[Succ]; });
+          DenseMap<BasicBlock *, unsigned> Indegree;
+          for (BasicBlock *BB : Nodes)
+            Indegree[BB] = 0;
+          for (BasicBlock *BB : Nodes)
+            forEachBodySucc(BB, [&](BasicBlock *Succ) { ++Indegree[Succ]; });
 
-	          SmallVector<BasicBlock *, 16> Ready;
-	          for (BasicBlock *BB : Nodes) {
-	            if (BB == Header)
-	              continue;
-	            if (Indegree.lookup(BB) == 0)
-	              Ready.push_back(BB);
-	          }
+          SmallVector<BasicBlock *, 16> Ready;
+          for (BasicBlock *BB : Nodes) {
+            if (BB == Header)
+              continue;
+            if (Indegree.lookup(BB) == 0)
+              Ready.push_back(BB);
+          }
 
-	          SmallVector<BasicBlock *, 16> EmitOrder;
-	          EmitOrder.reserve(Nodes.size());
-	          EmitOrder.push_back(Header);
+          SmallVector<BasicBlock *, 16> EmitOrder;
+          EmitOrder.reserve(Nodes.size());
+          EmitOrder.push_back(Header);
 
-	          auto pickReady = [&]() -> BasicBlock * {
-	            unsigned BestI = 0;
-	            unsigned BestOrder = std::numeric_limits<unsigned>::max();
-	            for (unsigned I = 0; I < Ready.size(); ++I) {
-	              BasicBlock *BB = Ready[I];
-	              unsigned Ord = FuncOrder.lookup(BB);
-	              if (Ord < BestOrder) {
-	                BestOrder = Ord;
-	                BestI = I;
-	              }
-	            }
-	            BasicBlock *BB = Ready[BestI];
-	            Ready.erase(Ready.begin() + BestI);
-	            return BB;
-	          };
+          auto pickReady = [&]() -> BasicBlock * {
+            unsigned BestI = 0;
+            unsigned BestOrder = std::numeric_limits<unsigned>::max();
+            for (unsigned I = 0; I < Ready.size(); ++I) {
+              BasicBlock *BB = Ready[I];
+              unsigned Ord = FuncOrder.lookup(BB);
+              if (Ord < BestOrder) {
+                BestOrder = Ord;
+                BestI = I;
+              }
+            }
+            BasicBlock *BB = Ready[BestI];
+            Ready.erase(Ready.begin() + BestI);
+            return BB;
+          };
 
-	          auto process = [&](BasicBlock *BB) {
-	            forEachBodySucc(BB, [&](BasicBlock *Succ) {
-	              auto It = Indegree.find(Succ);
-	              if (It == Indegree.end())
-	                return;
-	              if (It->second == 0)
-	                return;
-	              if (--It->second == 0 && Succ != Header)
-	                Ready.push_back(Succ);
-	            });
-	          };
+          auto process = [&](BasicBlock *BB) {
+            forEachBodySucc(BB, [&](BasicBlock *Succ) {
+              auto It = Indegree.find(Succ);
+              if (It == Indegree.end())
+                return;
+              if (It->second == 0)
+                return;
+              if (--It->second == 0 && Succ != Header)
+                Ready.push_back(Succ);
+            });
+          };
 
-	          // Seed ready set after processing Header first.
-	          process(Header);
-	          while (!Ready.empty()) {
-	            BasicBlock *BB = pickReady();
-	            EmitOrder.push_back(BB);
-	            process(BB);
-	          }
+          // Seed ready set after processing Header first.
+          process(Header);
+          while (!Ready.empty()) {
+            BasicBlock *BB = pickReady();
+            EmitOrder.push_back(BB);
+            process(BB);
+          }
 
-	          if (EmitOrder.size() != Nodes.size()) {
-	            reject("unsupported_inner_cycle");
-	            return false;
-	          }
+          if (EmitOrder.size() != Nodes.size()) {
+            reject("unsupported_inner_cycle");
+            return false;
+          }
 
-	          DenseMap<BasicBlock *, std::string> Labels;
-	          DenseMap<BasicBlock *, unsigned> LabelIndex;
-	          for (unsigned I = 0; I < EmitOrder.size(); ++I)
+          DenseMap<BasicBlock *, std::string> Labels;
+          DenseMap<BasicBlock *, unsigned> LabelIndex;
+          for (unsigned I = 0; I < EmitOrder.size(); ++I)
             Labels[EmitOrder[I]] = ("L" + std::to_string(I));
           for (unsigned I = 0; I < EmitOrder.size(); ++I)
             LabelIndex[EmitOrder[I]] = I;
           const std::string EndLabel = "L_end";
 
-		          auto labelForSucc = [&](BasicBlock *Succ) -> std::string {
-		            if (!Succ || !L->contains(Succ) || Succ == Header)
-		              return EndLabel;
-		            auto It = Labels.find(Succ);
-		            if (It == Labels.end())
-		              return EndLabel;
-		            return It->second;
-	          };
-
-	          // Plan inner-CF PHIs: allocate vector registers for scalar value PHIs
-	          // and create selector plans for pointer PHIs so loads/stores can
-	          // dispatch to the correct invariant base.
-	          DenseMap<BasicBlock *, SmallVector<PHINode *, 4>> ValuePhisByBlock;
-	          DenseMap<BasicBlock *, SmallVector<PHINode *, 2>> PtrPhisByBlock;
-
-	          auto planInnerPhis = [&]() -> bool {
-	            for (BasicBlock *BB : EmitOrder) {
-	              if (!BB || BB == Header)
-	                continue;
-
-	              for (Instruction &I : *BB) {
-	                auto *Phi = dyn_cast<PHINode>(&I);
-	                if (!Phi)
-	                  break;
-	                if (Phi->use_empty())
-	                  continue;
-
-	                if (Phi->getType()->isPointerTy()) {
-	                  if (!PtrPhiPlans.count(Phi)) {
-	                    PtrPhiPlan Plan;
-	                    auto Sel = allocVec();
-	                    if (!Sel) {
-	                      reject("vector_reg_exhausted");
-	                      return false;
-	                    }
-	                    Plan.SelReg = *Sel;
-	                    DenseMap<const Value *, unsigned> SelIdByPtr;
-
-	                    for (unsigned II = 0, IE = Phi->getNumIncomingValues();
-	                         II != IE; ++II) {
-	                      Value *InV = Phi->getIncomingValue(II);
-	                      BasicBlock *Pred = Phi->getIncomingBlock(II);
-	                      Value *InBase =
-	                          InV ? InV->stripPointerCasts() : nullptr;
-	                      if (!InBase || !InBase->getType()->isPointerTy()) {
-	                        reject("unsupported_ptr_phi_incoming");
-	                        return false;
-	                      }
-	                      if (!L->isLoopInvariant(InBase)) {
-	                        reject("unsupported_ptr_phi_variant_incoming");
-	                        return false;
-	                      }
-
-	                      unsigned SelId = 0;
-	                      auto Seen = SelIdByPtr.find(InBase);
-	                      if (Seen != SelIdByPtr.end()) {
-	                        SelId = Seen->second;
-	                      } else {
-	                        Value *I64V = PB.CreatePtrToInt(InBase, I64Ty);
-	                        auto BaseOpt = bindI64(I64V);
-	                        if (!BaseOpt) {
-	                          reject("ptr_phi_bind_exhausted");
-	                          return false;
-	                        }
-	                        SelId = Plan.BaseRis.size();
-	                        Plan.BaseRis.push_back(*BaseOpt);
-	                        SelIdByPtr[InBase] = SelId;
-	                      }
-	                      Plan.SelByPred[Pred] = SelId;
-	                    }
-
-	                    PtrPhiPlans[Phi] = std::move(Plan);
-	                  }
-	                  PtrPhisByBlock[BB].push_back(Phi);
-	                  continue;
-	                }
-
-	                Type *Ty = Phi->getType();
-	                if (Ty == Type::getFloatTy(Ctx) ||
-	                    (Ty->isIntegerTy() && Ty->getScalarSizeInBits() <= 64)) {
-	                  auto Dst = allocVec();
-	                  if (!Dst) {
-	                    reject("vector_reg_exhausted");
-	                    return false;
-	                  }
-	                  ValOp[Phi] = *Dst;
-	                  ValuePhisByBlock[BB].push_back(Phi);
-	                  continue;
-	                }
-
-	                reject("unsupported_inner_phi_type");
-	                return false;
-	              }
-	            }
-	            return true;
-	          };
-
-	          if (!planInnerPhis())
-	            return false;
-
-	          SmallVector<
-	              std::pair<std::string, std::pair<BasicBlock *, BasicBlock *>>,
-	              16>
-	              PhiEdgeLabels;
-
-	          auto needsPhiEdge = [&](BasicBlock *SuccBB) -> bool {
-	            if (!SuccBB)
-	              return false;
-	            auto VI = ValuePhisByBlock.find(SuccBB);
-	            if (VI != ValuePhisByBlock.end() && !VI->second.empty())
-	              return true;
-	            auto PI = PtrPhisByBlock.find(SuccBB);
-	            if (PI != PtrPhisByBlock.end() && !PI->second.empty())
-	              return true;
-	            return false;
-	          };
-
-	          auto getPhiEdgeLabel = [&](BasicBlock *PredBB,
-	                                     BasicBlock *SuccBB) -> std::string {
-	            std::string P = Labels.lookup(PredBB);
-	            if (P.empty())
-	              P = "L" + std::to_string(LabelIndex.lookup(PredBB));
-	            std::string S = Labels.lookup(SuccBB);
-	            if (S.empty())
-	              S = "L" + std::to_string(LabelIndex.lookup(SuccBB));
-	            std::string Lbl = P + "_to_" + S;
-	            for (auto &E : PhiEdgeLabels) {
-	              if (E.first == Lbl)
-	                return Lbl;
-	            }
-	            PhiEdgeLabels.push_back(
-	                std::make_pair(Lbl, std::make_pair(PredBB, SuccBB)));
-	            return Lbl;
-	          };
-
-	          auto targetLabelForSucc = [&](BasicBlock *PredBB,
-	                                        BasicBlock *SuccBB) -> std::string {
-	            std::string Base = labelForSucc(SuccBB);
-	            if (Base != EndLabel && needsPhiEdge(SuccBB))
-	              return getPhiEdgeLabel(PredBB, SuccBB);
-	            return Base;
-	          };
-
-	          auto isVectorToken = [](StringRef Tok) -> bool {
-	            std::string Lower = Tok.trim().lower();
-	            StringRef T(Lower);
-	            return T.starts_with("vt#") || T.starts_with("vu#") ||
-                   T.starts_with("vm#") || T.starts_with("vn#") ||
-                   T.starts_with("lc") || T == "ta" || T == "tb" ||
-                   T == "tc" || T == "td" || T == "to" || T == "ts" ||
-                   T.starts_with("acc");
+          auto labelForSucc = [&](BasicBlock *Succ) -> std::string {
+            if (!Succ || !L->contains(Succ) || Succ == Header)
+              return EndLabel;
+            auto It = Labels.find(Succ);
+            if (It == Labels.end())
+              return EndLabel;
+            return It->second;
           };
 
-	          auto emitExecMaskCompare = [&](StringRef Mnemonic, StringRef Lhs,
-	                                         StringRef Rhs) {
-	            OS << "  " << Mnemonic << " " << Lhs << ", " << Rhs
-	               << ", ->p\n";
-	          };
+          // Plan inner-CF PHIs: allocate vector registers for scalar value PHIs
+          // and create selector plans for pointer PHIs so loads/stores can
+          // dispatch to the correct invariant base.
+          DenseMap<BasicBlock *, SmallVector<PHINode *, 4>> ValuePhisByBlock;
+          DenseMap<BasicBlock *, SmallVector<PHINode *, 2>> PtrPhisByBlock;
 
-	          auto emitBranchOnExecMask = [&](StringRef TrueLabel,
-	                                          StringRef FalseLabel) {
-	            OS << "  b.nz " << TrueLabel << "\n";
-	            if (TrueLabel != FalseLabel)
-	              OS << "  j " << FalseLabel << "\n";
-	          };
+          auto planInnerPhis = [&]() -> bool {
+            for (BasicBlock *BB : EmitOrder) {
+              if (!BB || BB == Header)
+                continue;
 
-	          auto emitPredicateToExecMask = [&](Value *PredicateExpr) -> bool {
-	            if (auto *Cmp = dyn_cast<ICmpInst>(PredicateExpr)) {
-	              auto L = emitValue(Cmp->getOperand(0));
-	              auto R = emitValue(Cmp->getOperand(1));
-	              if (!L || !R)
-	                return false;
-	              if (!isVectorToken(*L) && !isVectorToken(*R))
-	                return false;
-	              if (Cmp->getOperand(0)->getType()->isIntegerTy(1) ||
-	                  Cmp->getOperand(1)->getType()->isIntegerTy(1)) {
-	                return false;
-	              }
+              for (Instruction &I : *BB) {
+                auto *Phi = dyn_cast<PHINode>(&I);
+                if (!Phi)
+                  break;
+                if (Phi->use_empty())
+                  continue;
 
-	              StringRef Mn;
-		              std::string A = formatIntSrc(*L);
-		              std::string B = formatIntSrc(*R);
-	              switch (Cmp->getPredicate()) {
-	              case CmpInst::ICMP_EQ:
-	                Mn = "v.cmp.eq";
-	                break;
-	              case CmpInst::ICMP_NE:
-	                Mn = "v.cmp.ne";
-	                break;
-	              case CmpInst::ICMP_SLT:
-	                Mn = "v.cmp.lt";
-	                break;
-	              case CmpInst::ICMP_SLE:
-	                Mn = "v.cmp.ge";
-	                std::swap(A, B);
-	                break;
-	              case CmpInst::ICMP_SGT:
-	                Mn = "v.cmp.lt";
-	                std::swap(A, B);
-	                break;
-	              case CmpInst::ICMP_SGE:
-	                Mn = "v.cmp.ge";
-	                break;
-	              case CmpInst::ICMP_ULT:
-	                Mn = "v.cmp.ltu";
-	                break;
-	              case CmpInst::ICMP_ULE:
-	                Mn = "v.cmp.geu";
-	                std::swap(A, B);
-	                break;
-	              case CmpInst::ICMP_UGT:
-	                Mn = "v.cmp.ltu";
-	                std::swap(A, B);
-	                break;
-	              case CmpInst::ICMP_UGE:
-	                Mn = "v.cmp.geu";
-	                break;
-	              default:
-	                return false;
-	              }
+                if (Phi->getType()->isPointerTy()) {
+                  if (!PtrPhiPlans.count(Phi)) {
+                    PtrPhiPlan Plan;
+                    auto Sel = allocVec();
+                    if (!Sel) {
+                      reject("vector_reg_exhausted");
+                      return false;
+                    }
+                    Plan.SelReg = *Sel;
+                    DenseMap<const Value *, unsigned> SelIdByPtr;
 
-	              emitExecMaskCompare(Mn, A, B);
-	              return true;
-	            }
+                    for (unsigned II = 0, IE = Phi->getNumIncomingValues();
+                         II != IE; ++II) {
+                      Value *InV = Phi->getIncomingValue(II);
+                      BasicBlock *Pred = Phi->getIncomingBlock(II);
+                      Value *InBase = InV ? InV->stripPointerCasts() : nullptr;
+                      if (!InBase || !InBase->getType()->isPointerTy()) {
+                        reject("unsupported_ptr_phi_incoming");
+                        return false;
+                      }
+                      if (!L->isLoopInvariant(InBase)) {
+                        reject("unsupported_ptr_phi_variant_incoming");
+                        return false;
+                      }
 
-	            if (auto *FCmp = dyn_cast<FCmpInst>(PredicateExpr)) {
-	              auto L = emitValue(FCmp->getOperand(0));
-	              auto R = emitValue(FCmp->getOperand(1));
-	              if (!L || !R)
-	                return false;
+                      unsigned SelId = 0;
+                      auto Seen = SelIdByPtr.find(InBase);
+                      if (Seen != SelIdByPtr.end()) {
+                        SelId = Seen->second;
+                      } else {
+                        Value *I64V = PB.CreatePtrToInt(InBase, I64Ty);
+                        auto BaseOpt = bindI64(I64V);
+                        if (!BaseOpt) {
+                          reject("ptr_phi_bind_exhausted");
+                          return false;
+                        }
+                        SelId = Plan.BaseRis.size();
+                        Plan.BaseRis.push_back(*BaseOpt);
+                        SelIdByPtr[InBase] = SelId;
+                      }
+                      Plan.SelByPred[Pred] = SelId;
+                    }
 
-	              StringRef Mn;
-		              std::string A = formatFloatSrc(*L);
-		              std::string B = formatFloatSrc(*R);
-	              switch (FCmp->getPredicate()) {
-	              case CmpInst::FCMP_OEQ:
-	              case CmpInst::FCMP_UEQ:
-	                Mn = "v.feq";
-	                break;
-	              case CmpInst::FCMP_ONE:
-	              case CmpInst::FCMP_UNE:
-	                Mn = "v.fne";
-	                break;
-	              case CmpInst::FCMP_OLT:
-	              case CmpInst::FCMP_ULT:
-	                Mn = "v.flt";
-	                break;
-	              case CmpInst::FCMP_OLE:
-	              case CmpInst::FCMP_ULE:
-	                Mn = "v.fge";
-	                std::swap(A, B);
-	                break;
-	              case CmpInst::FCMP_OGT:
-	              case CmpInst::FCMP_UGT:
-	                Mn = "v.flt";
-	                std::swap(A, B);
-	                break;
-	              case CmpInst::FCMP_OGE:
-	              case CmpInst::FCMP_UGE:
-	                Mn = "v.fge";
-	                break;
-	              default:
-	                return false;
-	              }
+                    PtrPhiPlans[Phi] = std::move(Plan);
+                  }
+                  PtrPhisByBlock[BB].push_back(Phi);
+                  continue;
+                }
 
-	              emitExecMaskCompare(Mn, A, B);
-	              return true;
-	            }
+                Type *Ty = Phi->getType();
+                if (Ty == Type::getFloatTy(Ctx) ||
+                    (Ty->isIntegerTy() && Ty->getScalarSizeInBits() <= 64)) {
+                  auto Dst = allocVec();
+                  if (!Dst) {
+                    reject("vector_reg_exhausted");
+                    return false;
+                  }
+                  ValOp[Phi] = *Dst;
+                  ValuePhisByBlock[BB].push_back(Phi);
+                  continue;
+                }
 
-	            auto Pred = emitCondition(PredicateExpr);
-	            if (!Pred || !isVectorToken(*Pred))
-	              return false;
-		            emitExecMaskCompare("v.cmp.ne", formatMaskSrc(*Pred), "zero");
-	            return true;
-	          };
+                reject("unsupported_inner_phi_type");
+                return false;
+              }
+            }
+            return true;
+          };
 
-	          auto emitCondBranch = [&](Value *Cond, StringRef TrueLabel,
-	                                    StringRef FalseLabel,
-	                                    StringRef SavedMaskReg = StringRef()) -> bool {
+          if (!planInnerPhis())
+            return false;
+
+          SmallVector<
+              std::pair<std::string, std::pair<BasicBlock *, BasicBlock *>>, 16>
+              PhiEdgeLabels;
+
+          auto needsPhiEdge = [&](BasicBlock *SuccBB) -> bool {
+            if (!SuccBB)
+              return false;
+            auto VI = ValuePhisByBlock.find(SuccBB);
+            if (VI != ValuePhisByBlock.end() && !VI->second.empty())
+              return true;
+            auto PI = PtrPhisByBlock.find(SuccBB);
+            if (PI != PtrPhisByBlock.end() && !PI->second.empty())
+              return true;
+            return false;
+          };
+
+          auto getPhiEdgeLabel = [&](BasicBlock *PredBB,
+                                     BasicBlock *SuccBB) -> std::string {
+            std::string P = Labels.lookup(PredBB);
+            if (P.empty())
+              P = "L" + std::to_string(LabelIndex.lookup(PredBB));
+            std::string S = Labels.lookup(SuccBB);
+            if (S.empty())
+              S = "L" + std::to_string(LabelIndex.lookup(SuccBB));
+            std::string Lbl = P + "_to_" + S;
+            for (auto &E : PhiEdgeLabels) {
+              if (E.first == Lbl)
+                return Lbl;
+            }
+            PhiEdgeLabels.push_back(
+                std::make_pair(Lbl, std::make_pair(PredBB, SuccBB)));
+            return Lbl;
+          };
+
+          auto targetLabelForSucc = [&](BasicBlock *PredBB,
+                                        BasicBlock *SuccBB) -> std::string {
+            std::string Base = labelForSucc(SuccBB);
+            if (Base != EndLabel && needsPhiEdge(SuccBB))
+              return getPhiEdgeLabel(PredBB, SuccBB);
+            return Base;
+          };
+
+          auto isVectorToken = [](StringRef Tok) -> bool {
+            std::string Lower = Tok.trim().lower();
+            StringRef T(Lower);
+            return T.starts_with("vt#") || T.starts_with("vu#") ||
+                   T.starts_with("vm#") || T.starts_with("vn#") ||
+                   T.starts_with("lc") || T == "ta" || T == "tb" || T == "tc" ||
+                   T == "td" || T == "to" || T == "ts" || T.starts_with("acc");
+          };
+
+          auto emitExecMaskCompare = [&](StringRef Mnemonic, StringRef Lhs,
+                                         StringRef Rhs) {
+            OS << "  " << Mnemonic << " " << Lhs << ", " << Rhs << ", ->p\n";
+          };
+
+          auto emitBranchOnExecMask = [&](StringRef TrueLabel,
+                                          StringRef FalseLabel) {
+            OS << "  b.nz " << TrueLabel << "\n";
+            if (TrueLabel != FalseLabel)
+              OS << "  j " << FalseLabel << "\n";
+          };
+
+          auto emitPredicateToExecMask = [&](Value *PredicateExpr) -> bool {
+            if (auto *Cmp = dyn_cast<ICmpInst>(PredicateExpr)) {
+              auto L = emitValue(Cmp->getOperand(0));
+              auto R = emitValue(Cmp->getOperand(1));
+              if (!L || !R)
+                return false;
+              if (!isVectorToken(*L) && !isVectorToken(*R))
+                return false;
+              if (Cmp->getOperand(0)->getType()->isIntegerTy(1) ||
+                  Cmp->getOperand(1)->getType()->isIntegerTy(1)) {
+                return false;
+              }
+
+              StringRef Mn;
+              std::string A = formatIntSrc(*L);
+              std::string B = formatIntSrc(*R);
+              switch (Cmp->getPredicate()) {
+              case CmpInst::ICMP_EQ:
+                Mn = "v.cmp.eq";
+                break;
+              case CmpInst::ICMP_NE:
+                Mn = "v.cmp.ne";
+                break;
+              case CmpInst::ICMP_SLT:
+                Mn = "v.cmp.lt";
+                break;
+              case CmpInst::ICMP_SLE:
+                Mn = "v.cmp.ge";
+                std::swap(A, B);
+                break;
+              case CmpInst::ICMP_SGT:
+                Mn = "v.cmp.lt";
+                std::swap(A, B);
+                break;
+              case CmpInst::ICMP_SGE:
+                Mn = "v.cmp.ge";
+                break;
+              case CmpInst::ICMP_ULT:
+                Mn = "v.cmp.ltu";
+                break;
+              case CmpInst::ICMP_ULE:
+                Mn = "v.cmp.geu";
+                std::swap(A, B);
+                break;
+              case CmpInst::ICMP_UGT:
+                Mn = "v.cmp.ltu";
+                std::swap(A, B);
+                break;
+              case CmpInst::ICMP_UGE:
+                Mn = "v.cmp.geu";
+                break;
+              default:
+                return false;
+              }
+
+              emitExecMaskCompare(Mn, A, B);
+              return true;
+            }
+
+            if (auto *FCmp = dyn_cast<FCmpInst>(PredicateExpr)) {
+              auto L = emitValue(FCmp->getOperand(0));
+              auto R = emitValue(FCmp->getOperand(1));
+              if (!L || !R)
+                return false;
+
+              StringRef Mn;
+              std::string A = formatFloatSrc(*L);
+              std::string B = formatFloatSrc(*R);
+              switch (FCmp->getPredicate()) {
+              case CmpInst::FCMP_OEQ:
+              case CmpInst::FCMP_UEQ:
+                Mn = "v.feq";
+                break;
+              case CmpInst::FCMP_ONE:
+              case CmpInst::FCMP_UNE:
+                Mn = "v.fne";
+                break;
+              case CmpInst::FCMP_OLT:
+              case CmpInst::FCMP_ULT:
+                Mn = "v.flt";
+                break;
+              case CmpInst::FCMP_OLE:
+              case CmpInst::FCMP_ULE:
+                Mn = "v.fge";
+                std::swap(A, B);
+                break;
+              case CmpInst::FCMP_OGT:
+              case CmpInst::FCMP_UGT:
+                Mn = "v.flt";
+                std::swap(A, B);
+                break;
+              case CmpInst::FCMP_OGE:
+              case CmpInst::FCMP_UGE:
+                Mn = "v.fge";
+                break;
+              default:
+                return false;
+              }
+
+              emitExecMaskCompare(Mn, A, B);
+              return true;
+            }
+
+            auto Pred = emitCondition(PredicateExpr);
+            if (!Pred || !isVectorToken(*Pred))
+              return false;
+            emitExecMaskCompare("v.cmp.ne", formatMaskSrc(*Pred), "zero");
+            return true;
+          };
+
+          auto emitCondBranch =
+              [&](Value *Cond, StringRef TrueLabel, StringRef FalseLabel,
+                  StringRef SavedMaskReg = StringRef()) -> bool {
             std::string Mnemonic = "b.ne";
             std::string Lhs;
             std::string Rhs = "zero";
@@ -6093,8 +6075,8 @@ public:
             auto emitPredicatedBranch = [&](Value *PredicateExpr) -> bool {
               if (emitPredicateToExecMask(PredicateExpr)) {
                 if (!SavedMaskReg.empty()) {
-                  OS << "  v.psel p, ri" << *ExecMaskSaveOneBind
-                     << ", ->" << formatWordDest(SavedMaskReg) << "\n";
+                  OS << "  v.psel p, ri" << *ExecMaskSaveOneBind << ", ->"
+                     << formatWordDest(SavedMaskReg) << "\n";
                 }
                 emitBranchOnExecMask(TrueLabel, FalseLabel);
                 BranchAlreadyEmitted = true;
@@ -6190,366 +6172,362 @@ public:
                << TrueLabel << "\n";
             if (TrueLabel != FalseLabel)
               OS << "  j " << FalseLabel << "\n";
-	            return true;
-	          };
+            return true;
+          };
 
-	          SmallVector<std::pair<std::string, BasicBlock *>, 8> ExitEdgeLabels;
+          SmallVector<std::pair<std::string, BasicBlock *>, 8> ExitEdgeLabels;
 
-	          auto emitExitEdgeStores = [&](BasicBlock *PredBB) -> bool {
-	            auto It = ExitPhiStoresByBlock.find(PredBB);
-	            if (It != ExitPhiStoresByBlock.end()) {
-	              for (auto &Pair : It->second) {
-	                unsigned BaseRi = Pair.first;
-	                Value *VIn = Pair.second;
-	                auto Tok = emitValue(VIn);
-	                if (!Tok) {
-	                  reject("exit_phi_value_emit_failed");
-	                  return false;
-	                }
-                  const ExitPhiPlan *Plan = nullptr;
-                  for (const ExitPhiPlan &P : ExitPhiPlans) {
-                    if (P.SlotBind == BaseRi) {
-                      Plan = &P;
-                      break;
-                    }
+          auto emitExitEdgeStores = [&](BasicBlock *PredBB) -> bool {
+            auto It = ExitPhiStoresByBlock.find(PredBB);
+            if (It != ExitPhiStoresByBlock.end()) {
+              for (auto &Pair : It->second) {
+                unsigned BaseRi = Pair.first;
+                Value *VIn = Pair.second;
+                auto Tok = emitValue(VIn);
+                if (!Tok) {
+                  reject("exit_phi_value_emit_failed");
+                  return false;
+                }
+                const ExitPhiPlan *Plan = nullptr;
+                for (const ExitPhiPlan &P : ExitPhiPlans) {
+                  if (P.SlotBind == BaseRi) {
+                    Plan = &P;
+                    break;
                   }
-                  const bool Stored =
-                      (Plan && Plan->LocalWordBase)
-                          ? emitStoreToSharedLocalWordBase(
-                                *Tok, *Plan->LocalWordBase,
-                                /*IsFloat=*/VIn->getType() ==
-                                    Type::getFloatTy(Ctx))
-                          : emitStoreToInvariantBind(
-                                *Tok, BaseRi,
-                                /*IsFloat=*/VIn->getType() ==
-                                    Type::getFloatTy(Ctx));
-		                if (!Stored) {
-	                  reject("exit_phi_store_emit_failed");
-	                  return false;
-	                }
-	              }
-	            }
-	            if (NeedsActiveReplay &&
-	                (ActiveSlotBind || ActiveSlotLocalWordBase)) {
-	              const bool StoredActive =
-	                  ActiveSlotLocalWordBase
-	                      ? emitStoreToLocalWordBase("zero",
-	                                                 *ActiveSlotLocalWordBase)
-	                      : emitStoreToActiveBind("zero", *ActiveSlotBind);
-	              if (!StoredActive) {
-	                reject("active_store_emit_failed");
-	                return false;
-	              }
-	            }
-	            return true;
-	          };
+                }
+                const bool Stored =
+                    (Plan && Plan->LocalWordBase)
+                        ? emitStoreToSharedLocalWordBase(
+                              *Tok, *Plan->LocalWordBase,
+                              /*IsFloat=*/VIn->getType() ==
+                                  Type::getFloatTy(Ctx))
+                        : emitStoreToInvariantBind(*Tok, BaseRi,
+                                                   /*IsFloat=*/VIn->getType() ==
+                                                       Type::getFloatTy(Ctx));
+                if (!Stored) {
+                  reject("exit_phi_store_emit_failed");
+                  return false;
+                }
+              }
+            }
+            if (NeedsActiveReplay &&
+                (ActiveSlotBind || ActiveSlotLocalWordBase)) {
+              const bool StoredActive =
+                  ActiveSlotLocalWordBase
+                      ? emitStoreToLocalWordBase("zero",
+                                                 *ActiveSlotLocalWordBase)
+                      : emitStoreToActiveBind("zero", *ActiveSlotBind);
+              if (!StoredActive) {
+                reject("active_store_emit_failed");
+                return false;
+              }
+            }
+            return true;
+          };
 
-	          auto getExitEdgeLabel =
-	              [&](BasicBlock *PredBB, unsigned SuccIdx) -> std::string {
-	            std::string Base = Labels.lookup(PredBB);
-	            if (Base.empty())
-	              Base = "L" + std::to_string(LabelIndex.lookup(PredBB));
-	            std::string Lbl =
-	                Base + "_exit" + std::to_string(SuccIdx);
-	            for (auto &P : ExitEdgeLabels) {
-	              if (P.first == Lbl)
-	                return Lbl;
-	            }
-	            ExitEdgeLabels.push_back(std::make_pair(Lbl, PredBB));
-	            return Lbl;
-	          };
+          auto getExitEdgeLabel = [&](BasicBlock *PredBB,
+                                      unsigned SuccIdx) -> std::string {
+            std::string Base = Labels.lookup(PredBB);
+            if (Base.empty())
+              Base = "L" + std::to_string(LabelIndex.lookup(PredBB));
+            std::string Lbl = Base + "_exit" + std::to_string(SuccIdx);
+            for (auto &P : ExitEdgeLabels) {
+              if (P.first == Lbl)
+                return Lbl;
+            }
+            ExitEdgeLabels.push_back(std::make_pair(Lbl, PredBB));
+            return Lbl;
+          };
 
-	          for (BasicBlock *BB : EmitOrder) {
-	            if (BB != Header)
-	              OS << Labels.lookup(BB) << ":\n";
-	            if (auto RestoreIt = ReplayMaskRestoreRegsByMerge.find(BB);
-	                RestoreIt != ReplayMaskRestoreRegsByMerge.end()) {
-	              for (const std::string &SavedMaskReg : RestoreIt->second)
-	                emitExecMaskCompare("v.cmp.ne", formatIntSrc(SavedMaskReg),
-	                                    "zero");
-	            }
-	            auto StoreMergeIt = IfConvertibleStoreMerges.find(BB);
-	            if (StoreMergeIt != IfConvertibleStoreMerges.end()) {
-	              const IfConvertibleStoreMergePlan &Plan = StoreMergeIt->second;
-	              auto *BI =
-	                  dyn_cast_or_null<BranchInst>(Plan.BranchBB->getTerminator());
-	              if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2) {
-	                reject("invalid_store_merge_plan");
-	                return false;
-	              }
-	              if (!Plan.TrueStore || !Plan.FalseStore) {
-	                reject("invalid_store_merge_plan");
-	                return false;
-	              }
-	              if (Plan.TrueStore->getValueOperand()->getType() !=
-	                      Type::getFloatTy(Ctx) ||
-	                  Plan.FalseStore->getValueOperand()->getType() !=
-	                      Type::getFloatTy(Ctx)) {
-	                reject("non_float_store_value");
-	                return false;
-	              }
-	              auto Pred = emitCondition(BI->getCondition());
-	              auto TV = emitValue(Plan.TrueStore->getValueOperand());
-	              auto FV = emitValue(Plan.FalseStore->getValueOperand());
-	              if (!Pred || !TV || !FV) {
-	                reject("store_merge_value_emit_failed");
-	                return false;
-	              }
-	              auto Dst = allocVec();
-	              if (!Dst) {
-	                reject("vector_reg_exhausted");
-	                return false;
-	              }
-	              OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
-	                 << formatFloatSrc(*TV) << ", " << formatFloatSrc(*FV)
-	                 << ", ->" << formatWordDest(*Dst) << "\n";
-	              if (!emitStoreValueToPtr(Plan.TrueStore->getPointerOperand(),
-	                                       *Dst, /*IsFloat=*/true,
-                                           /*ElemBytes=*/4)) {
-	                reject("store_merge_emit_failed");
-	                return false;
-	              }
-	            }
-	            if (!emitBodyInstructions(BB))
-	              return false;
+          for (BasicBlock *BB : EmitOrder) {
+            if (BB != Header)
+              OS << Labels.lookup(BB) << ":\n";
+            if (auto RestoreIt = ReplayMaskRestoreRegsByMerge.find(BB);
+                RestoreIt != ReplayMaskRestoreRegsByMerge.end()) {
+              for (const std::string &SavedMaskReg : RestoreIt->second)
+                emitExecMaskCompare("v.cmp.ne", formatIntSrc(SavedMaskReg),
+                                    "zero");
+            }
+            auto StoreMergeIt = IfConvertibleStoreMerges.find(BB);
+            if (StoreMergeIt != IfConvertibleStoreMerges.end()) {
+              const IfConvertibleStoreMergePlan &Plan = StoreMergeIt->second;
+              auto *BI =
+                  dyn_cast_or_null<BranchInst>(Plan.BranchBB->getTerminator());
+              if (!BI || !BI->isConditional() || BI->getNumSuccessors() != 2) {
+                reject("invalid_store_merge_plan");
+                return false;
+              }
+              if (!Plan.TrueStore || !Plan.FalseStore) {
+                reject("invalid_store_merge_plan");
+                return false;
+              }
+              if (Plan.TrueStore->getValueOperand()->getType() !=
+                      Type::getFloatTy(Ctx) ||
+                  Plan.FalseStore->getValueOperand()->getType() !=
+                      Type::getFloatTy(Ctx)) {
+                reject("non_float_store_value");
+                return false;
+              }
+              auto Pred = emitCondition(BI->getCondition());
+              auto TV = emitValue(Plan.TrueStore->getValueOperand());
+              auto FV = emitValue(Plan.FalseStore->getValueOperand());
+              if (!Pred || !TV || !FV) {
+                reject("store_merge_value_emit_failed");
+                return false;
+              }
+              auto Dst = allocVec();
+              if (!Dst) {
+                reject("vector_reg_exhausted");
+                return false;
+              }
+              OS << "  v.csel " << formatMaskSrc(*Pred) << ", "
+                 << formatFloatSrc(*TV) << ", " << formatFloatSrc(*FV) << ", ->"
+                 << formatWordDest(*Dst) << "\n";
+              if (!emitStoreValueToPtr(Plan.TrueStore->getPointerOperand(),
+                                       *Dst, /*IsFloat=*/true,
+                                       /*ElemBytes=*/4)) {
+                reject("store_merge_emit_failed");
+                return false;
+              }
+            }
+            if (!emitBodyInstructions(BB))
+              return false;
 
-	            auto *TI = BB->getTerminator();
-	            auto *BI = dyn_cast_or_null<BranchInst>(TI);
-	            auto *SI = dyn_cast_or_null<SwitchInst>(TI);
-	            if (!BI && !SI) {
-	              reject("unsupported_terminator");
-	              return false;
-	            }
+            auto *TI = BB->getTerminator();
+            auto *BI = dyn_cast_or_null<BranchInst>(TI);
+            auto *SI = dyn_cast_or_null<SwitchInst>(TI);
+            if (!BI && !SI) {
+              reject("unsupported_terminator");
+              return false;
+            }
 
-		            if (BI) {
-		              auto SplitIt = IfConvertibleSplits.find(BB);
-		              if (SplitIt != IfConvertibleSplits.end()) {
-		                BasicBlock *MergeBB = SplitIt->second.MergeBB;
-		                std::string MergeLabel = labelForSucc(MergeBB);
-		                if (MergeLabel != EndLabel) {
-		                  auto CurIt = LabelIndex.find(BB);
-		                  auto MergeIt = LabelIndex.find(MergeBB);
-		                  if (CurIt != LabelIndex.end() && MergeIt != LabelIndex.end() &&
-		                      MergeIt->second <= CurIt->second) {
-		                    reject("unsupported_inner_backedge");
-		                    return false;
-		                  }
-		                }
-		                OS << "  j " << MergeLabel << "\n";
-		                continue;
-		              }
-			              if (!BI->isConditional()) {
-			                BasicBlock *Succ = BI->getSuccessor(0);
-			                std::string Target = targetLabelForSucc(BB, Succ);
-			                if (Succ && !L->contains(Succ)) {
-			                  if (!emitExitEdgeStores(BB))
-			                    return false;
-			                }
-		                if (Target != EndLabel) {
-		                  auto CurIt = LabelIndex.find(BB);
-		                  auto SuccIt = LabelIndex.find(Succ);
-		                  if (CurIt != LabelIndex.end() && SuccIt != LabelIndex.end() &&
-	                      SuccIt->second <= CurIt->second) {
-	                    reject("unsupported_inner_backedge");
-	                    return false;
-	                  }
-	                }
-	                OS << "  j " << Target << "\n";
-	                continue;
-	              }
+            if (BI) {
+              auto SplitIt = IfConvertibleSplits.find(BB);
+              if (SplitIt != IfConvertibleSplits.end()) {
+                BasicBlock *MergeBB = SplitIt->second.MergeBB;
+                std::string MergeLabel = labelForSucc(MergeBB);
+                if (MergeLabel != EndLabel) {
+                  auto CurIt = LabelIndex.find(BB);
+                  auto MergeIt = LabelIndex.find(MergeBB);
+                  if (CurIt != LabelIndex.end() &&
+                      MergeIt != LabelIndex.end() &&
+                      MergeIt->second <= CurIt->second) {
+                    reject("unsupported_inner_backedge");
+                    return false;
+                  }
+                }
+                OS << "  j " << MergeLabel << "\n";
+                continue;
+              }
+              if (!BI->isConditional()) {
+                BasicBlock *Succ = BI->getSuccessor(0);
+                std::string Target = targetLabelForSucc(BB, Succ);
+                if (Succ && !L->contains(Succ)) {
+                  if (!emitExitEdgeStores(BB))
+                    return false;
+                }
+                if (Target != EndLabel) {
+                  auto CurIt = LabelIndex.find(BB);
+                  auto SuccIt = LabelIndex.find(Succ);
+                  if (CurIt != LabelIndex.end() && SuccIt != LabelIndex.end() &&
+                      SuccIt->second <= CurIt->second) {
+                    reject("unsupported_inner_backedge");
+                    return false;
+                  }
+                }
+                OS << "  j " << Target << "\n";
+                continue;
+              }
 
-	              BasicBlock *S0 = BI->getSuccessor(0);
-	              BasicBlock *S1 = BI->getSuccessor(1);
-		              const bool S0InLoop = L->contains(S0);
-		              const bool S1InLoop = L->contains(S1);
+              BasicBlock *S0 = BI->getSuccessor(0);
+              BasicBlock *S1 = BI->getSuccessor(1);
+              const bool S0InLoop = L->contains(S0);
+              const bool S1InLoop = L->contains(S1);
 
-		              // Header loop-entry guard is represented by B.DIM replay and is not
-		              // part of the decoupled body control flow.
-		              if (BB == Header && (S0InLoop != S1InLoop)) {
-		                BasicBlock *InLoopSucc = S0InLoop ? S0 : S1;
-		                if (InLoopSucc && InLoopSucc != Latch)
-		                  continue;
-		              }
+              // Header loop-entry guard is represented by B.DIM replay and is
+              // not part of the decoupled body control flow.
+              if (BB == Header && (S0InLoop != S1InLoop)) {
+                BasicBlock *InLoopSucc = S0InLoop ? S0 : S1;
+                if (InLoopSucc && InLoopSucc != Latch)
+                  continue;
+              }
 
-			              std::string TrueLabel =
-			                  (S0 && !S0InLoop) ? getExitEdgeLabel(BB, 0)
-			                                    : targetLabelForSucc(BB, S0);
-			              std::string FalseLabel =
-			                  (S1 && !S1InLoop) ? getExitEdgeLabel(BB, 1)
-			                                    : targetLabelForSucc(BB, S1);
-		              if (TrueLabel != EndLabel) {
-		                auto CurIt = LabelIndex.find(BB);
-		                auto S0It = LabelIndex.find(S0);
-		                if (CurIt != LabelIndex.end() && S0It != LabelIndex.end() &&
-	                    S0It->second <= CurIt->second) {
-	                  reject("unsupported_inner_backedge");
-	                  return false;
-	                }
-	              }
-	              if (FalseLabel != EndLabel) {
-	                auto CurIt = LabelIndex.find(BB);
-	                auto S1It = LabelIndex.find(S1);
-	                if (CurIt != LabelIndex.end() && S1It != LabelIndex.end() &&
-	                    S1It->second <= CurIt->second) {
-	                  reject("unsupported_inner_backedge");
-	                  return false;
-	                }
-	              }
+              std::string TrueLabel = (S0 && !S0InLoop)
+                                          ? getExitEdgeLabel(BB, 0)
+                                          : targetLabelForSucc(BB, S0);
+              std::string FalseLabel = (S1 && !S1InLoop)
+                                           ? getExitEdgeLabel(BB, 1)
+                                           : targetLabelForSucc(BB, S1);
+              if (TrueLabel != EndLabel) {
+                auto CurIt = LabelIndex.find(BB);
+                auto S0It = LabelIndex.find(S0);
+                if (CurIt != LabelIndex.end() && S0It != LabelIndex.end() &&
+                    S0It->second <= CurIt->second) {
+                  reject("unsupported_inner_backedge");
+                  return false;
+                }
+              }
+              if (FalseLabel != EndLabel) {
+                auto CurIt = LabelIndex.find(BB);
+                auto S1It = LabelIndex.find(S1);
+                if (CurIt != LabelIndex.end() && S1It != LabelIndex.end() &&
+                    S1It->second <= CurIt->second) {
+                  reject("unsupported_inner_backedge");
+                  return false;
+                }
+              }
 
-	              if (TrueLabel == FalseLabel) {
-	                OS << "  j " << TrueLabel << "\n";
-	                continue;
-	              }
-	              StringRef SavedMaskReg;
-	              if (auto MaskIt = ReplayMaskSaveRegByBranch.find(BB);
-	                  MaskIt != ReplayMaskSaveRegByBranch.end())
-	                SavedMaskReg = MaskIt->second;
-	              if (!emitCondBranch(BI->getCondition(), TrueLabel, FalseLabel,
-	                                  SavedMaskReg))
-	                return false;
-		              continue;
-		            }
+              if (TrueLabel == FalseLabel) {
+                OS << "  j " << TrueLabel << "\n";
+                continue;
+              }
+              StringRef SavedMaskReg;
+              if (auto MaskIt = ReplayMaskSaveRegByBranch.find(BB);
+                  MaskIt != ReplayMaskSaveRegByBranch.end())
+                SavedMaskReg = MaskIt->second;
+              if (!emitCondBranch(BI->getCondition(), TrueLabel, FalseLabel,
+                                  SavedMaskReg))
+                return false;
+              continue;
+            }
 
-		            // SwitchInst: lower as a linear compare chain. In bring-up mode we
-	            // model SIMT divergence via LaneCount=1, so a scalar branch is
-	            // sufficient.
-	            auto CondTok = emitValue(SI->getCondition());
-	            if (!CondTok) {
-	              reject("unsupported_switch_condition");
-	              return false;
-	            }
+            // SwitchInst: lower as a linear compare chain. In bring-up mode we
+            // model SIMT divergence via LaneCount=1, so a scalar branch is
+            // sufficient.
+            auto CondTok = emitValue(SI->getCondition());
+            if (!CondTok) {
+              reject("unsupported_switch_condition");
+              return false;
+            }
 
-	            for (auto Case : SI->cases()) {
-	              auto CaseTok = emitValue(Case.getCaseValue());
-	              if (!CaseTok) {
-	                reject("unsupported_switch_case");
-	                return false;
-	              }
-		              BasicBlock *DestBB = Case.getCaseSuccessor();
-		              std::string DestLabel = targetLabelForSucc(BB, DestBB);
-	              if (DestLabel != EndLabel) {
-	                auto CurIt = LabelIndex.find(BB);
-	                auto DestIt = LabelIndex.find(DestBB);
-	                if (CurIt != LabelIndex.end() && DestIt != LabelIndex.end() &&
-	                    DestIt->second <= CurIt->second) {
-	                  reject("unsupported_inner_backedge");
-	                  return false;
-	                }
-	              }
-			              OS << "  v.cmp.eq " << formatIntSrc(*CondTok) << ", "
-			                 << formatIntSrc(*CaseTok)
-			                 << ", ->p\n";
-		              OS << "  b.nz " << DestLabel << "\n";
-		            }
-		            std::string DefaultLabel =
-		                targetLabelForSucc(BB, SI->getDefaultDest());
-		            OS << "  j " << DefaultLabel << "\n";
-			          }
+            for (auto Case : SI->cases()) {
+              auto CaseTok = emitValue(Case.getCaseValue());
+              if (!CaseTok) {
+                reject("unsupported_switch_case");
+                return false;
+              }
+              BasicBlock *DestBB = Case.getCaseSuccessor();
+              std::string DestLabel = targetLabelForSucc(BB, DestBB);
+              if (DestLabel != EndLabel) {
+                auto CurIt = LabelIndex.find(BB);
+                auto DestIt = LabelIndex.find(DestBB);
+                if (CurIt != LabelIndex.end() && DestIt != LabelIndex.end() &&
+                    DestIt->second <= CurIt->second) {
+                  reject("unsupported_inner_backedge");
+                  return false;
+                }
+              }
+              OS << "  v.cmp.eq " << formatIntSrc(*CondTok) << ", "
+                 << formatIntSrc(*CaseTok) << ", ->p\n";
+              OS << "  b.nz " << DestLabel << "\n";
+            }
+            std::string DefaultLabel =
+                targetLabelForSucc(BB, SI->getDefaultDest());
+            OS << "  j " << DefaultLabel << "\n";
+          }
 
-			          // Emit phi-edge labels (PHI copies + ptr-phi selector writes)
-			          // before the exit-edge labels so we can branch to them from
-			          // within the linearized body.
-			          for (auto &P : PhiEdgeLabels) {
-			            OS << P.first << ":\n";
-			            BasicBlock *PredBB = P.second.first;
-			            BasicBlock *SuccBB = P.second.second;
-			            if (!PredBB || !SuccBB) {
-			              reject("invalid_phi_edge");
-			              return false;
-			            }
+          // Emit phi-edge labels (PHI copies + ptr-phi selector writes)
+          // before the exit-edge labels so we can branch to them from
+          // within the linearized body.
+          for (auto &P : PhiEdgeLabels) {
+            OS << P.first << ":\n";
+            BasicBlock *PredBB = P.second.first;
+            BasicBlock *SuccBB = P.second.second;
+            if (!PredBB || !SuccBB) {
+              reject("invalid_phi_edge");
+              return false;
+            }
 
-			            auto PI = PtrPhisByBlock.find(SuccBB);
-			            if (PI != PtrPhisByBlock.end()) {
-			              for (PHINode *Phi : PI->second) {
-			                auto PlanIt = PtrPhiPlans.find(Phi);
-			                if (PlanIt == PtrPhiPlans.end()) {
-			                  reject("missing_ptr_phi_plan");
-			                  return false;
-			                }
-			                PtrPhiPlan &Plan = PlanIt->second;
-			                auto SelIt = Plan.SelByPred.find(PredBB);
-			                if (SelIt == Plan.SelByPred.end()) {
-			                  reject("missing_ptr_phi_edge");
-			                  return false;
-			                }
-			                const unsigned SelId = SelIt->second;
-			                std::string SelTok = "zero";
-			                if (SelId != 0) {
-			                  auto Tok = emitValue(ConstantInt::get(I64Ty, SelId));
-			                  if (!Tok) {
-			                    reject("ptr_phi_sel_emit_failed");
-			                    return false;
-			                  }
-			                  SelTok = *Tok;
-			                }
-				                OS << "  v.add zero, " << formatIntSrc(SelTok)
-				                   << ", ->" << formatAssignedWordDest(Plan.SelReg)
-				                   << "\n";
-			              }
-			            }
+            auto PI = PtrPhisByBlock.find(SuccBB);
+            if (PI != PtrPhisByBlock.end()) {
+              for (PHINode *Phi : PI->second) {
+                auto PlanIt = PtrPhiPlans.find(Phi);
+                if (PlanIt == PtrPhiPlans.end()) {
+                  reject("missing_ptr_phi_plan");
+                  return false;
+                }
+                PtrPhiPlan &Plan = PlanIt->second;
+                auto SelIt = Plan.SelByPred.find(PredBB);
+                if (SelIt == Plan.SelByPred.end()) {
+                  reject("missing_ptr_phi_edge");
+                  return false;
+                }
+                const unsigned SelId = SelIt->second;
+                std::string SelTok = "zero";
+                if (SelId != 0) {
+                  auto Tok = emitValue(ConstantInt::get(I64Ty, SelId));
+                  if (!Tok) {
+                    reject("ptr_phi_sel_emit_failed");
+                    return false;
+                  }
+                  SelTok = *Tok;
+                }
+                OS << "  v.add zero, " << formatIntSrc(SelTok) << ", ->"
+                   << formatAssignedWordDest(Plan.SelReg) << "\n";
+              }
+            }
 
-			            auto VI = ValuePhisByBlock.find(SuccBB);
-			            if (VI != ValuePhisByBlock.end()) {
-			              for (PHINode *Phi : VI->second) {
-			                int Idx = Phi->getBasicBlockIndex(PredBB);
-			                if (Idx < 0) {
-			                  reject("missing_phi_incoming");
-			                  return false;
-			                }
-			                Value *InV = Phi->getIncomingValue(Idx);
-			                std::optional<std::string> SrcTok;
-			                bool NeedsEdgeFresh = false;
-			                if (InV->getType()->isIntegerTy() &&
-			                    InV->getType()->getScalarSizeInBits() <= 64) {
-			                  const SCEV *InS = SE.getSCEVAtScope(InV, L);
-			                  const auto *AR = dyn_cast<SCEVAddRecExpr>(InS);
-			                  if (AR && AR->getLoop() == L && AR->isAffine()) {
-			                    NeedsEdgeFresh = true;
-			                    SrcTok = emitIntegerAffineAddRecValue(
-			                        InV, /*EdgeFresh=*/true);
-			                  }
-			                }
-			                if (NeedsEdgeFresh && !SrcTok) {
-			                  reject("phi_incoming_addrec_emit_failed");
-			                  return false;
-			                }
-			                if (!SrcTok)
-			                  SrcTok = emitValue(InV);
-			                if (!SrcTok) {
-			                  reject("phi_incoming_emit_failed");
-			                  return false;
-			                }
-			                auto DIt = ValOp.find(Phi);
-			                if (DIt == ValOp.end()) {
-			                  reject("missing_phi_reg");
-			                  return false;
-			                }
-			                const bool IsFloat =
-			                    Phi->getType() == Type::getFloatTy(Ctx);
-			                OS << "  v.add "
-			                   << (IsFloat ? formatFloatSrc(*SrcTok)
-			                               : formatIntSrc(*SrcTok))
-			                   << ", zero, ->"
-			                   << formatAssignedWordDest(DIt->second)
-			                   << "\n";
-			              }
-			            }
+            auto VI = ValuePhisByBlock.find(SuccBB);
+            if (VI != ValuePhisByBlock.end()) {
+              for (PHINode *Phi : VI->second) {
+                int Idx = Phi->getBasicBlockIndex(PredBB);
+                if (Idx < 0) {
+                  reject("missing_phi_incoming");
+                  return false;
+                }
+                Value *InV = Phi->getIncomingValue(Idx);
+                std::optional<std::string> SrcTok;
+                bool NeedsEdgeFresh = false;
+                if (InV->getType()->isIntegerTy() &&
+                    InV->getType()->getScalarSizeInBits() <= 64) {
+                  const SCEV *InS = SE.getSCEVAtScope(InV, L);
+                  const auto *AR = dyn_cast<SCEVAddRecExpr>(InS);
+                  if (AR && AR->getLoop() == L && AR->isAffine()) {
+                    NeedsEdgeFresh = true;
+                    SrcTok =
+                        emitIntegerAffineAddRecValue(InV, /*EdgeFresh=*/true);
+                  }
+                }
+                if (NeedsEdgeFresh && !SrcTok) {
+                  reject("phi_incoming_addrec_emit_failed");
+                  return false;
+                }
+                if (!SrcTok)
+                  SrcTok = emitValue(InV);
+                if (!SrcTok) {
+                  reject("phi_incoming_emit_failed");
+                  return false;
+                }
+                auto DIt = ValOp.find(Phi);
+                if (DIt == ValOp.end()) {
+                  reject("missing_phi_reg");
+                  return false;
+                }
+                const bool IsFloat = Phi->getType() == Type::getFloatTy(Ctx);
+                OS << "  v.add "
+                   << (IsFloat ? formatFloatSrc(*SrcTok)
+                               : formatIntSrc(*SrcTok))
+                   << ", zero, ->" << formatAssignedWordDest(DIt->second)
+                   << "\n";
+              }
+            }
 
-			            OS << "  j " << labelForSucc(SuccBB) << "\n";
-			          }
+            OS << "  j " << labelForSucc(SuccBB) << "\n";
+          }
 
-			          // Emit exit-edge labels (stores + active=0) before the end-of-iteration
-			          // label so we can branch to them from within the linearized body.
-			          for (auto &P : ExitEdgeLabels) {
-			            OS << P.first << ":\n";
-		            if (!emitExitEdgeStores(P.second))
-		              return false;
-		            OS << "  j " << EndLabel << "\n";
-		          }
+          // Emit exit-edge labels (stores + active=0) before the
+          // end-of-iteration label so we can branch to them from within the
+          // linearized body.
+          for (auto &P : ExitEdgeLabels) {
+            OS << P.first << ":\n";
+            if (!emitExitEdgeStores(P.second))
+              return false;
+            OS << "  j " << EndLabel << "\n";
+          }
 
-		          OS << EndLabel << ":\n";
-		          return true;
-	        };
+          OS << EndLabel << ":\n";
+          return true;
+        };
 
         if (ActiveSlotLocalWordBase) {
           auto OneTok = emitValue(ConstantInt::get(I64Ty, 1));
@@ -6565,9 +6543,10 @@ public:
             continue;
           auto InitTok = emitLoadFromInvariantBind(Plan.SlotBind);
           if (!InitTok ||
-              !emitStoreToSharedLocalWordBase(
-                  *InitTok, *Plan.LocalWordBase,
-                  /*IsFloat=*/Plan.Phi && Plan.Phi->getType() == Type::getFloatTy(Ctx))) {
+              !emitStoreToSharedLocalWordBase(*InitTok, *Plan.LocalWordBase,
+                                              /*IsFloat=*/Plan.Phi &&
+                                                  Plan.Phi->getType() ==
+                                                      Type::getFloatTy(Ctx))) {
             reject("exit_phi_store_emit_failed");
             return false;
           }
@@ -6575,26 +6554,27 @@ public:
 
         const std::string AfterLabel = "L_after";
         if (ActiveSlotBind || ActiveSlotLocalWordBase) {
-          auto ActiveTok = ActiveSlotLocalWordBase
-                               ? emitLoadFromLocalWordBase(*ActiveSlotLocalWordBase)
-                               : emitLoadFromActiveBind(*ActiveSlotBind);
+          auto ActiveTok =
+              ActiveSlotLocalWordBase
+                  ? emitLoadFromLocalWordBase(*ActiveSlotLocalWordBase)
+                  : emitLoadFromActiveBind(*ActiveSlotBind);
           if (!ActiveTok) {
             reject("active_load_failed");
             return false;
           }
-	          auto Pred = allocVec();
-	          if (!Pred) {
-	            reject("vector_reg_exhausted");
-	            return false;
-	          }
-		          OS << "  v.cmp.eq " << formatIntSrc(*ActiveTok)
-		             << ", zero, ->" << formatMaskDest(*Pred) << "\n";
-		          // Reduce ops accumulate into the destination register; seed our scratch
-		          // reduce destination before each use.
-		          OS << "  c.movr zero, ->t\n";
-		          OS << "  v.rdor " << formatMaskSrc(*Pred) << ", ->t#1\n";
-		          OS << "  b.ne t#1, zero, " << AfterLabel << "\n";
-		        }
+          auto Pred = allocVec();
+          if (!Pred) {
+            reject("vector_reg_exhausted");
+            return false;
+          }
+          OS << "  v.cmp.eq " << formatIntSrc(*ActiveTok) << ", zero, ->"
+             << formatMaskDest(*Pred) << "\n";
+          // Reduce ops accumulate into the destination register; seed our
+          // scratch reduce destination before each use.
+          OS << "  c.movr zero, ->t\n";
+          OS << "  v.rdor " << formatMaskSrc(*Pred) << ", ->t#1\n";
+          OS << "  b.ne t#1, zero, " << AfterLabel << "\n";
+        }
 
         if (IsSingleBlock) {
           if (!emitBodyInstructions(Header))
@@ -6619,31 +6599,29 @@ public:
               return false;
             }
             if (Plan.LocalWordBase &&
-	                !emitStoreToLocalWordBase(*UpdateVal,
-	                                          *Plan.LocalWordBase + 1u,
-	                                          /*IsFloat=*/true)) {
+                !emitStoreToLocalWordBase(*UpdateVal, *Plan.LocalWordBase + 1u,
+                                          /*IsFloat=*/true)) {
               reject("recurrence_store_emit_failed");
               return false;
             }
-	            if (!emitStoreToInvariantBind(*UpdateVal, Plan.SlotBind,
-	                                          /*IsFloat=*/true)) {
-	              reject("recurrence_store_emit_failed");
-	              return false;
-	            }
+            if (!emitStoreToInvariantBind(*UpdateVal, Plan.SlotBind,
+                                          /*IsFloat=*/true)) {
+              reject("recurrence_store_emit_failed");
+              return false;
+            }
             continue;
           }
           if (Plan.LocalWordBase &&
-	              !emitStoreToLocalWordBase(It->second,
-	                                        *Plan.LocalWordBase + 1u,
-	                                        /*IsFloat=*/true)) {
+              !emitStoreToLocalWordBase(It->second, *Plan.LocalWordBase + 1u,
+                                        /*IsFloat=*/true)) {
             reject("recurrence_store_emit_failed");
             return false;
           }
-		          if (!emitStoreToInvariantBind(It->second, Plan.SlotBind,
-	                                        /*IsFloat=*/true)) {
-	            reject("recurrence_store_emit_failed");
-	            return false;
-	          }
+          if (!emitStoreToInvariantBind(It->second, Plan.SlotBind,
+                                        /*IsFloat=*/true)) {
+            reject("recurrence_store_emit_failed");
+            return false;
+          }
         }
 
         for (unsigned FI = 0; FI < F32InductionPlans.size(); ++FI) {
@@ -6671,7 +6649,8 @@ public:
           OS << "  v.fadd " << formatFloatSrc(*Cur) << ", "
              << formatFloatSrc(*StepTok) << ", ->" << formatWordDest(*Next)
              << "\n";
-          if (!emitStoreToInvariantBind(*Next, Plan.SlotBind, /*IsFloat=*/true)) {
+          if (!emitStoreToInvariantBind(*Next, Plan.SlotBind,
+                                        /*IsFloat=*/true)) {
             reject("f32_induction_store_emit_failed");
             return false;
           }
@@ -6685,52 +6664,50 @@ public:
             return false;
           }
           std::string PredName = *PredTok;
-	          if (ActiveContinueInvert) {
-	            auto Inv = allocVec();
-	            if (!Inv) {
-	              reject("vector_reg_exhausted");
-	              return false;
-	            }
-	            OS << "  v.cmp.eq " << formatMaskSrc(PredName)
-	               << ", zero, ->" << formatMaskDest(*Inv) << "\n";
-	            PredName = *Inv;
-		          }
-		          // Reduce ops accumulate into the destination register; seed our scratch
-		          // reduce destination before each use.
-		          OS << "  c.movr zero, ->t\n";
-			          OS << "  v.rdor " << formatMaskSrc(PredName) << ", ->t#1\n";
-		          const bool StoredActive =
-		              ActiveSlotLocalWordBase
-		                  ? emitStoreToLocalWordBase("t#1",
-		                                             *ActiveSlotLocalWordBase)
-		                  : emitStoreToActiveBind("t#1", *ActiveSlotBind);
-		          if (!StoredActive) {
-		            reject("active_store_emit_failed");
-		            return false;
-		          }
+          if (ActiveContinueInvert) {
+            auto Inv = allocVec();
+            if (!Inv) {
+              reject("vector_reg_exhausted");
+              return false;
+            }
+            OS << "  v.cmp.eq " << formatMaskSrc(PredName) << ", zero, ->"
+               << formatMaskDest(*Inv) << "\n";
+            PredName = *Inv;
+          }
+          // Reduce ops accumulate into the destination register; seed our
+          // scratch reduce destination before each use.
+          OS << "  c.movr zero, ->t\n";
+          OS << "  v.rdor " << formatMaskSrc(PredName) << ", ->t#1\n";
+          const bool StoredActive =
+              ActiveSlotLocalWordBase
+                  ? emitStoreToLocalWordBase("t#1", *ActiveSlotLocalWordBase)
+                  : emitStoreToActiveBind("t#1", *ActiveSlotBind);
+          if (!StoredActive) {
+            reject("active_store_emit_failed");
+            return false;
+          }
         }
 
         static constexpr const char *kReductionDstRegs[] = {"a0", "a1", "a2",
-                                                             "a3", "a4", "a5"};
-        if (ReductionPlans.size() > (sizeof(kReductionDstRegs) /
-                                     sizeof(kReductionDstRegs[0]))) {
+                                                            "a3", "a4", "a5"};
+        if (ReductionPlans.size() >
+            (sizeof(kReductionDstRegs) / sizeof(kReductionDstRegs[0]))) {
           reject("too_many_reductions");
           return false;
         }
 
-	        if (!ReductionPlans.empty()) {
-	          BasicBlock &EntryBB = F.getEntryBlock();
-	          Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
-	          IRBuilder<> EB(EntryIP);
+        if (!ReductionPlans.empty()) {
+          BasicBlock &EntryBB = F.getEntryBlock();
+          Instruction *EntryIP = &*EntryBB.getFirstInsertionPt();
+          IRBuilder<> EB(EntryIP);
 
           for (unsigned RI = 0; RI < ReductionPlans.size(); RI++) {
             ReductionPlan &Plan = ReductionPlans[RI];
             Type *RedTy = Plan.Update->getType();
             const uint32_t SlotElems =
                 static_cast<uint32_t>(LaneCount ? LaneCount : 1u);
-            Plan.Slot =
-                EB.CreateAlloca(RedTy, ConstantInt::get(I32Ty, SlotElems),
-                                "linx.simt.redslot");
+            Plan.Slot = EB.CreateAlloca(
+                RedTy, ConstantInt::get(I32Ty, SlotElems), "linx.simt.redslot");
             Plan.SlotElems = SlotElems;
             Plan.DstName = kReductionDstRegs[RI];
 
@@ -6776,45 +6753,44 @@ public:
               return false;
             }
 
-	            OS << "  " << reductionMnemonic(Plan.Kind) << " "
-	               << formatFloatSrc(*Src) << ", ->"
-	               << Plan.DstName << "\n";
+            OS << "  " << reductionMnemonic(Plan.Kind) << " "
+               << formatFloatSrc(*Src) << ", ->" << Plan.DstName << "\n";
             if (Plan.LocalWordBase) {
-              if (!emitStoreToLocalWordBase(Plan.DstName, *Plan.LocalWordBase)) {
+              if (!emitStoreToLocalWordBase(Plan.DstName,
+                                            *Plan.LocalWordBase)) {
                 reject("reduction_store_emit_failed");
                 return false;
               }
             } else {
-	              OS << "  v.sw.brg " << Plan.DstName << ", [ri" << Plan.SlotBind
-	                 << ", " << formatAddrExpr("lc0<<2") << ", "
-	                 << formatAddrExpr("zero<<2") << "]\n";
+              OS << "  v.sw.brg " << Plan.DstName << ", [ri" << Plan.SlotBind
+                 << ", " << formatAddrExpr("lc0<<2") << ", "
+                 << formatAddrExpr("zero<<2") << "]\n";
             }
-	          }
-	        }
+          }
+        }
 
-	        for (const LiveOutPlan &Plan : LiveOutPlans) {
-	          if (!Plan.Inst)
-	            continue;
-	          auto Tok = emitValue(Plan.Inst);
-	          if (!Tok) {
-	            reject("unsupported_liveout_value");
-	            return false;
-	          }
-              const bool Stored =
-                  Plan.LocalWordBase
-                      ? emitStoreToSharedLocalWordBase(
-                            *Tok, *Plan.LocalWordBase,
-                            /*IsFloat=*/Plan.Inst->getType() ==
-                                Type::getFloatTy(Ctx))
-                      : emitStoreToInvariantBind(
-                            *Tok, Plan.SlotBind,
-                            /*IsFloat=*/Plan.Inst->getType() ==
-                                Type::getFloatTy(Ctx));
-		          if (!Stored) {
-	            reject("liveout_store_emit_failed");
-	            return false;
-	          }
-	        }
+        for (const LiveOutPlan &Plan : LiveOutPlans) {
+          if (!Plan.Inst)
+            continue;
+          auto Tok = emitValue(Plan.Inst);
+          if (!Tok) {
+            reject("unsupported_liveout_value");
+            return false;
+          }
+          const bool Stored =
+              Plan.LocalWordBase
+                  ? emitStoreToSharedLocalWordBase(
+                        *Tok, *Plan.LocalWordBase,
+                        /*IsFloat=*/Plan.Inst->getType() ==
+                            Type::getFloatTy(Ctx))
+                  : emitStoreToInvariantBind(*Tok, Plan.SlotBind,
+                                             /*IsFloat=*/Plan.Inst->getType() ==
+                                                 Type::getFloatTy(Ctx));
+          if (!Stored) {
+            reject("liveout_store_emit_failed");
+            return false;
+          }
+        }
 
         if (ActiveSlotBind || ActiveSlotLocalWordBase)
           OS << AfterLabel << ":\n";
@@ -6823,11 +6799,10 @@ public:
           if (!Plan.LocalWordBase)
             continue;
           auto Tok = emitLoadFromSharedLocalWordBase(*Plan.LocalWordBase);
-          if (!Tok ||
-              !emitStoreToInvariantBind(
-                  *Tok, Plan.SlotBind,
-                  /*IsFloat=*/Plan.Phi &&
-                      Plan.Phi->getType() == Type::getFloatTy(Ctx))) {
+          if (!Tok || !emitStoreToInvariantBind(
+                          *Tok, Plan.SlotBind,
+                          /*IsFloat=*/Plan.Phi &&
+                              Plan.Phi->getType() == Type::getFloatTy(Ctx))) {
             reject("exit_phi_store_emit_failed");
             return false;
           }
@@ -6837,11 +6812,10 @@ public:
           if (!Plan.LocalWordBase)
             continue;
           auto Tok = emitLoadFromSharedLocalWordBase(*Plan.LocalWordBase);
-          if (!Tok ||
-              !emitStoreToInvariantBind(
-                  *Tok, Plan.SlotBind,
-                  /*IsFloat=*/Plan.Inst &&
-                      Plan.Inst->getType() == Type::getFloatTy(Ctx))) {
+          if (!Tok || !emitStoreToInvariantBind(
+                          *Tok, Plan.SlotBind,
+                          /*IsFloat=*/Plan.Inst &&
+                              Plan.Inst->getType() == Type::getFloatTy(Ctx))) {
             reject("liveout_store_emit_failed");
             return false;
           }
@@ -6855,13 +6829,13 @@ public:
             reject("reduction_store_emit_failed");
             return false;
           }
-	          if (!emitStoreToInvariantBind(*Tok, Plan.SlotBind,
-	                                        /*IsFloat=*/true)) {
+          if (!emitStoreToInvariantBind(*Tok, Plan.SlotBind,
+                                        /*IsFloat=*/true)) {
             reject("reduction_store_emit_failed");
             return false;
           }
         }
-	        OS << "  C.BSTOP\n";
+        OS << "  C.BSTOP\n";
         F.removeFnAttr("linx-vblock-ts-bytes");
         if (LocalScratchWordCount != 0) {
           const uint64_t ScratchBytes = LocalScratchWordCount * 4u;
@@ -6869,7 +6843,7 @@ public:
               std::max<uint64_t>(16u, PowerOf2Ceil(ScratchBytes));
           F.addFnAttr("linx-vblock-ts-bytes", std::to_string(RoundedBytes));
         }
-	        F.addFnAttr("linx-vblock-body-asm", OS.str());
+        F.addFnAttr("linx-vblock-body-asm", OS.str());
 
         // Decoupled body contract:
         // - Launch block carries only BSTART.{MSEQ,MPAR} descriptors.
@@ -6912,27 +6886,28 @@ public:
         while (BindVals.size() < kMaxVBlockBinds)
           BindVals.push_back(ConstantInt::get(I64Ty, 0));
 
-	        LB.CreateCall(Intr, {VKind, BodySym, Dim0, Dim1, Dim2, AttrBits,
-	                             BindVals[0], BindVals[1], BindVals[2], BindVals[3],
-	                             BindVals[4], BindVals[5], BindVals[6], BindVals[7],
-	                             BindVals[8], BindVals[9], BindVals[10], BindVals[11]});
+        LB.CreateCall(Intr,
+                      {VKind, BodySym, Dim0, Dim1, Dim2, AttrBits, BindVals[0],
+                       BindVals[1], BindVals[2], BindVals[3], BindVals[4],
+                       BindVals[5], BindVals[6], BindVals[7], BindVals[8],
+                       BindVals[9], BindVals[10], BindVals[11]});
 
-	        if (!ExitPhiPlans.empty()) {
-	          for (ExitPhiPlan &Plan : ExitPhiPlans) {
-	            if (!Plan.Phi || !Plan.Slot) {
-	              reject("invalid_exit_phi_plan");
-	              return false;
-	            }
-	            LoadInst *LiveOut =
-	                LB.CreateLoad(Plan.Phi->getType(), Plan.Slot, "linx.exitphi");
-	            Plan.Phi->addIncoming(LiveOut, LaunchBB);
-	          }
-	        }
+        if (!ExitPhiPlans.empty()) {
+          for (ExitPhiPlan &Plan : ExitPhiPlans) {
+            if (!Plan.Phi || !Plan.Slot) {
+              reject("invalid_exit_phi_plan");
+              return false;
+            }
+            LoadInst *LiveOut =
+                LB.CreateLoad(Plan.Phi->getType(), Plan.Slot, "linx.exitphi");
+            Plan.Phi->addIncoming(LiveOut, LaunchBB);
+          }
+        }
 
-		        if (!ReductionPlans.empty() || !RecurrencePlans.empty() ||
-		            !LiveOutPlans.empty()) {
-		          Instruction *ExitIP = &*Exit->getFirstInsertionPt();
-		          IRBuilder<> ExitB(ExitIP);
+        if (!ReductionPlans.empty() || !RecurrencePlans.empty() ||
+            !LiveOutPlans.empty()) {
+          Instruction *ExitIP = &*Exit->getFirstInsertionPt();
+          IRBuilder<> ExitB(ExitIP);
 
           auto replaceOutsideUses = [&](Value *From, Value *To) {
             if (!From || !To)
@@ -6957,51 +6932,54 @@ public:
                   static_cast<unsigned>(Plan.SlotElems - 1u),
                   "linx.red.last.ptr");
             }
-            LoadInst *LiveOut = ExitB.CreateLoad(Plan.Update->getType(), LoadPtr,
-                                                 "linx.red");
+            LoadInst *LiveOut =
+                ExitB.CreateLoad(Plan.Update->getType(), LoadPtr, "linx.red");
             replaceOutsideUses(Plan.Update, LiveOut);
             replaceOutsideUses(Plan.Phi, LiveOut);
           }
 
-	          for (RecurrencePlan &Plan : RecurrencePlans) {
-              if (!Plan.Slot || !Plan.Phi || !Plan.SlotTy) {
-                reject("invalid_recurrence_plan");
+          for (RecurrencePlan &Plan : RecurrencePlans) {
+            if (!Plan.Slot || !Plan.Phi || !Plan.SlotTy) {
+              reject("invalid_recurrence_plan");
+              return false;
+            }
+
+            Value *Raw = ExitB.CreateLoad(Plan.SlotTy, Plan.Slot, "linx.rec");
+
+            Value *PhiOut = Raw;
+            if (Plan.SlotTy != Plan.Phi->getType()) {
+              if (!Plan.SlotTy->isIntegerTy() ||
+                  !Plan.Phi->getType()->isIntegerTy()) {
+                reject("invalid_recurrence_liveout_cast");
                 return false;
               }
+              PhiOut = ExitB.CreateZExtOrTrunc(Raw, Plan.Phi->getType(),
+                                               "linx.rec.zext");
+            }
 
-              Value *Raw = ExitB.CreateLoad(Plan.SlotTy, Plan.Slot, "linx.rec");
-
-              Value *PhiOut = Raw;
-              if (Plan.SlotTy != Plan.Phi->getType()) {
-                if (!Plan.SlotTy->isIntegerTy() || !Plan.Phi->getType()->isIntegerTy()) {
-                  reject("invalid_recurrence_liveout_cast");
-                  return false;
-                }
-                PhiOut = ExitB.CreateZExtOrTrunc(Raw, Plan.Phi->getType(), "linx.rec.zext");
+            Value *UpdateOut = PhiOut;
+            if (Plan.Update && Plan.Update->getType() != Plan.Phi->getType()) {
+              if (!Plan.Update->getType()->isIntegerTy() ||
+                  !Plan.Phi->getType()->isIntegerTy()) {
+                reject("invalid_recurrence_liveout_cast");
+                return false;
               }
+              UpdateOut = ExitB.CreateZExtOrTrunc(
+                  PhiOut, Plan.Update->getType(), "linx.rec.upd.zext");
+            }
 
-              Value *UpdateOut = PhiOut;
-              if (Plan.Update && Plan.Update->getType() != Plan.Phi->getType()) {
-                if (!Plan.Update->getType()->isIntegerTy() || !Plan.Phi->getType()->isIntegerTy()) {
-                  reject("invalid_recurrence_liveout_cast");
-                  return false;
-                }
-                UpdateOut = ExitB.CreateZExtOrTrunc(PhiOut, Plan.Update->getType(),
-                                                   "linx.rec.upd.zext");
-              }
+            replaceOutsideUses(Plan.Update, UpdateOut);
+            replaceOutsideUses(Plan.Phi, PhiOut);
+          }
 
-	            replaceOutsideUses(Plan.Update, UpdateOut);
-	            replaceOutsideUses(Plan.Phi, PhiOut);
-	          }
-
-	          for (const LiveOutPlan &Plan : LiveOutPlans) {
-	            if (!Plan.Inst || !Plan.Slot)
-	              continue;
-	            LoadInst *LiveOut =
-	                ExitB.CreateLoad(Plan.Inst->getType(), Plan.Slot, "linx.liveout");
-	            replaceOutsideUses(Plan.Inst, LiveOut);
-	          }
-	        }
+          for (const LiveOutPlan &Plan : LiveOutPlans) {
+            if (!Plan.Inst || !Plan.Slot)
+              continue;
+            LoadInst *LiveOut = ExitB.CreateLoad(Plan.Inst->getType(),
+                                                 Plan.Slot, "linx.liveout");
+            replaceOutsideUses(Plan.Inst, LiveOut);
+          }
+        }
 
         LB.CreateBr(Exit);
 
@@ -7074,8 +7052,9 @@ FunctionPass *llvm::createLinxISASIMTAutoVectorizePass() {
   return new LinxISASIMTAutoVectorize();
 }
 
-PreservedAnalyses llvm::LinxISASIMTAutoVectorizePass::run(
-    Function &F, FunctionAnalysisManager &AM) {
+PreservedAnalyses
+llvm::LinxISASIMTAutoVectorizePass::run(Function &F,
+                                        FunctionAnalysisManager &AM) {
   if (!linxSIMTAutoVectorizeEnabled() || F.isDeclaration() ||
       isTsvcAuxHelperName(F.getName()) || !F.getParent()) {
     return PreservedAnalyses::all();

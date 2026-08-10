@@ -1,0 +1,44 @@
+# RUN: llc -mtriple=linx64 -run-pass=linx-blockify -o - %s | FileCheck %s
+
+# PTO/Linx 0.58 has no architectural implicit ACC singleton. TMATMUL writes
+# its explicit Local destination in one bundle. TMATMUL.ACC binds its explicit
+# accumulator as the first source, then left/right and the destination.
+# CHECK-LABEL: name: cube_explicit_accumulator
+# CHECK: BSTART_CUBE 17, 0
+# CHECK: B_IOT_G1
+# CHECK: BSTART_CUBE 17, 2
+# CHECK: B_IOT_G0
+# CHECK-NEXT: B_IOT_G1
+# CHECK-NOT: BSTART_CUBE 17, 8
+
+--- |
+  define void @cube_explicit_accumulator(ptr %a, ptr %b, ptr %out) {
+  entry:
+    ret void
+  }
+...
+---
+name:            cube_explicit_accumulator
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+  - { reg: '$r4', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r2, $r3, $r4
+
+    $tile0 = PSEUDO_TLSU_TLOAD $r2, 6
+    $tile1 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile16 = PSEUDO_CUBE_TMATMUL $tile0, $tile1, 4, 4, 4
+    $tile17 = PSEUDO_CUBE_TMATMUL_ACC killed $tile16, killed $tile0, killed $tile1, 4, 4, 4
+    PSEUDO_TLSU_TSTORE killed $r4, killed $tile17, 6
+    PSEUDO_RET implicit $r10
+...

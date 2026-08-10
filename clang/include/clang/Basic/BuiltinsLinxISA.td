@@ -18,23 +18,23 @@ class LinxISABuiltin<string prototype, string features = ""> : TargetBuiltin {
   let Features = features;
 }
 
-// Tile (TAU) bring-up: 4 KiB tile registers as _Vector<1024, int>.
+// PTO/Linx 0.58 tile bridge: 4 KiB frontend values as _Vector<1024, int>.
 let Attributes = [NoThrow] in {
-  // PR4/PR5 strict tile surfaces.
+  // TLSU transfers and Local-to-Local movement.
   def tile_tload : LinxISABuiltin<"_Vector<1024, int>(void const *, _Constant unsigned int, _Constant unsigned int, _Constant long long int, long long int, long long int, long long int, long long int)">;
   def tile_tstore : LinxISABuiltin<"void(void *, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, long long int, long long int, long long int, long long int)">;
-  def tile_tmov : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant unsigned int)">;
+  def tile_tmov : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant unsigned int)">;
 
-  def cube_acccvt : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, _Constant long long int)">;
-  // Canonical v0.57 TEPL shape: ValidCol, ValidRow, physical Col.
-  def tepl_unary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
-  def tepl_binary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
-  def tepl_binary_scalar : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, long long int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
-  def tepl_splat : LinxISABuiltin<"_Vector<1024, int>(long long int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
+  // VEC/SFU operations use the stable TEPL Mode/Function encoding carrier.
+  // TileOp selects the architectural mnemonic; it is not an execution engine.
+  def tileop_unary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
+  def tileop_binary : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
+  def tileop_binary_scalar : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, long long int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
+  def tileop_splat : LinxISABuiltin<"_Vector<1024, int>(long long int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int, long long int, long long int, long long int)">;
 
   // Core cube/vblock builtins.
-  def cube_mamulb : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
-  def cube_mamulb_acc : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
+  def cube_tmatmul : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
+  def cube_tmatmul_acc : LinxISABuiltin<"_Vector<1024, int>(_Vector<1024, int>, _Vector<1024, int>, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant unsigned int)">;
   def vblock_launch : LinxISABuiltin<"void(_Constant unsigned int, void const *, _Constant unsigned long long int, _Constant unsigned long long int, _Constant unsigned long long int, _Constant unsigned int)">;
 
   // Tile vector elementwise ops (VPAR bring-up).

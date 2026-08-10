@@ -1,4 +1,4 @@
-; RUN: not llc -mtriple=linx64 < %s 2>&1 | FileCheck %s
+; RUN: not --crash llc -mtriple=linx64 < %s 2>&1 | FileCheck %s
 
 declare void @llvm.linx.vblock.launch(i32, ptr, i64, i64, i64, i32,
                                       i64, i64, i64, i64, i64, i64,
@@ -14,4 +14,4 @@ entry:
 
 attributes #0 = { "linx-vblock-body-asm"="  v.lwi.u.local [to1, lc0.uh<<2, 8], ->vn.w\0A  C.BSTOP\0A" }
 
-; CHECK: archived raw vector operand name is not allowed in canonical v0.4; use TA/TB/TC/TD/TO/TS
+; CHECK: archived raw vector operand name is not allowed in canonical LinxISA 0.58; use TA/TB/TC/TD/TO/TS

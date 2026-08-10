@@ -1,0 +1,43 @@
+# RUN: llc -mtriple=linx64 -run-pass=linx-tile-ssa-balance -o - %s | FileCheck %s
+
+# CHECK-LABEL: name: tile_relay_identity
+# CHECK-NOT: $tile0 = PSEUDO_TLSU_TMOV
+# CHECK-NOT: = COPY
+# CHECK: PSEUDO_TLSU_TSTORE
+
+--- |
+  define i64 @tile_relay_identity(ptr %a, ptr %out) {
+  entry:
+    ret i64 0
+  }
+...
+---
+name:            tile_relay_identity
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r3', virtual-reg: '' }
+  - { reg: '$r4', virtual-reg: '' }
+frameInfo:
+  stackSize:       0
+  adjustsStack:    false
+  hasCalls:        false
+  isCalleeSavedInfoValid: true
+fixedStack:      []
+stack:           []
+body:             |
+  bb.0:
+    liveins: $r3, $r4
+
+    $tile0 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile0 = COPY killed $tile0
+    PSEUDO_TLSU_TSTORE killed $r4, killed $tile0, 6
+    $r2 = ADDIri $r0, 0
+    PSEUDO_RET implicit $r10, implicit $r2, implicit $r3
+...

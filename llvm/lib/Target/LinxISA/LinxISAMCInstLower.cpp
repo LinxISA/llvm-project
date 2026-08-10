@@ -1,4 +1,5 @@
-//===-- LinxISAMCInstLower.cpp - Lower LinxISA MachineInstr to MCInst ------===//
+//===-- LinxISAMCInstLower.cpp - Lower LinxISA MachineInstr to MCInst
+//------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -9,7 +10,7 @@
 #include "LinxISAMCInstLower.h"
 #include "LinxISA.h"
 #include "LinxISABaseInfo.h"
-#include "LinxISATileOpcodesV057.h"
+#include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAMCAsmInfo.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
@@ -85,8 +86,8 @@ static unsigned findSpecOpcodeByAsmFmt(StringRef AsmFmt, unsigned LengthBits) {
 
   SmallString<96> Msg;
   raw_svector_ostream OS(Msg);
-  OS << "Linx: missing spec opcode for asm fmt '" << AsmFmt << "' (" << LengthBits
-     << "b)";
+  OS << "Linx: missing spec opcode for asm fmt '" << AsmFmt << "' ("
+     << LengthBits << "b)";
   report_fatal_error(OS.str());
 }
 
@@ -120,8 +121,7 @@ static const MCExpr *withOffset(const MCExpr *Expr, int64_t Offset,
 }
 
 static bool splitShiftedSignedImm(int64_t Imm, unsigned BaseBits,
-                                  unsigned &ShamtOut,
-                                  int64_t &BaseImmOut) {
+                                  unsigned &ShamtOut, int64_t &BaseImmOut) {
   for (unsigned Sh = 0; Sh < 32; ++Sh) {
     int64_t Pow = (1LL << Sh);
     if (Imm % Pow != 0)
@@ -137,8 +137,7 @@ static bool splitShiftedSignedImm(int64_t Imm, unsigned BaseBits,
 }
 
 static bool splitShiftedUnsignedImm(uint64_t Imm, unsigned BaseBits,
-                                    unsigned &ShamtOut,
-                                    uint64_t &BaseImmOut) {
+                                    unsigned &ShamtOut, uint64_t &BaseImmOut) {
   for (unsigned Sh = 0; Sh < 32; ++Sh) {
     uint64_t Pow = (1ULL << Sh);
     if (Imm % Pow != 0)
@@ -165,8 +164,7 @@ bool LinxISAMCInstLower::lowerOperand(const MachineOperand &MO,
     OutOp = MCOperand::createImm(MO.getImm());
     return true;
   case MachineOperand::MO_MachineBasicBlock: {
-    const MCExpr *Expr =
-        MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), Ctx);
+    const MCExpr *Expr = MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), Ctx);
     OutOp = MCOperand::createExpr(Expr);
     return true;
   }
@@ -183,9 +181,8 @@ bool LinxISAMCInstLower::lowerOperand(const MachineOperand &MO,
     return true;
   }
   case MachineOperand::MO_ExternalSymbol: {
-    const MCExpr *Expr =
-        MCSymbolRefExpr::create(
-            Printer.GetExternalSymbolSymbol(MO.getSymbolName()), Ctx);
+    const MCExpr *Expr = MCSymbolRefExpr::create(
+        Printer.GetExternalSymbolSymbol(MO.getSymbolName()), Ctx);
     Expr = withOffset(Expr, MO.getOffset(), Ctx);
     const unsigned TF = MO.getTargetFlags();
     if (TF & LinxII::MO_PLT)
@@ -244,7 +241,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     Register Reg = MO.getReg();
     if (!Reg.isPhysical()) {
       MI->print(errs());
-      report_fatal_error("Linx: expected physical register operand in MC lowering");
+      report_fatal_error(
+          "Linx: expected physical register operand in MC lowering");
     }
     return static_cast<int64_t>(getReg5Encoding(Reg));
   };
@@ -305,31 +303,36 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   switch (Opc) {
   case LinxISA::CBSTART_STD: {
     // Compressed block start marker: `C.BSTART.STD BrType`.
-    OutMI.setOpcode(getSpecOpcode("C.BSTART.STD", /*LengthBits=*/16, /*Fields=*/1));
+    OutMI.setOpcode(
+        getSpecOpcode("C.BSTART.STD", /*LengthBits=*/16, /*Fields=*/1));
     OutMI.addOperand(MCOperand::createImm(I(0))); // BrType
     return;
   }
 
   case LinxISA::BSTART_STD_FALL: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD FALL<, fixup_label>", /*LengthBits=*/32));
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD FALL<, fixup_label>",
+                                          /*LengthBits=*/32));
     return;
   }
   case LinxISA::BSTART_STD_DIRECT: {
     // Prefer the compressed form; the assembler can relax to wider forms if
     // the target is out of range.
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("C.BSTART DIRECT, label", /*LengthBits=*/16));
+    OutMI.setOpcode(
+        getSpecOpcodeByAsmFmt("C.BSTART DIRECT, label", /*LengthBits=*/16));
     OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
   case LinxISA::BSTART_STD_COND: {
     // Prefer the compressed form; the assembler can relax to wider forms if
     // the target is out of range.
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("C.BSTART COND,  label", /*LengthBits=*/16));
+    OutMI.setOpcode(
+        getSpecOpcodeByAsmFmt("C.BSTART COND,  label", /*LengthBits=*/16));
     OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
   case LinxISA::BSTART_STD_CALL: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD CALL, <label>", /*LengthBits=*/32));
+    OutMI.setOpcode(
+        getSpecOpcodeByAsmFmt("BSTART.STD CALL, <label>", /*LengthBits=*/32));
     OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
@@ -338,7 +341,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::BSTART_STD_ICALL: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD ICALL", /*LengthBits=*/32));
+    OutMI.setOpcode(
+        getSpecOpcodeByAsmFmt("BSTART.STD ICALL", /*LengthBits=*/32));
     return;
   }
   case LinxISA::BSTART_STD_RET: {
@@ -352,23 +356,19 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  case LinxISA::BSTART_TMA: {
+  case LinxISA::BSTART_TLSU: {
     const int64_t DataType = I(0) & 0x1f;
     const unsigned Func = static_cast<unsigned>(I(1)) & 0x1fu;
-    static constexpr const char *TMAAsmFormats[] = {
-        "BSTART.TLOAD DataType",
-        "BSTART.TSTORE DataType",
-        "BSTART.TMOV DataType",
-        "BSTART.TPREFETCH DataType",
-        "BSTART.MGATHER DataType",
-        "BSTART.MSCATTER DataType",
-        "BSTART.MGATHER.MASK DataType",
-        "BSTART.MSCATTER.MASK DataType",
+    static constexpr const char *TLSUAsmFormats[] = {
+        "BSTART.TLOAD DataType",        "BSTART.TSTORE DataType",
+        "BSTART.TMOV DataType",         "BSTART.TPREFETCH DataType",
+        "BSTART.MGATHER DataType",      "BSTART.MSCATTER DataType",
+        "BSTART.MGATHER.MASK DataType", "BSTART.MSCATTER.MASK DataType",
         "BSTART.MGATHER.CAS DataType",
     };
-    if (Func >= std::size(TMAAsmFormats))
-      report_fatal_error("LinxISA: invalid v0.57 TMA Function");
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(TMAAsmFormats[Func],
+    if (Func >= std::size(TLSUAsmFormats))
+      report_fatal_error("LinxISA: invalid PTO ISA 0.58 TLSU function");
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt(TLSUAsmFormats[Func],
                                           /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
     return;
@@ -383,7 +383,6 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
         {4u, "BSTART.TMATMULMX DataType"},
         {5u, "BSTART.TMATMULMX.BIAS DataType"},
         {6u, "BSTART.TMATMULMX.ACC DataType"},
-        {8u, "BSTART.ACCCVT DataType"},
         {16u, "BSTART.TGEMV DataType"},
         {17u, "BSTART.TGEMV.BIAS DataType"},
         {18u, "BSTART.TGEMV.ACC DataType"},
@@ -398,7 +397,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
         break;
       }
     if (!AsmFmt)
-      report_fatal_error("LinxISA: invalid PTO ISA 0.57.1 CUBE Function");
+      report_fatal_error("LinxISA: invalid PTO ISA 0.58 CUBE function");
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(DataType));
     return;
@@ -406,8 +405,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::BSTART_TEPL: {
     const int64_t DataType = I(0) & 0x1f;
     const unsigned Selector = static_cast<unsigned>(I(1)) & 0x7fu;
-    if (!LinxISA::isCanonicalTEPLTileOpcodeV057(Selector))
-      report_fatal_error("LinxISA: reserved PTO ISA 0.57.1 TEPL Mode/Function");
+    if (!LinxISA::isCanonicalTileOperationV058(Selector))
+      report_fatal_error("LinxISA: reserved PTO ISA 0.58 TEPL Mode/Function");
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(
         "BSTART.TEPL Mode, Function, DataType", /*LengthBits=*/32));
     // Catalog field order is DataType, Function, Mode.
@@ -419,16 +418,16 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::BSTART_VPAR:
   case LinxISA::BSTART_VSEQ: {
-    const StringRef Mnem = (Opc == LinxISA::BSTART_VPAR) ? "BSTART.VPAR"
-                                                         : "BSTART.VSEQ";
+    const StringRef Mnem =
+        (Opc == LinxISA::BSTART_VPAR) ? "BSTART.VPAR" : "BSTART.VSEQ";
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/1));
     OutMI.addOperand(MCOperand::createImm(I(0))); // Mode
     return;
   }
   case LinxISA::BSTART_MPAR:
   case LinxISA::BSTART_MSEQ: {
-    const StringRef Mnem = (Opc == LinxISA::BSTART_MPAR) ? "BSTART.MPAR"
-                                                          : "BSTART.MSEQ";
+    const StringRef Mnem =
+        (Opc == LinxISA::BSTART_MPAR) ? "BSTART.MPAR" : "BSTART.MSEQ";
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/1));
     OutMI.addOperand(MCOperand::createImm(I(0))); // Mode
     return;
@@ -441,9 +440,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
 
   case LinxISA::B_CATR: {
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(
-        "B.CATR {trap, atomic, <aq, rl, aqrl>, far, dr}",
-        /*LengthBits=*/32));
+    OutMI.setOpcode(
+        getSpecOpcodeByAsmFmt("B.CATR {trap, atomic, <aq, rl, aqrl>, far, dr}",
+                              /*LengthBits=*/32));
     // Canonical catalog field order: DR, aq, atom, far, rl, trap.
     OutMI.addOperand(MCOperand::createImm(I(1))); // DR
     OutMI.addOperand(MCOperand::createImm(I(2))); // aq
@@ -504,7 +503,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::B_IOR: {
     OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("B.IOR [RegSrc0, RegSrc1, RegSrc2],[RegDst]",
+        getSpecOpcodeByAsmFmt("B.IOR [<gpr>[, <gpr>[, <gpr>]]][, -><gpr>]",
                               /*LengthBits=*/32));
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // RegSrc0
@@ -513,61 +512,65 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  case LinxISA::B_IOT_SIZE_G0:
-  case LinxISA::B_IOT_SIZE_G1: {
-    const bool Last = Opc == LinxISA::B_IOT_SIZE_G1;
+  case LinxISA::B_IOT_G0:
+  case LinxISA::B_IOT_G1: {
+    const bool Last = Opc == LinxISA::B_IOT_G1;
     const bool Src0Valid = I(2) == 0;
-    const bool Src1Valid = I(4) == 0;
+    const bool Src1Valid = I(3) == 0;
     const bool HasSrc0 = Src0Valid || Src1Valid;
     const bool HasSrc1 = Src0Valid && Src1Valid;
     const bool HasDestination = static_cast<unsigned>(I(0)) <= 3u;
     StringRef AsmFmt;
     if (HasDestination)
-      AsmFmt = HasSrc1   ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>, "
-                           "->DstTile<Size>"
-               : HasSrc0 ? "B.IOT SrcTile0<.reuse>, <last>, ->DstTile<Size>"
-                         : "B.IOT <last>, ->DstTile<Size>";
+      AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>, "
+                         "->DstTile<TSize>"
+               : HasSrc0
+                   ? "B.IOT SrcTile0, mask=PE_MASK, <last>, ->DstTile<TSize>"
+                   : "B.IOT mask=PE_MASK, <last>, ->DstTile<TSize>";
     else
-      AsmFmt = HasSrc1 ? "B.IOT SrcTile0<.reuse>, SrcTile1<.reuse>, <last>"
-                       : "B.IOT SrcTile0<.reuse>, <last>";
+      AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>"
+                       : "B.IOT SrcTile0, mask=PE_MASK, <last>";
     OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
     // Emit operands in the selected canonical form's catalog field order.
     if (HasDestination)
       OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
-    OutMI.addOperand(MCOperand::createImm(Last)); // L
+    OutMI.addOperand(MCOperand::createImm(Last));   // L
+    OutMI.addOperand(MCOperand::createImm(I(1)));   // PE_MASK
     if (HasSrc0) {
-      const unsigned SrcIndex = Src0Valid ? 5 : 6;
-      const unsigned ReuseIndex = Src0Valid ? 1 : 3;
-      OutMI.addOperand(MCOperand::createImm(I(ReuseIndex))); // S0R
-      if (HasSrc1)
-        OutMI.addOperand(MCOperand::createImm(I(3))); // S1R
+      const unsigned SrcIndex = Src0Valid ? 4 : 5;
+      if (!HasDestination) {
+        OutMI.addOperand(MCOperand::createImm(0)); // PTOU0_7
+        OutMI.addOperand(MCOperand::createImm(0)); // PTOU0_8
+      }
       OutMI.addOperand(MCOperand::createImm(I(SrcIndex))); // SrcTile0
       if (HasSrc1)
-        OutMI.addOperand(MCOperand::createImm(I(6))); // SrcTile1
+        OutMI.addOperand(MCOperand::createImm(I(5))); // SrcTile1
     }
-    if (HasDestination)
-      OutMI.addOperand(MCOperand::createImm(I(7))); // imm4 (Size)
+    if (HasDestination) {
+      const int64_t TSize = I(6);
+      if (TSize < 1 || TSize > 7)
+        report_fatal_error("LinxISA: B.IOT destination size must be 128B..8KB");
+      OutMI.addOperand(MCOperand::createImm(TSize));
+    }
     return;
   }
 
   case LinxISA::PSEUDO_V_ADD: {
-    emitNamedImmFields(
-        getSpecOpcode("V.ADD", /*LengthBits=*/64, /*Fields=*/5),
-        {{"RegDst", I(0)},
-         {"SrcL", I(1)},
-         {"SrcR", I(2)},
-         {"SrcRType", I(3)},
-         {"shamt", I(4)}});
+    emitNamedImmFields(getSpecOpcode("V.ADD", /*LengthBits=*/64, /*Fields=*/5),
+                       {{"RegDst", I(0)},
+                        {"SrcL", I(1)},
+                        {"SrcR", I(2)},
+                        {"SrcRType", I(3)},
+                        {"shamt", I(4)}});
     return;
   }
   case LinxISA::PSEUDO_V_SUB: {
-    emitNamedImmFields(
-        getSpecOpcode("V.SUB", /*LengthBits=*/64, /*Fields=*/5),
-        {{"RegDst", I(0)},
-         {"SrcL", I(1)},
-         {"SrcR", I(2)},
-         {"SrcRType", I(3)},
-         {"shamt", I(4)}});
+    emitNamedImmFields(getSpecOpcode("V.SUB", /*LengthBits=*/64, /*Fields=*/5),
+                       {{"RegDst", I(0)},
+                        {"SrcL", I(1)},
+                        {"SrcR", I(2)},
+                        {"SrcRType", I(3)},
+                        {"shamt", I(4)}});
     return;
   }
   case LinxISA::PSEUDO_V_MUL: {
@@ -596,9 +599,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::PSEUDO_V_FABS: {
-    emitNamedImmFields(
-        getSpecOpcode("V.FABS", /*LengthBits=*/64, /*Fields=*/2),
-        {{"RegDst", I(0)}, {"SrcL", I(1)}});
+    emitNamedImmFields(getSpecOpcode("V.FABS", /*LengthBits=*/64, /*Fields=*/2),
+                       {{"RegDst", I(0)}, {"SrcL", I(1)}});
     return;
   }
   case LinxISA::PSEUDO_V_FSQRT: {
@@ -673,23 +675,21 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::PSEUDO_V_CSEL: {
-    emitNamedImmFields(
-        getSpecOpcode("V.CSEL", /*LengthBits=*/64, /*Fields=*/5),
-        {{"RegDst", I(0)},
-         {"SrcP", I(1)},
-         {"SrcL", I(2)},
-         {"SrcR", I(3)},
-         {"SrcRType", I(4)}});
+    emitNamedImmFields(getSpecOpcode("V.CSEL", /*LengthBits=*/64, /*Fields=*/5),
+                       {{"RegDst", I(0)},
+                        {"SrcP", I(1)},
+                        {"SrcL", I(2)},
+                        {"SrcR", I(3)},
+                        {"SrcRType", I(4)}});
     return;
   }
   case LinxISA::PSEUDO_V_PSEL: {
-    emitNamedImmFields(
-        getSpecOpcode("V.PSEL", /*LengthBits=*/64, /*Fields=*/5),
-        {{"RegDst", I(0)},
-         {"SrcL", I(1)},
-         {"SrcR", I(2)},
-         {"SrcRType", 3},
-         {"SrcZero", 1}});
+    emitNamedImmFields(getSpecOpcode("V.PSEL", /*LengthBits=*/64, /*Fields=*/5),
+                       {{"RegDst", I(0)},
+                        {"SrcL", I(1)},
+                        {"SrcR", I(2)},
+                        {"SrcRType", 3},
+                        {"SrcZero", 1}});
     return;
   }
   case LinxISA::PSEUDO_V_LB_BRG: {
@@ -863,9 +863,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::PSEUDO_V_RDOR: {
-    emitNamedImmFields(
-        getSpecOpcode("V.RDOR", /*LengthBits=*/64, /*Fields=*/2),
-        {{"RegDst", I(0)}, {"SrcL", I(1)}});
+    emitNamedImmFields(getSpecOpcode("V.RDOR", /*LengthBits=*/64, /*Fields=*/2),
+                       {{"RegDst", I(0)}, {"SrcL", I(1)}});
     return;
   }
   case LinxISA::PSEUDO_V_RDXOR: {
@@ -959,7 +958,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
 
   case LinxISA::CSETC_TGT: {
-    OutMI.setOpcode(getSpecOpcode("C.SETC.TGT", /*LengthBits=*/16, /*Fields=*/1));
+    OutMI.setOpcode(
+        getSpecOpcode("C.SETC.TGT", /*LengthBits=*/16, /*Fields=*/1));
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
     return;
   }
@@ -1020,7 +1020,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/3));
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcR
-    int64_t SrcRType = 3; // default: no modifier
+    int64_t SrcRType = 3;                         // default: no modifier
     if (MI->getNumOperands() > 1) {
       const MachineOperand &SrcRMO = MI->getOperand(1);
       if (SrcRMO.isReg()) {
@@ -1040,7 +1040,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/3));
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcR
-    int64_t SrcRType = 3; // default: no modifier
+    int64_t SrcRType = 3;                         // default: no modifier
     if (MI->getNumOperands() > 1) {
       const MachineOperand &SrcRMO = MI->getOperand(1);
       if (SrcRMO.isReg()) {
@@ -1123,10 +1123,12 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::HLSETC_ANDI:
   case LinxISA::HLSETC_ORI: {
-    StringRef Mnem = (Opc == LinxISA::HLSETC_ANDI) ? "HL.SETC.ANDI" : "HL.SETC.ORI";
+    StringRef Mnem =
+        (Opc == LinxISA::HLSETC_ANDI) ? "HL.SETC.ANDI" : "HL.SETC.ORI";
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/48, /*Fields=*/3));
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
-    // Keep the same operand order as the 32-bit SETC.*I forms: SrcL, shamt, simm.
+    // Keep the same operand order as the 32-bit SETC.*I forms: SrcL, shamt,
+    // simm.
     unsigned Shamt = 0;
     int64_t BaseImm = 0;
     if (!splitShiftedSignedImm(I(1), /*BaseBits=*/24, Shamt, BaseImm))
@@ -1243,7 +1245,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR
-    OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
+    OutMI.addOperand(
+        MCOperand::createImm(3)); // SrcRType (default: no modifier)
     OutMI.addOperand(MCOperand::createImm(I(3))); // shamt
     return;
   }
@@ -1327,8 +1330,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR
-    OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
-    OutMI.addOperand(MCOperand::createImm(0));    // shamt
+    OutMI.addOperand(
+        MCOperand::createImm(3)); // SrcRType (default: no modifier)
+    OutMI.addOperand(MCOperand::createImm(0)); // shamt
     return;
   }
 
@@ -1388,7 +1392,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       if ((Opc == LinxISA::ADDIri || Opc == LinxISA::SUBIri ||
            Opc == LinxISA::ADDIWri || Opc == LinxISA::SUBIWri) &&
           Imm == 0) {
-        OutMI.setOpcode(getSpecOpcode("C.MOVR", /*LengthBits=*/16, /*Fields=*/2));
+        OutMI.setOpcode(
+            getSpecOpcode("C.MOVR", /*LengthBits=*/16, /*Fields=*/2));
         OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
         OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
         return;
@@ -1398,11 +1403,11 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       if ((Opc == LinxISA::ADDIri || Opc == LinxISA::SUBIri ||
            Opc == LinxISA::ADDIWri || Opc == LinxISA::SUBIWri) &&
           SrcReg == LinxISA::R0 && DstReg != LinxISA::R10) {
-        int64_t SImm = (Opc == LinxISA::SUBIri || Opc == LinxISA::SUBIWri)
-                           ? -Imm
-                           : Imm;
+        int64_t SImm =
+            (Opc == LinxISA::SUBIri || Opc == LinxISA::SUBIWri) ? -Imm : Imm;
         if (isInt<5>(SImm)) {
-          OutMI.setOpcode(getSpecOpcode("C.MOVI", /*LengthBits=*/16, /*Fields=*/2));
+          OutMI.setOpcode(
+              getSpecOpcode("C.MOVI", /*LengthBits=*/16, /*Fields=*/2));
           OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
           OutMI.addOperand(MCOperand::createImm(SImm)); // simm5
           return;
@@ -1414,7 +1419,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
           DstReg == LinxISA::U4) {
         int64_t SImm = (Opc == LinxISA::SUBIri) ? -Imm : Imm;
         if (isInt<5>(SImm)) {
-          OutMI.setOpcode(getSpecOpcode("C.ADDI", /*LengthBits=*/16, /*Fields=*/2));
+          OutMI.setOpcode(
+              getSpecOpcode("C.ADDI", /*LengthBits=*/16, /*Fields=*/2));
           OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
           OutMI.addOperand(MCOperand::createImm(SImm)); // simm5
           return;
@@ -1439,7 +1445,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
         MCOperand ExprOp;
         if (!lowerOperand(Op2, ExprOp)) {
           MI->print(errs());
-          report_fatal_error("Linx: failed to lower ADDI/ADDIW immediate operand");
+          report_fatal_error(
+              "Linx: failed to lower ADDI/ADDIW immediate operand");
         }
         OutMI.addOperand(ExprOp);
         return;
@@ -1491,8 +1498,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR
-    OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
-    OutMI.addOperand(MCOperand::createImm(0));    // shamt
+    OutMI.addOperand(
+        MCOperand::createImm(3)); // SrcRType (default: no modifier)
+    OutMI.addOperand(MCOperand::createImm(0)); // shamt
     return;
   }
 
@@ -1705,8 +1713,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       if (linxEnableCShift16() && DstReg == LinxISA::U4 &&
           SrcReg == LinxISA::T1 && isUInt<5>(Imm) &&
           (Opc == LinxISA::SLLIri || Opc == LinxISA::SRLIri)) {
-        const StringRef Cmnem =
-            (Opc == LinxISA::SLLIri) ? "C.SLLI" : "C.SRLI";
+        const StringRef Cmnem = (Opc == LinxISA::SLLIri) ? "C.SLLI" : "C.SRLI";
         OutMI.setOpcode(getSpecOpcode(Cmnem, /*LengthBits=*/16, /*Fields=*/1));
         OutMI.addOperand(MCOperand::createImm(Imm)); // uimm5
         return;
@@ -1721,7 +1728,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
     if (!Op2.isReg()) {
       MI->print(errs());
-      report_fatal_error("Linx: expected imm/reg operand for *I shift instruction");
+      report_fatal_error(
+          "Linx: expected imm/reg operand for *I shift instruction");
     }
 
     // If the shift amount got materialized into a register, fall back to the
@@ -1771,7 +1779,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     if (!Op2.isImm()) {
       if (!Op2.isReg()) {
         MI->print(errs());
-        report_fatal_error("Linx: expected imm/reg operand for HL.*I instruction");
+        report_fatal_error(
+            "Linx: expected imm/reg operand for HL.*I instruction");
       }
 
       // If the immediate got materialized into a register, fall back to the
@@ -1816,8 +1825,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
       OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
       OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR
-      OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
-      OutMI.addOperand(MCOperand::createImm(0));    // shamt
+      OutMI.addOperand(
+          MCOperand::createImm(3)); // SrcRType (default: no modifier)
+      OutMI.addOperand(MCOperand::createImm(0)); // shamt
       return;
     }
 
@@ -1969,13 +1979,15 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     const Register DstReg = MI->getOperand(0).getReg();
     if (DstReg == LinxISA::U4) {
       if (Opc == LinxISA::LWI && isInt<5>(I(2))) {
-        OutMI.setOpcode(getSpecOpcode("C.LWI", /*LengthBits=*/16, /*Fields=*/2));
+        OutMI.setOpcode(
+            getSpecOpcode("C.LWI", /*LengthBits=*/16, /*Fields=*/2));
         OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
         OutMI.addOperand(MCOperand::createImm(I(2))); // simm5 (scaled)
         return;
       }
       if (Opc == LinxISA::LDI && isInt<5>(I(2))) {
-        OutMI.setOpcode(getSpecOpcode("C.LDI", /*LengthBits=*/16, /*Fields=*/2));
+        OutMI.setOpcode(
+            getSpecOpcode("C.LDI", /*LengthBits=*/16, /*Fields=*/2));
         OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
         OutMI.addOperand(MCOperand::createImm(I(2))); // simm5 (scaled)
         return;
@@ -2027,7 +2039,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR (index)
-    OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
+    OutMI.addOperand(
+        MCOperand::createImm(3)); // SrcRType (default: no modifier)
     OutMI.addOperand(MCOperand::createImm(I(3))); // shamt
     return;
   }
@@ -2233,8 +2246,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     // Prefer compressed stores when storing the most recent T-hand value.
     // C.SWI/C.SDI implicitly store t#1.
     if ((Opc == LinxISA::SWI || Opc == LinxISA::SDI) &&
-        MI->getOperand(0).isReg() && MI->getOperand(0).getReg() == LinxISA::T1 &&
-        isInt<5>(I(2))) {
+        MI->getOperand(0).isReg() &&
+        MI->getOperand(0).getReg() == LinxISA::T1 && isInt<5>(I(2))) {
       OutMI.setOpcode(getSpecOpcode(Opc == LinxISA::SWI ? "C.SWI" : "C.SDI",
                                     /*LengthBits=*/16, /*Fields=*/2));
       OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
@@ -2412,7 +2425,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcD (value)
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR (index)
-    OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
+    OutMI.addOperand(
+        MCOperand::createImm(3)); // SrcRType (default: no modifier)
     return;
   }
 
@@ -2458,7 +2472,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR
-    int64_t SrcRType = 3; // default: no modifier
+    int64_t SrcRType = 3;                         // default: no modifier
     if (MI->getNumOperands() > 2) {
       const MachineOperand &SrcRMO = MI->getOperand(2);
       if (SrcRMO.isReg()) {
@@ -2521,7 +2535,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     // HL compare forms are always 48-bit.
     const unsigned LenBits = (Mnem.starts_with("HL.")) ? 48u : 32u;
 
-    // Try the 16-bit compare-immediate forms when the operand constraints match:
+    // Try the 16-bit compare-immediate forms when the operand constraints
+    // match:
     //   C.CMP.{EQI,NEI}  t#1, simm5, ->t
     if (LenBits == 32 && (Opc == LinxISA::CMPEQI || Opc == LinxISA::CMPNEI) &&
         MI->getNumOperands() >= 3) {
@@ -2529,7 +2544,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
       const Register SrcL = MI->getOperand(1).getReg();
       const int64_t Imm = I(2);
       if (Dst == LinxISA::U4 && SrcL == LinxISA::T1 && isInt<5>(Imm)) {
-        const StringRef Cmnem = (Opc == LinxISA::CMPEQI) ? "C.CMP.EQI" : "C.CMP.NEI";
+        const StringRef Cmnem =
+            (Opc == LinxISA::CMPEQI) ? "C.CMP.EQI" : "C.CMP.NEI";
         OutMI.setOpcode(getSpecOpcode(Cmnem, /*LengthBits=*/16, /*Fields=*/1));
         OutMI.addOperand(MCOperand::createImm(Imm)); // simm5
         return;
@@ -2545,15 +2561,16 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::CSELrrr: {
     // `CSEL SrcP, SrcL, SrcR<.neg>, ->{t, u, Rd}`
-    // LinxISA csel semantics: if pred != 0, use SrcL (true case), else SrcR (false)
-    // LLVM CSELrrr operands: (rd, pred, src_true, src_false)
-    // Map: SrcL = true case, SrcR = false case, SrcP = predicate
+    // LinxISA csel semantics: if pred != 0, use SrcL (true case), else SrcR
+    // (false) LLVM CSELrrr operands: (rd, pred, src_true, src_false) Map: SrcL
+    // = true case, SrcR = false case, SrcP = predicate
     OutMI.setOpcode(getSpecOpcode("CSEL", /*LengthBits=*/32, /*Fields=*/5));
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcL = true case
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcP = predicate
     OutMI.addOperand(MCOperand::createImm(R(3))); // SrcR = false case
-    OutMI.addOperand(MCOperand::createImm(3));    // SrcRType (default: no modifier)
+    OutMI.addOperand(
+        MCOperand::createImm(3)); // SrcRType (default: no modifier)
     return;
   }
 
@@ -2608,9 +2625,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
 
-  //===----------------------------------------------------------------------===//
-  // Function Entry/Exit Macro Instructions (LinxISA spec)
-  //===----------------------------------------------------------------------===//
+    //===----------------------------------------------------------------------===//
+    // Function Entry/Exit Macro Instructions (LinxISA spec)
+    //===----------------------------------------------------------------------===//
 
   case LinxISA::FENTRY: {
     // FENTRY [Begin ~ End], sp!, stacksize

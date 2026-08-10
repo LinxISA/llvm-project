@@ -1,5 +1,5 @@
 # RUN: split-file %s %t
-# RUN: yaml2obj -DABI=70 -DHASH=39 -DMINOR=37 -DREL=31 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/canonical.o
+# RUN: yaml2obj -DABI=70 -DHASH=30 -DMINOR=38 -DREL=30 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/canonical.o
 # RUN: ld.lld -m elf64linx -e 0 %t/canonical.o %t/canonical.o -o %t/out
 # RUN: llvm-readelf -S -x .note.pto.isa %t/out | FileCheck %s --check-prefix=OUTPUT
 # RUN: ld.lld -m elf64linx -shared %t/canonical.o -o %t/canonical.so
@@ -10,13 +10,13 @@
 # RUN: llvm-readelf -S %t/reloc.o %t/reloc-out | FileCheck %s --check-prefix=RELINK
 # RUN: yaml2obj %t/missing.yaml -o %t/missing.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/missing.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=MISSING
-# RUN: yaml2obj -DABI=71 -DHASH=39 -DMINOR=37 -DREL=31 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/abi.o
+# RUN: yaml2obj -DABI=71 -DHASH=30 -DMINOR=38 -DREL=30 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/abi.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/abi.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=ABI
-# RUN: yaml2obj -DABI=70 -DHASH=38 -DMINOR=37 -DREL=31 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/hash.o
+# RUN: yaml2obj -DABI=70 -DHASH=31 -DMINOR=38 -DREL=30 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/hash.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/hash.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=HASH
-# RUN: yaml2obj -DABI=70 -DHASH=39 -DMINOR=38 -DREL=30 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/release.o
+# RUN: yaml2obj -DABI=70 -DHASH=30 -DMINOR=37 -DREL=31 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/release.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/release.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=RELEASE
-# RUN: yaml2obj -DABI=70 -DHASH=39 -DMINOR=37 -DREL=31 -DFLAG=SHF_WRITE %t/identity.yaml -o %t/flags.o
+# RUN: yaml2obj -DABI=70 -DHASH=30 -DMINOR=38 -DREL=30 -DFLAG=SHF_WRITE %t/identity.yaml -o %t/flags.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/flags.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=FLAGS
 
 # OUTPUT-COUNT-1: .note.pto.isa     NOTE
@@ -25,12 +25,12 @@
 # OUTPUT-SAME: 4
 # OUTPUT: 04000000 a5000000 01000000 50544f00
 # OUTPUT: 7b22656e 636f6469 6e675f61 6269223a
-# OUTPUT: 372e3122 7d000000
+# OUTPUT: 382e3022 7d000000
 # RELINK-COUNT-2: .note.pto.isa     NOTE
 # MISSING: error: {{.*}}missing.o: missing required .note.pto.isa identity
 # ABI: error: {{.*}}abi.o: invalid .note.pto.isa: encoding ABI mismatch
 # HASH: error: {{.*}}hash.o: invalid .note.pto.isa: encoding projection hash mismatch
-# RELEASE: error: {{.*}}release.o: invalid .note.pto.isa: release mismatch (expected 0.57.1)
+# RELEASE: error: {{.*}}release.o: invalid .note.pto.isa: release mismatch (expected 0.58.0)
 # FLAGS: error: {{.*}}flags.o: invalid .note.pto.isa: section flags must be exactly SHF_ALLOC
 
 #--- identity.yaml
@@ -45,7 +45,7 @@ Sections:
     Type:         SHT_NOTE
     Flags:        [ [[FLAG]] ]
     AddressAlign: 4
-    Content:      04000000a50000000100000050544f007b22656e636f64696e675f616269223a22[[ABI=70]]746f2d6973612d302e35372e312d6d6f64652d66756e6374696f6e2d7631222c22656e636f64696e675f70726f6a656374696f6e5f736861323536223a22[[HASH=39]]373035613938346532653438653064346538353664336662636661303730343163383537386464333236643831663163393032373965383236333534633332222c2272656c65617365223a22302e35[[MINOR=37]]2e[[REL=31]]227d000000
+    Content:      04000000a50000000100000050544f007b22656e636f64696e675f616269223a22[[ABI=70]]746f2d6973612d302e35382e302d6d6f64652d66756e6374696f6e2d7631222c22656e636f64696e675f70726f6a656374696f6e5f736861323536223a22[[HASH=30]]636164323237326164613866353366633833353465323235363830393966653864366264346237383332633833373236306364333730623066633736666661222c2272656c65617365223a22302e35[[MINOR=38]]2e[[REL=30]]227d000000
 
 #--- missing.yaml
 !ELF
