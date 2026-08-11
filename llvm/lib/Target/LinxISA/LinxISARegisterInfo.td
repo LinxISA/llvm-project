@@ -85,6 +85,11 @@ def TILE29 : LinxISAReg<29, "tile29">;
 def TILE30 : LinxISAReg<30, "tile30">;
 def TILE31 : LinxISAReg<31, "tile31">;
 
+// Core-private Shared tile register identifiers.  They are compiler-managed
+// opaque handles carried by inline assembly, not ordinary scalar values.
+foreach I = 0-255 in
+  def SHARED#I : LinxISAReg<I, "shared"#I>;
+
 // GPR_Arch: Architectural GPRs only (R0-R23), no T/U queue references.
 // Use this for operands that must hold actual values (like comparison results).
 def GPR_Arch : RegisterClass<"Linx", [i64, i32, f64, f32], 64,
@@ -130,6 +135,9 @@ def TILE_M : RegisterClass<"Linx", [linxtile, v1024i32], 32768,
     (sequence "TILE%i", 16, 23)>;
 def TILE_N : RegisterClass<"Linx", [linxtile, v1024i32], 32768,
     (sequence "TILE%i", 24, 31)>;
+
+def SHARED : RegisterClass<"Linx", [i64], 64,
+    (sequence "SHARED%i", 0, 255)>;
 
 def CSR_Linx : CalleeSavedRegs<(add R10,
                                    (sequence "R%i", 11, 19))>;

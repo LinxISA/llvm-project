@@ -40,10 +40,9 @@ LinxISATargetInfo::getTargetBuiltins() const {
 
 ArrayRef<const char *> LinxISATargetInfo::getGCCRegNames() const {
   static const char *const GCCRegNames[] = {
-      "zero", "sp",  "a0",  "a1",  "a2",  "a3",  "a4",  "a5",
-      "a6",   "a7",  "ra",  "s0",  "s1",  "s2",  "s3",  "s4",
-      "s5",   "s6",  "s7",  "s8",  "x0",  "x1",  "x2",  "x3",
-      "t#1",  "t#2", "t#3", "t#4", "u#1", "u#2", "u",   "t",
+      "zero", "sp", "a0",  "a1",  "a2",  "a3",  "a4",  "a5",  "a6", "a7", "ra",
+      "s0",   "s1", "s2",  "s3",  "s4",  "s5",  "s6",  "s7",  "s8", "x0", "x1",
+      "x2",   "x3", "t#1", "t#2", "t#3", "t#4", "u#1", "u#2", "u",  "t",
   };
   return llvm::ArrayRef(GCCRegNames);
 }
@@ -77,6 +76,11 @@ bool LinxISATargetInfo::validateAsmConstraint(
   switch (Name[0]) {
   case 'r': {
     // General purpose register
+    Info.setAllowsRegister();
+    return true;
+  }
+  case 'S': {
+    // Compiler-allocated core-private Shared tile register S0..S255.
     Info.setAllowsRegister();
     return true;
   }
@@ -203,7 +207,7 @@ bool LinxISATargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
 }
 
 void LinxISATargetInfo::getTargetDefines(const LangOptions &Opts,
-                                        MacroBuilder &Builder) const {
+                                         MacroBuilder &Builder) const {
   (void)Opts;
   Builder.defineMacro("__LINX__");
   Builder.defineMacro("__linx__");
