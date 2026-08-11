@@ -517,9 +517,8 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
         ByteCount);
     writeBinaryCodes(
         OS, Fixups, STI,
-        {MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst_Size)
+        {MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
              .addOperand(MI.getOperand(3))
-             .addOperand(MI.getOperand(4))
              .addOperand(MCOperand::createImm(1))
              .addOperand(MI.getOperand(5))},
         ByteCount);

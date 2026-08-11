@@ -3043,13 +3043,6 @@ def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, Grou
   let TSize = 0;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
 }
-def B_IOT_OneSrc_NoDst_Size: B_IOT_Base<0b101, (outs),
-        (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last,
-             TILE_Src_Reg:$SrcTile0)> {
-  let SrcTile1 = 0;
-  let DstTile = 0b00;
-  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}";
-}
 def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
 // PTO v0.58 reissue: no mask-only Shared B.IOT companion exists (B.IOT binds

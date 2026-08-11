@@ -55,7 +55,7 @@ define void @reuse(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
 ; CHECK: BSTART.CUBE TMATMUL, FP32
 ; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
 ; CHECK-NEXT: B.IOS S0, mask=1111
-; CHECK-NEXT: B.IOT {{[^,]+}}, mask=1111, TSize={{[0-9]+}}, last
+; CHECK-NEXT: B.IOT {{[^,]+}}, mask=1111, last, ->t<512B>
 define void @matmul_shared(ptr %in_a, ptr %in_b, ptr %out) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)
   %b = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 3, ptr %in_b, i64 16)
