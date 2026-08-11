@@ -393,14 +393,16 @@ declare_mlir_dialect_python_bindings(
   DIALECT_NAME nvvm
   GEN_ENUM_BINDINGS)
 
-declare_mlir_dialect_python_bindings(
-  ADD_TO_PARENT MLIRPythonSources.Dialects
-  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mlir"
-  TD_FILE dialects/PTOOps.td
-  SOURCES
-    dialects/pto.py
-  DIALECT_NAME pto
-  GEN_ENUM_BINDINGS)
+if(MLIR_ENABLE_LINXISA_PTO)
+  declare_mlir_dialect_python_bindings(
+    ADD_TO_PARENT MLIRPythonSources.Dialects
+    ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/mlir"
+    TD_FILE dialects/PTOOps.td
+    SOURCES
+      dialects/pto.py
+    DIALECT_NAME pto
+    GEN_ENUM_BINDINGS)
+endif()
 
 declare_mlir_dialect_python_bindings(
   ADD_TO_PARENT MLIRPythonSources.Dialects
@@ -661,19 +663,21 @@ declare_mlir_python_extension(MLIRPythonExtension.Dialects.PDL.Nanobind
     MLIRCAPIPDL
 )
 
-declare_mlir_python_extension(MLIRPythonExtension.Dialects.pto
-  MODULE_NAME _pto
-  ADD_TO_PARENT MLIRPythonSources.Dialects.pto
-  ROOT_DIR "${PYTHON_SOURCE_DIR}"
-  PYTHON_BINDINGS_LIBRARY pybind11
-  SOURCES
-    DialectPTO.cpp
-  PRIVATE_LINK_LIBS
-    LLVMSupport
-  EMBED_CAPI_LINK_LIBS
-    MLIRCAPIIR
-    MLIRCAPIPTO
-)
+if(MLIR_ENABLE_LINXISA_PTO)
+  declare_mlir_python_extension(MLIRPythonExtension.Dialects.pto
+    MODULE_NAME _pto
+    ADD_TO_PARENT MLIRPythonSources.Dialects.pto
+    ROOT_DIR "${PYTHON_SOURCE_DIR}"
+    PYTHON_BINDINGS_LIBRARY pybind11
+    SOURCES
+      DialectPTO.cpp
+    PRIVATE_LINK_LIBS
+      LLVMSupport
+    EMBED_CAPI_LINK_LIBS
+      MLIRCAPIIR
+      MLIRCAPIPTO
+  )
+endif()
 
 declare_mlir_python_extension(MLIRPythonExtension.Dialects.SparseTensor.Nanobind
   MODULE_NAME _mlirDialectsSparseTensor
