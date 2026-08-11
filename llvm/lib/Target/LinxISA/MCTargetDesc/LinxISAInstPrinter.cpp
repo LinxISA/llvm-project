@@ -918,6 +918,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           .Case("BSTART.TMOV.S2L.BROADCAST", 2u)
           .Case("BSTART.TMOV.S2L.EXTRACT", 2u)
           .Case("BSTART.TPREFETCH", 3u)
+          .Case("BSTART.TSTORE.SPART", 14u)
           .Case("BSTART.MGATHER", 4u)
           .Case("BSTART.MSCATTER", 5u)
           .Case("BSTART.MGATHER.MASK", 6u)
