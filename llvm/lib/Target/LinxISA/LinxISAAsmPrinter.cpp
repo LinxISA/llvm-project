@@ -51,12 +51,10 @@ public:
   void emitInstruction(const MachineInstr *MI) override;
 
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
-                       const char *ExtraCode,
-                       raw_ostream &OS) override;
+                       const char *ExtraCode, raw_ostream &OS) override;
 
   bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
-                             const char *ExtraCode,
-                             raw_ostream &OS) override;
+                             const char *ExtraCode, raw_ostream &OS) override;
 
   static char ID;
 };
@@ -152,16 +150,74 @@ static void printLinxInlineAsmRegister(raw_ostream &OS, unsigned Reg,
   OS << linxReg5Name(Enc);
 }
 
+static StringRef linxTileDataTypeName(int64_t Value) {
+  switch (Value) {
+  case 0:
+    return "FP64";
+  case 1:
+    return "FP32";
+  case 2:
+    return "TF32";
+  case 3:
+    return "HF32";
+  case 4:
+    return "FP16";
+  case 5:
+    return "BF16";
+  case 6:
+    return "HIF8";
+  case 7:
+    return "E4M3";
+  case 8:
+    return "E5M2";
+  case 9:
+    return "E3M2";
+  case 10:
+    return "E2M3";
+  case 11:
+    return "E2M1X2";
+  case 12:
+    return "E1M2X2";
+  case 13:
+    return "E8M0";
+  case 14:
+    return "HIF4X2";
+  case 16:
+    return "S64";
+  case 17:
+    return "S32";
+  case 18:
+    return "S16";
+  case 19:
+    return "S8";
+  case 20:
+    return "S4X2";
+  case 24:
+    return "U64";
+  case 25:
+    return "U32";
+  case 26:
+    return "U16";
+  case 27:
+    return "U8";
+  case 28:
+    return "U4X2";
+  default:
+    return {};
+  }
+}
+
 bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
-                                       const char *ExtraCode,
-                                       raw_ostream &OS) {
+                                        const char *ExtraCode,
+                                        raw_ostream &OS) {
   // Clang/GCC use %cN for an immediate without target punctuation. Linx block
   // templates rely on that conventional modifier for selector and dimension
-  // fields. %qN prints only a tile register's destination queue bank because
+  // fields. %DN prints a tile dtype keyword for attribute commands. %qN
+  // prints only a tile register's destination queue bank because
   // canonical B.IOT destinations are written as ->t/u/m/n<Size>, while source
   // operands name a concrete queue slot such as t#1.
   if (ExtraCode && ExtraCode[0] != 0 &&
-      !((ExtraCode[0] == 'c' || ExtraCode[0] == 'q') &&
+      !((ExtraCode[0] == 'c' || ExtraCode[0] == 'D' || ExtraCode[0] == 'q') &&
         ExtraCode[1] == 0))
     return true;
 
@@ -185,11 +241,25 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   }
 
   if (MO.isImm()) {
+    if (ExtraCode && ExtraCode[0] == 'D') {
+      StringRef Name = linxTileDataTypeName(MO.getImm());
+      if (Name.empty())
+        return true;
+      OS << Name;
+      return false;
+    }
     OS << MO.getImm();
     return false;
   }
 
   if (MO.isCImm()) {
+    if (ExtraCode && ExtraCode[0] == 'D') {
+      StringRef Name = linxTileDataTypeName(MO.getCImm()->getSExtValue());
+      if (Name.empty())
+        return true;
+      OS << Name;
+      return false;
+    }
     OS << MO.getCImm()->getSExtValue();
     return false;
   }
@@ -205,9 +275,9 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
 }
 
 bool LinxISAAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
-                                             unsigned OpNo,
-                                             const char *ExtraCode,
-                                             raw_ostream &OS) {
+                                              unsigned OpNo,
+                                              const char *ExtraCode,
+                                              raw_ostream &OS) {
   if (ExtraCode && ExtraCode[0] != 0)
     return true;
 
@@ -268,10 +338,11 @@ bool LinxISAAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 
 char LinxISAAsmPrinter::ID = 0;
 
-INITIALIZE_PASS(LinxISAAsmPrinter, "linx-asm-printer",
-                "Linx Assembly Printer", false, false)
+INITIALIZE_PASS(LinxISAAsmPrinter, "linx-asm-printer", "Linx Assembly Printer",
+                false, false)
 
-extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxISAAsmPrinter() {
+extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
+LLVMInitializeLinxISAAsmPrinter() {
   RegisterAsmPrinter<LinxISAAsmPrinter> X32(getTheLinx32Target());
   RegisterAsmPrinter<LinxISAAsmPrinter> X64(getTheLinx64Target());
 }
