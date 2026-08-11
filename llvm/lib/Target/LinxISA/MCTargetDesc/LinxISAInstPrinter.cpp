@@ -472,8 +472,15 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   const linxisa_inst_form &Form = linxisa_inst_forms[Opcode];
   StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
+  SmallString<64> SourceVariantToken;
+  if (Form.source_variant && Form.source_variant[0]) {
+    SourceVariantToken = "BSTART.";
+    SourceVariantToken += Form.source_variant;
+  }
   const StringRef RawTok =
-      AsmFmt.empty() ? StringRef() : AsmFmt.split(' ').first.rtrim(",");
+      !SourceVariantToken.empty()
+          ? StringRef(SourceVariantToken)
+          : (AsmFmt.empty() ? StringRef() : AsmFmt.split(' ').first.rtrim(","));
 
   auto stripAngleSuffix = [&](StringRef Tok) -> StringRef {
     if (size_t Pos = Tok.find('<'); Pos != StringRef::npos)
@@ -906,6 +913,10 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           .Case("BSTART.TLOAD", 0u)
           .Case("BSTART.TSTORE", 1u)
           .Case("BSTART.TMOV", 2u)
+          .Case("BSTART.TMOV.L2S.INSERT", 2u)
+          .Case("BSTART.TMOV.L2S.PUBLISH", 2u)
+          .Case("BSTART.TMOV.S2L.BROADCAST", 2u)
+          .Case("BSTART.TMOV.S2L.EXTRACT", 2u)
           .Case("BSTART.TPREFETCH", 3u)
           .Case("BSTART.MGATHER", 4u)
           .Case("BSTART.MSCATTER", 5u)

@@ -1145,6 +1145,12 @@ static const StringMap<SmallVector<unsigned, 4>> &getMnemonicMap() {
         addKey(First, i);
     }
 
+    if (F.source_variant && F.source_variant[0]) {
+      SmallString<64> SourceName("BSTART.");
+      SourceName += F.source_variant;
+      addKey(SourceName, i);
+    }
+
     // Aliases for readability: treat `*.STD` as the default `*`.
     if (F.mnemonic) {
       StringRef M(F.mnemonic);
@@ -4224,8 +4230,15 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     M.Inst = MI;
     M.FixedBits = llvm::popcount(static_cast<uint64_t>(F.mask));
     M.LengthBits = F.length_bits;
+    SmallString<64> SourceName;
+    if (F.source_variant && F.source_variant[0]) {
+      SourceName = "BSTART.";
+      SourceName += F.source_variant;
+    }
     M.ExactMnemonic =
-        F.mnemonic && StringRef(F.mnemonic).equals_insensitive(StringRef(Key));
+        (F.mnemonic &&
+         StringRef(F.mnemonic).equals_insensitive(StringRef(Key))) ||
+        (!SourceName.empty() && SourceName.equals_insensitive(StringRef(Key)));
 
     if (!Best || M.ExactMnemonic > Best->ExactMnemonic ||
         (M.ExactMnemonic == Best->ExactMnemonic &&

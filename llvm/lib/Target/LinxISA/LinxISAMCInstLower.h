@@ -34,9 +34,9 @@ public:
   bool lowerOperand(const MachineOperand &MO, MCOperand &OutOp) const;
 
   unsigned getReg5Encoding(unsigned Reg) const;
+  unsigned getRegEncoding(unsigned Reg) const;
 };
 
 } // namespace llvm
 
 #endif // LLVM_LIB_TARGET_LINXISA_LINXISAMCINSTLOWER_H
-

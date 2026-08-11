@@ -40,10 +40,11 @@ public:
 
   const char *getTargetNodeName(unsigned Opcode) const override;
 
+  ConstraintType getConstraintType(StringRef Constraint) const override;
+
   std::pair<unsigned, const TargetRegisterClass *>
   getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
-                               StringRef Constraint,
-                               MVT VT) const override;
+                               StringRef Constraint, MVT VT) const override;
 
   void LowerAsmOperandForConstraint(SDValue Op, StringRef Constraint,
                                     std::vector<SDValue> &Ops,

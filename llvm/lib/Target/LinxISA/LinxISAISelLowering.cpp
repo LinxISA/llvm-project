@@ -1877,6 +1877,13 @@ const char *LinxISATargetLowering::getTargetNodeName(unsigned Opcode) const {
   }
 }
 
+LinxISATargetLowering::ConstraintType
+LinxISATargetLowering::getConstraintType(StringRef Constraint) const {
+  if (Constraint == "S")
+    return C_RegisterClass;
+  return TargetLowering::getConstraintType(Constraint);
+}
+
 std::pair<unsigned, const TargetRegisterClass *>
 LinxISATargetLowering::getRegForInlineAsmConstraint(
     const TargetRegisterInfo *TRI, StringRef Constraint, MVT VT) const {
@@ -1894,6 +1901,8 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
       // (especially for syscall/ACR entry/exit sequences). Restrict scalar "r"
       // operands to architectural registers only.
       return std::make_pair(0u, &LinxISA::GPR_ArchRegClass);
+    case 'S':
+      return std::make_pair(0u, &LinxISA::SHAREDRegClass);
     default:
       break;
     }

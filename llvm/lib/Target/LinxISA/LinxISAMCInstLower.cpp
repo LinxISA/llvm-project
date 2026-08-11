@@ -143,7 +143,11 @@ static unsigned getSpecOpcodeByAsmFmtAndMatch(StringRef AsmFmt,
 }
 
 unsigned LinxISAMCInstLower::getReg5Encoding(unsigned Reg) const {
-  return TRI.getEncodingValue(Reg) & 0x1F;
+  return getRegEncoding(Reg) & 0x1F;
+}
+
+unsigned LinxISAMCInstLower::getRegEncoding(unsigned Reg) const {
+  return TRI.getEncodingValue(Reg);
 }
 
 static const MCExpr *withOffset(const MCExpr *Expr, int64_t Offset,
