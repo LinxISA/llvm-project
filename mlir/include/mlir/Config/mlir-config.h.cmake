@@ -36,6 +36,9 @@
 /* If set, enables PDL usage. */
 #cmakedefine01 MLIR_ENABLE_PDL_IN_PATTERNMATCH
 
+/* If set, enables the LinxISA PTO dialect and conversion passes. */
+#cmakedefine01 MLIR_ENABLE_LINXISA_PTO
+
 /* If set, enables features that depend on the NVIDIA's PTX compiler. */
 #cmakedefine01 MLIR_ENABLE_NVPTXCOMPILER
 

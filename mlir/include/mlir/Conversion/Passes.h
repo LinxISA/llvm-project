@@ -9,6 +9,7 @@
 #ifndef MLIR_CONVERSION_PASSES_H
 #define MLIR_CONVERSION_PASSES_H
 
+#include "mlir/Config/mlir-config.h"
 #include "mlir/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithAndMathToAPFloat/ArithToAPFloat.h"
@@ -87,7 +88,9 @@
 #include "mlir/Conversion/VectorToXeGPU/VectorToXeGPU.h"
 #include "mlir/Conversion/XeGPUToXeVM/XeGPUToXeVM.h"
 #include "mlir/Conversion/XeVMToLLVM/XeVMToLLVM.h"
+#if MLIR_ENABLE_LINXISA_PTO
 #include "mlir/Dialect/PTO/Transforms/Passes.h"
+#endif
 
 namespace mlir {
 
