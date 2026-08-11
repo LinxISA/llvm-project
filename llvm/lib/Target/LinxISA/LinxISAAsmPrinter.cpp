@@ -12,10 +12,16 @@
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
 #include "TargetInfo/LinxISATargetInfo.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCStreamer.h"
@@ -24,14 +30,27 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <array>
+
 using namespace llvm;
 
 namespace {
 
 class LinxISAAsmPrinter : public llvm::AsmPrinter {
+  struct TileQueueState {
+    std::array<SmallVector<Register, 8>, 4> Hands;
+
+    bool operator==(const TileQueueState &Other) const {
+      return Hands == Other.Hands;
+    }
+  };
+
   std::unique_ptr<LinxISAMCInstLower> MCInstLowering;
   SmallPtrSet<const MachineBasicBlock *, 32> BodyLabelsEmitted;
   SmallPtrSet<const MachineInstr *, 32> SkippedFusedSetRet;
+  DenseMap<const MachineInstr *, SmallVector<unsigned, 8>> InlineAsmTileRanks;
+
+  void computeInlineAsmTileRanks(MachineFunction &MF);
 
 public:
   explicit LinxISAAsmPrinter(TargetMachine &TM,
@@ -45,6 +64,8 @@ public:
         OutContext, *this, *MF.getSubtarget().getRegisterInfo());
     BodyLabelsEmitted.clear();
     SkippedFusedSetRet.clear();
+    InlineAsmTileRanks.clear();
+    computeInlineAsmTileRanks(MF);
     return llvm::AsmPrinter::runOnMachineFunction(MF);
   }
 
@@ -60,6 +81,150 @@ public:
 };
 
 } // end anonymous namespace
+
+void LinxISAAsmPrinter::computeInlineAsmTileRanks(MachineFunction &MF) {
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  DenseMap<const MachineBasicBlock *, TileQueueState> Entries;
+  DenseMap<const MachineBasicBlock *, bool> Processed;
+  SmallVector<const MachineBasicBlock *, 32> Worklist;
+
+  auto tileHand = [&](Register Reg) -> unsigned {
+    if (!Reg || !Reg.isPhysical() || !LinxISA::TILERegClass.contains(Reg))
+      report_fatal_error("Linx: expected physical tile register in inline asm");
+    return (TRI.getEncodingValue(Reg) & 0x1fu) / 8u;
+  };
+
+  auto consume = [&](TileQueueState &State, Register Reg, StringRef Context) {
+    auto &Queue = State.Hands[tileHand(Reg)];
+    auto It = llvm::find(Queue, Reg);
+    if (It == Queue.end())
+      report_fatal_error(Twine("Linx: cannot consume absent inline-asm tile "
+                               "value for ") +
+                         Context);
+    Queue.erase(It);
+  };
+
+  auto push = [&](TileQueueState &State, Register Reg) {
+    auto &Queue = State.Hands[tileHand(Reg)];
+    if (auto It = llvm::find(Queue, Reg); It != Queue.end())
+      Queue.erase(It);
+    Queue.insert(Queue.begin(), Reg);
+    if (Queue.size() > 8u)
+      report_fatal_error(
+          "Linx: inline-asm tile queue exceeds architectural depth 8");
+  };
+
+  auto transfer = [&](const MachineInstr &MI, TileQueueState &State) {
+    if (!MI.isInlineAsm())
+      return;
+
+    SmallVector<Register, 4> Consumed;
+    SmallVector<Register, 4> Clobbered;
+    SmallVector<Register, 4> Defined;
+    SmallVector<unsigned, 8> Ranks(MI.getNumOperands(), 0u);
+    bool HasTileOperand = false;
+
+    for (unsigned FlagNo = InlineAsm::MIOp_FirstOperand;
+         FlagNo < MI.getNumOperands();) {
+      const MachineOperand &FlagMO = MI.getOperand(FlagNo);
+      if (!FlagMO.isImm())
+        break;
+      const InlineAsm::Flag Flag(FlagMO.getImm());
+      const unsigned NumRegs = Flag.getNumOperandRegisters();
+      if (FlagNo + 1u + NumRegs > MI.getNumOperands())
+        report_fatal_error("Linx: malformed inline-asm operand descriptor");
+
+      for (unsigned I = 0; I != NumRegs; ++I) {
+        const unsigned OpNo = FlagNo + 1u + I;
+        const MachineOperand &MO = MI.getOperand(OpNo);
+        if (!MO.isReg() || !LinxISA::TILERegClass.contains(MO.getReg()))
+          continue;
+
+        HasTileOperand = true;
+        const Register Reg = MO.getReg();
+        if (Flag.isRegUseKind()) {
+          const auto &Queue = State.Hands[tileHand(Reg)];
+          auto It = llvm::find(Queue, Reg);
+          if (It == Queue.end())
+            report_fatal_error("Linx: cannot prove inline-asm tile queue rank");
+          const unsigned Rank = static_cast<unsigned>(It - Queue.begin()) + 1u;
+          if (Rank > 8u)
+            report_fatal_error(
+                "Linx: inline-asm tile queue rank exceeds depth 8");
+          Ranks[OpNo] = Rank;
+          if (MO.isKill() && !llvm::is_contained(Consumed, Reg))
+            Consumed.push_back(Reg);
+        } else if (Flag.isRegDefKind() || Flag.isRegDefEarlyClobberKind()) {
+          if (!llvm::is_contained(Defined, Reg))
+            Defined.push_back(Reg);
+        } else if (Flag.isClobberKind()) {
+          if (!llvm::is_contained(Clobbered, Reg))
+            Clobbered.push_back(Reg);
+        }
+      }
+      FlagNo += 1u + NumRegs;
+    }
+
+    if (HasTileOperand)
+      InlineAsmTileRanks[&MI] = std::move(Ranks);
+
+    // Inputs are read before early-clobber outputs become architecturally
+    // visible.  Record every source rank first, then update the queue.
+    for (Register Reg : Consumed)
+      consume(State, Reg, "inline asm");
+    for (Register Reg : Clobbered) {
+      auto &Queue = State.Hands[tileHand(Reg)];
+      if (auto It = llvm::find(Queue, Reg); It != Queue.end())
+        Queue.erase(It);
+    }
+    for (Register Reg : Defined)
+      push(State, Reg);
+  };
+
+  for (const MachineBasicBlock &MBB : MF) {
+    if (MBB.pred_empty()) {
+      Entries.try_emplace(&MBB);
+      Worklist.push_back(&MBB);
+    }
+  }
+  if (!MF.empty() && !Entries.count(&MF.front())) {
+    Entries.try_emplace(&MF.front());
+    Worklist.push_back(&MF.front());
+  }
+
+  while (!Worklist.empty()) {
+    const MachineBasicBlock *MBB = Worklist.pop_back_val();
+    if (Processed.lookup(MBB))
+      continue;
+    Processed[MBB] = true;
+    TileQueueState Exit = Entries.lookup(MBB);
+    for (const MachineInstr &MI : *MBB)
+      transfer(MI, Exit);
+
+    for (const MachineBasicBlock *Succ : MBB->successors()) {
+      auto [It, Inserted] = Entries.try_emplace(Succ, Exit);
+      if (!Inserted && !(It->second == Exit))
+        report_fatal_error(
+            "Linx: inline-asm tile queue is ambiguous at a CFG join");
+      if (Inserted)
+        Worklist.push_back(Succ);
+    }
+  }
+
+  for (const MachineBasicBlock &MBB : MF) {
+    if (Processed.lookup(&MBB))
+      continue;
+    for (const MachineInstr &MI : MBB) {
+      if (MI.isInlineAsm()) {
+        for (const MachineOperand &MO : MI.operands()) {
+          if (MO.isReg() && LinxISA::TILERegClass.contains(MO.getReg()))
+            report_fatal_error("Linx: inline-asm tile queue is not provable "
+                               "through unreachable or cyclic control flow");
+        }
+      }
+    }
+  }
+}
 
 void LinxISAAsmPrinter::emitInstruction(const MachineInstr *MI) {
   if (SkippedFusedSetRet.contains(MI))
@@ -243,6 +408,16 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
         return true;
       static constexpr char Banks[4] = {'t', 'u', 'm', 'n'};
       OS << Banks[(Enc >> 3) & 0x3];
+      return false;
+    }
+    if (LinxISA::TILERegClass.contains(MO.getReg())) {
+      auto It = InlineAsmTileRanks.find(MI);
+      if (It == InlineAsmTileRanks.end() || OpNo >= It->second.size() ||
+          It->second[OpNo] == 0u)
+        report_fatal_error(
+            "Linx: missing proven queue rank for inline-asm tile source");
+      static constexpr char Banks[4] = {'t', 'u', 'm', 'n'};
+      OS << Banks[(Enc >> 3) & 0x3] << '#' << It->second[OpNo];
       return false;
     }
     printLinxInlineAsmRegister(OS, MO.getReg(), Enc);
