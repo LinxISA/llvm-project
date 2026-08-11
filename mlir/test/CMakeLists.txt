@@ -120,10 +120,12 @@ set(MLIR_TEST_DEPENDS
   mlir-rewrite
   mlir-tblgen
   mlir-translate
-  ptoas
   tblgen-lsp-server
   tblgen-to-irdl
   )
+if(MLIR_ENABLE_LINXISA_PTO)
+  list(APPEND MLIR_TEST_DEPENDS ptoas)
+endif()
 if(NOT MLIR_STANDALONE_BUILD)
   list(APPEND MLIR_TEST_DEPENDS FileCheck count not split-file yaml2obj)
 endif()
