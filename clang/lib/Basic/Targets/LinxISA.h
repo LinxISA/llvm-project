@@ -51,6 +51,10 @@ public:
     LongDoubleWidth = 64;
     LongDoubleAlign = 64;
     LongDoubleFormat = &llvm::APFloat::IEEEdouble();
+    BFloat16Width = 16;
+    BFloat16Align = 16;
+    BFloat16Format = &llvm::APFloat::BFloat();
+    HasFloat16 = true;
     SuitableAlign = 64;
   }
 
@@ -84,6 +88,8 @@ public:
   }
 
   bool hasBitIntType() const override { return true; }
+
+  bool hasBFloat16Type() const override { return true; }
 };
 
 class LLVM_LIBRARY_VISIBILITY Linx32TargetInfo : public LinxISATargetInfo {

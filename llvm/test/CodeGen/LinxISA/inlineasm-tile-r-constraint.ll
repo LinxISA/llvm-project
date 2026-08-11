@@ -14,6 +14,14 @@ entry:
   ret void
 }
 
+define void @inlineasm_tile_dtype() {
+entry:
+  call void asm sideeffect "B.DATR NORM.normal, ${0:D}, Null", "i"(i32 4)
+  ret void
+}
+
 ; CHECK-LABEL: inlineasm_tile_r:
 ; CHECK: BSTART.VEC TADD, U32
 ; CHECK: B.IOT t#{{[1-8]}}, t#{{[1-8]}}, mask=1111, last, ->t<4KB>
+; CHECK-LABEL: inlineasm_tile_dtype:
+; CHECK: B.DATR NORM.normal, FP16, Null
