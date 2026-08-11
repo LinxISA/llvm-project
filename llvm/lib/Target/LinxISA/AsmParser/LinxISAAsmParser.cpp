@@ -4235,10 +4235,14 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       SourceName = "BSTART.";
       SourceName += F.source_variant;
     }
+    // A source variant shares the canonical mnemonic and operand shape with
+    // its base form.  Match it only through its explicit source spelling so
+    // an unqualified mnemonic deterministically selects the base encoding.
     M.ExactMnemonic =
-        (F.mnemonic &&
-         StringRef(F.mnemonic).equals_insensitive(StringRef(Key))) ||
-        (!SourceName.empty() && SourceName.equals_insensitive(StringRef(Key)));
+        !SourceName.empty()
+            ? SourceName.equals_insensitive(StringRef(Key))
+            : (F.mnemonic &&
+               StringRef(F.mnemonic).equals_insensitive(StringRef(Key)));
 
     if (!Best || M.ExactMnemonic > Best->ExactMnemonic ||
         (M.ExactMnemonic == Best->ExactMnemonic &&
