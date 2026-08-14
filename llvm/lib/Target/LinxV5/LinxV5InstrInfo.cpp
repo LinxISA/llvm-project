@@ -665,6 +665,8 @@ void LinxV5InstrInfo::loadRegFromStackSlot(
   if (!LinxV5::GRRegClass.hasSubClassEq(RC) &&
       !LinxV5::LTRRegClass.hasSubClassEq(RC) &&
       !LinxV5::LURRegClass.hasSubClassEq(RC) &&
+      !LinxV5::MixedGPRRegClass.hasSubClassEq(RC) &&
+      !LinxV5::MixedGPRNoRARegClass.hasSubClassEq(RC) &&
       !LinxV5::Tile_ABSRegClass.hasSubClassEq(RC) &&
       !LinxV5::SIMTCGVRegClass.hasSubClassEq(RC))
     llvm_unreachable("Can't load this register from stack slot");

@@ -174,8 +174,14 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   // written literally in the asm string ("->%[Dst]<%Z[TileSize]>"). TSize is
   // encoded at PE granularity (the hardware multiplies by 4 for the core).
   if (ExtraCode && ExtraCode[0] == 'Z' && ExtraCode[1] == 0) {
-    if (!MO.isImm())
-      return true;
+    if (!MO.isImm()) {
+      // The TSize must be a compile-time immediate ("i" constraint). If an
+      // optimization pass degraded it to a register, do not emit the generic
+      // "<>" empty box (which would corrupt the B.IOT into "->u<>"); print a
+      // visible sentinel so the malformed bundle fails loudly downstream.
+      OS << "0B";
+      return false;
+    }
     static const char *TileSizes[] = {"0B",   "128B", "256B", "512B",
                                      "1KB",  "2KB",  "4KB",  "8KB"};
     if ((unsigned)MO.getImm() < sizeof(TileSizes) / sizeof(TileSizes[0]))
