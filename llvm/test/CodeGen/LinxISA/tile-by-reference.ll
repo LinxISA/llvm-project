@@ -1,5 +1,7 @@
 ; RUN: llc -mtriple=linx64 -O2 < %s | FileCheck %s
 ; RUN: llc -mtriple=linx32 -O2 < %s | FileCheck %s
+; RUN: llc -mtriple=linx64 -O2 -stop-before=linx-blockify -verify-machineinstrs < %s -o /dev/null
+; RUN: llc -mtriple=linx32 -O2 -stop-before=linx-blockify -verify-machineinstrs < %s -o /dev/null
 
 ; Public Tile API functions pass tile storage by reference.  The backend must
 ; move the 4 KiB payload through canonical TLSU blocks around tile inline asm,

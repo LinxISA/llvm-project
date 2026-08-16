@@ -489,7 +489,7 @@ def PSEUDO_TLSU_TLOAD : Pseudo<(outs TILE_TU:$dst), (ins GPR_Arch:$base, i64imm:
                               "# PSEUDO_TLSU_TLOAD", []>;
 
 // Spill/reload helper: allow TLOAD into any architectural tile register bank.
-let hasSideEffects = 1, isBarrier = 1, mayLoad = 1, Size = 4 in
+let hasSideEffects = 1, mayLoad = 1, Size = 4 in
 def PSEUDO_TLSU_TLOAD_ANY : Pseudo<(outs TILE:$dst), (ins GPR_Arch:$base, i64imm:$size),
                                   "# PSEUDO_TLSU_TLOAD_ANY", []>;
 
@@ -501,7 +501,7 @@ def PSEUDO_TLSU_TLOAD_DESC : Pseudo<(outs TILE_TU:$dst),
                                         GPR_Arch:$stride_bytes),
                                    "# PSEUDO_TLSU_TLOAD_DESC", []>;
 
-let hasSideEffects = 1, isBarrier = 1, mayStore = 1, Size = 4 in
+let hasSideEffects = 1, mayStore = 1, Size = 4 in
 def PSEUDO_TLSU_TSTORE : Pseudo<(outs), (ins GPR_Arch:$base, TILE:$src, i64imm:$size),
                                "# PSEUDO_TLSU_TSTORE", []>;
 
