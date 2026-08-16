@@ -2,8 +2,9 @@
 ; RUN: llvm-objdump -d --triple=linx64 %t | FileCheck %s
 
 ; Keep the canonical BSTART.ICALL return target in uimm5 range even when the
-; callee computation block is longer than 62 bytes. The return landing then
-; transfers to the semantic continuation.
+; callee computation block is longer than 62 bytes. C.SETC.TGT must execute in
+; the retiring preparation block before BSTART.ICALL snapshots BARG.BPCN. The
+; adjacent return landing then transfers to the semantic continuation.
 define i64 @long_icall(ptr %callee, ptr %p) {
 entry:
   %v0 = load volatile i64, ptr %p
@@ -41,12 +42,14 @@ entry:
 }
 
 ; CHECK-LABEL: <long_icall>:
-; CHECK: 01 60 96 50{{[[:space:]]+}}BSTART.ICALL{{[[:space:]]+}}0x{{[0-9a-f]+}},{{[[:space:]]+}}->ra
+; CHECK: 1c 05{{[[:space:]]+}}c.setc.tgt{{[[:space:]]+}}x0
+; CHECK-NEXT: 01 60 56 50{{[[:space:]]+}}BSTART.ICALL{{[[:space:]]+}}0x{{[0-9a-f]+}},{{[[:space:]]+}}->ra
 ; CHECK-NOT: C.BSTART.STD{{[[:space:]]+}}ICALL
 ; CHECK: <.LBB{{[0-9_]+}}>:
 ; CHECK: C.BSTART DIRECT
 ; CHECK-LABEL: <noreturn_icall>:
-; CHECK: 01 60 96 50{{[[:space:]]+}}BSTART.ICALL{{[[:space:]]+}}0x{{[0-9a-f]+}},{{[[:space:]]+}}->ra
+; CHECK: 1c 05{{[[:space:]]+}}c.setc.tgt{{[[:space:]]+}}x0
+; CHECK-NEXT: 01 60 56 50{{[[:space:]]+}}BSTART.ICALL{{[[:space:]]+}}0x{{[0-9a-f]+}},{{[[:space:]]+}}->ra
 ; CHECK-NOT: C.BSTART.STD{{[[:space:]]+}}ICALL
 ; CHECK: <.LBB{{[0-9_]+}}>:
 ; CHECK: 02 00{{[[:space:]]+}}C.BSTART DIRECT, [[SINK:0x[0-9a-f]+]]

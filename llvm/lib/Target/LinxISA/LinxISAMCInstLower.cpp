@@ -386,7 +386,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
   case LinxISA::BSTART_ICALL: {
     // The active fused indirect-call header carries the independent return
-    // target in its uimm5 field; the callee remains selected by SETC.TGT.
+    // target in its uimm5 field.  Its callee is the BARG.BPCN snapshot from
+    // the retiring block, established by an earlier SETC.TGT.
     OutMI.setOpcode(
         getSpecOpcode("BSTART.ICALL", /*LengthBits=*/32, /*Fields=*/1));
     OutMI.addOperand(lowerBranchTarget(0));

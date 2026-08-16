@@ -1880,19 +1880,19 @@ public:
       }
     }
 
-    // BSTART.ICALL carries its return address in an unsigned five-bit
-    // halfword displacement based at P+2.  Isolate the indirect transfer from
-    // all of its argument/callee preparation so the eventual header is always
-    // adjacent to its return landing instead of depending on block size.
-    SmallVector<MachineBasicBlock *, 32> ICallHeadSplitWorklist;
-    ICallHeadSplitWorklist.reserve(MF.size());
+    // BSTART.ICALL snapshots the retiring STD/FP block's BARG.BPCN while
+    // carrying its return address in an unsigned five-bit halfword displacement
+    // based at P+2.  Materialize BARG.BPCN with C.SETC.TGT before splitting off
+    // the indirect transfer.  This both preserves the architectural snapshot
+    // order and keeps the eventual header adjacent to its return landing.
+    SmallVector<MachineBasicBlock *, 32> ICallPrepSplitWorklist;
+    ICallPrepSplitWorklist.reserve(MF.size());
     for (MachineBasicBlock &MBB : MF)
-      ICallHeadSplitWorklist.push_back(&MBB);
+      ICallPrepSplitWorklist.push_back(&MBB);
 
-    while (!ICallHeadSplitWorklist.empty()) {
-      MachineBasicBlock *MBB = ICallHeadSplitWorklist.pop_back_val();
+    while (!ICallPrepSplitWorklist.empty()) {
+      MachineBasicBlock *MBB = ICallPrepSplitWorklist.pop_back_val();
       MachineInstr *ICall = nullptr;
-      bool HasRealInstrBefore = false;
       for (MachineInstr &MI : *MBB) {
         if (MI.isDebugInstr() || MI.isCFIInstruction() || isMarkerInstr(MI))
           continue;
@@ -1904,14 +1904,16 @@ public:
           ICall = &MI;
           break;
         }
-        HasRealInstrBefore = true;
       }
-      if (!ICall || !HasRealInstrBefore)
+      if (!ICall)
         continue;
 
+      BuildMI(*MBB, ICall->getIterator(), ICall->getDebugLoc(),
+              TII.get(LinxISA::CSETC_TGT))
+          .addReg(ICall->getOperand(0).getReg());
       MachineBasicBlock *ICallBB = splitBeforeInstr(*MBB, *ICall);
+      recomputeLiveIns(*MBB);
       recomputeLiveIns(*ICallBB);
-      ICallHeadSplitWorklist.push_back(ICallBB);
       Changed = true;
     }
 
@@ -3934,7 +3936,7 @@ public:
       std::optional<Register>
           HeaderSetcTgtReg; // inserted immediately after BSTART
       std::optional<Register>
-          ICallSetcTgtReg; // inserted after callee is computed (ICALL)
+          IndirectSetcTgtReg; // IND target selected within its transfer block
 
       // Identify the last two non-debug, non-marker instructions.
       MachineInstr *Last = nullptr;
@@ -3957,7 +3959,7 @@ public:
           CallTargetOp = Last->getOperand(0);
           if (CallTargetOp->isReg()) {
             Kind = ExitKind::Ind;
-            ICallSetcTgtReg = CallTargetOp->getReg();
+            IndirectSetcTgtReg = CallTargetOp->getReg();
           } else {
             Kind = ExitKind::Direct;
           }
@@ -3968,7 +3970,7 @@ public:
         case LinxISA::PSEUDO_TAILICALL: {
           CallTargetOp = Last->getOperand(0);
           Kind = ExitKind::Ind;
-          ICallSetcTgtReg = CallTargetOp->getReg();
+          IndirectSetcTgtReg = CallTargetOp->getReg();
           Last->eraseFromParent();
           Changed = true;
           break;
@@ -3977,7 +3979,6 @@ public:
           CallTargetOp = Last->getOperand(0);
           if (CallTargetOp->isReg()) {
             Kind = ExitKind::ICall;
-            ICallSetcTgtReg = CallTargetOp->getReg();
           } else {
             Kind = ExitKind::Call;
           }
@@ -4000,7 +4001,6 @@ public:
         case LinxISA::PSEUDO_ICALL: {
           CallTargetOp = Last->getOperand(0);
           Kind = ExitKind::ICall;
-          ICallSetcTgtReg = CallTargetOp->getReg();
           if (!MBB.succ_empty())
             ReturnBB = *MBB.succ_begin();
           if (ReturnBB && DecoupledBodyBBs.contains(ReturnBB))
@@ -5834,7 +5834,7 @@ public:
           Changed = true;
         }
 
-        if (ICallSetcTgtReg) {
+        if (IndirectSetcTgtReg) {
           auto InsertSetcTgt = std::next(BStartMI->getIterator());
           if (SetRetMI)
             InsertSetcTgt = std::next(SetRetMI->getIterator());
@@ -5843,14 +5843,14 @@ public:
           for (auto It = InsertSetcTgt, E = MBB.instr_end(); It != E; ++It) {
             if (It->isDebugInstr() || isMarkerInstr(*It))
               continue;
-            if (It->modifiesRegister(*ICallSetcTgtReg, &TRI)) {
+            if (It->modifiesRegister(*IndirectSetcTgtReg, &TRI)) {
               InsertAfterCalleeDef = std::next(It);
             }
           }
 
           BuildMI(MBB, InsertAfterCalleeDef, DebugLoc(),
                   TII.get(LinxISA::CSETC_TGT))
-              .addReg(*ICallSetcTgtReg);
+              .addReg(*IndirectSetcTgtReg);
           Changed = true;
         }
 
