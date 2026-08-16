@@ -1,0 +1,28 @@
+# RUN: llc -mtriple=linx64 -start-after=linx-blockify -filetype=asm %s -o - | FileCheck %s --check-prefix=ASM
+# RUN: llc -mtriple=linx64 -start-after=linx-blockify -filetype=obj %s -o %t
+# RUN: llvm-objdump -d --triple=linx64 %t | FileCheck %s --check-prefix=OBJ
+
+# A legacy internal BSTART_STD_ICALL can still be present in MIR produced by
+# an earlier pipeline stage. It must lower to a legal 0.58.1 compressed ICALL
+# header instead of looking up the removed 32-bit BSTART.STD ICALL form.
+# ASM: C.BSTART.STD{{[[:space:]]+}}ICALL
+# OBJ: C.BSTART.STD{{[[:space:]]+}}ICALL
+
+--- |
+  define void @legacy_icall_header() {
+  entry:
+    ret void
+  }
+...
+---
+name:            legacy_icall_header
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  bb.0.entry:
+    BSTART_STD_ICALL
+    BSTOP
+...

@@ -381,8 +381,11 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::BSTART_STD_ICALL: {
+    // This legacy internal opcode has no operands. Preserve its ICALL branch
+    // type while lowering it to the active PTO ISA 0.58.1 compressed header.
     OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("BSTART.STD ICALL", /*LengthBits=*/32));
+        getSpecOpcode("C.BSTART.STD", /*LengthBits=*/16, /*Fields=*/1));
+    OutMI.addOperand(MCOperand::createImm(6)); // BrType=ICALL
     return;
   }
   case LinxISA::BSTART_STD_RET: {
@@ -2713,7 +2716,8 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::FRET_STK: {
     // PTO ISA 0.58.1 fixes the begin endpoint to ra (R10), so only DstEnd
     // and uimm remain in the generated encoding fields.
-    assert(I(0) == 10 && "FRET.STK begin register must be ra");
+    if (I(0) != 10)
+      report_fatal_error("Linx: FRET.STK begin register must be ra");
     OutMI.setOpcode(getSpecOpcode("FRET.STK", /*LengthBits=*/32, /*Fields=*/2));
     OutMI.addOperand(MCOperand::createImm(I(1))); // reg_end
     OutMI.addOperand(MCOperand::createImm(I(2))); // stacksize
