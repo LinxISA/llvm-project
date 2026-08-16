@@ -470,7 +470,7 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   def BSTART_STD_COND  : LinxISAInst<(outs), (ins BrTarget:$dst), "", []>;
   def BSTART_STD_CALL  : LinxISAInst<(outs), (ins CallTarget:$dst), "", []>;
   def BSTART_STD_IND   : LinxISAInst<(outs), (ins), "", []>;
-  def BSTART_STD_ICALL : LinxISAInst<(outs), (ins), "", []>;
+  def BSTART_ICALL     : LinxISAInst<(outs), (ins BrTarget:$ret), "", []>;
   def BSTART_STD_RET   : LinxISAInst<(outs), (ins), "", []>;
 }
 

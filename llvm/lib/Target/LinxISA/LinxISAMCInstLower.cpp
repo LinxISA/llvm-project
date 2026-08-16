@@ -341,9 +341,13 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   switch (Opc) {
   case LinxISA::CBSTART_STD: {
     // Compressed block start marker: `C.BSTART.STD BrType`.
+    const int64_t BrType = I(0);
+    if (BrType != 1 && BrType != 5 && BrType != 7)
+      report_fatal_error(
+          "Linx: invalid C.BSTART.STD BrType (expected FALL, IND, or RET)");
     OutMI.setOpcode(
         getSpecOpcode("C.BSTART.STD", /*LengthBits=*/16, /*Fields=*/1));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // BrType
+    OutMI.addOperand(MCOperand::createImm(BrType));
     return;
   }
 
@@ -380,12 +384,12 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD IND", /*LengthBits=*/32));
     return;
   }
-  case LinxISA::BSTART_STD_ICALL: {
-    // This legacy internal opcode has no operands. Preserve its ICALL branch
-    // type while lowering it to the active PTO ISA 0.58.1 compressed header.
+  case LinxISA::BSTART_ICALL: {
+    // The active fused indirect-call header carries the independent return
+    // target in its uimm5 field; the callee remains selected by SETC.TGT.
     OutMI.setOpcode(
-        getSpecOpcode("C.BSTART.STD", /*LengthBits=*/16, /*Fields=*/1));
-    OutMI.addOperand(MCOperand::createImm(6)); // BrType=ICALL
+        getSpecOpcode("BSTART.ICALL", /*LengthBits=*/32, /*Fields=*/1));
+    OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
   case LinxISA::BSTART_STD_RET: {

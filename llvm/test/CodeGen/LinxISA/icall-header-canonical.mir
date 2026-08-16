@@ -1,0 +1,31 @@
+# RUN: llc -mtriple=linx64 -start-after=linx-blockify -filetype=asm %s -o - | FileCheck %s --check-prefix=ASM
+# RUN: llc -mtriple=linx64 -start-after=linx-blockify -filetype=obj %s -o %t
+# RUN: llvm-objdump -d --triple=linx64 %t | FileCheck %s --check-prefix=OBJ
+
+# The CodeGen ICALL header must carry its semantic return block in the active
+# 32-bit BSTART.ICALL uimm5 field. With the return block at byte 6, the field is
+# 2 halfwords from its P+2 base and the catalog-derived bytes are 01609650.
+# ASM: BSTART.ICALL{{[[:space:]]+}}.LBB0_1,{{[[:space:]]+}}->ra
+# OBJ: 0: 01 60 96 50{{[[:space:]]+}}BSTART.ICALL{{[[:space:]]+}}0x6,{{[[:space:]]+}}->ra
+
+--- |
+  define void @canonical_icall_header() {
+  entry:
+    ret void
+  }
+...
+---
+name:            canonical_icall_header
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  bb.0.entry:
+    BSTART_ICALL %bb.1
+    BSTOP
+
+  bb.1:
+    BSTOP
+...

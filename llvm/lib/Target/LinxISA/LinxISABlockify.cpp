@@ -370,7 +370,7 @@ static bool isMarkerInstr(const MachineInstr &MI) {
   case LinxISA::BSTART_STD_COND:
   case LinxISA::BSTART_STD_CALL:
   case LinxISA::BSTART_STD_IND:
-  case LinxISA::BSTART_STD_ICALL:
+  case LinxISA::BSTART_ICALL:
   case LinxISA::BSTART_STD_RET:
   case LinxISA::BSTART_TLSU:
   case LinxISA::BSTART_CUBE:
@@ -2196,7 +2196,7 @@ public:
             It->getOpcode() == LinxISA::BSTART_STD_COND ||
             It->getOpcode() == LinxISA::BSTART_STD_CALL ||
             It->getOpcode() == LinxISA::BSTART_STD_IND ||
-            It->getOpcode() == LinxISA::BSTART_STD_ICALL ||
+            It->getOpcode() == LinxISA::BSTART_ICALL ||
             It->getOpcode() == LinxISA::BSTART_STD_RET) {
           It = MBB.erase(It);
           Changed = true;
@@ -3338,7 +3338,7 @@ public:
         case LinxISA::BSTART_STD_COND:
         case LinxISA::BSTART_STD_CALL:
         case LinxISA::BSTART_STD_IND:
-        case LinxISA::BSTART_STD_ICALL:
+        case LinxISA::BSTART_ICALL:
         case LinxISA::BSTART_STD_RET:
           return true;
         default:
@@ -5655,7 +5655,7 @@ public:
              InsertBStart->getOpcode() == LinxISA::BSTART_STD_COND ||
              InsertBStart->getOpcode() == LinxISA::BSTART_STD_CALL ||
              InsertBStart->getOpcode() == LinxISA::BSTART_STD_IND ||
-             InsertBStart->getOpcode() == LinxISA::BSTART_STD_ICALL ||
+             InsertBStart->getOpcode() == LinxISA::BSTART_ICALL ||
              InsertBStart->getOpcode() == LinxISA::BSTART_STD_RET)) {
           InsertBStart = MBB.erase(InsertBStart);
           Changed = true;
@@ -5729,23 +5729,13 @@ public:
                          .getInstr();
           break;
         case ExitKind::ICall:
-          // Prefer the compressed BrType marker: C.BSTART (ICALL).
+          if (!ReturnBB)
+            report_fatal_error("Linx: missing indirect-call return target");
+          ReturnBB->setLabelMustBeEmitted();
           BStartMI = BuildMI(MBB, InsertBStart, DebugLoc(),
-                             TII.get(LinxISA::CBSTART_STD))
-                         .addImm(6) // BrType = ICALL
+                             TII.get(LinxISA::BSTART_ICALL))
+                         .addMBB(ReturnBB)
                          .getInstr();
-          // Indirect calls behave like CALL blocks but select the callee via
-          // SETC.TGT. Emit SETRET so the continuation block is reachable after
-          // the callee returns. SETRET must be immediately after the BSTART
-          // header.
-          if (ReturnBB) {
-            ReturnBB->setLabelMustBeEmitted();
-            auto InsertSetRet = std::next(BStartMI->getIterator());
-            SetRetMI =
-                BuildMI(MBB, InsertSetRet, DebugLoc(), TII.get(LinxISA::SETRET))
-                    .addMBB(ReturnBB)
-                    .getInstr();
-          }
           break;
         }
         Changed = true;
@@ -5862,15 +5852,14 @@ public:
         auto markerHasImplicitAbiUses = [&](const MachineInstr &MI) -> bool {
           const unsigned Opc = MI.getOpcode();
           if (Opc == LinxISA::BSTART_STD_CALL ||
-              Opc == LinxISA::BSTART_STD_ICALL ||
+              Opc == LinxISA::BSTART_ICALL ||
               Opc == LinxISA::BSTART_STD_RET) {
             return true;
           }
           if (Opc == LinxISA::CBSTART_STD && MI.getNumOperands() >= 1 &&
               MI.getOperand(0).isImm()) {
             const int64_t BrType = MI.getOperand(0).getImm() & 0x7;
-            return BrType == 4 /*CALL*/ || BrType == 6 /*ICALL*/ ||
-                   BrType == 7 /*RET*/;
+            return BrType == 7 /*RET*/;
           }
           return false;
         };

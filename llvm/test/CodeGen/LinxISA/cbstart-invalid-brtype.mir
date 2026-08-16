@@ -1,0 +1,23 @@
+# RUN: not --crash llc -mtriple=linx64 -start-after=linx-blockify -filetype=obj %s -o /dev/null 2>&1 | FileCheck %s
+
+# C.BSTART.STD permits only FALL=1, IND=5, and RET=7 in PTO ISA 0.58.1.
+# CHECK: LLVM ERROR: Linx: invalid C.BSTART.STD BrType (expected FALL, IND, or RET)
+
+--- |
+  define void @invalid_cbstart_icall_selector() {
+  entry:
+    ret void
+  }
+...
+---
+name:            invalid_cbstart_icall_selector
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  bb.0.entry:
+    CBSTART_STD 6
+    BSTOP
+...
