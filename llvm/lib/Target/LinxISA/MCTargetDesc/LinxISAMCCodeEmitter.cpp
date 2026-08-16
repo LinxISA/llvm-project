@@ -143,11 +143,12 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     MCFixupKind Kind = FK_NONE;
     bool PCRel = true;
     unsigned FixupOffset = 0;
-    if (Name == "simm12" && Mnemonic == "BSTART CALL") {
+    if (Name == "simm12" && Mnemonic == "BSTART.CALL") {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CBSTART12_PCREL);
     } else if (Name == "simm25" && Mnemonic == "HL.BSTART CALL") {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B25_PCREL);
-    } else if (Name == "uimm5" && Mnemonic == "BSTART CALL") {
+    } else if (Name == "uimm5" &&
+               (Mnemonic == "BSTART.CALL" || Mnemonic == "BSTART.ICALL")) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CSETRET5_PCREL);
       FixupOffset = 2;
     } else if (Name == "uimm5" && Mnemonic == "HL.BSTART CALL") {

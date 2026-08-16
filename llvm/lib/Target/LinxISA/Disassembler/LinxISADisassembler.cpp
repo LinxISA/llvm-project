@@ -63,6 +63,22 @@ static bool isSupportedLength(unsigned Bits) {
   return Bits == 16 || Bits == 32 || Bits == 48 || Bits == 64;
 }
 
+static bool isLegalCompressedStdBrType(const linxisa_inst_form &Form,
+                                       ArrayRef<int64_t> FieldVals) {
+  StringRef Mnem(Form.mnemonic ? Form.mnemonic : "");
+  if (Mnem != "C.BSTART.STD")
+    return true;
+
+  for (unsigned I = 0; I < Form.field_count; ++I) {
+    StringRef FieldName(linxisa_fields[Form.field_start + I].name);
+    if (FieldName != "BrType")
+      continue;
+    const int64_t BrType = FieldVals[I];
+    return BrType == 1 || BrType == 5 || BrType == 7;
+  }
+  return false;
+}
+
 static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
                                           unsigned &OutOpcode) {
   // Best-effort: pick the matching form with the most fixed bits.
@@ -257,8 +273,9 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
                                     /*InstSize=*/Size);
   };
 
-  const bool IsFusedCall32 = Mnem == "BSTART CALL";
+  const bool IsFusedCall32 = Mnem == "BSTART.CALL";
   const bool IsFusedCall48 = Mnem == "HL.BSTART CALL";
+  const bool IsFusedICall32 = Mnem == "BSTART.ICALL";
 
   auto isHalfwordPcRel = [&](StringRef FieldName) -> bool {
     // Control-flow immediates are halfword-scaled.
@@ -269,7 +286,8 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
 
   SmallVector<int64_t, 16> FieldVals;
   extractFields(*Matched, Insn, FieldVals);
-  if (!isLegalFrameTemplate(*Matched, FieldVals) ||
+  if (!isLegalCompressedStdBrType(*Matched, FieldVals) ||
+      !isLegalFrameTemplate(*Matched, FieldVals) ||
       !isLegalBIOTDestination(*Matched, FieldVals)) {
     Instr.clear();
     return Fail;
@@ -307,10 +325,11 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
       WantsSym = true;
       IsBranchLike = true;
       SymValue = static_cast<int64_t>(Address) + (V << 1);
-    } else if (FieldName == "uimm5" && (IsFusedCall32 || IsFusedCall48)) {
+    } else if (FieldName == "uimm5" &&
+               (IsFusedCall32 || IsFusedCall48 || IsFusedICall32)) {
       WantsSym = true;
       IsBranchLike = true;
-      const uint64_t ReturnFieldOffset = IsFusedCall32 ? 2 : 4;
+      const uint64_t ReturnFieldOffset = IsFusedCall48 ? 4 : 2;
       SymValue = static_cast<int64_t>(Address + ReturnFieldOffset) + (V << 1);
       if (tryAddingSymbolicOperand(Instr, SymValue, Address, IsBranchLike,
                                    /*Offset=*/ReturnFieldOffset,

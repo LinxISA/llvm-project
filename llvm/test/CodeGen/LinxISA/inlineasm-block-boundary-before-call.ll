@@ -13,10 +13,10 @@ entry:
 }
 
 ; CHECK-LABEL: inlineasm_boundary_before_vararg_call:
-; CHECK-NOT: BSTART{{[[:space:]]+}}CALL, printf
+; CHECK-NOT: HL.BSTART.STD{{[[:space:]]+}}CALL, printf
 ; CHECK: {{# APP}}
 ; CHECK: acrc
 ; CHECK: C.BSTOP
 ; CHECK: C.BSTART
 ; CHECK: {{# NO_APP}}
-; CHECK: BSTART{{[[:space:]]+}}CALL, printf{{(@plt)?}}, ra=
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, printf{{(@plt)?}}, ra=

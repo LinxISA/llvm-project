@@ -4,13 +4,13 @@
 
 #--- ok.s
 # CHECK-LABEL: <caller>:
-# CHECK: BSTART{{(\.STD)?}}{{[[:space:]]+}}CALL, callee, ra=
+# CHECK: BSTART.CALL{{[[:space:]]+}}callee, 0x4, ->ra
 # CHECK-NOT: setret
 	.text
 	.globl caller
 	.type caller,@function
 caller:
-	BSTART CALL, callee, ra=.Lret
+	BSTART.CALL callee, .Lret, ->ra
 .Lret:
 	C.BSTOP
 	.size caller, .-caller

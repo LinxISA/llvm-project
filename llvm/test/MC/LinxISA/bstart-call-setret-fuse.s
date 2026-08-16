@@ -1,15 +1,15 @@
 # RUN: llvm-mc -triple=linx64 -filetype=obj %s -o - | llvm-objdump -d --triple=linx64 - | FileCheck %s
 
 # CHECK-LABEL: <foo>:
-# CHECK: {{(HL\.)?BSTART(\.STD)?}} CALL, bar, ra=foo_ret
+# CHECK: BSTART.CALL{{[[:space:]]+}}bar, 0x4, ->ra
 # CHECK-NOT: setret
 
 	.text
 	.globl	foo
 	.type	foo,@function
 foo:
-	# Fused syntax (textual sugar): still encodes as BSTART CALL + C.SETRET.
-	BSTART	CALL, bar, ra=foo_ret
+	# PTO ISA 0.58.1 returning calls are a single atomic instruction.
+	BSTART.CALL	bar, foo_ret, ->ra
 foo_ret:
 	C.BSTOP
 	.size	foo, .-foo

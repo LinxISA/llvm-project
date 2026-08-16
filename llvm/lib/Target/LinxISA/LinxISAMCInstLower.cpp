@@ -341,9 +341,13 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   switch (Opc) {
   case LinxISA::CBSTART_STD: {
     // Compressed block start marker: `C.BSTART.STD BrType`.
+    const int64_t BrType = I(0);
+    if (BrType != 1 && BrType != 5 && BrType != 7)
+      report_fatal_error(
+          "Linx: invalid C.BSTART.STD BrType (expected FALL, IND, or RET)");
     OutMI.setOpcode(
         getSpecOpcode("C.BSTART.STD", /*LengthBits=*/16, /*Fields=*/1));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // BrType
+    OutMI.addOperand(MCOperand::createImm(BrType));
     return;
   }
 
@@ -369,8 +373,10 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::BSTART_STD_CALL: {
-    OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("BSTART.STD CALL, <label>", /*LengthBits=*/32));
+    // The standalone long CALL plus relaxable SETRET pair remains necessary
+    // when the return block is outside the atomic BSTART.CALL uimm5 range.
+    OutMI.setOpcode(getSpecOpcodeByAsmFmt("HL.BSTART.STD CALL, <label>",
+                                          /*LengthBits=*/48));
     OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
@@ -378,9 +384,12 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(getSpecOpcodeByAsmFmt("BSTART.STD IND", /*LengthBits=*/32));
     return;
   }
-  case LinxISA::BSTART_STD_ICALL: {
+  case LinxISA::BSTART_ICALL: {
+    // The active fused indirect-call header carries the independent return
+    // target in its uimm5 field; the callee remains selected by SETC.TGT.
     OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("BSTART.STD ICALL", /*LengthBits=*/32));
+        getSpecOpcode("BSTART.ICALL", /*LengthBits=*/32, /*Fields=*/1));
+    OutMI.addOperand(lowerBranchTarget(0));
     return;
   }
   case LinxISA::BSTART_STD_RET: {
@@ -2709,9 +2718,11 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   }
 
   case LinxISA::FRET_STK: {
-    // FRET.STK [Begin ~ End], sp!, stacksize
-    OutMI.setOpcode(getSpecOpcode("FRET.STK", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // reg_begin
+    // PTO ISA 0.58.1 fixes the begin endpoint to ra (R10), so only DstEnd
+    // and uimm remain in the generated encoding fields.
+    if (I(0) != 10)
+      report_fatal_error("Linx: FRET.STK begin register must be ra");
+    OutMI.setOpcode(getSpecOpcode("FRET.STK", /*LengthBits=*/32, /*Fields=*/2));
     OutMI.addOperand(MCOperand::createImm(I(1))); // reg_end
     OutMI.addOperand(MCOperand::createImm(I(2))); // stacksize
     return;

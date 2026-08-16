@@ -4,7 +4,7 @@
 	.globl caller
 	.type caller,@function
 caller:
-	BSTART CALL, callee
+	HL.BSTART.STD CALL, callee
 .Lret:
 	setret .Lret
 	C.BSTOP
@@ -18,4 +18,4 @@ callee:
 	.size callee, .-callee
 
 # CHECK: RELOCATION RECORDS FOR [.text]:
-# CHECK: R_LINX_B25_PCREL{{[[:space:]]+}}callee
+# CHECK: R_LINX_HL_BSTART30_PCREL{{[[:space:]]+}}callee

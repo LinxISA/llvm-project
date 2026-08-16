@@ -14,7 +14,9 @@ entry:
 }
 
 ; CHECK-LABEL: call_indirect_vararg_shape:
-; CHECK: C.BSTART.STD{{[[:space:]]+}}ICALL
 ; CHECK: {{(hl\.)?}}ld{{.*}},{{[[:space:]]+}}->{{(t|x[0-3])}}
+; CHECK: BSTART.ICALL{{[[:space:]]+}}[[RET:\.LBB[0-9_]+]],{{[[:space:]]+}}->ra
+; CHECK-NOT: setret
 ; CHECK: c.setc.tgt{{[[:space:]]+}}{{(t#1|x[0-3])}}
 ; CHECK-NOT: c.setc.tgt{{[[:space:]]+}}a0
+; CHECK: [[RET]]:

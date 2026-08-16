@@ -557,13 +557,10 @@ static std::optional<std::string> getLegacyAliasDiag(StringRef Mnemonic) {
   const std::string Up = toUpperStr(Mnemonic);
   const StringRef Key(Up);
 
-  if (Key == "L.BSTOP")
-    return "legacy alias 'L.BSTOP' is not allowed in canonical PTO 0.58; use "
-           "'C.BSTOP'";
-
-  const bool IsCanonicalLongBStart =
-      Key == "L.BSTART.STD" || Key == "L.BSTART.FP" || Key == "L.BSTART.SYS";
-  if (Key.starts_with("L.") && !IsCanonicalLongBStart)
+  const bool IsCanonicalLongForm = Key == "L.BSTOP" || Key == "L.BSTART.STD" ||
+                                   Key == "L.BSTART.FP" ||
+                                   Key == "L.BSTART.SYS";
+  if (Key.starts_with("L.") && !IsCanonicalLongForm)
     return "legacy 'L.*' mnemonics are not allowed in canonical PTO 0.58; use "
            "canonical "
            "mnemonics (for example 'V.*' and typed BSTART.* forms)";
@@ -1612,7 +1609,8 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
           break;
         }
         if (Fmt.contains("[RegSrc0 ~ RegSrcn]") ||
-            Fmt.contains("[RegDst0 ~ RegDstn]"))
+            Fmt.contains("[RegDst0 ~ RegDstn]") ||
+            Fmt.contains("[ra ~ RegDstn]"))
           AllowFrameRangeOperands = true;
       }
       for (unsigned FormIndex : It->second) {
@@ -2103,7 +2101,8 @@ static bool hasField(const linxisa_inst_form &Form, StringRef FieldName) {
 
 static bool isFrameTemplateForm(StringRef AsmFmt) {
   return AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
-         AsmFmt.contains("[RegDst0 ~ RegDstn]");
+         AsmFmt.contains("[RegDst0 ~ RegDstn]") ||
+         AsmFmt.contains("[ra ~ RegDstn]");
 }
 
 static bool isFrameTemplateEndpoint(unsigned Reg) {
@@ -2213,6 +2212,26 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (!require(!AsmFmt.starts_with_insensitive("FRET.STK") || Begin == 10u,
                  "FRET.STK frame template begin register must be R10"))
       return false;
+
+    // Frame fields are generated in encoding order, which is not necessarily
+    // the source operand order.  Emit the parsed range endpoints by field name;
+    // FRET.STK 0.58.1 fixes the begin endpoint to ra and therefore has no
+    // DstBegin field at all.
+    for (unsigned I = 0; I < Form.field_count; ++I) {
+      const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+      StringRef Name(Field.name ? Field.name : "");
+      if (Name == "SrcBegin" || Name == "DstBegin")
+        emitFieldImm(Begin);
+      else if (Name == "SrcEnd" || Name == "DstEnd")
+        emitFieldImm(End);
+      else if (Name == "uimm")
+        emitFieldImm(FrameBytes);
+      else {
+        Err = (Twine("unexpected frame template field '") + Name + "'").str();
+        return false;
+      }
+    }
+    return true;
   }
 
   // Special-case: setret/c.setret/hl.setret.
@@ -2246,7 +2265,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
 
   // BSTOP/C.BSTOP: no operands.
   if (AsmFmt.equals_insensitive("bstop") ||
-      AsmFmt.equals_insensitive("c.bstop")) {
+      AsmFmt.equals_insensitive("c.bstop") ||
+      AsmFmt.equals_insensitive("l.bstop")) {
     if (!require(Form.field_count == 0, "unexpected bstop field layout"))
       return false;
     if (!require(PI.Regs.empty() && PI.Imms.empty() && PI.Keywords.empty() &&
@@ -2291,6 +2311,33 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       else
         emitFieldExpr(Imm.Expr);
     }
+    return true;
+  }
+
+  // The 32-bit fused indirect call carries only the independent return target.
+  // Its C.SETRET-compatible field is based at the upper halfword (P+2).
+  if (AsmFmt.starts_with_insensitive("BSTART.ICALL ")) {
+    if (!require(PI.Regs.empty() && PI.Keywords.empty() && !PI.Mem &&
+                     !PI.SetRetTarget,
+                 "unexpected operands for fused BSTART.ICALL"))
+      return false;
+    if (!require(PI.Imms.size() == 1,
+                 "expected return target for fused BSTART.ICALL"))
+      return false;
+    if (!require(PI.ArrowDests.size() == 1 && PI.ArrowDests[0].Code == 10,
+                 "fused BSTART.ICALL destination must be ->ra"))
+      return false;
+    if (!require(Form.field_count == 1 &&
+                     StringRef(linxisa_fields[Form.field_start].name) ==
+                         "uimm5",
+                 "unexpected fused BSTART.ICALL field contract"))
+      return false;
+
+    int64_t Value = 0;
+    if (isConstExpr(PI.Imms[0].Expr, Value))
+      emitFieldImm(Value);
+    else
+      emitFieldExpr(PI.Imms[0].Expr);
     return true;
   }
 
@@ -2354,6 +2401,15 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         !require(BrTypeVal.has_value(), "expected branch kind (BrType)"))
       return false;
 
+    // The compressed standard header only encodes the canonical compact
+    // selectors.  In particular, BrType=6 was the removed compressed ICALL
+    // spelling; accepting it here would manufacture an encoding absent from
+    // the 0.58 catalog even though the generic BrType field can hold it.
+    if (AsmFmt.equals_insensitive("C.BSTART.STD {FALL, IND, RET}") &&
+        !require(*BrTypeVal == 1 || *BrTypeVal == 5 || *BrTypeVal == 7,
+                 "C.BSTART.STD branch kind must be FALL, IND, or RET"))
+      return false;
+
     // If the encoding does not carry BrType, ensure the requested kind matches
     // the chosen encoding.
     if (!HasBrTypeField && BrTypeVal.has_value()) {
@@ -2413,10 +2469,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       if (FN == "reserve") {
         if (AsmFmt.equals_insensitive("BSTART.FP RET") ||
             AsmFmt.equals_insensitive("BSTART.FP IND") ||
-            AsmFmt.equals_insensitive("BSTART.FP ICALL") ||
             AsmFmt.equals_insensitive("BSTART.STD RET") ||
-            AsmFmt.equals_insensitive("BSTART.STD IND") ||
-            AsmFmt.equals_insensitive("BSTART.STD ICALL")) {
+            AsmFmt.equals_insensitive("BSTART.STD IND")) {
           emitFieldImm(129);
           continue;
         }
@@ -3245,6 +3299,49 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     return true;
   }
 
+  // B.FPATR's generated fields are stored in canonical field-name order,
+  // while its assembly operands follow the architectural descriptor order.
+  if (AsmFmt.starts_with("B.FPATR")) {
+    if (!require(PI.Regs.empty() && PI.Keywords.empty() && !PI.Mem &&
+                     PI.ArrowDests.empty() && !PI.SetRetTarget,
+                 "unexpected operands for B.FPATR"))
+      return false;
+    if (!require(PI.Imms.size() == 7,
+                 "expected seven descriptor fields for B.FPATR"))
+      return false;
+
+    auto sourceIndex = [](StringRef FieldName) -> std::optional<unsigned> {
+      return StringSwitch<std::optional<unsigned>>(FieldName)
+          .Case("PreQuantMode", 0u)
+          .Case("ReluMode", 1u)
+          .Case("GroupNCode", 2u)
+          .Case("RowMaxEn", 3u)
+          .Case("GroupMaxEn", 4u)
+          .Case("RowMaxInit", 5u)
+          .Case("MaxAbsEn", 6u)
+          .Default(std::nullopt);
+    };
+
+    for (unsigned I = 0; I < Form.field_count; ++I) {
+      const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+      const StringRef FieldName(Field.name);
+      const std::optional<unsigned> Source = sourceIndex(FieldName);
+      if (!require(Source.has_value(),
+                   ("unsupported B.FPATR field: " + FieldName).str()))
+        return false;
+      int64_t Value = 0;
+      if (!require(isConstExpr(PI.Imms[*Source].Expr, Value),
+                   (FieldName + " must be a constant").str()))
+        return false;
+      const uint64_t Limit = uint64_t{1} << Field.bit_width;
+      if (!require(Value >= 0 && static_cast<uint64_t>(Value) < Limit,
+                   (FieldName + " does not fit its encoded field").str()))
+        return false;
+      emitFieldImm(Value);
+    }
+    return true;
+  }
+
   // Non-memory ops: map register sources in common order and immediates in
   // field order. SrcRType/shamt are treated as attributes of SrcR when present.
   if (!require(!PI.Mem.has_value(), "unexpected memory operand"))
@@ -3724,10 +3821,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (FN == "reserve") {
       if (AsmFmt.equals_insensitive("BSTART.FP RET") ||
           AsmFmt.equals_insensitive("BSTART.FP IND") ||
-          AsmFmt.equals_insensitive("BSTART.FP ICALL") ||
           AsmFmt.equals_insensitive("BSTART.STD RET") ||
-          AsmFmt.equals_insensitive("BSTART.STD IND") ||
-          AsmFmt.equals_insensitive("BSTART.STD ICALL")) {
+          AsmFmt.equals_insensitive("BSTART.STD IND")) {
         emitFieldImm(129);
         continue;
       }
