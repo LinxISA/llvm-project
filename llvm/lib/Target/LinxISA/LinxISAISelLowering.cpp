@@ -1775,8 +1775,8 @@ LinxISATargetLowering::LowerCall(CallLoweringInfo &CLI,
     Callee = DAG.getTargetExternalSymbol(E->getSymbol(), PtrVT, LinxII::MO_PLT);
   } else {
     // Indirect call: Callee is a value (register) computed by the program.
-    // The BlockISA lowering pass will translate this into an ICALL block using
-    // SETC.TGT to select the target.
+    // The BlockISA lowering pass will translate this into an ICALL block after
+    // SETC.TGT snapshots the target into the retiring block's BARG.BPCN.
     IsIndirectCall = true;
     if (Callee.getValueType() != PtrVT) {
       Callee = DAG.getNode(ISD::ZERO_EXTEND, DL, PtrVT, Callee);
