@@ -63,6 +63,22 @@ static bool isSupportedLength(unsigned Bits) {
   return Bits == 16 || Bits == 32 || Bits == 48 || Bits == 64;
 }
 
+static bool isLegalCompressedStdBrType(const linxisa_inst_form &Form,
+                                       ArrayRef<int64_t> FieldVals) {
+  StringRef Mnem(Form.mnemonic ? Form.mnemonic : "");
+  if (Mnem != "C.BSTART.STD")
+    return true;
+
+  for (unsigned I = 0; I < Form.field_count; ++I) {
+    StringRef FieldName(linxisa_fields[Form.field_start + I].name);
+    if (FieldName != "BrType")
+      continue;
+    const int64_t BrType = FieldVals[I];
+    return BrType == 1 || BrType == 5 || BrType == 7;
+  }
+  return false;
+}
+
 static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
                                           unsigned &OutOpcode) {
   // Best-effort: pick the matching form with the most fixed bits.
@@ -270,7 +286,8 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
 
   SmallVector<int64_t, 16> FieldVals;
   extractFields(*Matched, Insn, FieldVals);
-  if (!isLegalFrameTemplate(*Matched, FieldVals) ||
+  if (!isLegalCompressedStdBrType(*Matched, FieldVals) ||
+      !isLegalFrameTemplate(*Matched, FieldVals) ||
       !isLegalBIOTDestination(*Matched, FieldVals)) {
     Instr.clear();
     return Fail;

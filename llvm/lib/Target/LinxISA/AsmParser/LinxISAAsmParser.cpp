@@ -2401,6 +2401,15 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         !require(BrTypeVal.has_value(), "expected branch kind (BrType)"))
       return false;
 
+    // The compressed standard header only encodes the canonical compact
+    // selectors.  In particular, BrType=6 was the removed compressed ICALL
+    // spelling; accepting it here would manufacture an encoding absent from
+    // the 0.58 catalog even though the generic BrType field can hold it.
+    if (AsmFmt.equals_insensitive("C.BSTART.STD {FALL, IND, RET}") &&
+        !require(*BrTypeVal == 1 || *BrTypeVal == 5 || *BrTypeVal == 7,
+                 "C.BSTART.STD branch kind must be FALL, IND, or RET"))
+      return false;
+
     // If the encoding does not carry BrType, ensure the requested kind matches
     // the chosen encoding.
     if (!HasBrTypeField && BrTypeVal.has_value()) {

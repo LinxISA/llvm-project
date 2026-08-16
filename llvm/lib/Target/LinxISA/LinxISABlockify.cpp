@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -1877,6 +1878,92 @@ public:
         Changed = true;
         break;
       }
+    }
+
+    // BSTART.ICALL carries its return address in an unsigned five-bit
+    // halfword displacement based at P+2.  Isolate the indirect transfer from
+    // all of its argument/callee preparation so the eventual header is always
+    // adjacent to its return landing instead of depending on block size.
+    SmallVector<MachineBasicBlock *, 32> ICallHeadSplitWorklist;
+    ICallHeadSplitWorklist.reserve(MF.size());
+    for (MachineBasicBlock &MBB : MF)
+      ICallHeadSplitWorklist.push_back(&MBB);
+
+    while (!ICallHeadSplitWorklist.empty()) {
+      MachineBasicBlock *MBB = ICallHeadSplitWorklist.pop_back_val();
+      MachineInstr *ICall = nullptr;
+      bool HasRealInstrBefore = false;
+      for (MachineInstr &MI : *MBB) {
+        if (MI.isDebugInstr() || MI.isCFIInstruction() || isMarkerInstr(MI))
+          continue;
+        const bool IsIndirect =
+            MI.getOpcode() == LinxISA::PSEUDO_ICALL ||
+            (MI.getOpcode() == LinxISA::PSEUDO_CALL &&
+             MI.getNumOperands() != 0 && MI.getOperand(0).isReg());
+        if (IsIndirect) {
+          ICall = &MI;
+          break;
+        }
+        HasRealInstrBefore = true;
+      }
+      if (!ICall || !HasRealInstrBefore)
+        continue;
+
+      MachineBasicBlock *ICallBB = splitBeforeInstr(*MBB, *ICall);
+      recomputeLiveIns(*ICallBB);
+      ICallHeadSplitWorklist.push_back(ICallBB);
+      Changed = true;
+    }
+
+    // Give every indirect call a physically adjacent landing block.  A normal
+    // landing immediately transfers to the original semantic continuation.
+    // A noreturn call has no continuation; if it unexpectedly returns, use a
+    // self-looping DIRECT block as a fail-closed sink.  In both cases the
+    // BSTART.ICALL uimm5 target is the nearby landing, never an invented raw
+    // selector or a truncated displacement.
+    SmallVector<MachineBasicBlock *, 32> ICallBlocks;
+    for (MachineBasicBlock &MBB : MF) {
+      for (MachineInstr &MI : MBB) {
+        const bool IsIndirect =
+            MI.getOpcode() == LinxISA::PSEUDO_ICALL ||
+            (MI.getOpcode() == LinxISA::PSEUDO_CALL &&
+             MI.getNumOperands() != 0 && MI.getOperand(0).isReg());
+        if (IsIndirect) {
+          ICallBlocks.push_back(&MBB);
+          break;
+        }
+      }
+    }
+
+    for (MachineBasicBlock *ICallBB : ICallBlocks) {
+      if (ICallBB->succ_size() > 1)
+        report_fatal_error(
+            "Linx: indirect-call block has multiple return continuations");
+
+      MachineBasicBlock *SemanticReturn =
+          ICallBB->succ_empty() ? nullptr : *ICallBB->succ_begin();
+      if (SemanticReturn && DecoupledBodyBBs.contains(SemanticReturn))
+        report_fatal_error(
+            "Linx: indirect-call return targets a decoupled body");
+
+      MachineFunction &MF = *ICallBB->getParent();
+      auto *LandingBB = MF.CreateMachineBasicBlock(ICallBB->getBasicBlock());
+      MF.insert(std::next(ICallBB->getIterator()), LandingBB);
+      LandingBB->setLabelMustBeEmitted();
+
+      if (SemanticReturn) {
+        LandingBB->transferSuccessorsAndUpdatePHIs(ICallBB);
+        BuildMI(*LandingBB, LandingBB->end(), DebugLoc(),
+                TII.get(LinxISA::JUMP))
+            .addMBB(SemanticReturn);
+      } else {
+        LandingBB->addSuccessor(LandingBB);
+        BuildMI(*LandingBB, LandingBB->end(), DebugLoc(),
+                TII.get(LinxISA::JUMP))
+            .addMBB(LandingBB);
+      }
+      ICallBB->addSuccessor(LandingBB);
+      Changed = true;
     }
 
     // Ensure frame macro instructions are standalone blocks.
@@ -3894,19 +3981,16 @@ public:
           } else {
             Kind = ExitKind::Call;
           }
-          /*
-           * CALL/ICALL blocks must always carry an adjacent SETRET target under
-           * the strict call/ret contract. For no-successor (noreturn) blocks,
-           * prefer the physical next block; if that is unavailable (or points
-           * at the internal empty-body stub), fall back to this block's own
-           * label. A true noreturn callee should never consume the return
-           * target, but a concrete marker keeps the header encoding and
-           * emulator checks valid.
-           */
+          // Indirect calls were normalized above to have an adjacent landing.
+          // Direct noreturn calls retain the established full-width SETRET
+          // fallback; unlike BSTART.ICALL, that encoding is relaxable.
           if (!MBB.succ_empty())
             ReturnBB = *MBB.succ_begin();
           if (ReturnBB && DecoupledBodyBBs.contains(ReturnBB))
             ReturnBB = nullptr;
+          if (!ReturnBB && Kind == ExitKind::ICall)
+            report_fatal_error(
+                "Linx: normalized indirect call has no return landing");
           if (!ReturnBB)
             ReturnBB = &MBB;
           Last->eraseFromParent();
@@ -3922,7 +4006,8 @@ public:
           if (ReturnBB && DecoupledBodyBBs.contains(ReturnBB))
             ReturnBB = nullptr;
           if (!ReturnBB)
-            ReturnBB = &MBB;
+            report_fatal_error(
+                "Linx: normalized indirect call has no return landing");
           Last->eraseFromParent();
           Changed = true;
           break;
@@ -5851,8 +5936,7 @@ public:
         // instructions, not just the first header.
         auto markerHasImplicitAbiUses = [&](const MachineInstr &MI) -> bool {
           const unsigned Opc = MI.getOpcode();
-          if (Opc == LinxISA::BSTART_STD_CALL ||
-              Opc == LinxISA::BSTART_ICALL ||
+          if (Opc == LinxISA::BSTART_STD_CALL || Opc == LinxISA::BSTART_ICALL ||
               Opc == LinxISA::BSTART_STD_RET) {
             return true;
           }
