@@ -2232,6 +2232,57 @@ public:
       }
     };
 
+    auto transferInlineAsm = [&](const MachineInstr &MI,
+                                 TileQueueState &State) {
+      SmallVector<Register, 4> Consumed;
+      SmallVector<Register, 4> Clobbered;
+      SmallVector<Register, 4> Defined;
+
+      for (unsigned FlagNo = InlineAsm::MIOp_FirstOperand;
+           FlagNo < MI.getNumOperands();) {
+        const MachineOperand &FlagMO = MI.getOperand(FlagNo);
+        if (!FlagMO.isImm())
+          break;
+        const InlineAsm::Flag Flag(FlagMO.getImm());
+        const unsigned NumRegs = Flag.getNumOperandRegisters();
+        if (FlagNo + 1u + NumRegs > MI.getNumOperands())
+          report_fatal_error("Linx: malformed inline-asm operand descriptor");
+
+        for (unsigned I = 0; I != NumRegs; ++I) {
+          const MachineOperand &MO = MI.getOperand(FlagNo + 1u + I);
+          if (!MO.isReg() || !MO.getReg() ||
+              !LinxISA::TILERegClass.contains(MO.getReg()))
+            continue;
+
+          const Register Reg = MO.getReg();
+          if (Flag.isRegUseKind()) {
+            if (MO.isKill() && !llvm::is_contained(Consumed, Reg))
+              Consumed.push_back(Reg);
+          } else if (Flag.isRegDefKind() ||
+                     Flag.isRegDefEarlyClobberKind()) {
+            if (!llvm::is_contained(Defined, Reg))
+              Defined.push_back(Reg);
+          } else if (Flag.isClobberKind()) {
+            if (!llvm::is_contained(Clobbered, Reg))
+              Clobbered.push_back(Reg);
+          }
+        }
+        FlagNo += 1u + NumRegs;
+      }
+
+      for (Register Reg : Consumed)
+        consumeTileQueueValue(TRI, State, Reg, "inline asm");
+      for (Register Reg : Clobbered) {
+        const unsigned Hand =
+            physicalTileHandIndex(tileRegIdFromReg(TRI, Reg));
+        auto &Queue = State.Hands[Hand];
+        if (auto It = llvm::find(Queue, Reg); It != Queue.end())
+          Queue.erase(It);
+      }
+      for (Register Reg : Defined)
+        pushTileQueueValue(TRI, State, Reg);
+    };
+
     while (!TileQueueWorklist.empty()) {
       const MachineBasicBlock *MBB = TileQueueWorklist.pop_back_val();
       if (TileQueueProcessed.lookup(MBB))
@@ -2239,7 +2290,9 @@ public:
       TileQueueProcessed[MBB] = true;
       TileQueueState Exit = TileQueueEntries.lookup(MBB);
       for (const MachineInstr &MI : *MBB) {
-        if (isTilePseudoInstr(MI))
+        if (MI.isInlineAsm())
+          transferInlineAsm(MI, Exit);
+        else if (isTilePseudoInstr(MI))
           transferTilePseudo(MI, Exit);
       }
       for (const MachineBasicBlock *Succ : MBB->successors()) {

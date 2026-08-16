@@ -115,8 +115,25 @@ void LinxISAAsmPrinter::computeInlineAsmTileRanks(MachineFunction &MF) {
   };
 
   auto transfer = [&](const MachineInstr &MI, TileQueueState &State) {
-    if (!MI.isInlineAsm())
+    if (!MI.isInlineAsm()) {
+      SmallVector<Register, 4> Consumed;
+      SmallVector<Register, 4> Defined;
+      for (const MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.getReg() ||
+            !LinxISA::TILERegClass.contains(MO.getReg()))
+          continue;
+        if (MO.isUse() && MO.isKill() &&
+            !llvm::is_contained(Consumed, MO.getReg()))
+          Consumed.push_back(MO.getReg());
+        if (MO.isDef() && !llvm::is_contained(Defined, MO.getReg()))
+          Defined.push_back(MO.getReg());
+      }
+      for (Register Reg : Consumed)
+        consume(State, Reg, "generated tile block");
+      for (Register Reg : Defined)
+        push(State, Reg);
       return;
+    }
 
     SmallVector<Register, 4> Consumed;
     SmallVector<Register, 4> Clobbered;
