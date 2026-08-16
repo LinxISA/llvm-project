@@ -6,8 +6,8 @@
 caller:
 		# Local returning call keeps the BSTART relocation so the linker can
 		# recompute the call target after relaxation/layout. The return address is
-		# encoded directly by the PTO/Linx 0.58 CALL form.
-	BSTART CALL, callee, ra=.Lret
+		# encoded directly by the PTO/Linx 0.58.1 atomic CALL form.
+	BSTART.CALL callee, .Lret, ->ra
 .Lret:
 	C.BSTOP
 	.size caller, .-caller
@@ -20,4 +20,4 @@ callee:
 	.size callee, .-callee
 
 # CHECK: RELOCATION RECORDS FOR [.text]:
-# CHECK: R_LINX_HL_BSTART30_PCREL{{[[:space:]]+}}callee
+# CHECK: R_LINX_CBSTART12_PCREL{{[[:space:]]+}}callee

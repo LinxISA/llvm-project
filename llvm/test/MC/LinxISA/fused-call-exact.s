@@ -13,17 +13,20 @@
 # RELOC-NEXT: 0x2 R_LINX_CSETRET5_PCREL ext_ret32 0x0
 # RELOC-NEXT: 0x4 R_LINX_B25_PCREL ext_call48 0x0
 # RELOC-NEXT: 0x8 R_LINX_CSETRET5_PCREL ext_ret48 0x0
+# RELOC-NEXT: 0xC R_LINX_CSETRET5_PCREL ext_icall_ret 0x0
 
 # DIS-LABEL: <fused_external>:
-# DIS: BSTART.CALL{{[[:space:]]+}}0x{{[[:xdigit:]]+}}, 0x{{[[:xdigit:]]+}},{{[[:space:]]+}}->ra
-# DIS-NEXT: {{[[:xdigit:]]+}}: 91 03 00 00 16 51{{[[:space:]]+}}HL.BSTART.CALL{{[[:space:]]+}}0x{{[[:xdigit:]]+}}, 0x{{[[:xdigit:]]+}},{{[[:space:]]+}}->ra
+# DIS: {{[[:xdigit:]]+}}: 92 00 d6 51{{[[:space:]]+}}BSTART.CALL{{[[:space:]]+}}0x{{[[:xdigit:]]+}}, 0x{{[[:xdigit:]]+}},{{[[:space:]]+}}->ra
+# DIS-NEXT: {{[[:xdigit:]]+}}: 91 04 00 00 96 51{{[[:space:]]+}}HL.BSTART.CALL{{[[:space:]]+}}0x{{[[:xdigit:]]+}}, 0x{{[[:xdigit:]]+}},{{[[:space:]]+}}->ra
+# DIS-NEXT: {{[[:xdigit:]]+}}: 01 60 96 51{{[[:space:]]+}}BSTART.ICALL{{[[:space:]]+}}0x{{[[:xdigit:]]+}},{{[[:space:]]+}}->ra
 # DIS-LABEL: <ext_ret32>:
 # DIS-LABEL: <ext_call32>:
 # DIS-LABEL: <ext_ret48>:
 # DIS-LABEL: <ext_call48>:
+# DIS-LABEL: <ext_icall_ret>:
 
-# The two linked encodings are 0x51560072 and 0x511600000391.
-# BYTES: 72005651 91030000 1651
+# The linked encodings use independent call and return relocations.
+# BYTES: 9200d651 91040000 96510160 9651
 
 # Changing each raw immediate independently changes only its own field.
 # INDEPENDENT: 32005650 42005650 32009650 11020000
@@ -38,6 +41,7 @@
 fused_external:
   BSTART.CALL ext_call32, ext_ret32, ->ra
   HL.BSTART.CALL ext_call48, ext_ret48, ->ra
+  BSTART.ICALL ext_icall_ret, ->ra
 
 #--- defs.s
 .text
@@ -52,6 +56,9 @@ ext_ret48:
   .2byte 0
 .globl ext_call48
 ext_call48:
+  .2byte 0
+.globl ext_icall_ret
+ext_icall_ret:
   .2byte 0
 
 #--- independent.s

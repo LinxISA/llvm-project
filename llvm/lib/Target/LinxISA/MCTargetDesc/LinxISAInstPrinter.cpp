@@ -1060,6 +1060,15 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
+  if (AsmFmt.starts_with("BSTART.ICALL")) {
+    OS << "BSTART.ICALL\t";
+    if (!emitFusedReturnTarget(/*PcBaseOffset=*/2))
+      OS << "0x0";
+    OS << ",\t->ra";
+    printAnnotation(OS, Annot);
+    return;
+  }
+
   const bool IsCBSTART = AsmFmt.starts_with("C.BSTART");
   const bool IsLBSTART = AsmFmt.starts_with("L.BSTART");
   const bool IsBSTART =
@@ -1346,7 +1355,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   // Format: MNEM [RegBegin ~ RegEnd], sp!, stacksize
   // Must check BEFORE memory operand check since these also contain '['.
   if (AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
-      AsmFmt.contains("[RegDst0 ~ RegDstn]")) {
+      AsmFmt.contains("[RegDst0 ~ RegDstn]") ||
+      AsmFmt.contains("[ra ~ RegDstn]")) {
     StringRef Tok =
         Form.mnemonic ? StringRef(Form.mnemonic) : StringRef("FENTRY");
     OS << Tok;
@@ -1615,6 +1625,21 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       OS << ", sat";
     if (Canonicalize)
       OS << ", canonicalize";
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  if (AsmFmt.starts_with("B.FPATR")) {
+    OS << "B.FPATR\t";
+    bool First = true;
+    for (StringRef FieldName :
+         {"PreQuantMode", "ReluMode", "GroupNCode", "RowMaxEn", "GroupMaxEn",
+          "RowMaxInit", "MaxAbsEn"}) {
+      if (!First)
+        OS << ", ";
+      First = false;
+      OS << findFieldImm(FieldName).value_or(0);
+    }
     printAnnotation(OS, Annot);
     return;
   }

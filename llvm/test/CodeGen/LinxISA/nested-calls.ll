@@ -29,7 +29,7 @@ entry:
 ; CHECK-LABEL: call_return:
 ; CHECK-NOT: BSTART
 ; CHECK: FENTRY
-; CHECK: BSTART{{[[:space:]]+}}CALL, baz_leaf{{(@plt)?}}, ra=[[CR_RET:\.LBB[0-9_]+]]
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, baz_leaf{{(@plt)?}}, ra=[[CR_RET:\.LBB[0-9_]+]]
 ; CHECK-NOT: c.setret
 ; CHECK: [[CR_RET]]:
 ; CHECK-NOT: BSTART
@@ -39,7 +39,7 @@ entry:
 ; CHECK-LABEL: bar:
 ; CHECK-NOT: BSTART
 ; CHECK: FENTRY
-; CHECK: BSTART{{[[:space:]]+}}CALL, baz_leaf{{(@plt)?}}, ra=[[BAR_RET:\.LBB[0-9_]+]]
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, baz_leaf{{(@plt)?}}, ra=[[BAR_RET:\.LBB[0-9_]+]]
 ; CHECK-NOT: c.setret
 ; CHECK: [[BAR_RET]]:
 ; CHECK: FRET.STK
@@ -48,10 +48,10 @@ entry:
 ; CHECK-LABEL: foo:
 ; CHECK-NOT: BSTART
 ; CHECK: FENTRY
-; CHECK: BSTART{{[[:space:]]+}}CALL, bar{{(@plt)?}}, ra=[[FOO_RET1:\.LBB[0-9_]+]]
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, bar{{(@plt)?}}, ra=[[FOO_RET1:\.LBB[0-9_]+]]
 ; CHECK-NOT: c.setret
 ; CHECK: [[FOO_RET1]]:
-; CHECK: BSTART{{[[:space:]]+}}CALL, baz_leaf{{(@plt)?}}, ra=[[FOO_RET2:\.LBB[0-9_]+]]
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, baz_leaf{{(@plt)?}}, ra=[[FOO_RET2:\.LBB[0-9_]+]]
 ; CHECK-NOT: c.setret
 ; CHECK: [[FOO_RET2]]:
 ; CHECK: FRET.STK

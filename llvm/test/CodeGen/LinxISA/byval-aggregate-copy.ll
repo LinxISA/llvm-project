@@ -19,11 +19,11 @@ entry:
 attributes #0 = { noinline "disable-tail-calls"="true" }
 
 ; CHECK-LABEL: byval_copy_does_not_alias_caller_local:
-; CHECK: BSTART{{[[:space:]]+}}CALL, callee{{(@plt)?}}
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, callee{{(@plt)?}}
 ; CHECK-DAG: sdi{{[[:space:]]+}}a0, [sp, 24]
 ; CHECK-DAG: sdi{{[[:space:]]+}}a0, [sp, 8]
 ; CHECK-DAG: sdi{{[[:space:]]+}}a1, [sp, 32]
 ; CHECK-DAG: sdi{{[[:space:]]+}}a1, [sp, 16]
 ; CHECK: addi{{[[:space:]]+}}sp, 8,{{[[:space:]]+}}->a0
-; CHECK: BSTART{{[[:space:]]+}}CALL, use{{(@plt)?}}
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, use{{(@plt)?}}
 ; CHECK: addi{{[[:space:]]+}}sp, 24,{{[[:space:]]+}}->a0

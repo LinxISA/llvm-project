@@ -10,7 +10,7 @@ entry:
 
 ; CHECK-LABEL: callret_normal:
 ; CHECK: FENTRY
-; CHECK: BSTART{{[[:space:]]+}}CALL, callee{{(@plt)?}}, ra=[[RET:\.LBB[0-9_]+]]
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, callee{{(@plt)?}}, ra=[[RET:\.LBB[0-9_]+]]
 ; CHECK: [[RET]]:
 ; CHECK: FRET.STK
 ; CHECK-NOT: FEXIT

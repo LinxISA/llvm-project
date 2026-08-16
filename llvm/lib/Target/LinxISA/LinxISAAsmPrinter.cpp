@@ -259,24 +259,19 @@ void LinxISAAsmPrinter::emitInstruction(const MachineInstr *MI) {
 
         SmallString<128> Line;
         raw_svector_ostream OS(Line);
-        OS << "BSTART\tCALL, ";
-
-        if (BStartInst.getNumOperands() >= 1) {
-          const MCOperand &TargetOp = BStartInst.getOperand(0);
-          if (TargetOp.isExpr())
-            MAI->printExpr(OS, *TargetOp.getExpr());
-          else if (TargetOp.isImm())
-            OS << TargetOp.getImm();
-        }
+        OS << "HL.BSTART.STD\tCALL, ";
+        const MCOperand &TargetOp = BStartInst.getOperand(0);
+        if (TargetOp.isExpr())
+          MAI->printExpr(OS, *TargetOp.getExpr());
+        else
+          OS << TargetOp.getImm();
 
         OS << ", ra=";
-        if (SetRetInst.getNumOperands() >= 1) {
-          const MCOperand &RetOp = SetRetInst.getOperand(0);
-          if (RetOp.isExpr())
-            MAI->printExpr(OS, *RetOp.getExpr());
-          else if (RetOp.isImm())
-            OS << RetOp.getImm();
-        }
+        const MCOperand &RetOp = SetRetInst.getOperand(0);
+        if (RetOp.isExpr())
+          MAI->printExpr(OS, *RetOp.getExpr());
+        else
+          OS << RetOp.getImm();
 
         OutStreamer->emitRawText(OS.str());
         SkippedFusedSetRet.insert(&*NextIt);

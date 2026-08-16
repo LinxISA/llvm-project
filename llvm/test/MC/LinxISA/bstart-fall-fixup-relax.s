@@ -2,7 +2,7 @@
 # RUN: llvm-objdump -dr %t | FileCheck %s
 
 foo:
-  BSTART.STD FALL, .Lfixup
+  HL.BSTART.STD FALL, .Lfixup
   addi zero, 0, ->a0
 
 .section .fixup,"ax"

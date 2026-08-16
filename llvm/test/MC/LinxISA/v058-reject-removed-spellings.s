@@ -8,7 +8,10 @@ removed_spellings:
 	B.IOT [t#1], last, ->u<1KB>
 	B.ATTR aq
 	BSTART.PAR 33, 4
-	L.BSTOP
+	BSTART.FP CALL, removed_fp_call
+	BSTART.FP ICALL
+	BSTART.STD CALL, removed_std_call
+	BSTART.STD ICALL
 
 # CHECK: error:
 # CHECK: B.IOD
@@ -23,4 +26,10 @@ removed_spellings:
 # CHECK: error:
 # CHECK: BSTART.PAR
 # CHECK: error:
-# CHECK: L.BSTOP
+# CHECK: BSTART.FP
+# CHECK: error:
+# CHECK: BSTART.FP
+# CHECK: error:
+# CHECK: BSTART.STD
+# CHECK: error:
+# CHECK: BSTART.STD

@@ -9,4 +9,4 @@ entry:
 }
 
 ; CHECK-LABEL: panic_like:
-; CHECK: BSTART{{[[:space:]]+}}CALL, sink{{(@plt)?}}, ra=
+; CHECK: HL.BSTART.STD{{[[:space:]]+}}CALL, sink{{(@plt)?}}, ra=

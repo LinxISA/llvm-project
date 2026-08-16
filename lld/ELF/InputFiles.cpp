@@ -49,7 +49,7 @@ extern template void ObjFile<ELF64LE>::importCmseSymbols();
 extern template void ObjFile<ELF64BE>::importCmseSymbols();
 
 static constexpr StringLiteral PTOISAIdentity =
-    R"({"encoding_abi":"pto-isa-0.58.0-mode-function-v1","encoding_projection_sha256":"0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa","release":"0.58.0"})";
+    R"({"encoding_abi":"pto-isa-0.58.1-mode-function-v1","encoding_projection_sha256":"89b872d6eaf0252200bc9349d49b9346e2a69d894cdcc2dcd0fd71911c1e0b8c","release":"0.58.1"})";
 
 template <class ELFT>
 static SmallVector<size_t, 1>
@@ -112,13 +112,13 @@ validatePTOISAIdentity(Ctx &ctx, ELFFileBase &file, const ELFFile<ELFT> &obj,
       wireError("descriptor is not a JSON object");
       continue;
     }
-    if (identity->getString("release") != "0.58.0")
-      wireError("release mismatch (expected 0.58.0)");
+    if (identity->getString("release") != "0.58.1")
+      wireError("release mismatch (expected 0.58.1)");
     else if (identity->getString("encoding_abi") !=
-             "pto-isa-0.58.0-mode-function-v1")
+             "pto-isa-0.58.1-mode-function-v1")
       wireError("encoding ABI mismatch");
     else if (identity->getString("encoding_projection_sha256") !=
-             "0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa")
+             "89b872d6eaf0252200bc9349d49b9346e2a69d894cdcc2dcd0fd71911c1e0b8c")
       wireError("encoding projection hash mismatch");
     else
       wireError("descriptor is not the canonical compact JSON encoding");
