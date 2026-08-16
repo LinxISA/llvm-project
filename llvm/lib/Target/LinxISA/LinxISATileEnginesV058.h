@@ -24,8 +24,8 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TADD, 0x000u, VEC)                                                         \
   X(TSUB, 0x001u, VEC)                                                         \
   X(TMUL, 0x002u, VEC)                                                         \
-  X(TDIV, 0x003u, VEC)                                                         \
-  X(TREM, 0x004u, VEC)                                                         \
+  X(TDIV, 0x003u, SFU)                                                         \
+  X(TREM, 0x004u, SFU)                                                         \
   X(TAND, 0x006u, VEC)                                                         \
   X(TOR, 0x007u, VEC)                                                          \
   X(TXOR, 0x008u, VEC)                                                         \
@@ -49,8 +49,8 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TADDS, 0x020u, VEC)                                                        \
   X(TSUBS, 0x021u, VEC)                                                        \
   X(TMULS, 0x022u, VEC)                                                        \
-  X(TDIVS, 0x023u, VEC)                                                        \
-  X(TREMS, 0x024u, VEC)                                                        \
+  X(TDIVS, 0x023u, SFU)                                                        \
+  X(TREMS, 0x024u, SFU)                                                        \
   X(TANDS, 0x026u, VEC)                                                        \
   X(TORS, 0x027u, VEC)                                                         \
   X(TXORS, 0x028u, VEC)                                                        \
