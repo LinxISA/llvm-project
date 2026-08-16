@@ -6,6 +6,10 @@
 	BSTART.ACCCVT FP32
 	BSTART.TLSU TLOAD, FP16
 	BSTART.VEC TEXP, FP16
+	BSTART.VEC TDIV, FP16
+	BSTART.VEC TREM, FP16
+	BSTART.VEC TDIVS, FP16
+	BSTART.VEC TREMS, FP16
 	BSTART.SFU TADD, FP16
 	BSTART.VEC TALLOC, FP16
 	B.IOT t#1.reuse, mask=0001
@@ -22,6 +26,10 @@
 # CHECK: error: unrecognized instruction 'bstart.acccvt'
 # CHECK: error: unrecognized instruction 'bstart.tlsu'
 # CHECK: error: TEXP is classified as SFU, not VEC
+# CHECK: error: TDIV is classified as SFU, not VEC
+# CHECK: error: TREM is classified as SFU, not VEC
+# CHECK: error: TDIVS is classified as SFU, not VEC
+# CHECK: error: TREMS is classified as SFU, not VEC
 # CHECK: error: TADD is classified as VEC, not SFU
 # CHECK: error: unknown PTO 0.58 tile operation 'TALLOC'
 # CHECK: error: B.IOT reuse suffix is not part of PTO ISA 0.58

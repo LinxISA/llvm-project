@@ -5,6 +5,10 @@
 	.type	test_v058_tepl_template_ops,@function
 test_v058_tepl_template_ops:
 	BSTART.VEC TADD, FP16
+	BSTART.SFU TDIV, FP16
+	BSTART.SFU TREM, FP16
+	BSTART.SFU TDIVS, FP16
+	BSTART.SFU TREMS, FP16
 	BSTART.SFU TROWMAX, FP16
 	BSTART.TEPL 3, 16, FP16
 	BSTART.SFU TTRANS, FP16
@@ -14,6 +18,10 @@ test_v058_tepl_template_ops:
 
 # CHECK-LABEL: <test_v058_tepl_template_ops>:
 # CHECK: BSTART.VEC{{[[:space:]]+}}TADD, FP16
+# CHECK: BSTART.SFU{{[[:space:]]+}}TDIV, FP16
+# CHECK: BSTART.SFU{{[[:space:]]+}}TREM, FP16
+# CHECK: BSTART.SFU{{[[:space:]]+}}TDIVS, FP16
+# CHECK: BSTART.SFU{{[[:space:]]+}}TREMS, FP16
 # CHECK: BSTART.SFU{{[[:space:]]+}}TROWMAX, FP16
 # CHECK: BSTART.SFU{{[[:space:]]+}}TSCATTER, FP16
 # CHECK: BSTART.SFU{{[[:space:]]+}}TTRANS, FP16
