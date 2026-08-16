@@ -1973,24 +1973,3 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
 
   return TargetLowering::getRegForInlineAsmConstraint(TRI, Constraint, VT);
 }
-
-void LinxISATargetLowering::LowerAsmOperandForConstraint(
-    SDValue Op, StringRef Constraint, std::vector<SDValue> &Ops,
-    SelectionDAG &DAG) const {
-  if (Constraint.size() == 1) {
-    switch (Constraint[0]) {
-    case 'i':
-    case 'n': {
-      if (const auto *C = dyn_cast<ConstantSDNode>(Op)) {
-        Ops.push_back(DAG.getTargetConstant(C->getSExtValue(), SDLoc(Op),
-                                            Op.getValueType()));
-        return;
-      }
-      break;
-    }
-    default:
-      break;
-    }
-  }
-  TargetLowering::LowerAsmOperandForConstraint(Op, Constraint, Ops, DAG);
-}

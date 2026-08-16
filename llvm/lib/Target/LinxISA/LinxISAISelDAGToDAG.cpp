@@ -1955,6 +1955,22 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
 
     SDLoc DL(N);
     MVT MemVT = LD->getMemoryVT().getSimpleVT();
+
+    if (MemVT == MVT::linxtile) {
+      if (LD->getExtensionType() != ISD::NON_EXTLOAD)
+        report_fatal_error("Linx: tile loads cannot extend their result");
+
+      SDValue Size = CurDAG->getTargetConstant(6, DL, MVT::i64);
+      SDVTList VTs = CurDAG->getVTList(LD->getValueType(0), MVT::Other);
+      SDValue Ops[] = {LD->getBasePtr(), Size, LD->getChain()};
+      SDNode *Res = CurDAG->getMachineNode(
+          LinxISA::PSEUDO_TLSU_TLOAD_ANY, DL, VTs, Ops);
+      CurDAG->setNodeMemRefs(cast<MachineSDNode>(Res),
+                             {LD->getMemOperand()});
+      ReplaceNode(N, Res);
+      return;
+    }
+
     int64_t Scale = getMemScaleForVT(MemVT);
 
     // Fold materialized PC-relative addresses back into a single *.PCR load:
@@ -2100,6 +2116,19 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
 
     SDLoc DL(N);
     MVT MemVT = ST->getMemoryVT().getSimpleVT();
+
+    if (MemVT == MVT::linxtile) {
+      SDValue Size = CurDAG->getTargetConstant(6, DL, MVT::i64);
+      SDValue Ops[] = {ST->getBasePtr(), ST->getValue(), Size,
+                       ST->getChain()};
+      SDNode *Res = CurDAG->getMachineNode(
+          LinxISA::PSEUDO_TLSU_TSTORE, DL, MVT::Other, Ops);
+      CurDAG->setNodeMemRefs(cast<MachineSDNode>(Res),
+                             {ST->getMemOperand()});
+      ReplaceNode(N, Res);
+      return;
+    }
+
     int64_t Scale = getMemScaleForVT(MemVT);
 
     // Fold materialized PC-relative addresses back into a single *.PCR store:
