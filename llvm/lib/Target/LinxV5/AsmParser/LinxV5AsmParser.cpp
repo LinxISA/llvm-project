@@ -2899,7 +2899,7 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTEPL(OperandVector &Operands) {
                .Case("trandom", 105)
                .Case("tquant", 106)
                .Case("tdequant", 107)
-               .Case("tsort32", 108)
+               .Case("tsort", 108)
                .Case("tmrgsort", 109)
                .Case("ttrans", 110)
                .Case("tgather", 111)

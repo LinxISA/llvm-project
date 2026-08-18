@@ -7,7 +7,7 @@ target triple = "linx64v5"
 ; the first destination binding remains non-terminating.
 ;
 ; CHECK-LABEL: <tsort_f16>:
-; CHECK: BSTART.TEPL TSORT32, FP16
+; CHECK: BSTART.TEPL TSORT, FP16
 ; CHECK: B.IOT {{.*}}, mask=1111, {{[[:space:]]*}}->{{.*}}<2KB>
 ; CHECK-NEXT: B.IOT mask=1111, last, {{[[:space:]]*}}->{{.*}}<4KB>
 define void @tsort_f16(ptr %value_dst, ptr %index_dst, ptr %source_ptr,
