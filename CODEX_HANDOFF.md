@@ -81,6 +81,324 @@ SuperScalarModel audit snapshot:
 
 ---
 
+## 2026-08-19 Linx-TileOP-API Issue #18：Group TMATMUL 的 LB0 必须使用 per-PE local C 行数
+
+### 问题结论
+
+Issue：`LinxISA/Linx-TileOP-API#18`，标题为“Group TMATMUL 应按每 PE 的 local tileC 行数生成 LB0”。
+
+问题真实存在，根因在 TileOP matmul 参数推导：当前 `TMATMUL` 及其相关变体统一从
+Shared A/B 推导 `M/N/K`，当 A/B 是 `SharedTile`、参与 mask 为 4 PE、destination
+是每个 PE 私有的 local C 时，错误地将 Shared A 的完整 `Rows` 作为 `LB0`。
+
+参考形状：
+
+```text
+Shared A       = [tM, tK]
+Shared B       = [tK, tN]
+local C / PE   = [tM / PECount, tN]
+PECount        = popcount(PE_MASK)，当前 API/ISA 路径为 4
+
+正确的 Group TMATMUL：
+  LB0 = local C rows = tM / PECount
+  LB1 = local C cols = tN
+  LB2 = A/B reduction K = tK
+  B.IOT destination size = 每个 PE 的 local C tile size
+```
+
+以 issue 用例 `tM=64,tN=16,tK=16,PECount=4,FP32` 为例，正确 bundle 必须是：
+
+```asm
+B.DIM 16, 0, ->lb0
+B.DIM 16, 0, ->lb1
+B.DIM 16, 0, ->lb2
+B.IOS S0, mask=1111
+B.IOS S1, mask=1111
+B.IOT mask=1111, last, ->u<1KB>
+```
+
+而不是使用 `B.DIM 64, 0, ->lb0`。`LB0/LB1/LB2` 描述每个 PE 的计算窗口，
+不是 Shared A/B 的完整 core-level tile 形状。
+
+### ISA/语义边界
+
+本问题不是把所有 TMATMUL 都改成除以 4。必须区分两种执行模式：
+
+```text
+普通单 PE / Local 输入：
+  M = local destination rows
+  N = local destination cols
+  K = A cols = B rows
+  C shape = A rows x B cols
+
+Group / Shared A+B 输入：
+  PECount = popcount(参与计算的 PE mask)
+  M = local destination rows
+  N = local destination cols
+  K = Shared A cols = Shared B rows
+  Shared A rows = PECount * local destination rows
+  Shared B cols = local destination cols
+```
+
+当前 PTO v0.58.1 API 的 Group 路径使用 `mask=1111`，因此第一阶段可将
+`PECount=4` 作为已编码的固定合同；不要从 Shared A 行数猜测 PE 数，也不要无条件
+对所有 matmul 的 `A.Rows` 做 `/4`。如果后续 ISA/API 允许其他 PE mask，必须改为
+从实际参与 mask 的 popcount 计算，并同时验证 Shared A 的行数可被该 popcount 整除。
+
+Group 合同应满足：
+
+```text
+PECount > 0
+SharedA.Rows == PECount * LocalC.Rows
+SharedA.Cols == SharedB.Rows == LB2
+SharedB.Cols == LocalC.Cols == LB1
+LocalC.Rows == LB0
+LocalC tile capacity >= LB0 * LB1 * sizeof(C.dtype)
+```
+
+运行时 valid shape 也必须满足同一关系：
+
+```text
+SharedA.ValidRows == PECount * LocalC.ValidRows
+SharedA.ValidCols == SharedB.ValidRows
+SharedB.ValidCols == LocalC.ValidCols
+```
+
+如果当前 Tile 类型只有编译期 shape，没有可用的 PE mask 类型信息，则至少对固定
+`mask=1111` 实现编译期 `static_assert`；运行时 valid shape 由已有 accessor/调试
+检查验证。不要用“只要能发射汇编”代替合同检查。
+
+### TileOP 实现设计
+
+实现文件主要是：
+
+```text
+include/jcore/template_asm.hpp
+```
+
+当前普通 `TMATMUL` 的问题模式是：
+
+```cpp
+size_t M = pto_matmul_detail::matrix_valid_row(a);
+size_t N = pto_matmul_detail::matrix_valid_col(b);
+size_t K = pto_matmul_detail::matrix_valid_col(a);
+pto_matmul_detail::matmul<Attr>(c, a, b, M, N, K);
+```
+
+应新增一个集中化的 shape/模式判定 helper，避免在普通、ACC、BIAS、MX 及 FIXP
+overload 中分别复制逻辑。例如：
+
+```cpp
+struct MatmulShape {
+  size_t M;
+  size_t N;
+  size_t K;
+  bool group;
+};
+
+template <typename C, typename A, typename B>
+constexpr MatmulShape resolve_matmul_shape() {
+  constexpr bool IsGroup = is_shared_tile_v<A> && is_shared_tile_v<B>;
+  if constexpr (IsGroup) {
+    constexpr size_t kPeCount = 4;
+    static_assert(A::Rows == kPeCount * C::Rows,
+                  "Group TMATMUL requires SharedA.Rows == 4 * local C.Rows");
+    static_assert(A::Cols == B::Rows,
+                  "Group TMATMUL requires A.Cols == B.Rows");
+    static_assert(B::Cols == C::Cols,
+                  "Group TMATMUL requires SharedB.Cols == local C.Cols");
+    return {matrix_valid_row(c), matrix_valid_col(c), matrix_valid_col(a), true};
+  } else {
+    static_assert(A::Rows == C::Rows && B::Cols == C::Cols,
+                  "TMATMUL output shape must be A.Rows x B.Cols");
+    return {matrix_valid_row(a), matrix_valid_col(b), matrix_valid_col(a), false};
+  }
+}
+```
+
+上面是设计示意，不要求照抄名称。实际实现必须遵循以下规则：
+
+1. Group 判定只对规范允许的 Shared A + Shared B 组合生效；不能把 Local/Local
+   普通 matmul 误判为 Group。
+2. Group `M` 必须来自 destination C 的 `Rows/ValidRow`，不能来自 Shared A。
+3. Group `N` 必须来自 destination C 的 `Cols/ValidCol`，并与 Shared B 的列数匹配。
+4. Group `K` 仍来自 Shared A 的列数，并与 Shared B 的行数匹配。
+5. 编译期 shape 用静态字段检查；动态 valid shape 用 accessor 检查或 debug 断言。
+6. Group destination 仍然是每个 PE 的 local tile；不能把 destination tile size
+   扩大成完整 Shared A rows 对应的大小。
+7. 统一 helper 必须被所有支持 Shared A+B 的路径复用：
+   - `TMATMUL`
+   - `TMATMUL_ACC`
+   - `TMATMUL_BIAS`
+   - `TMATMUL_MX`
+   - `TMATMUL_MX_BIAS`
+   - `TMATMUL_MX_ACC`
+   - 带 `fixp::Options` 的对应 overload
+8. 只有在 active ISA 明确支持该组合时才扩展 Shared-A/Local-B 或 Local-A/Shared-B；
+   当前共享 matmul 合同重点是 Local/Local、Shared-A/Shared-B。禁止通过放宽模板
+   约束悄悄接受 ISA 未定义的 operand 角色。
+9. `B.IOS` 的 source slot、PE mask、`B.IOT last` 和 destination 约束不得因为修复
+   LB0 而改变。
+10. 不要修改 `B.DIM` 的编码含义：只修正传入的 M/N/K，不能通过 assembler/printer
+    把 64 打印成 16 来掩盖 API 计算错误。
+
+### FIXP/options 相关要求
+
+带 `FixpAttr` 或 `fixp::Options` 的接口当前也从 A/B 推导 `M/N/K`。这些路径不能遗漏：
+
+```text
+TMATMUL(..., options)
+TMATMUL_ACC(..., options)
+TMATMUL_BIAS(..., options)
+TMATMUL_MX(..., options)
+TMATMUL_MX_ACC(..., options)
+TMATMUL_MX_BIAS(..., options)
+```
+
+建议所有 public overload 在进入 emitter 前调用同一个 `resolve_matmul_shape`，再把
+`M/N/K` 传给现有 emitter。不要在 emitter 内部重复判断，避免 basic、ACC 和 FIXP
+路径产生不同的 LB0。
+
+如果 Group 模式的输出/辅助 tile（RowMax、GroupMax、Quant、PReLU 等）有额外的
+shape 合同，应按其 active ASL 分别验证；不能因为 C 的 M 改成 local M 就把完整 Group
+统计量错误地缩成 local 统计量，除非对应 ASL 明确要求 per-PE 输出。
+
+### PE mask 处理
+
+第一阶段沿用当前 inline asm 的 `mask=1111`，并在设计文档/代码中明确这是固定的
+4-PE Group 合同。建议定义单一常量或 trait，不在多个宏中散落硬编码：
+
+```cpp
+inline constexpr unsigned kGroupPeMask = 0b1111;
+inline constexpr size_t kGroupPeCount = 4;
+```
+
+如果现有宏的 mask 由固定的 `PE_MASK` token 生成，则 shape helper 必须与该 mask
+保持一致。后续若支持动态 mask，应将 mask 和 `popcount(mask)` 作为编译期属性传入，
+并要求：
+
+```text
+popcount(mask) == PECount
+A.Rows == PECount * C.Rows
+```
+
+不能用运行时普通整数直接决定 inline asm 的 operand 数量或语法分支。
+
+### 不应采用的修复
+
+以下修复均不接受：
+
+- 在所有 `TMATMUL` 中无条件 `M = A.Rows / 4`；
+- 只修改反汇编文本或 LLVM printer，不修改 TileOP 的 M 推导；
+- 只把 `B.IOT` size 改成 local size、但保留 `LB0=A.Rows`；
+- 删除 shape 检查，让 model 在执行时自行猜测 Group 语义；
+- 只修复三参数 basic `TMATMUL`，遗漏 ACC/BIAS/MX/FIXP/options；
+- 通过改变 SharedTile 的类型元数据伪造 local C shape；
+- 接受 `SharedA.Rows` 不能被 PECount 整除的 Group 组合；
+- 将未定义的 Shared-A/Local-B 组合当作普通 matmul 处理。
+
+### 测试设计
+
+至少新增或更新 TileOP 测试：
+
+1. **Group 正向 basic**：
+   - `SharedA=[64,16] FP32`；`SharedB=[16,16] FP32`；`C=[16,16] FP32`；
+   - 反汇编检查 `LB0=16, LB1=16, LB2=16`、`B.IOS` 为 4-PE mask、destination
+     size 为 `1KB`。
+2. **普通正向 basic**：Local A/B/C 形状一致，确认仍生成原来的 `M=A.Rows`，不能
+   被错误除以 4。
+3. **Group 正向 ACC/BIAS/MX/FIXP**：每个变体至少一个编译/反汇编测试，确认
+   `LB0` 都是 local C rows。
+4. **Group 负向 shape**：
+   - `A.Rows != 4*C.Rows`；
+   - `A.Cols != B.Rows`；
+   - `B.Cols != C.Cols`；
+   - destination dtype/shape 不匹配；
+   - Shared A/B 组合不完整或使用未定义 operand role。
+5. **动态 valid shape**：静态 shape 合法但 `ValidRows/ValidCols` 不满足 Group
+   关系时，应在已有 debug/contract 路径中拒绝，不能生成错误的 LB0/LB1/LB2。
+6. **Shared mask 与 PE count**：当前 `mask=1111` 用例确认 `PECount=4`；若代码
+   支持其他 mask，补充 popcount 与 shape 关系测试。
+7. **回归 SuperNPUBench 用例**：编译 issue #18 的 `matmul_shared.hpp`，反汇编
+   检查从 `B.DIM 64` 改为 `B.DIM 16`，并确认普通 matmul 测例无回归。
+
+推荐定向命令（按本地仓库 Makefile/工具链路径调整）：
+
+```bash
+cd /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API/test/tileop_api
+make clean
+make TESTCASE=TMATMUL COMPILER_DIR=<linx-llvm-build>/bin PLAT=linx diss
+```
+
+同时使用当前 Linx LLVM 的 `linx64v5-unknown-linux-musl`、`-mlxbc`、`-fenable-matrix`
+和正确 sysroot 做 `.s/.o` 编译及 `llvm-objdump` 验证；不能只用 host clang 检查 C++
+模板是否实例化。
+
+### 验收标准与状态
+
+Issue #18 当前状态：**✅ 核心修复与合同补丁已完成、通过验收并推送**。
+
+实现基线：TileOP commit `bcbcb0a` 完成 per-PE `LB0` 主修复；commit `c02dae6` 补齐合同与测试并已推送 `origin/linx`：
+
+- 让 12 个 public entry 实际实例化 `resolve_matmul_shape<C,A,B>()`，修复原提交中
+  `static_assert` helper 从未调用、非法 Group shape 仍可编译的问题；
+- 编译期拒绝 `A.Rows != 4*C.Rows`、`A.Cols != B.Rows`、`B.Cols != C.Cols`；
+- 同时检查静态 valid shape：`A.ValidRow == 4*C.ValidRow`、
+  `A.ValidCol == B.ValidRow`、`B.ValidCol == C.ValidCol`；
+- 当前后端在 Shared 寄存器 live range 中加入动态 valid-shape 控制流会触发
+  `MachineRegisterInfo::setRegClass` assertion，因此动态 valid-shape Group 目前明确
+  编译期拒绝，不能静默生成未检查 bundle；
+- 清理 options 主入口残留的旧 `D.Rows == A.Rows` 断言，Group options 统一由
+  resolver 按 per-PE local C 合同判断；
+- 更新 `SharedMatrixForms.cpp`，以合法的 SharedA `[64,16]`、SharedB `[16,16]`、
+  local C `[16,16]` 覆盖 basic/options 的 TMATMUL/ACC/BIAS/MX/MX_ACC/MX_BIAS；
+- 增加 `group_shape/group_k/group_n/group_dynamic` compile-fail 用例。
+
+本地验收结果：
+
+```text
+GroupMatmul.cpp:             PASS，basic/ACC/BIAS LB0=LB1=LB2=16
+SharedMatrixForms.cpp:       PASS，6 variants × basic/options Group 路径均编译
+Group operation inventory:   TMATMUL/ACC/BIAS/TMATMULMX/MX.ACC/MX.BIAS 各 3 组
+Negative tests:              9 passed, 0 failed
+B6 contract tests:           17 passed
+Docs check:                  PASS
+git diff --check:            PASS
+普通路径回归:               MatmulAccOperandOrder、TMatmulAccFullOptions、
+                             TMatmulAllOptions、SharedMatmul 全部 PASS
+```
+
+动态 valid-shape Group 后续若要支持，必须先修 LLVM Shared register coalescing 的
+`Invalid RC for virtual register` 崩溃，再将当前 compile-time rejection 改为安全的
+runtime legality check；不能在 TileOP 中直接加入分支并声称完成。
+
+验收必须同时满足：
+
+- Group basic/ACC/BIAS/MX/FIXP/options 均使用 local C 的 `LB0`；
+- 普通 Local matmul 保持原有 M/N/K 语义；
+- 静态和动态 shape 合同均有正负测试；
+- 生成的 `B.IOT` destination size 与 per-PE local C 一致；
+- LLVM assembler/printer/model 不需要靠文本修正来解释错误 bundle；
+- `git diff --check`、相关编译测试、反汇编检查全部通过；
+- 验收通过后再由主 agent 更新此节状态和远端同步记录，执行 agent 不要自行
+  修改 issue 评论或推送未 review 的 commit。
+
+关联代码/实现位置：
+
+```text
+TileOP:
+  /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API/include/jcore/template_asm.hpp
+  /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API/test/tileop_api/src/
+
+Issue reproduction:
+  SuperNPUBench/benchmark/one-level-arch/kernels/matmul/matmul_shared.hpp
+
+LLVM:
+  /home/zhuwei/linx-llvm/llvm/lib/Target/LinxV5/
+  仅在确认 LB0 编码/解码或 model legality 另有不一致时修改，不能用 LLVM printer
+  掩盖 TileOP M 推导错误。
+```
+
 ### 2. Work Package A：SuperScalarModel
 
 审计 main 与 PR #233 后，至少有 9 个 accepted operation 未完整实现：
