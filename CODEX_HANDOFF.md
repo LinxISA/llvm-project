@@ -1,10 +1,1484 @@
 # Codex 工作交接记录
 
-> 最新状态日期：2026-08-13
+> 最新状态日期：2026-08-19
 > LLVM 仓库：`/home/zhuwei/linx-llvm`
-> TileOP API 仓库：`/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`
-> PTO-SPEC 审计快照：`/tmp/pto-spec-audit-20260812`
-> **重启后必须先阅读紧接本段的“2026-08-13 状态快照”。后续较早章节是历史记录；发生冲突时，以最新快照和当前 PTO-SPEC normative ASL 为准。**
+> TileOP API 当前仓库：`/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`
+> PTO-SPEC 最新审计快照：`/tmp/pto-spec-current`（v0.58.1，`c381465b2b8e`）
+> **重启后必须先阅读紧接本段的“2026-08-18 PTO 0.58.1 剩余实现工作包”，再按其中顺序实施。后续 TSORT 专章和较早章节是补充/历史记录；发生冲突时，以当前 PTO-SPEC normative ASL 为准。**
+
+## 2026-08-19 PTO 0.58.1 剩余实现工作包（TileOP 合同修复已推送，模型仍待做）
+
+### 0. 任务边界与固定基线
+
+本节是**实施设计 + 进度**。设计目标：补齐已经通过 active ASL 复核、确定未实现
+或未对齐的 Tile operation。**截至 2026-08-18 已完成的子项在对应 WP 段用
+`✅ 已实现` 标注（含 commit）；未标 ✅ 的子项仍待实施。** 各 WP 段内的 ✅ 注记
+是最新进度，另一 agent 检查已完成项时以那些注记 + 各仓 HEAD 为准。
+
+```text
+PTO-SPEC normative baseline:
+  path:    /tmp/pto-spec-current
+  HEAD:    c381465b2b8e457e162a4246ee58bb9a2c5b49fd
+  tag:     v0.58.1
+  source:  asl/（active normative source；docs 只用于交叉检查）
+
+LLVM:
+  path:    /home/zhuwei/linx-llvm
+  branch:  dev-llvm15_56
+  HEAD:    49d63a6  [LinxV5] Canonicalize TEPL 0x06c as TSORT (C1 已完成)
+  含:      4ecebf37 Accept non-last B.IOT destination suffixes（前置）
+
+TileOP API:
+  path:    /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API
+  branch:  linx
+  HEAD:    7c1dead  （B1/B2/B3 合同修复、B5 retired 清理均已完成并推送）
+
+SuperScalarModel audit snapshot:
+  main:    ef8e58e8e53d6e641205556e5e7bdca2c780ccb1
+  PR #233: b3227fe53bbbfcd26509406cf4e410763d2db87b
+  source review tree: /tmp/SuperScalarModel-248-review
+```
+
+执行约束：
+
+- 不创建新分支，不切换用户当前分支；每个仓库始终在用户指定的现有分支工作；
+- 不 reset/clean LLVM 工作区，不覆盖用户未提交或未跟踪文件；
+- 先做最小、独立、可验证的 operation，再做跨 operation 基础设施；
+- 每个修复必须同时有 legality 负测和 execution/encoding 正测；
+- 不以旧 markdown、旧 issue 描述或旧实现反推语义；冲突时以 v0.58.1 active
+  ASL 为准；
+- 本节聚焦 Tile operation。2026-08-17 章节列出的 scalar/command MC 缺口
+  （例如 `BSTART.ICALL`、CASB/CASH/CASW/CASD、DMA、PRF、PRFI.U、BWT、
+  `B.DATR` decoder collision）仍需单独处理，不能因本工作包完成而宣称整个
+  PTO 0.58.1 已全部对齐。
+
+### 1. 实施总顺序与跨仓依赖
+
+建议按以下顺序提交；不要把所有操作塞入一个大 commit：
+
+```text
+1. LLVM：TSORT canonical 名称 + deleted selector 清理        [1a 完成: 49d63a6（TSORT 名）；1b deleted selector 清理待做]
+2. LLVM：修复 MGATHER.CAS TwoSrc_NoDst inline-asm operand 匹配  [完成: 澄清为误判，无需改 LLVM]
+3. TileOP：MGATHER_CAS API（依赖第 2 步）                     [完成: 2088886；合同修复: 7c1dead]
+4. Model：MGATHER_CAS decode/bundle/atomic execution           [待做]
+5. Model：共享 sorting helper + TSORT + TMRGSORT               [待做]
+6. TileOP：修正 TMRGSORT API                                  [完成: 50541a0；shape 合同修复: 7c1dead]
+7. Model：TQUANT/TDEQUANT scalar-attribute contract            [待做]
+8. TileOP：修正 TQUANT/TDEQUANT API                           [完成: 968a5a2；RMode/shape 修复: 7c1dead]
+9. Model：feature-map descriptor infrastructure + TIMG2COL     [待做]
+10. TileOP：补 TIMG2COL descriptor/config API                  [待做]
+11. Model：TGEMV_MX / BIAS / ACC                               [待做]
+12. TileOP/LLVM：删除或拒绝 retired operation surface          [TileOP 完成: a15297f; LLVM parser 侧待做]
+13. TileOP：按 v0.58.1 重建 operation contract tests           [待做, 即 B6]
+14. 三仓联合 assemble + model execution 回归                   [待做]
+```
+
+可以调整相邻步骤，但必须保持两条依赖：
+
+- `MGATHER_CAS` TileOP 必须在 LLVM inline asm 能编码 TwoSrc_NoDst 后落地；
+- `TIMG2COL` execution 必须在 feature-map descriptor 状态模型落地后实现，不能
+  把 descriptor 参数临时硬编码在指令执行函数里。
+
+---
+
+### 2. Work Package A：SuperScalarModel
+
+审计 main 与 PR #233 后，至少有 9 个 accepted operation 未完整实现：
+
+```text
+MGATHER_CAS
+TSORT
+TIMG2COL
+TMRGSORT
+TQUANT
+TDEQUANT
+TGEMV_MX
+TGEMV_MX_BIAS
+TGEMV_MX_ACC
+```
+
+`TPREFETCH` 在当前功能模型中保持 no-op 是合理的：模型没有 architecture-visible
+cache state，预取不得改变 architectural state，也不应为了“看起来实现了”创建
+虚假 cache 行为。
+
+#### A1. MGATHER_CAS：TLSU Function 8
+
+Normative source：
+
+```text
+asl/tile/memory-and-data-movement/irregular/MGATHER_CAS.asl
+相关 bundle/operand/address/atomic legality helpers
+```
+
+当前缺口：
+
+- `ParFunction` 从 7 跳到 9，Function 8 没有枚举；
+- 没有 `TileOp::MGATHER_CAS` 映射、decode、dispatch、bundle validation；
+- 没有 atomic compare-and-swap execution；
+- 参考位置：`isa/ISACommon/TileOpManager.h`，执行入口参考
+  `emulator/engine/TMAEngine.cpp`。
+
+规范 operand 映射：
+
+```text
+destination0 = 每 lane 观察到的旧 memory value
+address      = GM base address
+source0      = byte-displacement index Tile
+source1      = expected-value Tile
+source2      = replacement-value Tile
+```
+
+Bundle 必须精确解释为：
+
+```text
+BSTART.TLSU MGATHER.CAS, <transfer dtype>
+B.IOR [base], []
+B.IOT <IndexTile>, <ExpectedTile>, mask=<common-mask>, 0
+B.IOT <ReplacementTile>, mask=<common-mask>, last,
+      -><ObservedOldValueTile><size>
+```
+
+实现步骤：
+
+1. 在 Tile operation function/enum 表中补 TLSU Function 8，并映射到
+   `TileOp::MGATHER_CAS`；确保 9 及之后 function 数值不移动。
+2. 在 bundle accumulation 阶段新增专用 contract，要求 exactly two Local
+   `B.IOT`：第一条 `Index + Expected`、无 destination、`last=0`；第二条
+   `Replacement + destination`、`last=1`。
+3. 要求两条 `B.IOT` PE mask 相同且非零；禁止 `B.IOS`；禁止多余 source、
+   destination、B.IOR GPR。
+4. transfer dtype 禁止 packed 4-bit。index dtype 仅允许规范列出的
+   `S/U 4x2, 8, 16, 32, 64`；解码 byte displacement 时严格按 index dtype
+   做 sign/zero extension。
+5. 建立 staged operation：先读取所有有效 lane 的 index/expected/replacement，
+   计算 `base + byte_displacement`，检查 overflow、alignment、address range、
+   memory accessibility 和 destination capacity；任何 lane 失败时，**不得发生任何
+   atomic memory effect，也不得部分写 destination**。
+6. preflight 全部成功后，按模型选择的确定性 lane 次序逐 lane 执行 CAS。每 lane
+   原子地 load old value；若 old 与 expected bitwise 相等则 store replacement；
+   destination 对应 lane 始终写 old value。
+7. duplicate address 合法。ASL 允许其顺序 implementation-defined；模型应选定并
+   测试一个稳定顺序（建议 PE/lane 的现有遍历顺序），不要并行化成不可复现结果。
+8. execution 完成后一次性发布 destination；完整 physical destination 的 padding
+   按 `PadValue` 填充。
+9. 普通 memory store/CAS 命中 raw spill shadow metadata 覆盖范围时，复用普通
+   memory 写路径使对应 shadow metadata 失效，不能绕过 `SoftMemory` 的一致性逻辑。
+
+可复用实现：
+
+```text
+emulator/engine/TMAEngine.cpp
+  ExecuteMGATHER / ExecuteMSCATTER 的地址生成、Tile lane 遍历与 preflight
+
+emulator/engine/AaccelssMemoryEngine.cpp
+  scalar atomic read-modify-write 的串行化/内存访问方式
+
+emulator/Memory.cpp
+  SoftMemory::Load / SoftMemory::Store 与 shadow metadata invalidation
+```
+
+不要直接在 `TMAEngine.cpp` 对裸 host pointer 做 compare/store；必须经过模型 memory
+API，并保证一次 CAS 在模型语义上不可被拆分观察。
+
+验收测试：
+
+- encode/decode Function 8，不影响 Function 7/9；
+- CAS 成功：destination=old，memory=replacement；
+- CAS 失败：destination=old，memory 保持 old；
+- signed negative byte displacement；
+- 每一种合法 index width；
+- duplicate addresses 的确定性行为；
+- 某个后续 lane 地址非法时，前面 lane 也没有 memory side effect；
+- packed transfer dtype、错误 B.IOT 数、错误 last、不同 mask、B.IOS 均 fault；
+- destination padding 与 atomic publication；
+- CAS 写覆盖 spill shadow 后，旧 shadow 不再被 reload 使用。
+
+#### A2. TSORT：TEPL Mode 3 Function 12，selector 0x06c
+
+Normative source：
+
+```text
+asl/tile/irregular-and-complex/sorting/TSORT.asl
+asl/tile/model/ordering/sorting.asl
+asl/tile/model/execution/sorting.asl
+```
+
+当前缺口：`TileOpManager.h` 把 selector `0x06c` 标为 reserved，没有 TSORT
+枚举/映射，也没有 `ExecuteTSORT`。
+
+实现步骤：
+
+1. 将 selector `0x06c` 映射为 `TSORT`，不要创建或恢复 `TSORT32` operation。
+2. 新增 sorting 公共 helper，供 TSORT/TMRGSORT 共用：
+   `TileNumericValueClass`、`TileFloatingOrderKey`、`TileSortLeftBefore`、
+   signaling-NaN 检测与 sticky NV 更新。
+3. legality 要求一个 persistent Local source、两个 distinct new Local
+   destination；value source/value destination 为 FP16 或 FP32，index
+   destination 为 U32；三者 logical/valid shape 一致、RowMajor、同一非零 mask。
+4. 解析 LB0：absent 或 0 表示 32；其余只允许 1..64。LB1/LB2 必须 absent。
+   解析 B.IOR RegSrc0：0 ascending、1 descending；其余值 fault。
+5. 每个有效 row 从 column 0 开始按 `sort_width` 分组，最后一组允许变短；只读取
+   valid element，不读取 padding。
+6. 为每个元素构造 `{value_bits, original_group_index, input_sequence}`，stable sort
+   后同时写 value destination 与 U32 index destination。index 必须是
+   `original_column % sort_width`，不是排序后位置，也不是全行 column。
+7. comparator 必须复刻 active ASL ordering：numeric 在 NaN 前；两个 NaN 保持输入
+   顺序；signed zero 相等；相等 numeric 依赖 stable sort 保序；descending 只反转
+   numeric order，不能破坏 equal/NaN stability。
+8. 输入出现 signaling NaN 时不 legality fault，执行完成后 OR sticky NV flag。
+9. 两个 destination 都先写 staging buffer，全部成功后原子发布；padding 按各自
+   dtype 的 PadValue 填充。
+
+禁止使用 host `float <`、`std::isnan + descending ? > : <` 作为最终 comparator，
+因为它无法完整表达 NaN、signed zero、stable tie 和 signaling NaN flag 规则。
+
+验收测试：
+
+- FP16/FP32，ascending/descending，sort width 1/16/32/64；
+- omitted LB0 与 LB0=0 都等价于 32；
+- 短尾 group；跨多个 row/group；
+- duplicate numeric、`+0/-0`、quiet NaN、signaling NaN；
+- value/index 输出配对不丢失；
+- index destination 不是 U32、两个 destination alias、LB1/LB2 present、非法 B.IOR
+  都 fault；
+- destination 在 fault 时完全不变。
+
+#### A3. TMRGSORT：TEPL Mode 3 Function 13
+
+Normative source：
+
+```text
+asl/tile/irregular-and-complex/sorting/TMRGSORT.asl
+asl/tile/model/ordering/sorting.asl
+asl/tile/model/execution/sorting.asl
+```
+
+当前缺口：`TEPLEngine.cpp` 中 `ExecuteTMRGSORT` 直接 `assert(false)`。
+
+实现步骤：
+
+1. 复用 A2 的 ASL-compatible comparator，不另写一套 host comparator。
+2. legality 要求两个 persistent、非空、single-row Local source；二者 FP16 或
+   FP32 且 dtype 相同；一个 new Local destination；所有 B.DIM 必须 absent。
+3. destination `ValidRow=1`，`ValidCol=left.ValidCol + right.ValidCol`，先检查物理
+   capacity；B.IOR optional RegSrc0 仅允许 0/1 表示升/降序。
+4. 在产生任何 destination 写入前，分别验证两个 source 已按指定方向排序；未排序
+   source 必须 legality/execution fault，destination 不变。
+5. 使用标准双指针 stable merge。比较相等时 left source 优先；numeric 在 NaN 前；
+   NaN 保持各 source 内顺序并保持 left precedence。
+6. signaling NaN OR sticky NV；staging 完成后一次发布 destination 并填 padding。
+
+验收测试：空 source、multi-row source、dtype mismatch、未排序 source、destination
+capacity 不足均 fault；正常测试覆盖 equal 值 left-first、NaN、signed zero、升序和
+降序。
+
+#### A4. TQUANT / TDEQUANT：重做为 v0.58.1 scalar-attribute contract
+
+Normative source：
+
+```text
+asl/tile/irregular-and-complex/format-conversion/TQUANT.asl
+asl/tile/irregular-and-complex/format-conversion/TDEQUANT.asl
+asl/tile/model/numeric/formats.asl
+asl/tile/model/legality/operand-schema.asl
+```
+
+当前缺口：
+
+- `TQUANT` 仍保留旧 metadata Tile/多 profile 思路，部分路径只是 cast；
+- `TDEQUANT` 错误要求 `src/scale/offset` 三个 Tile；
+- 两者都没有正确使用 B.DATR 与 B.IOR scalar multiplier/zero point。
+
+公共设计：
+
+1. 新增集中 helper，例如 `TileProfileQuantize` / `TileProfileDequantize`，把
+   ASL `impdef` numeric policy 放在一个文件内；执行函数只负责 contract、遍历、
+   exceptions 和 atomic publish。
+2. B.IOR omitted 时使用 multiplier raw FP32 `1.0f`、zero point 0；present 时
+   RegSrc0 是 multiplier 的 raw FP32 bits，RegSrc1 是 integer zero point；拒绝
+   多余 GPR。
+3. multiplier 必须 positive、finite、nonzero；zero point 必须能由量化整数 dtype
+   表示。所有 attribute 在写 destination 前完成验证。
+4. source/destination 保持 ASL logical shape/layout contract；不要以“总 bytes
+   相等”替代 logical shape legality。
+
+`TQUANT`：
+
+- exactly one FP32 source + one S8/U8 destination；
+- B.DATR mandatory，读取 destination DataType、RMode、Sat；
+- 逐元素计算 `round(source * multiplier + zero_point)`；
+- rounding 完全按 RMode helper；Sat=1 clamp 到目标范围，Sat=0 按目标 bit width
+  modulo/wrap；
+- destination padding 为 Null；
+- 对 NaN/Inf、overflow、rounding exception 的 sticky flag 行为按当前 reference
+  profile 固化测试。
+
+`TDEQUANT`：
+
+- exactly one S8/U8 source + one FP32 destination；
+- 不再读取 scale/offset Tile；
+- B.IOR 使用同一 multiplier/zero-point contract；
+- saturation 必须 false；
+- 公式严格调用 active ASL 对应的 `TileProfileDequantize` helper，不从旧注释推断；
+- destination padding 为 FP32 Null/PadValue。
+
+验收测试：所有 RMode、Sat clamp/wrap、S8/U8 边界、默认/显式 B.IOR、非法
+multiplier、越界 zero point、多余 Tile operand、错误 dtype、shape mismatch、fault
+atomicity。测试 expected value 应按当前 reference profile 写成 bit-exact fixture，
+避免使用实现本身计算 expected。
+
+#### A5. TIMG2COL：先建立 feature-map descriptor 状态
+
+Normative source：
+
+```text
+asl/tile/layout-and-rearrangement/layout/TIMG2COL.asl
+asl/tile/model/state/feature-map-descriptors.asl
+asl/tile/model/legality/image-to-column.asl
+asl/tile/model/execution/image-to-column.asl
+```
+
+当前缺口：`ExecuteTIMG2COL` 直接 `assert(false)`，现有 `TileInfo` 没有
+feature-map descriptor。
+
+状态设计：
+
+```cpp
+struct FeatureMapDescriptor {
+  batches;
+  depth;
+  channelGroups;
+  height;
+  width;
+  channelsPerGroup;
+  filterHeight;
+  filterWidth;
+  strideHeight;
+  strideWidth;
+  dilationHeight;
+  dilationWidth;
+  padLeft;
+  padRight;
+  padTop;
+  padBottom;
+  logicalChannels;
+  typedPaddingBits;
+  transposed;
+  layout; // NC1HWC0 or NDC1HWC0
+};
+```
+
+字段实际类型按模型现有 scalar/state conventions 选择，但必须能无损表示 ASL
+范围。descriptor 建议作为 Tile architectural side state，由 Tile id/register binding
+索引，不要塞入会随 dtype reinterpret 自动重算的普通 shape 字段。
+
+生命周期：
+
+- descriptor 创建/设置必须经过统一 API 并做完整 legality；
+- source move 若规范要求 descriptor 跟随，则显式 copy；否则不得猜测传播；
+- Tile 被 free、重新分配、覆盖为普通非 feature-map Tile 时 descriptor 失效；
+- spill/reload 如只保存 raw Tile bytes，不能悄悄恢复陈旧 descriptor；需按 ASL
+  architectural state 定义决定是否显式保存 metadata；
+- debug dump 应显示 descriptor 是否 valid，便于定位测试。
+
+`TIMG2COL` execution：
+
+1. exactly one persistent Local source + one new Local destination；读取 B.IOR
+   RegSrc0=`posM`、RegSrc1=`posK` 的 low 16 bits。
+2. source descriptor 必须 valid，layout 只允许 NC1HWC0/NDC1HWC0，且
+   `transposed=false`；destination 必须是标准 Left matrix role/layout。
+3. 在任何写入前验证 descriptor 内部范围、source definedness、`posM/posK`、输出
+   logical shape、destination capacity 以及全部 index arithmetic 不溢出。
+4. 按 ASL helper 将 matrix `(m,k)` 映射回 batch/depth/output spatial/filter spatial/
+   channel。映射到 source 范围外的 spatial/channel 写 `typedPaddingBits`，不能读
+   source padding 猜值。
+5. 先构造完整 destination staging buffer，再原子发布；source descriptor 和 source
+   Tile 均 read-only。
+
+验收测试至少覆盖：2D/3D layout、stride、dilation、四边 padding、尾 channel、
+`posM/posK` 分块、typed padding、descriptor 缺失/过期、transposed=true、capacity
+不足、fault 时 destination 不变。
+
+#### A6. TGEMV_MX / TGEMV_MX_BIAS / TGEMV_MX_ACC
+
+Normative source：
+
+```text
+asl/tile/matrix-and-matrix-vector/matrix-vector/TGEMV_MX.asl
+asl/tile/matrix-and-matrix-vector/matrix-vector/TGEMV_MX_BIAS.asl
+asl/tile/matrix-and-matrix-vector/matrix-vector/TGEMV_MX_ACC.asl
+Functions 20 / 21 / 22
+```
+
+当前缺口：`CubeEngine.cpp` 三个 dispatch 最终 `assert(0)`；不能继续使用
+identity-scale fallback。
+
+operand 顺序：
+
+```text
+TGEMV_MX:       left vector, row scale, right matrix, column scale
+TGEMV_MX_BIAS:  left vector, row scale, right matrix, column scale, bias
+TGEMV_MX_ACC:   accumulator, left vector, row scale, right matrix, column scale
+```
+
+实现步骤：
+
+1. 提取普通 `TGEMV/TGEMV_BIAS/TGEMV_ACC` 的 M=1 logical shape、bias、accumulator、
+   destination/reduction publish 流程。
+2. 提取 `TMATMULMX/TMATMULMX_BIAS/TMATMULMX_ACC` 的 scale Tile load、
+   `MatrixScale`、`MatrixScaleLHiF4`、`MatrixScaleRHiF4` 和 `MatrixMul` 路径。
+3. 组合成共享 `ExecuteTGEMVMXVariant(kind, block, attrs)`，不要复制三份易漂移循环。
+4. Local only，Shared Tile 直接 legality fault；M 必须固定为 1；source persistent。
+5. 每个 MX input 如果本身不是 FP16/BF16，则对应 E8M0 scale Tile mandatory；
+   FP16/BF16 的 scale optional/按 ASL contract 处理。禁止缺 scale 时静默当 1。
+6. BIAS 路径在 dot-product 后按规范位置加 bias；ACC 路径先读取 accumulator，并按
+   普通 TGEMV_ACC 的 accumulation order 处理。
+7. 完整 B.FPATR postprocess、rounding、saturation、activation、reduction 行为继续
+   生效；不要只完成乘加核心。
+8. destination 与 reduction outputs 全部 staging 后原子发布；任一 source/scale/
+   FPATR legality 失败时不产生部分结果。
+
+验收测试：三个 variant、每种 active MX dtype/scale pairing、FP16/BF16 无需 scale
+路径、缺失/错误 E8M0 scale、M!=1、Shared operand、bias/acc 顺序、非零 FPATR、
+reduction output 与 fault atomicity。增加与等价 `TMATMULMX` 的 M=1 differential
+test，允许的 rounding 差异必须由 ASL 明确支持。
+
+---
+
+### 3. Work Package B：Linx-TileOP-API
+
+> **✅ 2026-08-19 已验证并推送：commit `7c1dead`。** 修复内容：
+> `TQUANT/TDEQUANT` 使用 PTO 0.58.1 bundle RMode 编码（默认 RNE 为编码 0，
+> 增加 RTM/RTP/RTO，保留兼容别名），并增加 Local/RowMajor 与 logical-shape
+> 合同；`MGATHER_CAS` 支持规范允许的 S/U 4X2、8、16、32、64-bit index，仍
+> 拒绝 packed four-bit transfer dtype；`TMRGSORT` 增加 Local RowMajor、single-row、
+> non-empty 和合并 destination 容量检查；同步补充三组 TileOP 编译测试。
+>
+> 验证命令（使用当前 LLVM build 的 resource overlay）：
+>
+> ```text
+> clang++ -resource-dir=/tmp/linx-clang-resource --target=linx64v5-unknown-linux-musl
+>   -mlxbc -fenable-matrix -std=c++20 -O2 ... -c
+>   test/tileop_api/src/{MGatherCas,TMrgSort,TQuant,TSort,TPrefetch}.cpp
+> ```
+>
+> 结果：5 个测试全部编译通过；反汇编确认 MGATHER_CAS 两条 B.IOT、TMRGSORT
+> 无 B.DIM、TQUANT/TDEQUANT 的 B.DATR/B.IOR 合同；S4X2 index 正向用例通过。
+> 负向 TMRGSORT 错误容量用例能够触发 static assertion。`git diff --check` 和
+> `python3 tools/generate_engine_docs.py --check` 均通过。
+
+当前审计结论：109 个 accepted Tile operation 中，唯一完全没有 public API 的是
+`MGATHER_CAS`；`TSORT`、`TPREFETCH`、六个 TGEMV、六个 MX Matrix API 已存在。
+但 `TMRGSORT`、`TIMG2COL`、`TQUANT/TDEQUANT` 的现有 API 仍是旧合同，必须修正。
+
+#### B1. MGATHER_CAS public API
+
+在 LLVM A2 的 inline-asm TwoSrc_NoDst 修复合入后，实现：
+
+```cpp
+template <typename DstTile, typename IndexTile,
+          typename ExpectedTile, typename ReplacementTile>
+void MGATHER_CAS(DstTile &observedOld,
+                 uint64_t base,
+                 IndexTile &byteDisplacements,
+                 ExpectedTile &expected,
+                 ReplacementTile &replacement,
+                 uint32_t validCol,
+                 uint32_t validRow);
+```
+
+具体模板签名按库现有 traits 风格调整，但 operand 顺序和语义不能改变。编译期检查：
+
+- `observedOld/expected/replacement` transfer dtype、logical shape、layout 相同；
+- transfer dtype 不是 packed 4-bit；
+- index dtype 在 ASL 合法集合内；
+- 全部 Tile 为 Local，TileSizeCode 分别从各 Tile 类型计算，不能假定 index 与 value
+  物理大小相同。
+
+inline asm 发射 exactly two B.IOT，第一条必须是 TwoSrc_NoDst 且没有 `last`，第二条
+带 replacement、destination 和 `last`；B.IOR 只携带 base；加 `"memory"` clobber。
+不要用两个普通 gather + compare + scatter wrapper 模拟 CAS，那会丢失原子性。
+
+测试必须既检查 `.s` 文本，也用当前 LLVM assemble/objdump 验证真实 bundle。
+
+> **✅ 已实现（2026-08-18，commit `2088886`；合同修复已合入 `7c1dead`）**：`MGATHER_CAS(
+> observedOld, base, byteDisplacements, expected, replacement, validCol,
+> validRow=1)`。注意：早先判断的"LLVM inline-asm TwoSrc_NoDst gap"是**误判**
+> （纯 IR `B.IOT $0,$1,mask=1111` + `@2Tr` 可编译）；真实根因是首版把第二
+> 条 B.IOT 的 destination 约束写成输入 `"Tr"`。改用 **early-clobber 输出
+> `=&Tr`** 后 bundle 通过。反汇编确认：`B.IOT Idx,Exp,mask=1111`（TwoSrc_NoDst）
+> + `B.IOT Rep,mask=1111,last,->Dst` + `B.IOR [base]`。测试 MGatherCas.cpp。
+
+#### B2. TMRGSORT API 修正
+
+当前旧接口 `TMRGSORT(dst, src0, src1)` 错误发射 LB0/LB1/LB2、没有 descending，
+并固定 `mask=15`。改为：
+
+```cpp
+template <typename DstTile, typename LeftTile, typename RightTile>
+void TMRGSORT(DstTile &dst,
+              LeftTile &left,
+              RightTile &right,
+              bool descending = false);
+```
+
+要求：
+
+- 不发任何 B.DIM；
+- B.IOR RegSrc0 携带 0/1 descending；
+- 两个 source 位于规范要求的 source slots，一个 destination；
+- dtype 只允许 FP16/FP32 且一致；
+- single-row/non-empty 等 runtime legality 由模型/硬件检查，能在 host/debug 路径
+  明确 assert 的也应提供诊断；
+- mask 使用库现有 PE-mask 抽象，不新增硬编码 15。
+
+旧 overload 若保留，必须只作为 source-compatible ascending wrapper，并调用新接口；
+不得继续发旧 LB 字段。
+
+> **✅ 已实现（2026-08-18，commit `50541a0`；shape 合同修复已合入 `7c1dead`）**：新
+> `TMRGSORT(dst, left, right, descending=false)` 只发 B.IOR RegSrc0（0/1，
+> volatile anti-fold）+ 一条 TwoSrc_Dst B.IOT（mask=1111, last）；无 B.DIM；
+> dtype 校验 FP16/FP32 一致；旧 LB0/LB1/LB2+mask=15 合同移除。测试
+> TMrgSort.cpp。
+
+#### B3. TQUANT / TDEQUANT API 修正
+
+当前 `(dst, src)` 无法表达 v0.58.1 attributes。建议接口：
+
+```cpp
+void TQUANT(dst, src,
+            RoundMode roundMode,
+            bool saturate,
+            float multiplier = 1.0f,
+            int32_t zeroPoint = 0);
+
+void TDEQUANT(dst, src,
+              float multiplier = 1.0f,
+              int32_t zeroPoint = 0);
+```
+
+- TQUANT 从 destination type 生成 B.DATR DataType，并编码 RMode/Sat；source 必须
+  FP32，destination 必须 S8/U8；
+- TDEQUANT destination 固定 FP32，source S8/U8，Sat 必须编码 false；
+- multiplier 通过 GPR 传递 raw FP32 bits，不能让编译器数值转换成 integer；zero
+  point 通过另一 GPR；默认值可以省略 B.IOR 或显式发送规范默认值，但测试必须覆盖
+  最终 bundle 合法；
+- inline asm 必须保留 GPR input 和 `memory`/Tile constraints 的正确 clobber；
+- 删除/诊断旧 scale Tile、offset Tile overload，避免生成模型不再接受的 operand
+  数量。
+
+> **✅ 已实现（2026-08-18，commit `968a5a2`；RMode/shape 修复已合入 `7c1dead`）**：
+> `TQUANT<Mode=RNE, Saturate=false>(dst, src, multiplier=1.0f, zeroPoint=0)`
+> FP32→S8/U8；`TDEQUANT<Mode=RNE>(dst, src, ...)` S8/U8→FP32。RMode 用编译期
+> 模板参数（B.DATR 立即数）经 `%c` 传数字；Sat 用 if constexpr 选 SAT/NOSAT
+> （token）；multiplier 以 raw FP32 bits（memcpy→u32 GPR）+ zeroPoint 走
+> B.IOR；新增 RoundMode 枚举。旧 `(dst,src)` TDEQUANT 保留为转发 wrapper。
+> 测试 TQuant.cpp。
+
+#### B4. TIMG2COL API 与 descriptor 配置
+
+当前只有 `TIMG2COL(dst, src)`，至少改为：
+
+```cpp
+void TIMG2COL(dst, src, uint32_t posM, uint32_t posK);
+```
+
+只编码 `posM/posK` low 16 bits 到 B.IOR。更重要的是，库还需要 feature-map
+descriptor 的创建/绑定接口；接口名称按现有 API 风格确定，但必须能完整表达 A5
+列出的所有字段和 typed padding，不能只提供 stride/pad 的不完整子集。
+
+建议将 descriptor 定义为强类型 POD，并提供显式 bind/config operation：
+
+```cpp
+FeatureMapDescriptor descriptor{...};
+configure_feature_map(source, descriptor);
+TIMG2COL(dst, source, posM, posK);
+```
+
+如果 ISA 用独立命令配置 descriptor，应严格发对应 command；如果 descriptor 是
+runtime/model-side metadata，则 target backend 不能静默假装硬件已配置。实施前先从
+active ASL catalog 确认 descriptor 的 architectural configuration path，并把选择写入
+API 文档。
+
+#### B5. retired operation surface 清理
+
+以下 0.58.1 deleted/reserved 名称仍有实际 inline asm 发射代码：
+
+```text
+TFMOD TPRELU TADDC TSUBC TFMODS TLRELU TAXPY
+TADDSC TSUBSC TGATHERB TRANDOM
+```
+
+处理原则：
+
+- public API 删除，或保留“实例化即 static_assert”的迁移诊断；
+- 不得继续发出对应 selector；
+- `TSORT32` 当前已是实例化时报错迁移桩，保持该策略即可；
+- changelog/docs 给出 replacement（若 active ASL 有直接 replacement）；没有一对一
+  replacement 时明确说明 retired，不要编造替代指令。
+
+> **✅ 已实现（2026-08-18，commit `a15297f` TileOP linx）**：11 个 retired op
+> 全部改为实例化即 static_assert 的迁移桩（TFMOD/TPRELU/TADDC/TSUBC/TFMODS/
+> TLRELU/TAXPY/TADDSC/TSUBSC/TGATHERB/TRANDOM），不再发射 selector；spec 无
+> 对应 active replacement，诊断明确 retired。spot-check 3 个桩实例化拒绝通过。
+
+#### B6. contract test 重建
+
+以下测试/fixture 仍固定旧 `linx-isa v0.58` 与 `%q/%D` ABI：
+
+```text
+test/test_v058_engine_contract.py
+contracts/linxisa-v0.58-engine-ops.json
+```
+
+当前 15 tests 中 6 PASS、9 FAIL。重建方式：
+
+1. 从 `/tmp/pto-spec-current` v0.58.1 active catalog 自动生成 accepted operation
+   集合和 mode/function；
+2. fixture 记录 spec HEAD/tag，避免名字仍叫 v0.58 却验证 v0.58.1；
+3. 保留当前真实 LLVM inline-asm ABI：`Tr` Tile constraint、`%Z` TileSize printer；
+   不恢复 `%q/%D`；
+4. deleted/reserved operation 作为 negative inventory，验证 API 不再发射；
+5. 对 multi-B.IOT operation 记录 operand role/last/destination count，而不只比较
+   mnemonic 字符串；
+6. 将 TSORT 的两个不同 dtype destination、MGATHER_CAS TwoSrc_NoDst、TIMG2COL
+   B.IOR、TQUANT/TDEQUANT B.DATR+B.IOR 作为专门 contract fixture。
+
+---
+
+### 4. Work Package C：LLVM MC / parser / printer / inline asm
+
+#### C1. canonical TSORT，删除 TSORT32 accepted spelling
+
+当前行为：
+
+```text
+BSTART.TEPL TSORT, FP16    -> assemble fail
+BSTART.TEPL TSORT32, FP16  -> assemble success，selector 0x06c
+```
+
+需修改：
+
+```text
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.cpp
+llvm/test/CodeGen/LinxV5/v5-tsort-inline-asm.ll
+以及相邻 LinxV5 MC encode/decode tests
+```
+
+实现要求：
+
+1. selector `0x06c` 的 canonical operation 名改为 `TSORT`；parser 接受 TSORT，
+   printer 输出 TSORT。
+2. `TSORT32` 不再作为 accepted alias；如果兼容期必须接受，只能 gated deprecated
+   alias，并且 PTO-only/canonical test 必须拒绝。优先直接拒绝以匹配 active ASL。
+3. 不改变 selector 数值，不把 `BSTART.SFU`/`BSTART.TEPL` carrier 层与 operation
+   canonical assembly 层混淆；测试同时覆盖项目当前支持的 carrier spelling 和最终
+   operation token。
+4. 更新 inline asm test 为双 destination TSORT 合同，不能只改字符串。
+
+> **✅ 已实现（2026-08-18，commit `49d63a6` LLVM dev-llvm15_56）**：parser
+> `tsort`→0x06c（`tsort32` 拒绝），printer 0x06c→`TSORT`，v5-tsort-inline-asm.ll
+> CHECK 更新为 TSORT。encoding/selector 不变（`0x81 0x91 0xc1 0x26`）；TileOP
+> `BSTART.TEPL 108` 数字形式不受影响。
+>
+> **相关前提 commit `4ecebf37`（Accept non-last B.IOT destination suffixes）**：
+> 让 TSORT 第一条 `B.IOT Source, mask=1111, ->ValueDst`（无 last，规范 `<last>`
+> 只在末条）可被 LLVM 接受。注意：旧 toolchain（未含 4ecebf37）下该无-last 形式
+> 会 Match 失败；本地回归需用含 4ecebf37 的 LLVM 构建。
+
+#### C2. deleted/reserved selector 清理
+
+LLVM 当前仍可编码至少：
+
+```text
+TFMOD       0x005
+TPRELU      0x00e
+TADDC       0x018
+TSUBC       0x019
+TFMODS      0x025
+TLRELU      0x02e
+TAXPY       0x02f
+TADDSC      0x038
+TSUBSC      0x039
+TGATHERB    0x061
+TRANDOM     0x069
+```
+
+实现方式：
+
+- 从 accepted mnemonic-to-selector parser table 移除；
+- printer 对这些 raw selector 不得打印成 active mnemonic，应按项目约定输出
+  unknown/reserved；
+- decoder 若 carrier 可解出 generic selector，必须在 PTO operation decode 层标记
+  reserved，而不是构造 retired `TileOp`；
+- 添加每个名称的 parser negative test 和每个 raw selector 的 decoder test；
+- 如果 Linx vendor mode 确实要保留，必须放入显式 extension gate，默认 PTO 0.58.1
+  surface 不可见，也不得计入 accepted operation inventory。
+
+#### C3. MGATHER.CAS TwoSrc_NoDst inline-asm gap
+
+现状：普通 `llvm-mc` 能解析/编码 MGATHER.CAS 所需 B.IOT 形态，但 clang/LLVM
+inline asm 对第一条 `B_IOT_TwoSrc_NoDst` 报 `unknown operand`，带 `last` 的错误输入
+还可能触发前端崩溃。根因范围在 LinxV5 inline-asm operand classification/matching，
+不是 MGATHER.CAS selector 本身。
+
+重点检查：
+
+```text
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+LinxV5 inline-asm operand constraint lowering / target operand matcher
+B_IOT_TwoSrc_NoDst 对应 TableGen operand class
+TILE_Src_Reg / MCK_TileReg 的第二 source slot
+```
+
+修复策略：
+
+1. 用最小 `.ll` 内联汇编建立 reproducer，只包含：两个 `Tr` Tile input、无 Tile
+   output 的 `B.IOT src0, src1, mask=..., 0`。
+2. 对比已经工作的 two-source matrix B.IOT 和 one-source+destination TSORT B.IOT，
+   找出第二 Tile source 在 inline asm substitution 后为何没有分类成 MCK_TileReg。
+3. 修正 matcher/operand class，使两个 Tile source 都走 `Tr` constraint 与 Tile
+   register parser；不要为 MGATHER.CAS 写 mnemonic 特判，也不要把第二 Tile 当 GPR。
+4. 对 malformed `last`/destination 组合返回正常 diagnostic，禁止 assert/crash。
+5. 保持普通 source-file assembly 行为不回归，并验证最终 encoding 与 llvm-mc
+   直接汇编完全相同。
+
+验收测试：
+
+- inline asm TwoSrc_NoDst 成功；
+- 第一个/第二个 Tile 均可由不同 virtual Tile value 分配；
+- `Tr` 与 `%Z` ABI 不变；
+- 错误 operand kind、缺第二 source、非法 destination/last 只报 error 不 crash；
+- TileOP `MGATHER_CAS` 完整 bundle 能 compile、assemble、objdump round-trip。
+
+> **✅ 已澄清（2026-08-18）：C3 不是 LLVM gap，无需修改 LLVM。** 纯 IR 复现
+> 证明 inline asm 的 TwoSrc_NoDst（`B.IOT $0,$1,mask=1111` + 两个 `@2Tr` 输入）
+> 可正常编译/汇编。MGATHER_CAS 首版的失败缘于 TileOP 把 destination 写成输入
+> `"Tr"` 约束；改用 `=&Tr` 输出后 bundle 通过（见 B1 注记）。本段所列的验收
+> 项（两 Tile source 独立分配、`Tr`/`%Z` 不变、错误只报不 crash、MGATHER
+> round-trip）已由 MGatherCas.cpp + objdump 覆盖。
+
+#### C4. 不要顺手恢复旧 inline-asm ABI
+
+任何上述修复都不得引入：
+
+```text
+%q Tile printer
+%D TileSize printer
+普通 "r" constraint 传 Tile
+用 %c 打印 TileSize
+79e0f651cb3da67b409745e0680f757b3ee5aa4f 中已回退的整套 ABI 改写
+```
+
+当前正确基线仍是 `Tr` + `%Z`。若 matcher 修复需要新 operand class，应只解决
+TwoSrc_NoDst 的第二 Tile source，不扩大 ABI surface。
+
+---
+
+### 5. 联合验收矩阵
+
+每个 operation 至少完成四层验证：
+
+```text
+Layer 1: PTO catalog/ASL inventory
+  accepted operation 名称、mode/function/selector、operand schema 一致
+
+Layer 2: LLVM MC + inline asm
+  source assembly -> encoding -> disassembly round-trip；非法 bundle 拒绝且不 crash
+
+Layer 3: TileOP contract
+  API 生成正确 BSTART/B.DIM/B.DATR/B.IOR/B.IOT 数量、顺序、last、dtype、TileSize
+
+Layer 4: SuperScalarModel execution
+  legality、preflight atomicity、bit-exact result、flags、padding、destination publication
+```
+
+建议建立一个小型 cross-repo fixture，每个 operation 保存：
+
+```text
+spec operation id
+mode/function/selector
+assembly text
+expected raw encoding
+operand role manifest
+positive input/output vectors
+negative legality cases
+```
+
+至少联合跑：
+
+```bash
+# LLVM：使用实际 build 目录替换 <build>
+<build>/bin/llvm-lit llvm/test/MC/LinxV5 llvm/test/CodeGen/LinxV5
+
+# TileOP：先跑 operation 单测，再跑 contract inventory
+# 具体命令以仓库当前 README/CI 为准，不新建测试框架
+
+# Model：先跑每个新增 operation 的定向测试，再跑受影响 engine suite
+# 最后用 TileOP 生成的 ELF/汇编进入 model，避免只测手写内部 Block
+```
+
+验收记录必须写明真实执行命令、PASS 数和未运行原因；没有 model executable 或
+硬件环境时，只能标记“未验证”，不能用 compile success 代替 execution success。
+
+### 6. 明确禁止的错误修复方向
+
+- 不放宽 binary TEPL/TCVT 的 ASL legality 为“只要总 bytes 相同”；logical shape、
+  layout 和规范要求的 dtype contract 必须保留；
+- 不把 spill/reload 的 raw byte round-trip 当成任意 operation 可跨 dtype reinterpret；
+- 不恢复 deleted selector，不能因为已有 ELF 使用旧名就继续接受；
+- 不把 `TSORT` index destination 当成与 value destination 同 dtype、同物理大小；
+- 不用 host floating `<` 直接实现 TSORT/TMRGSORT；
+- 不把 `MGATHER_CAS` 降级为 gather+compare+scatter；
+- 不让 `TQUANT/TDEQUANT` 继续读取旧 scale/offset Tile；
+- 不在缺少 E8M0 scale 时对 MX operation 使用 identity scale fallback；
+- 不在 `ExecuteTIMG2COL` 内硬编码临时 descriptor；
+- 不为通过测试恢复 `%q/%D` 或普通 `"r"` Tile inline-asm ABI；
+- 不因本节 9 个 model operation 完成，就宣称 scalar/command 全部达到 0.58.1。
+
+### 7. 完成定义与提交说明模板
+
+一个 operation 只有满足以下条件才可标记完成：
+
+```text
+[ ] active ASL legality 条件逐项映射到代码或共享 helper
+[ ] 所有 operand role、顺序、数量和 last/mask 规则有负测
+[ ] execution 先 preflight、后 effect，fault 不产生部分 state
+[ ] padding、flags、destination publication 有测试
+[ ] LLVM assemble/disassemble 与 TileOP 发射一致
+[ ] model 能运行 TileOP/LLVM 生成的真实输入
+[ ] docs 不再描述 retired/旧 operand contract
+```
+
+建议 commit 拆分：
+
+```text
+[LinxV5] Canonicalize TSORT and reject retired tile selectors
+[LinxV5] Support two-source no-destination B.IOT in inline asm
+[TileOP] Add MGATHER_CAS API for PTO ISA 0.58.1
+[Model] Implement MGATHER_CAS atomic gather compare-and-swap
+[Model] Implement PTO sorting operations
+[TileOP] Align TMRGSORT with PTO ISA 0.58.1
+[Model] Align TQUANT and TDEQUANT scalar attributes
+[TileOP] Align quantization APIs with PTO ISA 0.58.1
+[Model] Add feature-map descriptor state and TIMG2COL
+[Model] Implement TGEMV MX variants
+[TileOP] Regenerate PTO ISA 0.58.1 operation contracts
+```
+
+提交前再次 `git status --short --branch`，只提交当前 operation 的文件；不要夹带
+LLVM 工作区中用户已有 patch。除非用户明确要求，不要创建分支、rebase 或 force
+push。
+
+## 2026-08-18 TSORT TileOP 历史设计（TileOP 已实现；其余以上节为准）
+
+> 本节保留 TSORT TileOP 的早期详细设计供追溯。当前 TileOP 已有 TSORT API；
+> 后续 agent 不应按本节“待实现”文字重复实现。LLVM canonical 名称与
+> SuperScalarModel TSORT execution 的剩余工作统一以上一节 Work Package A2/C1
+> 为准。
+
+### 1. 当前基线与规范来源
+
+```text
+PTO-SPEC:
+  repo:    PTO-ISA/pto-spec
+  branch:  main
+  HEAD:    c381465b2b8e457e162a4246ee58bb9a2c5b49fd
+  release: v0.58.1
+  source:  asl/tile/irregular-and-complex/sorting/TSORT.asl
+
+TileOP:
+  path:    /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API
+  branch:  linx
+  HEAD:    21a93e6
+  note:    cmp.md 已更新到 TCMP<Mode> API；issue #48/#49（TLOAD stride
+           逻辑元素 + B.IOR memory clobber）已修复并推送；TSORT 尚未开始。
+```
+
+不要恢复 `79e0f65` 中整套 `%q`、普通 `"r"` Tile operand、`%c` TileSize
+改写。当前 LLVM 的 Tile inline-asm ABI 仍是 `Tr` Tile constraint 和 `%Z`
+TileSize printer。
+
+### 2. ISA 的 TSORT 精确定义
+
+active ISA 只有 `TSORT`，没有 accepted operation `TSORT32`。TSORT 使用：
+
+```text
+encoding carrier: TEPL Mode 3 Function 12
+selector:         0x06c / 108
+canonical block:  BSTART.SFU TSORT, FP32|FP16
+sources:          1 个 persistent Local value source
+destinations:     2 个 distinct new Local destinations
+                  destination0 = sorted values，dtype FP16/FP32
+                  destination1 = original group-local indices，dtype U32
+```
+
+这里要区分三个不同层次，不能把它们混写：
+
+```text
+operation canonical assembly: TSORT <bundle operands>
+block composition:            BSTART.SFU TSORT, FP32|FP16
+encoding carrier in catalog:  BSTART.TEPL, Mode=3, Function=12, selector=0x06C
+```
+
+`BSTART.SFU TSORT` 的直接来源是 `pto-spec/asl/tile/irregular-and-complex/sorting/TSORT.asl`
+的 `block`、`contract.block_composition`、`contract.examples` 和 `legality` 字段；
+生成文档 `docs/tile/irregular-and-complex/sorting/TSORT.md` 的 Block composition
+段也明确列出该形式。文档 Assembly 段只写抽象形式 `TSORT <bundle operands>`。
+catalog 中的 `command_mnemonic: BSTART.TEPL` 表示底层编码 carrier，不代表
+canonical source assembly 应写成 `BSTART.TEPL TSORT`。
+
+语义要求：
+
+- 每个有效 row 独立排序；
+- 每行从 column 0 开始按 `sort_width` 分组；
+- 最后一组可以短于 `sort_width`，不得读取 padding；
+- 排序稳定；相等元素保持输入顺序；
+- index 输出是元素排序前在当前 group 内的位置，即
+  `original_column % sort_width`；
+- `descending=0` 为升序，`descending=1` 为降序；
+- `sort_width` 取值 `1..64`；省略 LB0 或编码 LB0=0 时默认 32；
+- value source/value destination 只允许 FP16 或 FP32；
+- index destination 必须是 U32；
+- 三个 Tile 的 logical rows/columns/valid rows/valid columns 相同；
+- 三个 Tile 均为 Local、Numeric、RowMajor；
+- value/index destination 必须是两个不同的新 Tile，不能与 source alias；
+- B.DATR 应省略或全零；LB1/LB2 不得出现；B.IOS 不合法；
+- 所有 B.IOT 使用相同的非零 PE mask。
+
+### 3. 需要提供的 TileOP API
+
+建议首先提供一个语义完整、参数明确的 runtime 控制接口：
+
+```cpp
+template <is_tile_data_v ValueDstTile,
+          is_tile_data_v IndexDstTile,
+          is_tile_data_v SourceTile>
+void TSORT(ValueDstTile &valueDst,
+           IndexDstTile &indexDst,
+           SourceTile &source,
+           uint32_t sortWidth = 32,
+           bool descending = false);
+```
+
+如果项目现有 API 风格要求编译期 attribute，可另外提供模板 overload，但不能只提供
+固定 32 元素版本：
+
+```cpp
+template <uint32_t SortWidth = 32, bool Descending = false,
+          is_tile_data_v ValueDstTile,
+          is_tile_data_v IndexDstTile,
+          is_tile_data_v SourceTile>
+void TSORT(ValueDstTile &valueDst,
+           IndexDstTile &indexDst,
+           SourceTile &source);
+```
+
+runtime API 不得 clamp 非法参数。`sortWidth > 64` 或 descending 控制值不是
+0/1 时，ISA 要求 Tile legality fault；host/debug 路径可以 assert，target 路径必须
+保持规范语义。
+
+### 4. 编译期类型与 shape 约束
+
+在进入 inline asm 前使用现有 Tile traits/static_assert 检查：
+
+```text
+SourceTile::DType == ValueDstTile::DType；
+Source/ValueDst dtype 是 FP16 或 FP32；
+IndexDstTile::DType 是 U32；
+三个 Tile 的 Rows、Cols 完全一致；
+三个 Tile 的 runtime ValidRow、ValidCol 由同一 logical shape 描述；
+三个 Tile 是 Local RowMajor；
+不允许 Shared、Acc、Left/Right matrix role 或 boxed/fractal layout；
+```
+
+注意 FP16 value tile 与 U32 index tile 虽然 logical shape 相同，但物理字节数和
+TileSizeCode 不同。必须分别使用 `valueDst` 和 `indexDst` 自己的 TileSizeCode，
+不能复用 value destination 的 `%Z` operand。
+
+### 5. Linx inline-asm 绑定逻辑
+
+目标 bundle 应表达为：
+
+```asm
+BSTART.SFU TSORT, <source/value dtype>
+B.DIM <sortWidth>, 0, ->lb0
+B.IOR [<descendingGpr>], []
+B.IOT <source>, mask=<same-mask>, 0, -><valueDst><value-TSize>
+B.IOT mask=<same-mask>, last, -><indexDst><index-TSize>
+```
+
+关键实现要求：
+
+1. `BSTART` datatype 来自 source/value dtype，不能使用 index 的 U32 TypeCode；
+2. 不要发 `B.DATR`，默认全零正好满足 TSORT contract；
+3. 只发 LB0，不要沿用旧 `TSORT32` 的 LB1/LB2 shape bundle；
+4. `sortWidth` 放 GPR 后绑定到 LB0；默认值 32 可以显式传 32；
+5. `bool descending` 先规范化为 `uint32_t descendingValue = descending ? 1 : 0`，
+   再通过 `B.IOR` 的 RegSrc0 传递；
+6. 第一条 B.IOT 同时绑定 persistent source 和 sorted-value destination；
+7. 第二条 B.IOT 是 destination-only，并带 `last`，绑定 U32 index destination；
+8. Tile operands 使用当前 LLVM 支持的 `Tr` constraint，TileSize 使用 `%Z`；
+9. 两个输出优先使用 early-clobber output constraint（如 `=&Tr`），防止寄存器
+   分配器把两个 new destination 或 source 错误 alias；如果当前 frontend 不接受，
+   必须通过 object/objdump 证明普通 `=Tr` 仍分配三个不同的 Tile register；
+10. PE mask 沿用当前编译器实际接受的文本形式，不要在本任务中顺手做全库
+    `mask=15`/`mask=1111` 迁移；但两个 B.IOT 的 mask 必须相同且非零。
+
+示意代码，不可未经编译验证直接照抄：
+
+```cpp
+uint32_t descendingValue = descending ? 1u : 0u;
+asm volatile(
+    "BSTART.SFU TSORT, %c[DataType]\n"
+    "B.DIM %[SortWidth], 0, ->lb0\n"
+    "B.IOR [%[Descending]], []\n"
+    "B.IOT %[Source], mask=15, 0, "
+        "->%[ValueDst]<%Z[ValueTileSize]>\n"
+    "B.IOT mask=15, last, "
+        "->%[IndexDst]<%Z[IndexTileSize]>\n"
+    : [ValueDst] "=&Tr"(valueDst.data()),
+      [IndexDst] "=&Tr"(indexDst.data())
+    : [Source] "Tr"(source.data()),
+      [DataType] "i"(type_traits<typename SourceTile::DType>::TypeCode),
+      [SortWidth] "r"(sortWidth),
+      [Descending] "r"(descendingValue),
+      [ValueTileSize] "i"(
+          tile_type_traits<typename ValueDstTile::TileDType>::TilesizeCode),
+      [IndexTileSize] "i"(
+          tile_type_traits<typename IndexDstTile::TileDType>::TilesizeCode));
+```
+
+当前 LLVM handoff 已记录 canonical `TSORT` parser 可能尚未落地。如果
+`BSTART.SFU TSORT` 不能 assemble：
+
+- 优先补齐/等待 LLVM canonical TSORT parser/printer；
+- 可以用 `BSTART.TEPL 108` 做临时兼容验证，但必须清晰标记为 encoding carrier
+  fallback，并保留 canonical 汇编测试；
+- 不得因此恢复错误的单输出 `TSORT32(dst, src)` 语义。
+
+### 6. 旧 TSORT32 的处理
+
+当前 `include/jcore/template_asm.hpp` 中的：
+
+```cpp
+void TSORT32(dst, src);
+```
+
+只有一个 destination，也错误发送 LB1/LB2，无法产生 U32 original-index 输出，
+不符合 active ISA。处理方式：
+
+- 正式接口改为 `TSORT(valueDst, indexDst, source, sortWidth, descending)`；
+- 删除 `TSORT32`，或保留一个明确 deprecated 且实例化即报错的迁移诊断；
+- 不能把旧 `TSORT32` 简单重命名为 `TSORT`；
+- 不能在 wrapper 内偷偷丢弃 index destination；
+- 不要恢复 `79e0f65` 中同样只有单输出的 `TSORT(dst, src)` 草案，该草案也不
+  满足 normative ASL。
+
+### 7. 文件范围建议
+
+最小实现预计涉及：
+
+```text
+include/jcore/template_asm.hpp
+test/tileop_api/src/TSort.cpp                （新增）
+test/tileop_api/compile.all                  （加入编译项）
+docs/tileop-usage/                           （补充 TSORT API/语义）
+```
+
+如果项目要求所有 backend 暴露一致 API，再分别增加 cpu_sim 实现；cpu_sim 必须做
+稳定分组排序并同时写 value/index 两个输出。不要为了接口齐全添加空实现。AArch64
+后端没有能力时应保持明确 unavailable，而不是静默退化。
+
+### 8. 必须增加的测试
+
+正向编译/汇编测试至少覆盖：
+
+```text
+FP16 values + U32 indices，sortWidth=32，ascending；
+FP32 values + U32 indices，sortWidth=16，descending；
+sortWidth=1；
+sortWidth=64；
+value/index TileSizeCode 不同；
+生成一个 source、两个不同 destination Tile bindings；
+只有 LB0，没有 LB1/LB2；
+B.IOR 实际携带 0/1；
+BSTART datatype 来自 FP16/FP32 value，不是 U32 index；
+第二个 B.IOT 是 destination-only 且带 last；
+```
+
+负向编译测试至少覆盖：
+
+```text
+BF16/S32/U32 value source 被拒绝；
+index destination 不是 U32 被拒绝；
+source/value destination dtype 不同被拒绝；
+三个 Tile logical shape 不一致被拒绝；
+Shared 或非 RowMajor Tile 被拒绝；
+旧 TSORT32 不能继续作为 accepted ISA API 使用；
+```
+
+如果有 simulator/model 联调环境，功能测试至少验证：
+
+```text
+升序与降序；
+每行独立分组；
+最后一个短 group；
+重复值的稳定性；
+index 是 group-local original position；
++0/-0 与 NaN 顺序；
+FP16 和 FP32 两种 value dtype；
+```
+
+### 9. 验收时必须报告
+
+实现 agent 完成后必须给出：
+
+```text
+最终公开 API 签名；
+旧 TSORT32 的处理方式；
+修改文件列表；
+两个 destination 的 B.IOT 顺序；
+value/index 各自使用的 TileSizeCode；
+防止 source/value/index Tile register alias 的证据；
+canonical BSTART.SFU TSORT 是否被当前 LLVM 接受；
+若使用 BSTART.TEPL 108 fallback，LLVM 缺口和后续移除条件；
+正向/负向测试命令及结果；
+至少一个 object/objdump 或等价汇编证据。
+```
+
+### 10. 本任务禁止事项
+
+- 不要只把 `TSORT32` 重命名成 `TSORT`；
+- 不要遗漏 U32 index destination；
+- 不要固定只能排序 32 个元素；
+- 不要继续发送 LB1/LB2；
+- 不要把 index Tile 的 U32 当成 BSTART datatype；
+- 不要假设 value/index Tile 的物理字节数或 TileSizeCode 相同；
+- 不要恢复 `79e0f65` 的 `%q`/普通 `"r"` Tile ABI；
+- 不要顺手修改 TMRGSORT、全库 mask 文本或其他 retired operation；
+- 不要在没有真实 Linx compile/objdump 证据时宣称实现完成。
+
+## 2026-08-18 v0.58.1 TileOP 确定项进展
+
+### 已完成并推送（TileOP linx：8ba7828 / 后续）
+
+- **TSORT**（见上文任务段）：`TSORT(valueDst, indexDst, source,
+  sortWidth=32, descending=false)`，TEPL 108 carrier（LLVM 无 canonical
+  BSTART.SFU mnemonic）；value/index 用各自逻辑 TilesizeCode（FP16 2KB vs
+  U32 4KB）；TSORT32 改迁移诊断。测试 TSort.cpp，负向 4 例全拒。
+- **TPREFETCH**：`TPREFETCH(gm, valid_col, valid_row)`，TLSU function 3
+  carrier（`BSTART.TLSU TPREFETCH`）；无 tile 绑定（implicit PE 1111），
+  只发 B.DIM（LB0/LB1/LB2）+ B.IOR（base, row_stride 逻辑元素）；带
+  `: "memory"` clobber。测试 TPrefetch.cpp。
+
+### MGATHER_CAS 已实现（2026-08-18 纠正：非 LLVM gap）
+
+早期曾误判为"LLVM inline-asm TwoSrc_NoDst gap"，实际**已解决**：
+- LLVM inline asm **接受** TwoSrc_NoDst（纯 IR repro 用 `@2Tr` 约束 + `B.IOT $0,
+  $1, mask=1111` 编译成功）；TSORT 的 OneSrc_Dst 也一直可用。
+- 真实失败原因是 TileOP 首版把第二条 B.IOT 的 destination 约束写成了输入
+  `"Tr"`；改用 **early-clobber 输出 `=&Tr`** 后完整 bundle 编译通过。
+
+已实现（commit 2088886，TileOP linx）：
+
+```cpp
+MGATHER_CAS(observedOld, base, byteDisplacements, expected, replacement,
+            validCol, validRow = 1);
+```
+
+- exactly two B.IOT：IndexTile+ExpectedTile（TwoSrc_NoDst，L=0）→
+  ReplacementTile+last -> DstTile（L=1）；B.IOR 只带 base；`"memory"` clobber。
+- 静态检查：expected/replacement/dst 同一 transfer DataType；index 为整型
+  byte displacement；三 Tile 与 ValidRow x ValidCol 一致。
+- 测试 MGatherCas.cpp。
+
+## 2026-08-17 PTO ISA 0.58.1 对齐审计：剩余实现与编码缺口
+
+### 0. 重启后的最短启动流程
+
+```bash
+cd /home/zhuwei/linx-llvm
+sed -n '1,260p' CODEX_HANDOFF.md
+git status --short --branch
+git -C /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API \
+  status --short --branch
+git -C /tmp/pto-spec-audit-20260817 log -1 --oneline
+```
+
+除非用户明确要求，不要 commit、push、rebase、切换分支或清理 untracked
+文件。LLVM 工作区仍有大量用户 patch/诊断文件，必须保留。
+
+### 1. 当前精确基线
+
+```text
+PTO-SPEC:
+  path:    /tmp/pto-spec-audit-20260817
+  branch:  main
+  HEAD:    c381465b2b8e457e162a4246ee58bb9a2c5b49fd
+  date:    2026-08-16T11:01:45Z
+  subject: Fix ASL release validation fixtures (#87)
+  release: PTO ISA 0.58.1
+  encoding ABI: pto-isa-0.58.1-mode-function-v1
+
+LLVM:
+  path:    /home/zhuwei/linx-llvm
+  branch:  dev-llvm15_56
+  HEAD:    86959776bd1fb22dcc8e73b57ec2276c65d44f38
+  subject: [LinxV5] Fix regclass spill/reload asymmetry and B.IOT %Z non-immediate handling
+  remote:  linxisa/dev-llvm15_56 同步
+
+TileOP:
+  path:    /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API
+  branch:  linx
+  HEAD:    21a93e6c1f5bd2b67d8c1e1215d028d3556d0dd8
+  subject: [tileop-api] docs: update cmp.md to TCMP<Mode>/TCMPS<Mode> API
+  remote:  origin/linx 同步
+```
+
+PTO ISA 0.58.1 inventory：`474` scalar forms、`74` active block/command
+forms、`109` direct Tile operations、`32` occupied extension reservations。
+0.58.0 → 0.58.1 保持 Tile Mode/Function encoding ABI；Tile operation
+selector/function 数值没有变化。`TDIV/TDIVS/TREM/TREMS` 仅从 VEC 重新归类
+为 SFU，selector 仍分别为 `0x003/0x023/0x004/0x024`。
+
+### 2. 已确认对齐，不应重复修改
+
+- 109 个 accepted Tile operation 的 TLSU/CUBE function 与 TEPL selector 数值
+  没有发现误差。
+- TLSU `0..14` 已对齐：`MGATHER.CAS=8`、Shared TMOV `9..12`、
+  `GMOV=13`、`TSTORE.SPART=14`。
+- 12 个 Matrix CUBE function 已对齐。
+- `L.BSTOP` 精确编码已对齐：
+  `0f 00 00 00 01 00 00 00`。
+- `HL.QPOP` 当前 TableGen 已把废弃 `SrcR` 位固定为 zero，符合 0.58.1
+  收紧后的 mask；不要恢复第二个 source operand。
+- TileOP 已完成普通 `TMOV`、六个 `TGEMV*`、完整 Matrix PostProcess
+  inline-asm surface、TCMP/TCMPS CMode、TLSU logical-element stride。
+- Matrix inline-asm 路径的 B.FPATR 值在 asm 文本中，不受 native pseudo
+  硬编码 zero 的限制。
+
+### 3. LLVM P0：reserved/deleted Tile operation 清理
+
+最新规范要求 deleted/reserved Tile operation 不得作为 PTO accepted operation
+assemble/decode。当前 LLVM 仍接受至少：
+
+```text
+TPRELU TAXPY TGATHERB TRANDOM
+TFMOD TFMODS TADDC TSUBC TADDSC TSUBSC TLRELU
+TSORT32 ESAVE ERCOV
+```
+
+精确问题：
+
+- canonical `TSORT`（selector `0x06c`）当前 parser 不接受；printer 仍输出
+  deleted name `TSORT32`。
+- `ESAVE/ERCOV` 已在 0.58.1 command inventory 中标为 `reserved-in-pto`，
+  TEPL selector `0x07e/0x07f` 也位于 reserved range，但 LLVM 仍有
+  `PseudoESAVE/PseudoERCOV`、parser 和 printer。
+- `TPRELU` 等 deleted selector 仍能正常编码为合法 mnemonic。
+
+实施要求：
+
+1. parser 删除或隔离 deleted names；
+2. printer 对 reserved selector 输出 numeric/unknown，不能输出 accepted mnemonic；
+3. decoder 使用最新 negative raw vectors 验证 fail-closed；
+4. 增加 canonical `TSORT`，如需兼容 `TSORT32`，只能作为明确的非 PTO alias。
+
+### 4. LLVM P0：B.FPATR legality 与 native lowering
+
+#### 4.1 MC legality 缺失
+
+当前 TableGen 仅限制字段位宽，实测仍错误接受：
+
+```asm
+B.FPATR 63, 7, 15, 1, 1, 1, 1
+# encoding: 23 a0 ff ff
+```
+
+必须按 normative ASL 检查：
+
+```text
+PreQuantMode = {0,1,2,3,4,5,12,13,16,17,18,19,20,23,24,25,26,27,28,32..39}
+ReluMode     = 0..3
+GroupNCode   = 0..9
+RowMaxEn=0   => RowMaxInit=0
+GroupMaxEn=0 => GroupNCode=0
+GroupMaxEn=1 => GroupNCode!=0
+RowMaxEn=0 && GroupMaxEn=0 => MaxAbsEn=0
+```
+
+建议在 AsmParser 集中验证字段和组合，并增加正负 MC tests。
+
+#### 4.2 Native Matrix pseudo 仍只支持 canonical None
+
+`llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5MCCodeEmitter.cpp` 的
+`expandPseudoCCall` 仍为所有 active Matrix pseudo 构造七个 zero immediate：
+
+```text
+B.FPATR 0, 0, 0, 0, 0, 0, 0
+```
+
+后续 P2 需要把真实 FPATR operand 从 IR/pseudo/ISel 传到 MC emitter。不要影响
+已经正确工作的 TileOP inline-asm 路径。
+
+### 5. LLVM P0/P1：确定的 command/scalar encoding 差异
+
+#### 5.1 `B.DATR` / `B.CACR.STD` decoder collision
+
+规范合法 raw：
+
+```text
+23 10 00 00
+```
+
+当前 `llvm-mc --disassemble --triple=linx64v5` 错误输出：
+
+```asm
+B.CACR.STD 0
+```
+
+需要按 0.58.1 decoder partition 修复 mask/priority，并增加 raw regression。
+
+#### 5.2 `DTYPE_NONE=31` canonical token 和 per-form legality 缺失
+
+当前 printer 对 `EMPTY_DataType=31` 输出空字符串，导致：
+
+```asm
+BSTART.TLSU TMOV, 31
+```
+
+round-trip 打印为：
+
+```asm
+BSTART.TLSU TMOV,
+```
+
+需要增加明确 `DTYPE_NONE` parser/printer token，并按 form 限制合法使用范围；
+不能让所有 DataType field 无条件接受 31。
+
+#### 5.3 canonical `BSTART.<operation>` aliases 缺失
+
+最新规范 canonical spelling 包括：
+
+```asm
+BSTART.TLOAD FP32
+BSTART.TMOV FP32
+BSTART.TMATMUL FP32
+BSTART.TGEMV FP32
+```
+
+当前 LLVM 全部拒绝，仅接受兼容形式 `BSTART.TLSU ...`、
+`BSTART.CUBE ...`。应先增加 input aliases；是否切换 printer canonical output
+需要评估现有测试和 TileOP inline asm 文本。
+
+#### 5.4 新 `BSTART.ICALL` form 缺失
+
+0.58.1 active form：
+
+```asm
+BSTART.ICALL <rt_label>, ->ra
+# base raw with rt_label=0: 01 60 16 50
+```
+
+当前 `BSTART.ICALL 0, ->ra` parser fail；旧 `BSTART ICALL` 会压缩为
+16-bit `C.BSTART.STD ICALL`，不是同一 form，也没有独立 `rt_label` field。
+
+#### 5.5 `XB` 已 reserved-in-pto，但 LLVM 仍接受
+
+规范 raw `81 6f 00 00` 当前仍解码为 `XB 0, 0`。如果 Linx 要保留为
+vendor extension，必须明确隔离 PTO-only surface；不能计入 PTO 0.58.1 active
+command forms。
+
+#### 5.6 八个 32-bit scalar form 缺失
+
+```text
+CASB CASH CASW CASD DMA PRF PRFI.U BWT
+```
+
+当前验证：
+
+- `CASB/CASH/CASW/CASD/DMA/PRF/PRFI.U` 规范 raw 均 decoder fail；
+- `BWT` raw `2b 00 30 00` 错误解码为 `trap zero`。
+
+先补 MC parser/encoder/decoder skeleton 和 raw tests；CodeGen lowering、memory
+effects、atomic ordering、调度信息需要单独核对，不能只补 mnemonic 后宣称完成。
+
+### 6. LLVM P1：B.IOR canonical 与 bundle legality
+
+规范 canonical：
+
+```asm
+B.IOR [src0, src1, src2], ->dst
+```
+
+当前 printer：
+
+```asm
+B.IOR [src0,src1,src2],[dst]
+```
+
+位编码基本一致，但仍需：
+
+- canonical `->dst` spelling；
+- duplicate `B.IOR` fault；
+- 根据当前 bundle operation 消耗正确数量/顺序的 GPR operand；
+- 未消费的 RegSrc/RegDst field 必须为 zero；
+- 处理单条 raw disassembly 无法获知 bundle context 的边界。
+
+### 7. TileOP P1/P2：剩余 public API 缺口
+
+当前至少缺少：
+
+```text
+TPREFETCH
+MGATHER_CAS
+TSORT
+```
+
+- `TPREFETCH`：LLVM TLSU function 3 已有；TileOP 仍需确定 byte_count、GM
+  descriptor 和无 Tile destination 的 inline-asm carrier。
+- `MGATHER_CAS`：LLVM TLSU function 8 已有；TileOP 仍需设计 destination、
+  base、indices、expected、replacement 的五 operand 映射及 atomic/memory
+  contract。
+- `TSORT`：现有 `TSORT32(dst, src)` 是 deleted legacy API。规范 `TSORT`
+  需要 sorted-values 与 original-U32-indices 两个 destination、source、
+  sort_width 和 descending，不能简单重命名旧 wrapper。
+
+### 8. Linx extension 与 PTO active surface 的边界
+
+LLVM 仍支持 `B.TEXT`、`BSTART.MPAR/MSEQ`、部分旧 `HL/L.BSTART` 等已经不在
+PTO 0.58.1 active inventory 中的 form。这些可以作为 Linx vendor extension
+保留，但后续必须明确：
+
+```text
+普通 Linx 模式：允许 extension；
+PTO 0.58.1 canonical/PTO-only 模式：拒绝或明确标注 extension；
+统计与审计：不得计入 74 个 PTO active command forms。
+```
+
+### 9. 建议执行顺序
+
+```text
+P0-1 reserved/deleted Tile selector 清理 + TSORT canonical
+P0-2 B.FPATR MC legality
+P0-3 B.DATR/B.CACR.STD decoder collision
+P0-4 BWT/trap collision
+P0-5 DTYPE_NONE token/per-form legality
+P1-1 BSTART.<operation> aliases + BSTART.ICALL
+P1-2 其余 7 个缺失 scalar forms
+P1-3 XB/旧 command 的 PTO-vendor-extension 边界
+P1-4 B.IOR canonical/bundle legality
+P2-1 native Matrix FPATR operand threading
+P2-2 TileOP TPREFETCH/MGATHER_CAS/TSORT API
+```
+
+每个工作包必须先跑最窄 raw MC encode/decode tests，再扩大到 LinxV5 MC、
+CodeGen 或 TileOP compile tests。不要顺手修改与当前工作包无关的 SIMT spill、
+Shared ABI 或用户 patch。
+
+---
 
 ## 2026-08-13 状态快照：inline-asm Matrix 全量交付 + TileOP 已推送
 
