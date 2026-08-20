@@ -819,7 +819,7 @@ void LinxV5InstPrinter::printBstartDataType(const MCInst *MI, unsigned OpNo,
     O << "U4x2";
     break;
   case LinxV5Op::DataType::EMPTY_DataType:
-    O << "";
+    O << "DTYPE_NONE";
     break;
   default:
     O << "<invalid-dtype>";

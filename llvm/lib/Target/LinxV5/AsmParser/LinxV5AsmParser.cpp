@@ -2617,8 +2617,10 @@ LinxV5AsmParser::parseBstartDataType(OperandVector &Operands) {
 
   if (getLexer().getTok().is(AsmToken::Integer)) {
     unsigned Val = getLexer().getTok().getIntVal();
-    // Reject values greater than 30
-    if (Val > 30)
+    // PTO 0.58.1: code 31 is DTYPE_NONE (inheritance sentinel);
+    // codes 15, 21..23, 29..30 are reserved.
+    if (Val > 31 || Val == 15 || (Val >= 21 && Val <= 23) ||
+        Val == 29 || Val == 30)
       return MatchOperand_NoMatch;
 
     getParser().Lex();
@@ -2658,9 +2660,11 @@ LinxV5AsmParser::parseBstartDataType(OperandVector &Operands) {
                  .Case("u16", DataType::U16)
                  .Case("u8", DataType::U8)
                  .Case("u4x2", DataType::U4x2)
+                 .Case("dtype_none", DataType::EMPTY_DataType)
                  .Default(DataType::EMPTY_DataType);
 
-  if (DataType == DataType::EMPTY_DataType)
+  if (DataType == DataType::EMPTY_DataType &&
+      Identifier.lower() != "dtype_none")
     return MatchOperand_NoMatch;
 
   getParser().Lex(); // Eat identifier token.
