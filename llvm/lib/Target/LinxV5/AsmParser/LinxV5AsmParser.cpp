@@ -3887,6 +3887,32 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       llvm::LinxV5II::IsDisassembleOnlyMask) {
     return true;
   }
+  // P0-2: B.FPATR field/combo legality per PTO 0.58.1 B.FPATR.asl.
+  if (Inst.getOpcode() == LinxV5::B_FPATR) {
+    auto GetImm = [&](unsigned OpNo) -> int64_t {
+      return Inst.getOperand(OpNo).getImm();
+    };
+    int64_t PreQuant = GetImm(0), Relu = GetImm(1), GroupN = GetImm(2);
+    int64_t RowMaxEn = GetImm(3), GroupMaxEn = GetImm(4);
+    int64_t RowMaxInit = GetImm(5), MaxAbs = GetImm(6);
+    const int64_t LegalPreQuant[] = {
+        0, 1, 2, 3, 4, 5, 12, 13, 16, 17, 18, 19, 20,
+        23, 24, 25, 26, 27, 28, 32, 33, 34, 35, 36, 37, 38, 39};
+    if (llvm::is_contained(LegalPreQuant, PreQuant) == false)
+      return true; // invalid PreQuantMode
+    if (Relu > 3 || Relu < 0)
+      return true;
+    if (GroupN > 9 || GroupN < 0)
+      return true;
+    if (RowMaxEn == 0 && RowMaxInit != 0)
+      return true;
+    if (GroupMaxEn == 0 && GroupN != 0)
+      return true;
+    if (GroupMaxEn == 1 && GroupN == 0)
+      return true;
+    if (RowMaxEn == 0 && GroupMaxEn == 0 && MaxAbs != 0)
+      return true;
+  }
   return false;
 }
 
