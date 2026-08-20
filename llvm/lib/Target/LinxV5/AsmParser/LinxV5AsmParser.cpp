@@ -187,6 +187,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   OperandMatchResultTy parseGPRList(OperandVector &Operands);
   OperandMatchResultTy parsePlusImm17(OperandVector &Operands);
   OperandMatchResultTy parseTileSizeWithBracket(OperandVector &Operands);
+  OperandMatchResultTy parseBIOSTileSizeWithBracket(OperandVector &Operands);
   OperandMatchResultTy parseSIMTDstRWithArrow(OperandVector &Operands);
   OperandMatchResultTy parseSIMTDstVecRWithArrow(OperandVector &Operands);
   OperandMatchResultTy parseBAttrType(OperandVector &Operands);
@@ -548,6 +549,7 @@ public:
   // v5: B.IOT destination-suffix TileSize ("<8KB>"), same value form as
   // isTileSizeWithBracket; distinct predicate per AsmOperandClass name.
   bool isB_IOT_TileSize() const { return isTileSizeWithBracket(); }
+  bool isBIOSTileSize() const { return isTileSizeWithBracket(); }
 
   bool isGPRWithBracket() const { return isReg(); }
 
@@ -1738,6 +1740,22 @@ static bool matchRegisterNameHelper(MCRegister &RegNo, StringRef Name) {
     return true;
 
   return false;
+}
+
+// B.IOS has its own TSize map distinct from B.IOT: 0 selects the source
+// form; 1..7 are destination capacities starting at 512 B (1=512B, 2=1KB,
+// 3=2KB, 4=4KB, 5=8KB, 6=16KB, 7=32KB). B.IOT keeps the old map.
+static unsigned matchBIOSTileSize(StringRef Name) {
+  return StringSwitch<unsigned>(Name)
+      .Case("0B", 0)
+      .Case("512B", 1)
+      .Case("1KB", 2)
+      .Case("2KB", 3)
+      .Case("4KB", 4)
+      .Case("8KB", 5)
+      .Case("16KB", 6)
+      .Case("32KB", 7)
+      .Default(16);
 }
 
 static unsigned matchTileSizeHelper(StringRef Name) {
@@ -3011,6 +3029,79 @@ LinxV5AsmParser::parseTileSizeWithBracket(OperandVector &Operands) {
     // such as 8kb...
     Str = StringRef((sizeImm + sizeUnits).str());
     unsigned Result = matchTileSizeHelper(Str);
+    if (Result >= 0b10000) {
+      getLexer().UnLex(AsmToken(AsmToken::Less, "<"));
+      return MatchOperand_NoMatch;
+    }
+    const MCExpr *Res = MCConstantExpr::create(Result, getContext());
+    Operands.push_back(LinxV5Operand::createImm(Res, S, E));
+    getLexer().Lex(); // consume imm
+    getLexer().Lex(); // comsum size unit
+    if (!getLexer().getTok().getString().str().compare(">")) {
+      getLexer().Lex(); // consume '>'
+    }
+  } else {
+    if (getLexer().getKind() == AsmToken::Identifier &&
+        getLexer().peekTok().is(AsmToken::Greater)) {
+      llvm::AsmToken Token = getLexer().getTok();
+      getLexer().Lex(); // consume Token
+      getLexer().Lex(); // consume '>'
+      getLexer().UnLex(Token);
+      getParser().parseExpression(ResSymbol, E);
+    } else {
+      getLexer().UnLex(AsmToken(AsmToken::Less, "<"));
+      return MatchOperand_NoMatch;
+    }
+    Operands.push_back(LinxV5Operand::createImm(ResSymbol, S, E));
+  }
+  return MatchOperand_Success;
+}
+OperandMatchResultTy LinxV5AsmParser::parseBIOSTileSizeWithBracket(OperandVector &Operands) {
+  const MCExpr *ResSymbol;
+  StringRef Str = getLexer().getTok().getString();
+  SMLoc S = getLoc();
+  SMLoc E = SMLoc::getFromPointer(S.getPointer());
+  if (!Str.str().compare("<")) {
+    getLexer().Lex(); // consume '<'
+  } else {
+    return MatchOperand_NoMatch;
+  }
+
+  // Regarding the situation where tilesize is represented using an enum in inline assembly.
+  if (getLexer().getTok().is(AsmToken::Integer) && !getLexer().peekTok().getString().str().compare(">")) {
+    unsigned Val = getLexer().getTok().getIntVal();
+
+    if (Val >= 0b10000) {
+      getLexer().UnLex(AsmToken(AsmToken::Less, "<"));
+      return MatchOperand_NoMatch;
+    }
+
+    const MCExpr *Res = MCConstantExpr::create(Val, getContext());
+    Operands.push_back(LinxV5Operand::createImm(Res, S, E));
+    getParser().Lex(); //consume enum
+    // After consuming the enum value, the current token should be '>'.
+    if (!getLexer().getTok().getString().str().compare(">")) {
+      getLexer().Lex(); // consume '>'
+    }
+    return MatchOperand_Success;
+  }
+
+  StringRef sizeImm = getLexer().getTok().getString();
+  if (!sizeImm.lower().compare("zero")) {
+    const MCExpr *Res = MCConstantExpr::create(16, getContext());
+    Operands.push_back(LinxV5Operand::createImm(Res, S, E));
+    getLexer().Lex(); // consume zero
+    if (!getLexer().getTok().getString().str().compare(">")) {
+      getLexer().Lex(); // consume '>'
+    }
+    return MatchOperand_Success;
+  }
+
+  if (getLexer().getKind() == AsmToken::Integer) {
+    StringRef sizeUnits = getLexer().peekTok().getString();
+    // such as 8kb...
+    Str = StringRef((sizeImm + sizeUnits).str());
+    unsigned Result = matchBIOSTileSize(Str);
     if (Result >= 0b10000) {
       getLexer().UnLex(AsmToken(AsmToken::Less, "<"));
       return MatchOperand_NoMatch;

@@ -2929,13 +2929,19 @@ def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
   let EncoderMethod = "getImmOpValueTSize";
 }
 
-// B.IOS destination TSize: must be nonzero (a nonzero TSize selects the
-// destination role; TSize=0 is the source form). The DecoderMethod lets the
-// disassembler reject TSize=0 for B_IOS_Dst, so a TSize=0 word decodes as
-// B_IOS_Src instead of being ambiguous.
+// B.IOS TSize uses its own 3-bit map (1=512B, 2=1KB, 3=2KB, 4=4KB, 5=8KB,
+// 6=16KB, 7=32KB), distinct from B.IOT's map (1=128B .. 7=8KB). TSize=0 is
+// the source form of the shared B_IOS word; printB_IOS renders source vs
+// destination from this value, and decodeBIOSDstTSize accepts all values.
+def BIOSTileSizeAsmOperand : AsmOperandClass {
+  let Name = "BIOSTileSize";
+  let ParserMethod = "parseBIOSTileSizeWithBracket";
+  let RenderMethod = "addImmOperands";
+}
+
 def BIOS_Dst_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
-  let ParserMatchClass = B_IOT_TileSizeAsmOperand;
-  let PrintMethod = "printTileSizeWithBracket";
+  let ParserMatchClass = BIOSTileSizeAsmOperand;
+  let PrintMethod = "printBIOSTileSizeWithBracket";
   let EncoderMethod = "getImmOpValueTSize";
   let DecoderMethod = "decodeBIOSDstTSize";
 }
@@ -2986,7 +2992,7 @@ class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
 // from TSize; the two InstAliases below accept both textual inputs.
 def B_IOS : B_IOS_Base<0b001, (outs),
         (ins SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
-             TSize_Op:$TSize)> {
+             BIOS_Dst_TSize_Op:$TSize)> {
   // printInst overrides the printed form based on TSize.
   let AsmString = "B.IOS" # "\t$PE_MASK, $SharedTID$TSize";
 }

@@ -415,6 +415,24 @@ void LinxV5InstPrinter::printTileSizeWithBracket(
     O << "<" << TileSizes[Imm] << ">";
 }
 
+void LinxV5InstPrinter::printBIOSTileSizeWithBracket(
+    const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
+    raw_ostream &O) {
+  if (MI->getOperand(OpNo).isExpr()) {
+    const MCExpr *Expr = MI->getOperand(OpNo).getExpr();
+    O << "<";
+    Expr->print(O, &MAI);
+    O << ">";
+    return;
+  }
+
+  static constexpr const char *TileSizes[] = {
+      "0B", "512B", "1KB", "2KB", "4KB", "8KB", "16KB", "32KB"};
+  unsigned Imm = MI->getOperand(OpNo).getImm();
+  if (Imm < sizeof(TileSizes) / sizeof(TileSizes[0]))
+    O << "<" << TileSizes[Imm] << ">";
+}
+
 void LinxV5InstPrinter::printPE_MASK(const MCInst *MI, unsigned OpNo,
                     const MCSubtargetInfo &STI, raw_ostream &O) {
   // v5 PE_MASK: 4-bit {PE0,PE1,PE2,PE3}, 1000=PE0..1111=all. Print as
@@ -468,7 +486,7 @@ void LinxV5InstPrinter::printB_IOS(const MCInst *MI, const MCSubtargetInfo &STI,
     printPE_MASK(MI, 1, STI, O);
     O << ", ->";
     printSharedTID(MI, 0, STI, O);
-    printTileSizeWithBracket(MI, 2, STI, O);
+    printBIOSTileSizeWithBracket(MI, 2, STI, O);
   }
 }
 

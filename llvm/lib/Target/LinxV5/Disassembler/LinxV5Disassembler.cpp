@@ -419,16 +419,18 @@ static DecodeStatus decodeFail(MCInst &Inst, const InsnType &insn,
   return MCDisassembler::Fail;
 }
 
-// B.IOS destination TSize: a nonzero TSize selects the destination role. If
-// the field is zero the word is the source form (B_IOS_Src), so reject zero
-// here to let the decoder fall through to B_IOS_Src.
+// B.IOS TSize: TSize=0 selects the source role, a nonzero TSize the
+// destination role; B_IOS is a single instruction that printB_IOS renders
+// either way from this value, so accept all 3-bit values.
+//
+// Note: the operand decoder receives the already-extracted 3-bit field value
+// (fieldFromInstruction(insn, 9, 3) in the generated table), not the full
+// instruction word, so use the value directly.
 template <typename InsnType>
 static DecodeStatus decodeBIOSDstTSize(MCInst &Inst, const InsnType &insn,
                                        int64_t Address,
                                        const MCDisassembler *Decoder) {
-  uint64_t TSize = (static_cast<uint64_t>(insn) >> 9) & 0x7;
-  if (TSize == 0)
-    return MCDisassembler::Fail;
+  uint64_t TSize = static_cast<uint64_t>(insn) & 0x7;
   Inst.addOperand(MCOperand::createImm(TSize));
   return MCDisassembler::Success;
 }
