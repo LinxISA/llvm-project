@@ -237,9 +237,14 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
 
   setOperationAction(ISD::BSWAP, XLenVT, Expand);
 
-  setOperationAction(ISD::CTTZ, XLenVT, Expand);
-  setOperationAction(ISD::CTLZ, XLenVT, Expand);
-  setOperationAction(ISD::CTPOP, XLenVT, Expand);
+  // PTO ISA has scalar ctz/clz/bcnt (ctz/clz/bcnt SrcL, M, N, ->Rd). Lower
+  // the count-trailing/leading/popcount ops to those instructions with the
+  // full XLEN-wide field (M=0, N=XLEN) instead of Expand→SWAR.
+  // Note: the ISA ctz returns N for an all-zero field, which matches both
+  // ISD::CTTZ (must return XLEN) and CTTZ_ZERO_UNDEF (any value is legal).
+  setOperationAction(ISD::CTTZ, XLenVT, Legal);
+  setOperationAction(ISD::CTLZ, XLenVT, Legal);
+  setOperationAction(ISD::CTPOP, XLenVT, Legal);
 
   if (!Subtarget.isSIMT() &&
       (Subtarget.enableLegacyISel() || !Subtarget.hasCSel()))

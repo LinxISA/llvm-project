@@ -276,8 +276,12 @@ defm SLL : ALUshift<0b111, "sll", Type_010>;
 class BIT_Base<bits<3> Func, string opcstr, LinxV5InstType type> :
     LinxV5Inst_E_MN<type, OPC_Bit_Operation, Func, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN), opcstr>;
 
+// REV reverses byte order within an N-bit field: `rev SrcL, M, N, ->Rd`.
+// Like ctz/clz/bcnt, lsb26 holds the raw field offset M and lsb20 holds the
+// width minus one (imml = N-1), so the operand classes match BIT_Base
+// (uimm6 = raw M at Inst{31-26}; uimm6_plus1 = N-1 at Inst{25-20}).
 class REV_Base<bits<3> Func, string opcstr, LinxV5InstType type> :
-    LinxV5Inst_E_MN<type, OPC_Bit_Operation, Func, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, uimm6_revPlus1:$ImmM, uimm6_rev:$ImmN), opcstr>;
+    LinxV5Inst_E_MN<type, OPC_Bit_Operation, Func, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN), opcstr>;
 
 def BXS : BIT_Base<0b000, "bxs", Type_011>;
 def BXU : BIT_Base<0b001, "bxu", Type_011>;
@@ -2546,6 +2550,15 @@ def : Pat<(PatBXU i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN), (BXU i64:$SrcL, ui
 def : Pat<(PatBXS i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN), (BXS i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN)>;
 def : Pat<(PatBIC i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN), (BIC i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN)>;
 def : Pat<(PatBIS i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN), (BIS i64:$SrcL, uimm6:$ImmM, uimm6_plus1:$ImmN)>;
+
+// PTO ISA ctz/clz/bcnt SrcL, M, N, ->Rd over an N-bit field starting at M
+// (wrapping). Lower the LLVM count ops to the full XLEN-wide field:
+// M=0, N=XLEN, so the encode input for the N-1 field is 64 (uimm6_plus1
+// encodes Imm-1). The ISA ctz/clz return N when the field is all-zero,
+// satisfying both CTTZ (must be XLEN) and CTTZ_ZERO_UNDEF (any value).
+def : Pat<(i64 (cttz i64:$SrcL)), (CTZ i64:$SrcL, 0, 64)>;
+def : Pat<(i64 (ctlz i64:$SrcL)), (CLZ i64:$SrcL, 0, 64)>;
+def : Pat<(i64 (ctpop i64:$SrcL)), (BCNT i64:$SrcL, 0, 64)>;
 }
 
 // ===---------------------- Float DAG ISel Patterns ------------------------===
