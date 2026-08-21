@@ -419,17 +419,47 @@ static DecodeStatus decodeFail(MCInst &Inst, const InsnType &insn,
   return MCDisassembler::Fail;
 }
 
-// B.IOS destination TSize: a nonzero TSize selects the destination role. If
-// the field is zero the word is the source form (B_IOS_Src), so reject zero
-// here to let the decoder fall through to B_IOS_Src.
+// B.IOS SizeCode operand decoder. The operand decoder receives the
+// already-extracted 4-bit field value (fieldFromInstruction(insn, 15, 4) in
+// the generated table), not the full instruction word. SizeCode=0 is the
+// source form; 1..12 are destination capacities; 13..15 are reserved and
+// rejected.
 template <typename InsnType>
 static DecodeStatus decodeBIOSDstTSize(MCInst &Inst, const InsnType &insn,
                                        int64_t Address,
                                        const MCDisassembler *Decoder) {
-  uint64_t TSize = (static_cast<uint64_t>(insn) >> 9) & 0x7;
-  if (TSize == 0)
-    return MCDisassembler::Fail;
-  Inst.addOperand(MCOperand::createImm(TSize));
+  uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
+  if (SizeCode > 12)
+    return MCDisassembler::Fail; // reserved 13..15
+  Inst.addOperand(MCOperand::createImm(SizeCode));
+  return MCDisassembler::Success;
+}
+
+// B.IOT destination SizeCode operand decoder (Local SizeCode contract
+// 1..10). A size code of 0 encodes the source-only form, and 11..15 are
+// reserved, so an instruction word that lands on a B_IOT_*_Dst form with
+// any of these must fail to decode as a destination (the decoder then falls
+// through to the source-only form for SizeCode=0).
+template <typename InsnType>
+static DecodeStatus decodeBIOTDstSizeCode(MCInst &Inst, const InsnType &insn,
+                                          int64_t Address,
+                                          const MCDisassembler *Decoder) {
+  uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
+  if (SizeCode < 1 || SizeCode > 10)
+    return MCDisassembler::Fail; // source form (0) or reserved (11..15)
+  Inst.addOperand(MCOperand::createImm(SizeCode));
+  return MCDisassembler::Success;
+}
+
+// PEMode operand decoder: receives the already-extracted 3-bit mode value
+// (fieldFromInstruction(insn, 9, 3) in the generated table) and expands it
+// back to the 4-bit semantic mask that the printer renders as mask=NNNN.
+template <typename InsnType>
+static DecodeStatus decodePEMode(MCInst &Inst, const InsnType &insn,
+                                 int64_t Address,
+                                 const MCDisassembler *Decoder) {
+  uint64_t Mode = static_cast<uint64_t>(insn) & 0x7;
+  Inst.addOperand(MCOperand::createImm(LinxV5PEMode::maskForMode(Mode)));
   return MCDisassembler::Success;
 }
 

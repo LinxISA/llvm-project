@@ -673,20 +673,28 @@ unsigned
 LinxV5MCCodeEmitter::getImmOpValuePE_MASK(const MCInst &MI, unsigned OpNo,
                                            SmallVectorImpl<MCFixup> &Fixups,
                                            const MCSubtargetInfo &STI) const {
-  // v5 PE_MASK: 4-bit immediate, same encoding path as TileSize.
+  // PTO-ISA ADR 0069: the operand holds a 4-bit PE mask; [11:9] carries the
+  // 3-bit PEMode. Convert the mask to its PEMode via the table; a mask with
+  // no PEMode must not reach the encoder (the AsmParser rejects it).
   const MCOperand &MO = MI.getOperand(OpNo);
+  unsigned Mask;
   if (MO.isReg())
-    return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
-  if (MO.isImm())
-    return static_cast<unsigned>(MO.getImm());
-  return getImmOpValue(MI, OpNo, Fixups, STI);
+    Mask = Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  else if (MO.isImm())
+    Mask = static_cast<unsigned>(MO.getImm());
+  else
+    return getImmOpValue(MI, OpNo, Fixups, STI);
+  Optional<unsigned> Mode = LinxV5PEMode::modeForMask(Mask);
+  if (!Mode)
+    report_fatal_error("PE mask has no PEMode encoding");
+  return *Mode;
 }
 
 unsigned
 LinxV5MCCodeEmitter::getImmOpValueTSize(const MCInst &MI, unsigned OpNo,
                                          SmallVectorImpl<MCFixup> &Fixups,
                                          const MCSubtargetInfo &STI) const {
-  // v5 TSize: 3-bit immediate, same encoding path.
+  // v5 SizeCode: 4-bit immediate (0..12; 13..15 reserved by the parser).
   const MCOperand &MO = MI.getOperand(OpNo);
   if (MO.isReg())
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());

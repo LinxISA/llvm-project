@@ -170,6 +170,72 @@ enum TOF {
 };
 } // namespace LinxV5II
 
+// B.IOT/B.IOS SizeCode / PEMode helpers (PTO-ISA commit 1e91bf9, ADR 0069).
+//
+// SizeCode  : 4-bit, Inst{18-15}. 0 is the source-only encoding; B.IOT
+//             destination uses 1..10 (128 B..64 KiB per PE), B.IOS
+//             destination uses 1..12 (128 B..256 KiB per PE); 13..15 are
+//             reserved.
+//
+// PEMode    : 3-bit, Inst{11-9}. The common decoder expands it to a fixed
+//             four-PE semantic mask (PE0 sits at bit 3):
+//               0->0000  1->1000(PE0)  2->0100(PE1)  3->0010(PE2)
+//               4->0001(PE3)  5->1100(PE0+PE1)  6->1110(PE0+PE1+PE2)
+//               7->1111(all)
+//             Masks with no PEMode (0011,0101,0110,0111,1001,1010,1011,1101)
+//             are not encodable and must be rejected.
+namespace LinxV5SizeCode {
+constexpr unsigned LocalMaxSizeCode = 10;   // B.IOT destination 1..10
+constexpr unsigned SharedMaxSizeCode = 12;  // B.IOS destination 1..12
+constexpr unsigned ReservedMinSizeCode = 13;
+
+/// SizeCode value -> per-PE bytes (128 * 2^(code-1)). Code must be 1..12.
+inline uint64_t bytesForSizeCode(unsigned Code) {
+  return 128ULL << (Code - 1);
+}
+
+/// Per-PE bytes -> SizeCode, or None if not a legal power of two size.
+/// 128 B -> code 1, 256 B -> code 2, ..., 256 KiB -> code 12.
+inline Optional<unsigned> sizeCodeForBytes(uint64_t Bytes) {
+  if (Bytes < 128 || !isPowerOf2_64(Bytes))
+    return None;
+  unsigned Code = Log2_64(Bytes) - 6; // 128 -> 1
+  if (Code > SharedMaxSizeCode)
+    return None;
+  return Code;
+}
+
+/// Canonical size text for SizeCode 0..12 ("0B","128B",..,"256KB").
+inline StringRef sizeCodeToString(unsigned Code) {
+  static constexpr const char *Sizes[] = {
+      "0B",    "128B", "256B", "512B",  "1KB",   "2KB",  "4KB",
+      "8KB",   "16KB", "32KB", "64KB",  "128KB", "256KB"};
+  if (Code < sizeof(Sizes) / sizeof(Sizes[0]))
+    return Sizes[Code];
+  return "?";
+}
+} // namespace LinxV5SizeCode
+
+namespace LinxV5PEMode {
+
+/// PEMode value -> 4-bit semantic mask (bit 3 is PE0).
+constexpr unsigned MaskForMode[8] = {0, 8, 4, 2, 1, 12, 14, 15};
+
+/// 4-bit semantic mask -> PEMode, or None if the mask has no PEMode.
+inline Optional<unsigned> modeForMask(unsigned Mask) {
+  for (unsigned Mode = 0; Mode < 8; ++Mode)
+    if (MaskForMode[Mode] == Mask)
+      return Mode;
+  return None;
+}
+
+/// PEMode value -> 4-bit semantic mask. Mode must be 0..7.
+inline unsigned maskForMode(unsigned Mode) {
+  assert(Mode < 8 && "PEMode must be 0..7");
+  return MaskForMode[Mode];
+}
+} // namespace LinxV5PEMode
+
 namespace LinxV5TileCall {
 struct TileCallEntry {
   int dNum;

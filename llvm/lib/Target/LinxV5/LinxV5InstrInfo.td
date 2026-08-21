@@ -2783,13 +2783,18 @@ let Format = InstFormatBlockModifier;
   let isDisassembleOnly = 0;
   // v5 encoding (replaces v4):
   //   [31:26] SrcTile1 (6b), [25:20] SrcTile0 (6b), [19] last,
-  //   [18:15] PE_MASK (4b), [14:12] Func (3b), [11:9] TSize (3b),
+  //   [18:15] SizeCode (4b), [14:12] Func (3b), [11:9] PEMode (3b),
   //   [8:7] DstTile (2b: T/U/M/N), [6:4]/[3:1] fixed, [0] fixed 1.
-  // v5 replaces v4 Group bit[19] with last, size imm4[18:15] with PE_MASK,
+  // PTO-ISA ADR 0069 (commit 1e91bf9): [18:15] carries the 4-bit SizeCode
+  // (0 = source-only, 1..10 = destination capacity 128B..64KB per PE; 13..15
+  // reserved) and [11:9] carries the 3-bit PEMode expanded to a 4-PE mask.
+  // The TSize operand drives the SizeCode field; the PE_MASK operand drives
+  // the PEMode field (the PE_MASK encoder converts a 4-bit mask to PEMode).
+  // v5 replaces v4 Group bit[19] with last, size imm4[18:15] with SizeCode,
   // and deletes source reuse (S0R/S1R bit{6}). acc is not encoded in B.IOT.
   // The GroupOp operand is reused for the last flag (its semantics: ", last").
-  bits<4> PE_MASK;
-  bits<3> TSize;
+  bits<4> TSize;      // SizeCode value 0..12 (13..15 reserved)
+  bits<3> PE_MASK;    // PEMode value (encoder maps a 4-bit mask to the 3-bit mode)
   bits<6> SrcTile1;
   bits<6> SrcTile0;
   bits<2> DstTile;
@@ -2798,9 +2803,9 @@ let Format = InstFormatBlockModifier;
   let Inst{31-26} = SrcTile1;
   let Inst{25-20} = SrcTile0;
   let Inst{19} = Last;
-  let Inst{18-15} = PE_MASK;
+  let Inst{18-15} = TSize;    // SizeCode field
   let Inst{14-12} = Func;
-  let Inst{11-9} = TSize;
+  let Inst{11-9} = PE_MASK;   // PEMode field (encoder returns 3-bit mode)
   let Inst{8-7} = DstTile;
   let Inst{6-4} = 0b001;
   let Inst{3-1} = 0b001;
@@ -2837,11 +2842,18 @@ def TileSizeWithBracketAsmOperand : AsmOperandClass {
   let RenderMethod = "addImmOperands";
 }
 
-// v5: B.IOT destination-suffix TileSize (e.g. "->t<8KB>"). Same 3-bit TSize
-// field/encoding as TSize_Op, but parses/prints the bracket-size form. Used
-// only by B_IOT_*_Dst; TSize_Op keeps "TSize=N" for non-B.IOT and legacy.
+// v5: B.IOT destination-suffix SizeCode (e.g. "->t<8KB>"). Matches
+// 1..10 (B.IOT destination capacity; 0 is source, 11..15 reserved).
 def B_IOT_TileSizeAsmOperand : AsmOperandClass {
   let Name = "B_IOT_TileSize";
+  let ParserMethod = "parseTileSizeWithBracket";
+  let RenderMethod = "addImmOperands";
+}
+
+// v5: B.IOS SizeCode. Matches 0..12 (0 = source, 1..12 destination up to
+// 256KB; 13..15 reserved).
+def B_IOS_TileSizeAsmOperand : AsmOperandClass {
+  let Name = "B_IOS_TileSize";
   let ParserMethod = "parseTileSizeWithBracket";
   let RenderMethod = "addImmOperands";
 }
@@ -2930,47 +2942,66 @@ def PE_MASK_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]> {
   let ParserMatchClass = PE_MASKAsmOperand;
   let PrintMethod = "printPE_MASK";
   let EncoderMethod = "getImmOpValuePE_MASK";
+  let DecoderMethod = "decodePEMode";
 }
 def TSizeAsmOperand : AsmOperandClass {
   let Name = "TSize";
   let ParserMethod = "parseTSize";
   let RenderMethod = "addImmOperands";
 }
-def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
+// TSize (legacy "TSize=N" spelling) now carries the 4-bit SizeCode value
+// (0..12; 13..15 reserved and rejected by the parser/encoder). This stays
+// wide for ISel-generated pseudo operands (PseudoV5GMOV/L2S/S2L), whose
+// value is produced by calculateVCallSizeMask with the right role limit.
+def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]> {
   let ParserMatchClass = TSizeAsmOperand;
   let PrintMethod = "printTSize";
   let EncoderMethod = "getImmOpValueTSize";
 }
 
-// B.IOS destination TSize: must be nonzero (a nonzero TSize selects the
-// destination role; TSize=0 is the source form). The DecoderMethod lets the
-// disassembler reject TSize=0 for B_IOS_Dst, so a TSize=0 word decodes as
-// B_IOS_Src instead of being ambiguous.
-def BIOS_Dst_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
-  let ParserMatchClass = B_IOT_TileSizeAsmOperand;
+// B.IOT destination legacy "TSize=N" spelling must honor the Local SizeCode
+// contract 1..10 (128B..64KB per PE). 0 is the source form (a destination
+// spelling with TSize=0 is illegal) and 11..15 reserved. Used only by the
+// B.IOT_*_Dst legacy aliases; PseudoV5* keep the wide TSize_Op above.
+def B_IOT_TSizeAsmOperand : AsmOperandClass {
+  let Name = "B_IOT_TSize";
+  let ParserMethod = "parseTSize";
+  let RenderMethod = "addImmOperands";
+}
+def B_IOT_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 10;}]> {
+  let ParserMatchClass = B_IOT_TSizeAsmOperand;
+  let PrintMethod = "printTSize";
+  let EncoderMethod = "getImmOpValueTSize";
+}
+
+// B.IOS destination SizeCode: 0 selects the source role, 1..12 a Shared
+// destination capacity (128B..256KB per PE); 13..15 reserved. The
+// DecoderMethod lets the disassembler accept 0 (source) and 1..12.
+def BIOS_Dst_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm <= 12;}]> {
+  let ParserMatchClass = B_IOS_TileSizeAsmOperand;
   let PrintMethod = "printTileSizeWithBracket";
   let EncoderMethod = "getImmOpValueTSize";
   let DecoderMethod = "decodeBIOSDstTSize";
 }
 
-// v5: B.IOT destination-suffix TileSize operand. 3-bit, same encoding as
-// TSize_Op (getImmOpValueTSize), but parses "<8KB>" and prints "<8KB>" as a
-// destination suffix. Only B_IOT_*_Dst use this; TSize_Op keeps "TSize=N".
-def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<3>(Imm);}]> {
+// v5: B.IOT destination-suffix SizeCode operand (1..10 for B.IOT destination,
+// 128 B..64 KB per PE; 0 is only the source form and 11..15 reserved).
+def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 10;}]> {
   let ParserMatchClass = B_IOT_TileSizeAsmOperand;
   let PrintMethod = "printTileSizeWithBracket";
   let EncoderMethod = "getImmOpValueTSize";
+  let DecoderMethod = "decodeBIOTDstSizeCode";
 }
 
 // PTO v0.58 reissue: 32-bit B.IOS Shared operand binder, replacing the retired
 // 16-bit C.B.IOS. Carries an absolute Shared ID (S0..S255), the per-PE size
-// (TSize) and the operation PE mask. TSize=0 selects a Shared source; a
-// nonzero TSize selects a Shared destination and declares per-PE capacity.
+// (SizeCode) and the participation mode (PEMode). SizeCode=0 selects a Shared
+// source; 1..12 selects a Shared destination capacity (128B..256KB per PE).
 //   source:      B.IOS S12, mask=1111
 //   destination: B.IOS mask=0011, ->S12<128B>
-// Encoding: [31:28]=0, [27:20]=SharedTID, [19]=0, [18:15]=PE_MASK,
-//           [14:12]=funct3=001, [11:9]=TSize, [8:7]=00, [6:0]=0x13.
-// match=0x00001013, mask=0xf00871ff.
+// Encoding (ADR 0069): [31:28]=0, [27:20]=SharedTID, [19]=0,
+//           [18:15]=SizeCode (4b), [14:12]=funct3=001, [11:9]=PEMode (3b),
+//           [8:7]=00, [6:0]=0x13. match=0x00001013, mask=0xf00871ff.
 class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
     : LinxV5Inst<outs, ins, "B.IOS", argstr> {
   let Format = InstFormatBlockModifier;
@@ -2978,15 +3009,15 @@ class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
   let isDisassembleOnly = 0;
 
   bits<8> SharedTID;
-  bits<4> PE_MASK;
-  bits<3> TSize;
+  bits<4> TSize;      // SizeCode value 0..12 (13..15 reserved); 0 = source
+  bits<3> PE_MASK;    // PEMode value (encoder maps a 4-bit mask to the 3-bit mode)
 
   let Inst{31-28} = 0b0000;
   let Inst{27-20} = SharedTID;
   let Inst{19} = 0b0;
-  let Inst{18-15} = PE_MASK;
+  let Inst{18-15} = TSize;   // SizeCode field
   let Inst{14-12} = Role;
-  let Inst{11-9} = TSize;
+  let Inst{11-9} = PE_MASK;  // PEMode field (encoder returns 3-bit mode)
   let Inst{8-7} = 0b00;
   let Inst{6-0} = 0b0010011;
 }
@@ -2999,17 +3030,19 @@ class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
 // from TSize; the two InstAliases below accept both textual inputs.
 def B_IOS : B_IOS_Base<0b001, (outs),
         (ins SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
-             TSize_Op:$TSize)> {
+             BIOS_Dst_TSize_Op:$TSize)> {
   // printInst overrides the printed form based on TSize.
   let AsmString = "B.IOS" # "\t$PE_MASK, $SharedTID$TSize";
 }
 // Source input: "B.IOS S17, mask=1111" (TSize defaults to 0).
 def : InstAlias<"B.IOS\t$SharedTID, $PE_MASK",
     (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK, 0), 0>;
-// Destination input: "B.IOS mask=0011, ->S12<128B>".
+// Destination input: "B.IOS mask=0011, ->S12<128B>". Must use the B.IOS
+// SizeCode operand (1..12); the B.IOT shared bracket operand (1..10) would
+// wrongly cap Shared destinations at 64KB.
 def : InstAlias<"B.IOS\t$PE_MASK, $SharedTID$TSize",
     (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
-     B_IOT_TileSize_Op:$TSize), 0>;
+     BIOS_Dst_TSize_Op:$TSize), 0>;
 
 def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last)> {
@@ -3019,17 +3052,16 @@ def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
   // v5: TileSize prints as a destination suffix "<8KB>" rather than "TSize=N".
   let AsmString = "B.IOT" # "\t${PE_MASK}${Last}, $DstTile$TSize";
 }
-def : InstAlias<"B.IOT\t$DstTile", (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0), 0>;
 def : InstAlias<"B.IOT\t$PE_MASK, $TSize, $DstTile",
     (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
-                     TSize_Op:$TSize, 0), 0>;
+                     B_IOT_TSize_Op:$TSize, 0), 0>;
 def : InstAlias<"B.IOT\t$PE_MASK, $DstTile$TSize",
     (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
                      B_IOT_TileSize_Op:$TSize, 0), 0>;
 // v5 legacy compatibility: "TSize=N, last, ->dst" still accepted on input.
 def : InstAlias<"B.IOT\t$PE_MASK, $TSize, $Last, $DstTile",
     (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
-                     TSize_Op:$TSize, GroupOp:$Last), 0>;
+                     B_IOT_TSize_Op:$TSize, GroupOp:$Last), 0>;
 
 def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
@@ -3037,10 +3069,9 @@ def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
   let Format = InstFormat_STACK_SIZE;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}, $DstTile$TSize";
 }
-def : InstAlias<"B.IOT\t$SrcTile0, $DstTile", (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $TSize, $DstTile",
     (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
-                      TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0), 0>;
+                      B_IOT_TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $DstTile$TSize",
     (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
                       B_IOT_TileSize_Op:$TSize, 0,
@@ -3051,10 +3082,9 @@ def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
   let Format = InstFormat_STACK_SIZE;
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}, $DstTile$TSize";
 }
-def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $DstTile", (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK, $TSize, $DstTile",
     (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
-                      TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0,
+                      B_IOT_TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0,
                       TILE_Src_Reg:$SrcTile1), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK, $DstTile$TSize",
     (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,

@@ -545,9 +545,46 @@ public:
   bool isPE_MASK() const { return isImm(); }
   bool isTSize() const { return isImm(); }
 
-  // v5: B.IOT destination-suffix TileSize ("<8KB>"), same value form as
-  // isTileSizeWithBracket; distinct predicate per AsmOperandClass name.
-  bool isB_IOT_TileSize() const { return isTileSizeWithBracket(); }
+  // v5: B.IOT destination legacy "TSize=N" honors the Local SizeCode
+  // contract 1..10; 0 (source-only) and 11..15 are rejected in a
+  // destination spelling.
+  bool isB_IOT_TSize() const {
+    LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
+    int64_t Imm;
+    if (!isImm())
+      return false;
+    if (!evaluateConstantImm(getImm(), Imm, VK))
+      return true; // symbolic form falls through to encoder
+    return Imm >= 1 && Imm <= 10;
+  }
+
+  // v5: B.IOT destination-suffix SizeCode ("<8KB>"). B.IOT destination
+  // capacity is 1..10 (128B..64KB per PE); 0 is the source form and 11..15
+  // reserved, all rejected at match time.
+  bool isB_IOT_TileSize() const {
+    LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
+    int64_t Imm;
+    if (!isImm())
+      return false;
+    if (!evaluateConstantImm(getImm(), Imm, VK))
+      return true; // symbolic form falls through to encoder
+    return Imm >= 1 && Imm <= 10;
+  }
+
+  // v5: B.IOS destination SizeCode ("<256KB>"). A destination spelling must
+  // carry 1..12 (128B..256KB per PE); 0 would be a source-only encoding, so
+  // reject it here to keep "->S0<0B>"/->"S0<0>" from silently becoming a
+  // source. The source form "B.IOS S0, mask=..." never passes a bracket size
+  // and reaches the instruction with the implicit SizeCode=0 operand.
+  bool isB_IOS_TileSize() const {
+    LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
+    int64_t Imm;
+    if (!isImm())
+      return false;
+    if (!evaluateConstantImm(getImm(), Imm, VK))
+      return true; // symbolic form falls through to encoder
+    return Imm >= 1 && Imm <= 12;
+  }
 
   bool isGPRWithBracket() const { return isReg(); }
 
@@ -1750,6 +1787,11 @@ static unsigned matchTileSizeHelper(StringRef Name) {
       .Case("2KB", 5)
       .Case("4KB", 6)
       .Case("8KB", 7)
+      .Case("16KB", 8)
+      .Case("32KB", 9)
+      .Case("64KB", 10)
+      .Case("128KB", 11)
+      .Case("256KB", 12)
       .Default(16);
 }
 
@@ -2413,7 +2455,12 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   return MatchOperand_Success;
 }
 
-// v5: parse "mask=N" where N is a 4-bit decimal (0..15).
+// v5: parse "mask=N" where N is a 4-bit binary spelling (0..15). PTO-ISA
+// ADR 0069: [11:9] carries a 3-bit PEMode; only the masks in the PEMode
+// table (0000,1000,0100,0010,0001,1100,1110,1111) are encodable, so reject
+// any other mask here. A token containing only 0/1 is read as a binary bit
+// pattern ("mask=0011" is the pattern 0011 = 3); any other digit string
+// ("15") is read as an ordinary decimal then validated against the table.
 OperandMatchResultTy
 LinxV5AsmParser::parsePE_MASK(OperandVector &Operands) {
   SMLoc S = getLoc();
@@ -2430,20 +2477,29 @@ LinxV5AsmParser::parsePE_MASK(OperandVector &Operands) {
   // expect integer
   if (getLexer().getTok().getKind() != AsmToken::Integer)
     return MatchOperand_ParseFail;
-  // PTO v0.58 reissue: PE_MASK is a 4-bit binary spelling ("mask=0011" is
-  // the bit pattern 0011 = 3, not octal/decimal 11). Parse the token as a
-  // binary digit string.
   unsigned Val = 0;
   StringRef MaskStr = getLexer().getTok().getString();
   // Strip any leading "0b".
   if (MaskStr.startswith_insensitive("0b"))
     MaskStr = MaskStr.substr(2);
-  for (char C : MaskStr) {
-    if (C != '0' && C != '1')
+  bool AllBinary = !MaskStr.empty() &&
+                   all_of(MaskStr, [](char C) { return C == '0' || C == '1'; });
+  if (AllBinary) {
+    for (char C : MaskStr) {
+      Val = (Val << 1) | (C - '0');
+      if (Val > 15)
+        return MatchOperand_ParseFail;
+    }
+  } else {
+    if (MaskStr.getAsInteger(10, Val) || Val > 15)
       return MatchOperand_ParseFail;
-    Val = (Val << 1) | (C - '0');
-    if (Val > 15)
-      return MatchOperand_ParseFail;
+  }
+  // ADR 0069: the 3-bit PEMode field only encodes the 8 masks in the table;
+  // a mask with no PEMode must be rejected (e.g. mask=0110 is not encodable).
+  if (!LinxV5PEMode::modeForMask(Val)) {
+    getParser().Error(S, "PE mask has no PEMode encoding (legal masks: "
+                         "0000,1000,0100,0010,0001,1100,1110,1111)");
+    return MatchOperand_ParseFail;
   }
   getLexer().Lex(); // consume integer
   const MCExpr *Expr = MCConstantExpr::create(Val, getParser().getContext());
@@ -2466,7 +2522,7 @@ LinxV5AsmParser::parseTSize(OperandVector &Operands) {
   if (getLexer().getTok().getKind() != AsmToken::Integer)
     return MatchOperand_ParseFail;
   unsigned Val = getLexer().getTok().getIntVal();
-  if (Val > 7)
+  if (Val > 12)
     return MatchOperand_ParseFail;
   getLexer().Lex(); // consume integer
   const MCExpr *Expr = MCConstantExpr::create(Val, getParser().getContext());
@@ -3801,12 +3857,20 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
       if (getLexer().getTok().is(AsmToken::Identifier)) {
         StringRef Id = getLexer().getTok().getIdentifier();
         if (Id.startswith_insensitive("mask")) {
-          if (parsePE_MASK(Operands) == MatchOperand_Success)
+          OperandMatchResultTy R = parsePE_MASK(Operands);
+          if (R == MatchOperand_Success)
             continue;
+          // A "mask=..." that parsed but is not encodable (e.g. mask=0110)
+          // is a hard error; do not fall through to the generic parser.
+          if (R == MatchOperand_ParseFail)
+            return false;
         }
         if (Id.startswith_insensitive("tsize")) {
-          if (parseTSize(Operands) == MatchOperand_Success)
+          OperandMatchResultTy R = parseTSize(Operands);
+          if (R == MatchOperand_Success)
             continue;
+          if (R == MatchOperand_ParseFail)
+            return false;
         }
       }
       if (parseOperand(Operands, Name))

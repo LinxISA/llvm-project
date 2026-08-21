@@ -1102,16 +1102,20 @@ SDValue LinxV5TargetLowering::lowerMergeCF(SDLoc &DL, SDValue Op,
   return Result;
 }
 
-static unsigned calculateVCallSizeMask(EVT Type) {
+static unsigned calculateVCallSizeMask(EVT Type, unsigned MaxCode = 10) {
   // The tile register type's size is the per-PE tile size and encodes directly
-  // (no division by 4): the same compact code matchTileSizeHelper uses
-  // (128B..8KB -> 1..7 = Log2-6). Fixups/encoders pass the value through, so
-  // codegen and handwritten asm must agree on this encoding.
+  // (no division by 4): SizeCode = Log2(SizeBytes)-6 (128 B -> 1). Local B.IOT
+  // destinations allow 1..10 (128 B..64 KB per PE); Shared B.IOS destinations
+  // allow 1..12 (128 B..256 KB per PE) so callers pass MaxCode accordingly.
   uint64_t SizeBytes = Type.getFixedSizeInBits() / 8;
-  if (!isPowerOf2_64(SizeBytes) || SizeBytes < 128 || SizeBytes > 8192)
+  if (!isPowerOf2_64(SizeBytes) || SizeBytes < 128)
     report_fatal_error(
-        "LinxV5 Tile size must be a power of two from 128 B through 8 KB");
-  return Log2_64(SizeBytes) - 6;
+        "LinxV5 Tile size must be a power of two from 128 B upward");
+  unsigned Code = Log2_64(SizeBytes) - 6; // 128 -> 1
+  if (Code > MaxCode)
+    report_fatal_error("LinxV5 Tile size exceeds the per-PE capacity for its "
+                       "destination role");
+  return Code;
 }
 
 static uint64_t getV5ConstantOperand(SDValue Op, StringRef Name,
