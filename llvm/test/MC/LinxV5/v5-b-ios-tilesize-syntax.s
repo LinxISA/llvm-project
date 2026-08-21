@@ -23,6 +23,14 @@ B.IOS mask=1111, ->S6<32KB>
 B.IOT mask=1111, last, ->t<128B>
 B.IOT mask=1111, last, ->t<8KB>
 
+# Numeric TSize input: the TileOP Shared wrappers emit the raw B.IOS TSize
+# code (%c[SharedTilesizeCode], 1..7) rather than the size text. The parser
+# treats <N> as the encoded value directly (1=512B .. 7=32KB).
+B.IOS mask=1111, ->S0<1>
+B.IOS mask=1111, ->S1<2>
+B.IOS mask=1111, ->S2<5>
+B.IOS mask=1111, ->S3<7>
+
 # ENC: B.IOS{{.*}}S0, mask=1111
 # ENC: B.IOS{{.*}}S255, mask=1111
 # ENC: B.IOS{{.*}}->S0<512B>
@@ -34,6 +42,10 @@ B.IOT mask=1111, last, ->t<8KB>
 # ENC: B.IOS{{.*}}->S6<32KB>
 # ENC: B.IOT{{.*}}->t<128B>
 # ENC: B.IOT{{.*}}->t<8KB>
+# ENC: B.IOS{{.*}}->S0<512B>
+# ENC: B.IOS{{.*}}->S1<1KB>
+# ENC: B.IOS{{.*}}->S2<8KB>
+# ENC: B.IOS{{.*}}->S3<32KB>
 
 # DIS: B.IOS{{.*}}S0, mask=1111
 # DIS: B.IOS{{.*}}S255, mask=1111
@@ -46,3 +58,7 @@ B.IOT mask=1111, last, ->t<8KB>
 # DIS: B.IOS{{.*}}->S6<32KB>
 # DIS: B.IOT{{.*}}->t<128B>
 # DIS: B.IOT{{.*}}->t<8KB>
+# DIS: B.IOS{{.*}}->S0<512B>
+# DIS: B.IOS{{.*}}->S1<1KB>
+# DIS: B.IOS{{.*}}->S2<8KB>
+# DIS: B.IOS{{.*}}->S3<32KB>
