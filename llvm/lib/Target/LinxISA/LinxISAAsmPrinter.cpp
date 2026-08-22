@@ -388,19 +388,29 @@ static StringRef linxTileDataTypeName(int64_t Value) {
   }
 }
 
+static StringRef linxTileSizeName(int64_t Value) {
+  static constexpr StringLiteral Names[] = {
+      "",    "128B", "256B", "512B", "1KB",   "2KB",  "4KB",
+      "8KB", "16KB", "32KB", "64KB", "128KB", "256KB"};
+  if (Value < 1 || Value >= static_cast<int64_t>(std::size(Names)))
+    return {};
+  return Names[Value];
+}
+
 bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                                         const char *ExtraCode,
                                         raw_ostream &OS) {
   // Clang/GCC use %cN for an immediate without target punctuation. Linx block
   // templates rely on that conventional modifier for selector and dimension
-  // fields. %DN prints a tile dtype keyword for attribute commands. %SN
+  // fields. %DN prints a tile dtype keyword for attribute commands. %ZN
+  // prints a SizeCode as its canonical byte size. %SN
   // prints a compiler-allocated Shared register as S0..S255. %qN
   // prints only a tile register's destination queue bank because
   // canonical B.IOT destinations are written as ->t/u/m/n<Size>, while source
   // operands name a concrete queue slot such as t#1.
   if (ExtraCode && ExtraCode[0] != 0 &&
       !((ExtraCode[0] == 'c' || ExtraCode[0] == 'D' || ExtraCode[0] == 'S' ||
-         ExtraCode[0] == 'q') &&
+         ExtraCode[0] == 'Z' || ExtraCode[0] == 'q') &&
         ExtraCode[1] == 0))
     return true;
 
@@ -423,6 +433,34 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
       return false;
     }
     if (LinxISA::TILERegClass.contains(MO.getReg())) {
+      if (MO.isDef()) {
+        // A plain pure output denotes the destination queue bank, matching
+        // the explicit %q modifier. A read/write operand is ambiguous because
+        // the same placeholder would need both bank and ranked-source syntax.
+        for (unsigned FlagNo = InlineAsm::MIOp_FirstOperand;
+             FlagNo < MI->getNumOperands();) {
+          const MachineOperand &FlagMO = MI->getOperand(FlagNo);
+          if (!FlagMO.isImm())
+            break;
+          const InlineAsm::Flag Flag(FlagMO.getImm());
+          const unsigned NumRegs = Flag.getNumOperandRegisters();
+          if (FlagNo + 1u + NumRegs > MI->getNumOperands())
+            return true;
+          unsigned MatchedOp = 0;
+          if (Flag.isRegUseKind() && Flag.isUseOperandTiedToDef(MatchedOp)) {
+            (void)MatchedOp;
+            for (unsigned I = 0; I != NumRegs; ++I) {
+              const MachineOperand &UseMO = MI->getOperand(FlagNo + 1u + I);
+              if (UseMO.isReg() && UseMO.getReg() == MO.getReg())
+                return true;
+            }
+          }
+          FlagNo += 1u + NumRegs;
+        }
+        static constexpr char Banks[4] = {'t', 'u', 'm', 'n'};
+        OS << Banks[(Enc >> 3) & 0x3];
+        return false;
+      }
       auto It = InlineAsmTileRanks.find(MI);
       if (It == InlineAsmTileRanks.end() || OpNo >= It->second.size() ||
           It->second[OpNo] == 0u)
@@ -437,8 +475,9 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   }
 
   if (MO.isImm()) {
-    if (ExtraCode && ExtraCode[0] == 'D') {
-      StringRef Name = linxTileDataTypeName(MO.getImm());
+    if (ExtraCode && (ExtraCode[0] == 'D' || ExtraCode[0] == 'Z')) {
+      StringRef Name = ExtraCode[0] == 'D' ? linxTileDataTypeName(MO.getImm())
+                                           : linxTileSizeName(MO.getImm());
       if (Name.empty())
         return true;
       OS << Name;
@@ -449,8 +488,10 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   }
 
   if (MO.isCImm()) {
-    if (ExtraCode && ExtraCode[0] == 'D') {
-      StringRef Name = linxTileDataTypeName(MO.getCImm()->getSExtValue());
+    if (ExtraCode && (ExtraCode[0] == 'D' || ExtraCode[0] == 'Z')) {
+      StringRef Name = ExtraCode[0] == 'D'
+                           ? linxTileDataTypeName(MO.getCImm()->getSExtValue())
+                           : linxTileSizeName(MO.getCImm()->getSExtValue());
       if (Name.empty())
         return true;
       OS << Name;

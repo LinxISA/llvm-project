@@ -488,6 +488,9 @@ protected:
 std::unique_ptr<TargetCodeGenInfo>
 createDefaultTargetCodeGenInfo(CodeGenModule &CGM);
 
+std::unique_ptr<TargetCodeGenInfo>
+createLinxISATargetCodeGenInfo(CodeGenModule &CGM);
+
 enum class AArch64ABIKind {
   AAPCS = 0,
   DarwinPCS,

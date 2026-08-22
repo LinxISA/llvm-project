@@ -1891,11 +1891,13 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
     case 'r':
-      if (VT.isVector() || VT == MVT::linxtile)
+      if (VT == MVT::v1024i32 || VT == MVT::linxtile)
         // The ordinary register constraint remains valid for typed tile
         // carriers; the value type selects the architectural TILE register
         // file. PTO C++ wrappers may spell this class explicitly as "Tr".
         return std::make_pair(0u, &LinxISA::TILERegClass);
+      if (VT.isVector())
+        return std::make_pair(0u, nullptr);
       // The Linx GPR encoding space includes queue pseudo-registers
       // (t#k/u#k and the special RegDst encodings for ->t/->u). These are not
       // general-purpose registers and are not safe for C inline-asm operands
@@ -1910,15 +1912,14 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
   }
 
   if (Constraint == "Tr") {
-    // A 4 KiB tile carrier is larger than LLVM's simple vector MVT space and
-    // therefore reaches this hook as Other. The explicit Tr spelling keeps
-    // that otherwise-opaque carrier scoped to the TILE register class.
-    if (VT.isVector() || VT == MVT::linxtile || VT == MVT::Other)
+    if (VT == MVT::v1024i32 || VT == MVT::linxtile)
       return std::make_pair(0u, &LinxISA::TILERegClass);
     return std::make_pair(0u, nullptr);
   }
   if (Constraint == "Sr")
-    return std::make_pair(0u, &LinxISA::SHAREDRegClass);
+    return VT == MVT::i64
+               ? std::make_pair(0u, &LinxISA::SHAREDRegClass)
+               : std::make_pair(0u, nullptr);
   if (Constraint == "vr")
     return std::make_pair(0u, &LinxISA::GPR_ArchRegClass);
 

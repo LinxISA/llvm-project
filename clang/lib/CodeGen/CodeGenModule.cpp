@@ -117,6 +117,10 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
   default:
     return createDefaultTargetCodeGenInfo(CGM);
 
+  case llvm::Triple::linx32:
+  case llvm::Triple::linx64:
+    return createLinxISATargetCodeGenInfo(CGM);
+
   case llvm::Triple::m68k:
     return createM68kTargetCodeGenInfo(CGM);
   case llvm::Triple::mips:
