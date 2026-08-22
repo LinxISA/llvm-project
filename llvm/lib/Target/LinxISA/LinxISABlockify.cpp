@@ -154,6 +154,13 @@ static bool isAssignedDataLayout(int64_t Layout) {
   }
 }
 
+static bool validateHasLayoutFlag(int64_t HasLayout, StringRef Context) {
+  if (HasLayout != 0 && HasLayout != 1)
+    report_fatal_error(Twine("Linx: ") + Context +
+                       " has_layout must be exactly 0 or 1");
+  return HasLayout == 1;
+}
+
 static void validateStrictTileTSize(int64_t TSize, StringRef Context) {
   if (TSize < 1 || TSize > 10) {
     report_fatal_error(Twine("Linx: ") + Context +
@@ -2740,7 +2747,8 @@ public:
         Meta.DataType =
             static_cast<uint8_t>(PseudoMI->getOperand(3).getImm() & 0x1f);
         Meta.Layout = PseudoMI->getOperand(4).getImm();
-        Meta.HasLayout = (PseudoMI->getOperand(5).getImm() & 1) != 0;
+        Meta.HasLayout =
+            validateHasLayoutFlag(PseudoMI->getOperand(5).getImm(), "TMOV");
         validateStrictTileTSize(Meta.TSize, "TMOV");
         if (!isTileDataTypeFieldValue(Meta.DataType))
           report_fatal_error(

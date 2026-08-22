@@ -88,6 +88,13 @@ static bool isStrictTileTSizeCode(unsigned TSize) {
   return Bytes && *Bytes >= 128u && *Bytes <= 65536u;
 }
 
+static bool validateHasLayoutFlag(int64_t HasLayout, StringRef Context) {
+  if (HasLayout != 0 && HasLayout != 1)
+    report_fatal_error(Twine("Linx: ") + Context +
+                       " has_layout must be exactly 0 or 1");
+  return HasLayout == 1;
+}
+
 static unsigned cubeM32OutputTSize(int64_t N, StringRef Context) {
   if (N <= 0 || N > 512)
     report_fatal_error(Twine("Linx: ") + Context +
@@ -297,7 +304,7 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     Meta.TSize = static_cast<uint8_t>(MI.getOperand(2).getImm() & 0x1f);
     Meta.HasDataType = true;
     Meta.DataType = static_cast<uint8_t>(MI.getOperand(3).getImm() & 0x1f);
-    Meta.HasLayout = (MI.getOperand(5).getImm() & 1) != 0;
+    Meta.HasLayout = validateHasLayoutFlag(MI.getOperand(5).getImm(), "TMOV");
     if (Meta.HasLayout)
       Meta.Layout = MI.getOperand(4).getImm();
     return true;
