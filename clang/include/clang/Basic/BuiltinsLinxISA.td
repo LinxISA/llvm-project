@@ -20,6 +20,9 @@ class LinxISABuiltin<string prototype, string features = ""> : TargetBuiltin {
 
 // PTO/Linx 0.58 tile bridge: 4 KiB frontend values as _Vector<1024, int>.
 let Attributes = [NoThrow] in {
+  // Read the current processing-element ID from the read-only PEID SSR.
+  def get_thread_idx : LinxISABuiltin<"unsigned int()">;
+
   // TLSU transfers and Local-to-Local movement.
   def tile_tload : LinxISABuiltin<"_Vector<1024, int>(void const *, _Constant unsigned int, _Constant unsigned int, _Constant long long int, long long int, long long int, long long int, long long int)">;
   def tile_tstore : LinxISABuiltin<"void(void *, _Vector<1024, int>, _Constant unsigned int, _Constant unsigned int, _Constant long long int, long long int, long long int, long long int, long long int)">;

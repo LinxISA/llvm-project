@@ -1879,7 +1879,8 @@ const char *LinxISATargetLowering::getTargetNodeName(unsigned Opcode) const {
 
 LinxISATargetLowering::ConstraintType
 LinxISATargetLowering::getConstraintType(StringRef Constraint) const {
-  if (Constraint == "S")
+  if (Constraint == "S" || Constraint == "Sr" || Constraint == "Tr" ||
+      Constraint == "vr")
     return C_RegisterClass;
   return TargetLowering::getConstraintType(Constraint);
 }
@@ -1891,9 +1892,9 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
     switch (Constraint[0]) {
     case 'r':
       if (VT.isVector() || VT == MVT::linxtile)
-        // PTO 0.58 uses the ordinary register constraint for typed tile
-        // carriers; the value type, rather than a retired multi-letter
-        // constraint, selects the architectural TILE register file.
+        // The ordinary register constraint remains valid for typed tile
+        // carriers; the value type selects the architectural TILE register
+        // file. PTO C++ wrappers may spell this class explicitly as "Tr".
         return std::make_pair(0u, &LinxISA::TILERegClass);
       // The Linx GPR encoding space includes queue pseudo-registers
       // (t#k/u#k and the special RegDst encodings for ->t/->u). These are not
@@ -1907,6 +1908,19 @@ LinxISATargetLowering::getRegForInlineAsmConstraint(
       break;
     }
   }
+
+  if (Constraint == "Tr") {
+    // A 4 KiB tile carrier is larger than LLVM's simple vector MVT space and
+    // therefore reaches this hook as Other. The explicit Tr spelling keeps
+    // that otherwise-opaque carrier scoped to the TILE register class.
+    if (VT.isVector() || VT == MVT::linxtile || VT == MVT::Other)
+      return std::make_pair(0u, &LinxISA::TILERegClass);
+    return std::make_pair(0u, nullptr);
+  }
+  if (Constraint == "Sr")
+    return std::make_pair(0u, &LinxISA::SHAREDRegClass);
+  if (Constraint == "vr")
+    return std::make_pair(0u, &LinxISA::GPR_ArchRegClass);
 
   // Explicit register constraints: "{a0}", "{a1}", ...
   if (Constraint.size() > 2 && Constraint.front() == '{' &&

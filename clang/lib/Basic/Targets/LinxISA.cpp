@@ -74,6 +74,20 @@ bool LinxISATargetInfo::validateAsmConstraint(
   // Z - first special register (ra/r10)
 
   switch (Name[0]) {
+  case 'T': {
+    if (Name[1] != 'r')
+      return false;
+    ++Name;
+    Info.setAllowsRegister();
+    return true;
+  }
+  case 'v': {
+    if (Name[1] != 'r')
+      return false;
+    ++Name;
+    Info.setAllowsRegister();
+    return true;
+  }
   case 'r': {
     // General purpose register
     Info.setAllowsRegister();
@@ -81,6 +95,8 @@ bool LinxISATargetInfo::validateAsmConstraint(
   }
   case 'S': {
     // Compiler-allocated core-private Shared tile register S0..S255.
+    if (Name[1] == 'r')
+      ++Name;
     Info.setAllowsRegister();
     return true;
   }
@@ -143,6 +159,17 @@ bool LinxISATargetInfo::validateAsmConstraint(
   default:
     return false;
   }
+}
+
+std::string
+LinxISATargetInfo::convertConstraint(const char *&Constraint) const {
+  if ((Constraint[0] == 'T' || Constraint[0] == 'S' || Constraint[0] == 'v') &&
+      Constraint[1] == 'r') {
+    std::string Result = std::string("^") + std::string(Constraint, 2);
+    ++Constraint;
+    return Result;
+  }
+  return TargetInfo::convertConstraint(Constraint);
 }
 
 bool LinxISATargetInfo::hasFeature(StringRef Feature) const {

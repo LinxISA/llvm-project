@@ -2413,8 +2413,19 @@ QualType Sema::BuildExtVectorType(QualType T, Expr *SizeExpr,
   //
   // We explicitly allow bool elements in ext_vector_type for C/C++.
   bool IsNoBoolVecLang = getLangOpts().OpenCL || getLangOpts().OpenCLCPlusPlus;
+  const llvm::Triple::ArchType Arch =
+      Context.getTargetInfo().getTriple().getArch();
+  const auto *ET = T->getAs<EnumType>();
+  const bool HasLinxStorageAnnotation =
+      ET && llvm::any_of(ET->getDecl()->specific_attrs<AnnotateAttr>(),
+                         [](const AnnotateAttr *A) {
+                           return A->getAnnotation() == "linx.storage_type";
+                         });
+  const bool IsLinxStorageEnum =
+      HasLinxStorageAnnotation &&
+      (Arch == llvm::Triple::linx32 || Arch == llvm::Triple::linx64);
   if ((!T->isDependentType() && !T->isIntegerType() &&
-       !T->isRealFloatingType()) ||
+       !T->isRealFloatingType() && !IsLinxStorageEnum) ||
       (IsNoBoolVecLang && T->isBooleanType())) {
     Diag(AttrLoc, diag::err_attribute_invalid_vector_type) << T;
     return QualType();
