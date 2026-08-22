@@ -835,6 +835,14 @@ public:
           reject("linx_tile_intrinsic_loop");
           return false;
         }
+        // PTO ISA 0.58.3 reserves every block-body conditional branch form.
+        // Reject structurally non-linear candidates before analysis or IR
+        // construction can mutate the scalar loop.  A future lowering may
+        // accept these only after it can prove a branch-free predicated body.
+        if (HasInnerCF) {
+          reject("pto0583_body_branch_reserved");
+          return false;
+        }
         if (HasCalls) {
           reject("contains_call");
           return false;
@@ -6836,26 +6844,6 @@ public:
           }
         }
 
-        // PTO ISA 0.58.3 reserves the former two-level block-body conditional
-        // branch encodings.  Keep the original scalar loop when a candidate
-        // body still requires one instead of handing an illegal body to
-        // Blockify and terminating compilation.
-        SmallVector<StringRef, 32> BodyLines;
-        StringRef(OS.str()).split(BodyLines, '\n');
-        for (StringRef Line : BodyLines) {
-          Line = Line.trim();
-          if (Line.starts_with_insensitive("b.eq ") ||
-              Line.starts_with_insensitive("b.ne ") ||
-              Line.starts_with_insensitive("b.lt ") ||
-              Line.starts_with_insensitive("b.ge ") ||
-              Line.starts_with_insensitive("b.ltu ") ||
-              Line.starts_with_insensitive("b.geu ") ||
-              Line.starts_with_insensitive("b.z ") ||
-              Line.starts_with_insensitive("b.nz ")) {
-            reject("pto0583_body_branch_reserved");
-            return false;
-          }
-        }
         OS << "  C.BSTOP\n";
         F.removeFnAttr("linx-vblock-ts-bytes");
         if (LocalScratchWordCount != 0) {

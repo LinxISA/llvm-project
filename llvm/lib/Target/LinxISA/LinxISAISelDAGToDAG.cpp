@@ -180,16 +180,15 @@ static void validateTileByteBudget(StringRef IntrinsicName, uint64_t Dim0,
                                    std::optional<uint64_t> TSize) {
   const uint64_t Bytes =
       computeTileBytesOrDie(IntrinsicName, Dim0, Dim1, Dim2, ElemBits);
-  constexpr uint64_t StrictMaxBytes = 8192u;
+  constexpr uint64_t StrictMaxBytes = 65536u;
 
   if (Bytes > StrictMaxBytes) {
-    report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " tile-byte check failed: bytes=" + Twine(Bytes) +
-                       "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
-                       ", dim2=" + Twine(Dim2) +
-                       ", elem_bits=" + Twine(ElemBits) +
-                       ") exceeds strict max 8192B. Shrink dimensions or "
-                       "element width.");
+    report_fatal_error(
+        Twine("Linx: ") + IntrinsicName + " tile-byte check failed: bytes=" +
+        Twine(Bytes) + "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
+        ", dim2=" + Twine(Dim2) + ", elem_bits=" + Twine(ElemBits) +
+        ") exceeds architectural max 65536B. Shrink dimensions or "
+        "element width.");
   }
 
   if (TSize) {

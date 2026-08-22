@@ -27,7 +27,7 @@ let TargetPrefix = "linx" in {
   //                                  i64 immStrideBytes)
   //
   // PTO 0.58 legality (enforced in Linx backend):
-  // - tsize in [1, 7] (128B..8KB)
+  // - tsize in [1, 10] (128B..64KB)
   // - dtype in u5
   // - layout/lb0/lb1/stride are immediate scalar descriptor fields
   def int_linx_tile_tload :
@@ -58,7 +58,7 @@ let TargetPrefix = "linx" in {
   //                                 i64 immLayout, i1 immHasLayout)
   //
   // PTO 0.58 legality (enforced in Linx backend):
-  // - tsize in [1, 7] (128B..8KB)
+  // - tsize in [1, 10] (128B..64KB)
   // - dtype in u5
   // - has_layout in {0,1}
   def int_linx_tile_tmov :
@@ -100,7 +100,7 @@ let TargetPrefix = "linx" in {
   // PTO 0.58 tile-operation surface (header-only template dispatch).
   // PTO 0.58 legality (enforced in Linx backend):
   // - tileop10 in [0, 1023]
-  // - tsize in [1, 7] (128B..8KB)
+  // - tsize in [1, 10] (128B..64KB)
   // - dtype in u5
   def int_linx_tileop_unary :
       Intrinsic<[llvm_linx_tile_ty],

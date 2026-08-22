@@ -37,8 +37,8 @@ exit:
 ; REMARK-AUTO: "status":"reject"
 ; REMARK-AUTO: "reason":"pto0583_body_branch_reserved"
 ; REMARK-AUTO: "layout_policy":"auto"
-; REMARK-AUTO: "layout_kind":"grouped-strip-mined"
-; REMARK-AUTO: "cf_strategy":"active-replay"
+; REMARK-AUTO: "layout_kind":"none"
+; REMARK-AUTO: "cf_strategy":"none"
 
 ; GROUPED-LABEL: search_store_index_grouped_boundary:
 ; GROUPED-NOT: BSTART.MSEQ
@@ -47,5 +47,5 @@ exit:
 ; REMARK-GROUPED: "status":"reject"
 ; REMARK-GROUPED: "reason":"pto0583_body_branch_reserved"
 ; REMARK-GROUPED: "layout_policy":"grouped"
-; REMARK-GROUPED: "layout_kind":"grouped-strip-mined"
-; REMARK-GROUPED: "cf_strategy":"active-replay"
+; REMARK-GROUPED: "layout_kind":"none"
+; REMARK-GROUPED: "cf_strategy":"none"

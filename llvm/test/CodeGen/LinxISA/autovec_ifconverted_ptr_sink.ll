@@ -39,5 +39,5 @@ exit:
 ; REMARK: "function":"vector_ptr_sink_diamond"
 ; REMARK: "status":"reject"
 ; REMARK: "reason":"pto0583_body_branch_reserved"
-; REMARK: "layout_kind":"scalar-replay"
-; REMARK: "cf_strategy":"if-converted-diamond"
+; REMARK: "layout_kind":"none"
+; REMARK: "cf_strategy":"none"

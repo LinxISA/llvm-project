@@ -148,6 +148,8 @@ static StringRef dtypeName(unsigned DT) {
     return "U8";
   case 28:
     return "U4X2";
+  case 31:
+    return "DTYPE_NONE";
   default:
     return StringRef();
   }

@@ -29,5 +29,5 @@ exit:
 
 ; REMARK-REJECT: "function":"search_store_index_exit_store_reject"
 ; REMARK-REJECT: "status":"reject"
-; REMARK-REJECT: "reason":"unsupported_exit_side_effects"
+; REMARK-REJECT: "reason":"pto0583_body_branch_reserved"
 ; REMARK-REJECT: "layout_policy":"grouped"

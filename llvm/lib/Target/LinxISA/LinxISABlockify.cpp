@@ -101,7 +101,7 @@ static std::optional<uint64_t> tileTSizeToBytes(unsigned TSize) {
 
 static std::optional<unsigned> tileBytesToTSize(uint64_t Bytes) {
   // Local VBLOCK scratch sizing is independent of the active B.IOT
-  // destination-size policy and retains the backend's 16B..4KB input
+  // destination-size policy and retains the backend's 16B..8KB input
   // contract. The wire descriptor rounds sub-128B reservations up to the
   // architectural minimum TSize 1.
   if (Bytes < 16u || Bytes > 8192u || !isPowerOf2_64(Bytes))
@@ -224,15 +224,14 @@ static void validateTileByteBudget(StringRef Context, uint64_t Dim0,
                                    std::optional<uint64_t> TSize) {
   const uint64_t Bytes =
       computeTileBytesOrDie(Context, Dim0, Dim1, Dim2, ElemBits);
-  constexpr uint64_t StrictMaxBytes = 8192u;
+  constexpr uint64_t StrictMaxBytes = 65536u;
   if (Bytes > StrictMaxBytes) {
-    report_fatal_error(Twine("Linx: ") + Context +
-                       " tile-byte check failed: bytes=" + Twine(Bytes) +
-                       "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
-                       ", dim2=" + Twine(Dim2) +
-                       ", elem_bits=" + Twine(ElemBits) +
-                       ") exceeds strict max 8192B. Shrink dimensions or "
-                       "element width.");
+    report_fatal_error(
+        Twine("Linx: ") + Context + " tile-byte check failed: bytes=" +
+        Twine(Bytes) + "B (dim0=" + Twine(Dim0) + ", dim1=" + Twine(Dim1) +
+        ", dim2=" + Twine(Dim2) + ", elem_bits=" + Twine(ElemBits) +
+        ") exceeds architectural max 65536B. Shrink dimensions or "
+        "element width.");
   }
 
   if (TSize) {

@@ -43,8 +43,8 @@ exit:
 ; REMARK: "status":"reject"
 ; REMARK: "reason":"pto0583_body_branch_reserved"
 ; REMARK: "layout_policy":"grouped"
-; REMARK: "layout_kind":"grouped-strip-mined"
-; REMARK: "cf_strategy":"active-replay"
+; REMARK: "layout_kind":"none"
+; REMARK: "cf_strategy":"none"
 
 !0 = distinct !{!0, !1}
 !1 = !{!"llvm.loop.mustprogress"}

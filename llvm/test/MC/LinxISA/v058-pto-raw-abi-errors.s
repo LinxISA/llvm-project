@@ -12,6 +12,10 @@ B.IOT t#1, mask=1111, last, ->acc<1KB>
 B.IOT t#1, mask=1111, last, ->u<128KB>
 BSTART.TTRANSPOSE FP16
 BSTART.TSORT32 FP16
+B.DATR Layout21, NOT_A_DTYPE, Null
+B.CATR NOT_AN_ATTRIBUTE
+B.DATR Layout21, DTYPE_NONE, Null, cmode8
+B.DATR Layout21, DTYPE_NONE, Null, rmodebogus
 
 # CHECK: error: unrecognized instruction 'b.arg'
 # CHECK: error: unrecognized instruction 'bstart.cube'
@@ -21,6 +25,10 @@ BSTART.TSORT32 FP16
 # CHECK: error: tile size must be in strict range 128B..64KB
 # CHECK: error: unrecognized instruction 'bstart.ttranspose'
 # CHECK: error: unrecognized instruction 'bstart.tsort32'
+# CHECK: error: unknown block attribute: NOT_A_DTYPE
+# CHECK: error: unknown block attribute: NOT_AN_ATTRIBUTE
+# CHECK: error: unknown block attribute: CMODE8
+# CHECK: error: unknown block attribute: RMODEBOGUS
 # OLD: warning: invalid instruction encoding
 # RETIRED: warning: invalid instruction encoding
 # CUBE-NAMED: BSTART.TMATMULMX.BIAS{{[[:space:]]+}}TF32
