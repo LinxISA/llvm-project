@@ -22,8 +22,9 @@ entry:
 ; CHECK: BSTART.TMATMUL.ACC
 ; The accumulator C and left operand A occupy the first ordered descriptor.
 ; The terminal descriptor binds B and allocates the explicit 4x4xi32 result;
-; the architectural destination size rounds up to the 128B minimum.
+; CUBE_M32 uses one 128B CELL per S32 output column, so four columns require
+; a 512B destination.
 ; CHECK: B.IOT{{[[:space:]]+[^,]+,[[:space:]]*[^,]+, mask=1111}}
-; CHECK: B.IOT{{[[:space:]]+[^,]+, mask=1111, last, ->[mntu]<128B>}}
+; CHECK: B.IOT{{[[:space:]]+[^,]+, mask=1111, last, ->[mntu]<512B>}}
 ; CHECK-NOT: BSTART.ACCCVT
 ; CHECK: BSTART.TSTORE

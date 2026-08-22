@@ -97,17 +97,18 @@ exit:
 ; REMARK: "function":"nested_store"
 ; REMARK: "status":"lowered"
 ; REMARK: "function":"inner_if_uniform"
-; REMARK: "status":"lowered"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
 
 ; ASM: BSTART.MSEQ
 ; ASM: B.IOR
 ; ASM: v.lw.brg
 ; ASM: v.fadd
 ; ASM: v.sw.brg
-; ASM: b.lt
-; ASM: j
+; ASM: setc.lt
+; ASM-NOT: b.lt
 
 ; GROUP: BSTART.MSEQ
 ; GROUP: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
 ; GROUP: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb1}}
-; GROUP: v.add lc0, lc1<<5
+; GROUP: v.add lc0, lc1.uw<<5

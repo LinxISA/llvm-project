@@ -13,6 +13,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
@@ -260,6 +261,29 @@ static std::optional<unsigned> parsePEMaskKeyword(StringRef Text) {
   return Value;
 }
 
+static std::optional<unsigned> encodePEMode(unsigned PEMask) {
+  switch (PEMask) {
+  case 0b0000:
+    return 0;
+  case 0b1000:
+    return 1;
+  case 0b0100:
+    return 2;
+  case 0b0010:
+    return 3;
+  case 0b0001:
+    return 4;
+  case 0b1100:
+    return 5;
+  case 0b1110:
+    return 6;
+  case 0b1111:
+    return 7;
+  default:
+    return std::nullopt;
+  }
+}
+
 static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
   const std::string Up = toUpperStr(Name.trim());
   return StringSwitch<std::optional<unsigned>>(Up)
@@ -288,7 +312,44 @@ static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
       .Case("U16", 26u)
       .Case("U8", 27u)
       .Case("U4X2", 28u)
+      .Case("DTYPE_NONE", 31u)
       .Default(std::nullopt);
+}
+
+static bool isConcreteTileDataType(unsigned DType) {
+  return DType <= 14 || (DType >= 16 && DType <= 20) ||
+         (DType >= 24 && DType <= 28);
+}
+
+static bool isTileDataTypeFieldValue(unsigned DType) {
+  return isConcreteTileDataType(DType) || DType == 31;
+}
+
+static bool isAssignedDataLayout(unsigned Layout) {
+  switch (Layout) {
+  case 0:
+  case 1:
+  case 3:
+  case 4:
+  case 6:
+  case 8:
+  case 9:
+  case 17:
+  case 18:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 30:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static std::optional<unsigned> parseTileOperationKeyword(StringRef Name) {
@@ -302,20 +363,35 @@ static std::optional<unsigned> parseLayoutKeyword(StringRef Name) {
   if (Ref == "NORM" || Ref == "NORMAL" || Ref == "CANON" ||
       Ref == "NORM.NORMAL")
     return 0u;
-  if (Ref == "ND2NZ.NORMAL")
-    return 2u;
-  if (Ref == "ND2ZN.NORMAL")
-    return 3u;
-  if (Ref == "DN2ZN.NORMAL")
-    return 8u;
-  if (Ref == "DN2NZ.NORMAL")
-    return 9u;
-  if (Ref == "NZ2DN.CANON")
-    return 28u;
+  const auto [Base, Suffix] = Ref.split('.');
+  if (!Suffix.empty() && Suffix != "NORMAL" && Suffix != "CANON")
+    return std::nullopt;
+  if (std::optional<unsigned> Named =
+          StringSwitch<std::optional<unsigned>>(Base)
+              .Case("ND2DN", 1u)
+              .Case("ND2ZN", 3u)
+              .Case("ND2NZ", 4u)
+              .Case("DN2ND", 6u)
+              .Case("DN2ZN", 8u)
+              .Case("DN2NZ", 9u)
+              .Case("ZN2ND", 17u)
+              .Case("ZN2DN", 18u)
+              .Case("ZN2NZ", 20u)
+              .Case("ND2M32", 21u)
+              .Case("ND2M16", 22u)
+              .Case("ND2N8", 23u)
+              .Case("M322ND", 24u)
+              .Case("M162ND", 25u)
+              .Case("N82ND", 26u)
+              .Case("NZ2ND", 27u)
+              .Case("NZ2DN", 28u)
+              .Case("NZ2ZN", 30u)
+              .Default(std::nullopt))
+    return Named;
   if (Ref.starts_with("LAYOUT")) {
     StringRef Tail = Ref.drop_front(6);
     unsigned Value = 0;
-    if (!Tail.getAsInteger(0, Value) && Value < 32u)
+    if (!Tail.getAsInteger(0, Value) && isAssignedDataLayout(Value))
       return Value;
   }
   return std::nullopt;
@@ -743,90 +819,38 @@ static std::optional<unsigned> parsePrefetchModelSuffix(StringRef Suffix) {
   return std::nullopt;
 }
 
-static bool parseQueueFlagSuffix(StringRef Suffix, bool AllowH, unsigned &E,
-                                 unsigned &H, unsigned &I, unsigned &R,
-                                 unsigned &S) {
+enum class QueueFlagKind { QMT, QPOP, QPUSH };
+
+static bool parseQueueFlagSuffix(StringRef Suffix, QueueFlagKind Kind,
+                                 unsigned &E, unsigned &H, unsigned &I,
+                                 unsigned &R, unsigned &S) {
   E = 0;
   H = 0;
   I = 0;
   R = 0;
   S = 0;
-  while (!Suffix.empty()) {
-    if (Suffix.consume_front_insensitive("ier")) {
-      I = 1;
-      E = 1;
-      R = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("ies")) {
-      I = 1;
-      E = 1;
-      S = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("ie")) {
-      I = 1;
-      E = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("is")) {
-      I = 1;
-      S = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("ir")) {
-      I = 1;
-      R = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("es")) {
-      E = 1;
-      S = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("er")) {
-      E = 1;
-      R = 1;
-      continue;
-    }
-    if (AllowH && Suffix.consume_front_insensitive("her")) {
-      H = 1;
-      E = 1;
-      R = 1;
-      continue;
-    }
-    if (AllowH && Suffix.consume_front_insensitive("he")) {
-      H = 1;
-      E = 1;
-      continue;
-    }
-    if (AllowH && Suffix.consume_front_insensitive("hr")) {
-      H = 1;
-      R = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("i")) {
-      I = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("e")) {
-      E = 1;
-      continue;
-    }
-    if (AllowH && Suffix.consume_front_insensitive("h")) {
-      H = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("r")) {
-      R = 1;
-      continue;
-    }
-    if (Suffix.consume_front_insensitive("s")) {
-      S = 1;
-      continue;
-    }
+  const std::string Canonical = Suffix.lower();
+  const bool IsLegal =
+      Kind == QueueFlagKind::QMT ? StringSwitch<bool>(Canonical)
+                                       .Cases({"i", "e", "s", "r", "ie", "is",
+                                               "ir", "es", "er", "ies", "ier"},
+                                              true)
+                                       .Default(false)
+      : Kind == QueueFlagKind::QPOP
+          ? StringSwitch<bool>(Canonical)
+                .Cases({"e", "r", "er"}, true)
+                .Default(false)
+          : StringSwitch<bool>(Canonical)
+                .Cases({"h", "e", "r", "he", "hr", "er", "her"}, true)
+                .Default(false);
+  if (!IsLegal)
     return false;
-  }
+
+  E = StringRef(Canonical).contains('e');
+  H = StringRef(Canonical).contains('h');
+  I = StringRef(Canonical).contains('i');
+  R = StringRef(Canonical).contains('r');
+  S = StringRef(Canonical).contains('s');
   return true;
 }
 
@@ -839,13 +863,13 @@ static std::optional<unsigned> parseVectorBlockModeKeyword(StringRef Name) {
 }
 
 static std::optional<unsigned> parsePadValueKeyword(StringRef Name) {
-  if (Name.equals_insensitive("Null"))
-    return 0u;
   if (Name.equals_insensitive("Zero"))
-    return 1u;
+    return 0u;
   if (Name.equals_insensitive("Max"))
-    return 2u;
+    return 1u;
   if (Name.equals_insensitive("Min"))
+    return 2u;
+  if (Name.equals_insensitive("Null"))
     return 3u;
   return std::nullopt;
 }
@@ -1516,10 +1540,14 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest,
       TSize = *Code;
     }
 
-    // PTO 0.58 TSize codes 1..7 map to 128B..8KB per participating PE.
-    if (TSize < 1u || TSize > 7u) {
+    // PTO 0.58.3 SizeCode extends Local destinations through 64 KiB and
+    // Shared destinations through 256 KiB per participating PE.
+    const unsigned MaxSizeCode = AllowShared ? 12u : 10u;
+    if (TSize < 1u || TSize > MaxSizeCode) {
       return Error(getTok().getLoc(),
-                   "tile size must be in strict range 128B..8KB");
+                   AllowShared
+                       ? "tile size must be in strict range 128B..256KB"
+                       : "tile size must be in strict range 128B..64KB");
     }
 
     if (parseToken(AsmToken::Greater, "expected '>' to close size suffix"))
@@ -2931,6 +2959,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (!require(PEMask.has_value(),
                  "PE mask must contain exactly four binary digits"))
       return false;
+    auto PEMode = encodePEMode(*PEMask);
+    if (!require(PEMode.has_value(),
+                 "PE mask must be one of 0000, 1000, 0100, 0010, 0001, "
+                 "1100, 1110, or 1111"))
+      return false;
 
     const bool IsSource = PI.Imms.size() == 1 && PI.ArrowDests.empty();
     const bool IsDestination = PI.Imms.empty() && PI.ArrowDests.size() == 1;
@@ -2940,7 +2973,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       return false;
 
     unsigned SharedTID = 0;
-    unsigned TSize = 0;
+    unsigned SizeCode = 0;
     if (IsSource) {
       int64_t Value = 0;
       if (!require(isConstExpr(PI.Imms[0].Expr, Value) && Value >= 0 &&
@@ -2950,22 +2983,22 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       SharedTID = static_cast<unsigned>(Value);
     } else {
       SharedTID = PI.ArrowDests[0].Code;
-      TSize = PI.ArrowDests[0].AngleSize;
+      SizeCode = PI.ArrowDests[0].AngleSize;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
-                       !PI.ArrowDests[0].HasAngleReg && TSize >= 1u &&
-                       TSize <= 7u,
-                   "B.IOS destination size must be 128B..8KB"))
+                       !PI.ArrowDests[0].HasAngleReg && SizeCode >= 1u &&
+                       SizeCode <= 12u,
+                   "B.IOS destination size must be 128B..256KB"))
         return false;
     }
 
     for (unsigned I = 0; I < Form.field_count; ++I) {
       StringRef FieldName(linxisa_fields[Form.field_start + I].name);
-      if (FieldName == "PE_MASK")
-        emitFieldImm(*PEMask);
+      if (FieldName == "PEMode")
+        emitFieldImm(*PEMode);
       else if (FieldName == "SharedTID")
         emitFieldImm(SharedTID);
-      else if (FieldName == "TSize")
-        emitFieldImm(TSize);
+      else if (FieldName == "SizeCode")
+        emitFieldImm(SizeCode);
       else
         return require(false, ("unsupported B.IOS field: " + FieldName).str());
     }
@@ -2978,61 +3011,115 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                  "unexpected operands for B.CATR"))
       return false;
 
+    const bool IsBCATR = AsmFmt.starts_with("B.CATR");
     StringMap<StringRef> Attrs;
+    StringSet<> SeenAttrs;
+    std::string AttrError;
     unsigned CMode = 0;
     unsigned RMode = 0;
-    auto recordAttrToken = [&](StringRef RawText) {
+    auto recordAttrToken = [&](StringRef RawText) -> bool {
+      AttrError.clear();
+      auto claim = [&](StringRef Key) {
+        if (SeenAttrs.insert(Key).second)
+          return true;
+        AttrError = (Twine("duplicate block attribute: ") + Key).str();
+        return false;
+      };
       StringRef Text = RawText;
       if (Text.starts_with("."))
         Text = Text.drop_front();
       auto Parts = Text.split('=');
       if (!Parts.second.empty()) {
-        Attrs[Parts.first] = Parts.second;
-        return;
+        if (!IsBCATR && (Parts.first.equals_insensitive("LAYOUT") ||
+                         Parts.first.equals_insensitive("DTYPE") ||
+                         Parts.first.equals_insensitive("PAD"))) {
+          if (!claim(Parts.first.upper()))
+            return false;
+          Attrs[Parts.first.upper()] = Parts.second;
+          return true;
+        }
+        return false;
       }
-      if (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
-          Text.equals_insensitive("AQRL")) {
+      if (IsBCATR &&
+          (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
+           Text.equals_insensitive("AQRL"))) {
+        if (!claim("ORDER"))
+          return false;
         Attrs["ORDER"] = Text;
-        return;
+        return true;
       }
-      if (Text.equals_insensitive("ATOMIC") ||
-          Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
-          Text.equals_insensitive("FAR") || Text.equals_insensitive("SAT") ||
-          Text.equals_insensitive("CANONICALIZE")) {
+      if (IsBCATR &&
+          (Text.equals_insensitive("ATOMIC") ||
+           Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
+           Text.equals_insensitive("FAR"))) {
+        if (!claim(Text.upper()))
+          return false;
         Attrs[Text] = "ON";
-        return;
+        return true;
       }
-      if (Text.starts_with_insensitive("CMODE")) {
+      if (!IsBCATR && (Text.equals_insensitive("SAT") ||
+                       Text.equals_insensitive("CANONICALIZE"))) {
+        if (!claim(Text.upper()))
+          return false;
+        Attrs[Text] = "ON";
+        return true;
+      }
+      if (!IsBCATR && Text.starts_with_insensitive("CMODE")) {
         unsigned Value = 0;
-        if (!Text.drop_front(5).getAsInteger(0, Value) && Value < 8)
-          CMode = Value;
-        return;
+        if (Text.drop_front(5).getAsInteger(0, Value) || Value > 5)
+          return false;
+        if (!claim("CMODE"))
+          return false;
+        CMode = Value;
+        return true;
       }
-      if (Text.starts_with_insensitive("RMODE")) {
+      if (!IsBCATR && Text.starts_with_insensitive("RMODE")) {
         unsigned Value = 0;
-        if (!Text.drop_front(5).getAsInteger(0, Value) && Value < 8)
-          RMode = Value;
-        return;
+        if (Text.drop_front(5).getAsInteger(0, Value) || Value >= 8)
+          return false;
+        if (!claim("RMODE"))
+          return false;
+        RMode = Value;
+        return true;
       }
-      if (parseLayoutKeyword(Text)) {
+      if (!IsBCATR && parseLayoutKeyword(Text)) {
+        if (!claim("LAYOUT"))
+          return false;
         Attrs["LAYOUT"] = Text;
-        return;
+        return true;
       }
-      if (parseDataTypeKeyword(Text)) {
+      if (!IsBCATR && parseDataTypeKeyword(Text)) {
+        if (!claim("DTYPE"))
+          return false;
         Attrs["DTYPE"] = Text;
-        return;
+        return true;
       }
-      if (parsePadValueKeyword(Text)) {
+      if (!IsBCATR && parsePadValueKeyword(Text)) {
+        if (!claim("PAD"))
+          return false;
         Attrs["PAD"] = Text;
-        return;
+        return true;
       }
+      return false;
     };
     for (const ParsedKeyword &KW : PI.Keywords) {
-      recordAttrToken(KW.TextUpper);
+      if (!require(
+              recordAttrToken(KW.TextUpper),
+              AttrError.empty()
+                  ? (Twine("unknown block attribute: ") + KW.TextUpper).str()
+                  : AttrError))
+        return false;
     }
     for (const ParsedImm &Imm : PI.Imms) {
-      if (const auto *S = dyn_cast<MCSymbolRefExpr>(Imm.Expr))
-        recordAttrToken(toUpperStr(S->getSymbol().getName()));
+      if (const auto *S = dyn_cast<MCSymbolRefExpr>(Imm.Expr)) {
+        const std::string Text = toUpperStr(S->getSymbol().getName());
+        if (!require(recordAttrToken(Text),
+                     AttrError.empty()
+                         ? (Twine("unknown block attribute: ") + Text).str()
+                         : AttrError))
+          return false;
+      } else if (!require(false, "block attributes must use assigned names"))
+        return false;
     }
 
     auto onBit = [&](StringRef Key) -> unsigned {
@@ -3060,18 +3147,19 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       Layout = *L;
     }
 
-    unsigned DType = 0;
+    unsigned DType = IsBCATR ? 0u : 31u;
     if (auto It = Attrs.find("DTYPE"); It != Attrs.end()) {
       auto DT = parseDataTypeKeyword(It->second);
-      if (!require(DT.has_value(), "invalid B.CATR dtype"))
+      if (!require(DT.has_value() && isTileDataTypeFieldValue(*DT),
+                   "invalid B.DATR dtype"))
         return false;
       DType = *DT;
     }
 
-    unsigned Pad = 0;
+    unsigned Pad = IsBCATR ? 0u : 3u;
     if (auto It = Attrs.find("PAD"); It != Attrs.end()) {
       auto P = parsePadValueKeyword(It->second);
-      if (!require(P.has_value(), "invalid B.CATR pad value"))
+      if (!require(P.has_value(), "invalid B.DATR pad value"))
         return false;
       Pad = *P;
     }
@@ -3220,6 +3308,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (!require(PEMask.has_value(),
                  "B.IOT requires exactly one mask=PE_MASK operand"))
       return false;
+    const std::optional<unsigned> PEMode = encodePEMode(*PEMask);
+    if (!require(PEMode.has_value(),
+                 "PE mask must be one of 0000, 1000, 0100, 0010, 0001, "
+                 "1100, 1110, or 1111"))
+      return false;
     const bool FormHasDestination = AsmFmt.contains("->DstTile");
     if (!require(
             PI.ArrowDests.size() == (FormHasDestination ? 1u : 0u),
@@ -3229,18 +3322,18 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       return false;
 
     unsigned DstTile = 0u;
-    unsigned TSize = 0u;
+    unsigned SizeCode = 0u;
     if (FormHasDestination) {
       DstTile = PI.ArrowDests[0].Code & 0x7u;
-      TSize = PI.ArrowDests[0].AngleSize;
+      SizeCode = PI.ArrowDests[0].AngleSize;
       if (!require(DstTile <= 3u, "B.IOT destination must be one of t/u/m/n"))
         return false;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
                        !PI.ArrowDests[0].HasAngleReg,
                    "B.IOT expects size suffix '->t<Size>'"))
         return false;
-      if (!require(TSize >= 1u && TSize <= 7u,
-                   "B.IOT destination size must be 128B..8KB"))
+      if (!require(SizeCode >= 1u && SizeCode <= 10u,
+                   "B.IOT destination size must be 128B..64KB"))
         return false;
     }
 
@@ -3282,16 +3375,16 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         emitFieldImm(DstTile);
       else if (FN == "L")
         emitFieldImm(WantLast);
-      else if (FN == "PE_MASK")
-        emitFieldImm(*PEMask);
+      else if (FN == "PEMode")
+        emitFieldImm(*PEMode);
       else if (FN == "PTOU0_7" || FN == "PTOU0_8")
         emitFieldImm(0);
       else if (FN == "SrcTile0")
         emitFieldImm(Src0);
       else if (FN == "SrcTile1")
         emitFieldImm(Src1);
-      else if (FN == "TSize")
-        emitFieldImm(TSize);
+      else if (FN == "SizeCode")
+        emitFieldImm(SizeCode);
       else
         return require(false, ("unsupported B.IOT field: " + FN).str());
     }
@@ -3306,8 +3399,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                      PI.ArrowDests.empty() && !PI.SetRetTarget,
                  "unexpected operands for B.FPATR"))
       return false;
-    if (!require(PI.Imms.size() == 7,
-                 "expected seven descriptor fields for B.FPATR"))
+    if (!require(PI.Imms.size() == 9,
+                 "expected nine descriptor fields for B.FPATR"))
       return false;
 
     auto sourceIndex = [](StringRef FieldName) -> std::optional<unsigned> {
@@ -3319,6 +3412,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
           .Case("GroupMaxEn", 4u)
           .Case("RowMaxInit", 5u)
           .Case("MaxAbsEn", 6u)
+          .Case("TransA", 7u)
+          .Case("TransB", 8u)
           .Default(std::nullopt);
     };
 
@@ -3408,8 +3503,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                      static_cast<unsigned>(*FuncVal)),
                  "BSTART.TEPL Mode/Function is reserved in PTO ISA 0.58"))
       return false;
-    if (!require(*DataTypeVal >= 0 && *DataTypeVal <= 31,
-                 (Twine(Kind) + " DataType out of range")))
+    if (!require(*DataTypeVal >= 0 && isConcreteTileDataType(
+                                          static_cast<unsigned>(*DataTypeVal)),
+                 (Twine(Kind) + " requires an assigned concrete DataType")))
       return false;
 
     for (unsigned i = 0; i < Form.field_count; ++i) {
@@ -3514,6 +3610,15 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     }
   }
 
+  bool QMTUsesSrcR = false;
+  if (AsmFmt.starts_with_insensitive("hl.qmt[")) {
+    int64_t IFlag = 0;
+    if (!require(PI.Imms.size() == 4u && isConstExpr(PI.Imms[1].Expr, IFlag),
+                 "invalid HL.QMT queue flags"))
+      return false;
+    QMTUsesSrcR = IFlag != 0;
+  }
+
   for (unsigned i = 0; i < Form.field_count; ++i) {
     const linxisa_field &Field = linxisa_fields[Form.field_start + i];
     StringRef FN(Field.name);
@@ -3597,6 +3702,10 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     }
 
     if (FN == "SrcR") {
+      if (AsmFmt.starts_with_insensitive("hl.qmt[") && !QMTUsesSrcR) {
+        emitFieldImm(0);
+        continue;
+      }
       auto R = ForcedSrcR ? ForcedSrcR : takeReg();
       if (!require(R.has_value(), "missing SrcR operand"))
         return false;
@@ -3753,11 +3862,21 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       int64_t V = 0;
       if (!isConstExpr(E, V)) {
         if (FN == "DataType") {
-          if (const auto *S = dyn_cast<MCSymbolRefExpr>(E))
+          if (const auto *S = dyn_cast<MCSymbolRefExpr>(E)) {
             if (auto DT = parseDataTypeKeyword(S->getSymbol().getName())) {
+              const bool AllowNone =
+                  AsmFmt.equals_insensitive("BSTART.TMOV DataType");
+              if (!require(
+                      isConcreteTileDataType(*DT) || (AllowNone && *DT == 31),
+                      AllowNone ? "BSTART.TMOV requires an assigned DataType "
+                                  "or DTYPE_NONE"
+                                : "BSTART requires an assigned concrete "
+                                  "DataType"))
+                return false;
               emitFieldImm(*DT);
               continue;
             }
+          }
         }
         if (FN == "Mode") {
           if (const auto *S = dyn_cast<MCSymbolRefExpr>(E))
@@ -3768,6 +3887,17 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
             }
         }
         if (!require(false, (FN + " must be a constant for now").str()))
+          return false;
+      }
+      if (FN == "DataType") {
+        const bool AllowNone =
+            AsmFmt.equals_insensitive("BSTART.TMOV DataType");
+        if (!require(
+                V >= 0 && (isConcreteTileDataType(static_cast<unsigned>(V)) ||
+                           (AllowNone && V == 31)),
+                AllowNone ? "BSTART.TMOV requires an assigned DataType or "
+                            "DTYPE_NONE"
+                          : "BSTART requires an assigned concrete DataType"))
           return false;
       }
       emitFieldImm(V);
@@ -4043,14 +4173,14 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     if (auto Canonical = tryResolvePrefetchAlias("HL.PRFI.UA."))
       return Canonical;
 
-    auto tryResolveQueueAlias = [&](StringRef Prefix, bool AllowH, bool HasI,
-                                    bool HasS,
+    auto tryResolveQueueAlias = [&](StringRef Prefix, QueueFlagKind Kind,
+                                    bool HasI, bool HasS,
                                     bool HasH) -> std::optional<std::string> {
       if (!KeyRef.starts_with_insensitive(Prefix))
         return std::nullopt;
       unsigned E = 0, H = 0, I = 0, R = 0, S = 0;
-      if (!parseQueueFlagSuffix(KeyRef.drop_front(Prefix.size()), AllowH, E, H,
-                                I, R, S))
+      if (!parseQueueFlagSuffix(KeyRef.drop_front(Prefix.size()), Kind, E, H, I,
+                                R, S))
         return std::nullopt;
       pushImm(E);
       if (HasH)
@@ -4063,15 +4193,15 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return Prefix.drop_back().str();
     };
 
-    if (auto Canonical = tryResolveQueueAlias("HL.QMT.", /*AllowH=*/false,
+    if (auto Canonical = tryResolveQueueAlias("HL.QMT.", QueueFlagKind::QMT,
                                               /*HasI=*/true, /*HasS=*/true,
                                               /*HasH=*/false))
       return Canonical;
-    if (auto Canonical = tryResolveQueueAlias("HL.QPOP.", /*AllowH=*/false,
+    if (auto Canonical = tryResolveQueueAlias("HL.QPOP.", QueueFlagKind::QPOP,
                                               /*HasI=*/false, /*HasS=*/false,
                                               /*HasH=*/false))
       return Canonical;
-    if (auto Canonical = tryResolveQueueAlias("HL.QPUSH.", /*AllowH=*/true,
+    if (auto Canonical = tryResolveQueueAlias("HL.QPUSH.", QueueFlagKind::QPUSH,
                                               /*HasI=*/false, /*HasS=*/false,
                                               /*HasH=*/true))
       return Canonical;

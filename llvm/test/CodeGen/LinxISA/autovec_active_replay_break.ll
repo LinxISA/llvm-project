@@ -34,4 +34,4 @@ exit:
 
 ; REMARK: "function":"search_store_index"
 ; REMARK: "status":"reject"
-; REMARK: "reason":"unsupported_exit_side_effects"
+; REMARK: "reason":"pto0583_body_branch_reserved"

@@ -14,4 +14,4 @@ entry:
   ret void
 }
 
-; CHECK: Linx: cube.tmatmul.acc requires m to be a positive power of two in range 1..65536
+; CHECK: Linx: cube.tmatmul.acc requires m to be in arbitrary positive range 1..65535

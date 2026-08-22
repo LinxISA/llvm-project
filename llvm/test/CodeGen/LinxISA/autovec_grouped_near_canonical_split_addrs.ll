@@ -37,20 +37,14 @@ exit:
 }
 
 ; CHECK-LABEL: search_store_index_split_addrs_near_canonical:
-; CHECK: BSTART.MSEQ
-; CHECK: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; CHECK: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; CHECK: v.psel p,
-; CHECK: b.nz
-; CHECK: v.sw.brg
-; CHECK: v.sw.brg
-; CHECK: v.cmp.ne
+; CHECK-NOT: BSTART.MSEQ
 
 ; REMARK: "function":"search_store_index_split_addrs_near_canonical"
-; REMARK: "status":"lowered"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
 ; REMARK: "layout_policy":"grouped"
-; REMARK: "layout_kind":"grouped-strip-mined"
-; REMARK: "cf_strategy":"active-replay"
+; REMARK: "layout_kind":"none"
+; REMARK: "cf_strategy":"none"
 
 !0 = distinct !{!0, !1}
 !1 = !{!"llvm.loop.mustprogress"}

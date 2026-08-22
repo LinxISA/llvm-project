@@ -1,6 +1,6 @@
 # RUN: not --crash llc -mtriple=linx64 -run-pass=linx-tile-ssa-balance -o - %s 2>&1 | FileCheck %s
 
-# CHECK: TSize outside 128B..8KB policy
+# CHECK: SizeCode outside 128B..64KB policy
 
 --- |
   define i64 @tile_size_policy_reject(ptr %a, ptr %out) {

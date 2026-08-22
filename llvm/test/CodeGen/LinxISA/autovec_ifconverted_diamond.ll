@@ -1,6 +1,9 @@
 ; RUN: rm -f %t.remarks.json
 ; RUN: llc -mtriple=linx64 -O2 --linx-simt-autovec=1 --linx-simt-autovec-mode=mseq --linx-simt-autovec-lanes=32 --linx-simt-autovec-remarks=%t.remarks.json < %s | FileCheck %s --check-prefix=ASM
 ; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks.json
+; RUN: llc -mtriple=linx64 -O2 -filetype=obj < %s -o %t.scalar.o
+; RUN: llc -mtriple=linx64 -O2 -filetype=obj --linx-simt-autovec=1 --linx-simt-autovec-mode=mseq --linx-simt-autovec-lanes=32 < %s -o %t.autovec.o
+; RUN: cmp %t.scalar.o %t.autovec.o
 
 define void @vector_inner_diamond(ptr nocapture %a, ptr nocapture %b) {
 entry:
@@ -74,33 +77,19 @@ exit:
 }
 
 ; ASM-LABEL: vector_inner_diamond:
-; ASM: BSTART.MSEQ
-; ASM: B.TEXT
-; ASM: B.IOR
-; ASM: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; ASM: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb2}}
-; ASM: v.lw.brg
-; ASM: v.sw.brg
-; ASM: C.BSTOP
-; ASM-NOT: v.rdor
+; ASM-NOT: BSTART.MSEQ
 
 ; ASM-LABEL: vector_nested_diamond:
-; ASM: BSTART.MSEQ
-; ASM: B.TEXT
-; ASM: B.IOR
-; ASM: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; ASM: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb2}}
-; ASM: v.lw.brg
-; ASM: v.sw.brg
-; ASM: C.BSTOP
-; ASM-NOT: v.rdor
+; ASM-NOT: BSTART.MSEQ
 
 ; REMARK: "function":"vector_inner_diamond"
-; REMARK: "layout_kind":"grouped-strip-mined"
-; REMARK: "cf_strategy":"if-converted-diamond"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
+; REMARK: "layout_kind":"none"
+; REMARK: "cf_strategy":"none"
 
 ; REMARK: "function":"vector_nested_diamond"
-; REMARK: "layout_kind":"grouped-strip-mined"
-; REMARK: "cf_strategy":"if-converted-diamond"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
+; REMARK: "layout_kind":"none"
+; REMARK: "cf_strategy":"none"

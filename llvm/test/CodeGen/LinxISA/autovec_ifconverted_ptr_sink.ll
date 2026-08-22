@@ -34,17 +34,10 @@ exit:
 }
 
 ; ASM-LABEL: vector_ptr_sink_diamond:
-; ASM: BSTART.MSEQ
-; ASM: B.TEXT
-; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb0}}
-; ASM: C.B.DIMI{{[[:space:]]+}}64,{{.*->lb1}}
-; ASM: v.flt
-; ASM: v.csel
-; ASM: v.cmp.eq
-; ASM: b.nz
-; ASM: v.sw.brg
-; ASM-NOT: v.rdor
+; ASM-NOT: BSTART.MSEQ
 
 ; REMARK: "function":"vector_ptr_sink_diamond"
-; REMARK: "layout_kind":"scalar-replay"
-; REMARK: "cf_strategy":"if-converted-diamond"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
+; REMARK: "layout_kind":"none"
+; REMARK: "cf_strategy":"none"

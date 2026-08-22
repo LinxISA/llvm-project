@@ -90,6 +90,12 @@ static void printTileRef(raw_ostream &OS, unsigned TileId) {
   OS << Prefix << "#" << utostr(Depth + 1u);
 }
 
+static unsigned decodePEMode(unsigned PEMode) {
+  static constexpr unsigned Masks[] = {0b0000, 0b1000, 0b0100, 0b0010,
+                                       0b0001, 0b1100, 0b1110, 0b1111};
+  return Masks[PEMode & 0x7u];
+}
+
 static StringRef dtypeName(unsigned DT) {
   switch (DT & 0x1f) {
   case 0:
@@ -142,6 +148,8 @@ static StringRef dtypeName(unsigned DT) {
     return "U8";
   case 28:
     return "U4X2";
+  case 31:
+    return "DTYPE_NONE";
   default:
     return StringRef();
   }
@@ -174,17 +182,43 @@ static unsigned cubeStateOpFromFunction(unsigned Func) {
 static StringRef layoutFormatName(unsigned Format) {
   switch (Format & 0x1fu) {
   case 0:
-    return "NORM.normal";
-  case 2:
-    return "ND2NZ.normal";
+    return "NORM";
+  case 1:
+    return "ND2DN";
   case 3:
-    return "ND2ZN.normal";
+    return "ND2ZN";
+  case 4:
+    return "ND2NZ";
+  case 6:
+    return "DN2ND";
   case 8:
-    return "DN2ZN.normal";
+    return "DN2ZN";
   case 9:
-    return "DN2NZ.normal";
+    return "DN2NZ";
+  case 17:
+    return "ZN2ND";
+  case 18:
+    return "ZN2DN";
+  case 20:
+    return "ZN2NZ";
+  case 21:
+    return "ND2M32";
+  case 22:
+    return "ND2M16";
+  case 23:
+    return "ND2N8";
+  case 24:
+    return "M322ND";
+  case 25:
+    return "M162ND";
+  case 26:
+    return "N82ND";
+  case 27:
+    return "NZ2ND";
   case 28:
-    return "NZ2DN.canon";
+    return "NZ2DN";
+  case 30:
+    return "NZ2ZN";
   default:
     return StringRef();
   }
@@ -204,13 +238,13 @@ static StringRef vectorBlockModeName(unsigned Mode) {
 static StringRef padValueName(unsigned Pad) {
   switch (Pad & 0x1fu) {
   case 0:
-    return "Null";
-  case 1:
     return "Zero";
-  case 2:
+  case 1:
     return "Max";
-  case 3:
+  case 2:
     return "Min";
+  case 3:
+    return "Null";
   default:
     return StringRef();
   }
@@ -1407,25 +1441,25 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
   if (AsmFmt.starts_with("B.IOS")) {
     const unsigned PEMask =
-        static_cast<unsigned>(findFieldImm("PE_MASK").value_or(0)) & 0xfu;
+        decodePEMode(static_cast<unsigned>(findFieldImm("PEMode").value_or(0)));
     const unsigned SharedTID =
         static_cast<unsigned>(findFieldImm("SharedTID").value_or(0)) & 0xffu;
-    const unsigned TSize =
-        static_cast<unsigned>(findFieldImm("TSize").value_or(0)) & 0x7u;
+    const unsigned SizeCode =
+        static_cast<unsigned>(findFieldImm("SizeCode").value_or(0)) & 0xfu;
 
     auto printPEMask = [&]() {
       for (int Bit = 3; Bit >= 0; --Bit)
         OS << ((PEMask >> Bit) & 1u);
     };
     OS << "B.IOS\t";
-    if (TSize == 0) {
+    if (SizeCode == 0) {
       OS << "S" << SharedTID << ", mask=";
       printPEMask();
     } else {
       OS << "mask=";
       printPEMask();
       OS << ", ->S" << SharedTID << "<";
-      const uint64_t Bytes = 1ull << (TSize + 6u);
+      const uint64_t Bytes = 1ull << (SizeCode + 6u);
       if (Bytes >= 1024u)
         OS << (Bytes / 1024u) << "KB";
       else
@@ -1478,13 +1512,13 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned DstTile =
         static_cast<unsigned>(findFieldImm("DstTile").value_or(0)) & 0x3u;
     const unsigned PEMask =
-        static_cast<unsigned>(findFieldImm("PE_MASK").value_or(0)) & 0xfu;
+        decodePEMode(static_cast<unsigned>(findFieldImm("PEMode").value_or(0)));
     const unsigned Src0 =
         static_cast<unsigned>(findFieldImm("SrcTile0").value_or(0)) & 0x3fu;
     const unsigned Src1 =
         static_cast<unsigned>(findFieldImm("SrcTile1").value_or(0)) & 0x3fu;
-    const unsigned TSize =
-        static_cast<unsigned>(findFieldImm("TSize").value_or(0)) & 0x7u;
+    const unsigned SizeCode =
+        static_cast<unsigned>(findFieldImm("SizeCode").value_or(0)) & 0xfu;
     const bool Src0Present = AsmFmt.contains("SrcTile0");
     const bool Src1Present = AsmFmt.contains("SrcTile1");
     const bool HasDestination = AsmFmt.contains("->DstTile");
@@ -1525,7 +1559,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     static constexpr const char *DstKinds[] = {"t", "u", "m", "n"};
     OS << "->" << DstKinds[DstTile] << "<";
-    const uint64_t Bytes = 1ull << (TSize + 6u);
+    const uint64_t Bytes = 1ull << (SizeCode + 6u);
     if (Bytes >= 1024u)
       OS << utostr(static_cast<unsigned>(Bytes / 1024u)) << "KB";
     else
@@ -1634,12 +1668,76 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     bool First = true;
     for (StringRef FieldName :
          {"PreQuantMode", "ReluMode", "GroupNCode", "RowMaxEn", "GroupMaxEn",
-          "RowMaxInit", "MaxAbsEn"}) {
+          "RowMaxInit", "MaxAbsEn", "TransA", "TransB"}) {
       if (!First)
         OS << ", ";
       First = false;
       OS << findFieldImm(FieldName).value_or(0);
     }
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  if (AsmFmt.starts_with_insensitive("hl.qmt[")) {
+    const unsigned E = findFieldImm("e").value_or(0) & 1u;
+    const unsigned I = findFieldImm("i").value_or(0) & 1u;
+    const unsigned R = findFieldImm("r").value_or(0) & 1u;
+    const unsigned S = findFieldImm("s").value_or(0) & 1u;
+    OS << "HL.QMT";
+    if (E || I || R || S) {
+      OS << ".";
+      if (I)
+        OS << "i";
+      if (E)
+        OS << "e";
+      if (S)
+        OS << "s";
+      if (R)
+        OS << "r";
+    }
+    OS << "\t" << reg5Name(findFieldImm("SrcL").value_or(0));
+    if (I)
+      OS << ", " << reg5Name(findFieldImm("SrcR").value_or(0));
+    OS << ", ->" << reg5Name(findFieldImm("RegDst").value_or(0));
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  if (AsmFmt.starts_with_insensitive("hl.qpop[")) {
+    const unsigned E = findFieldImm("e").value_or(0) & 1u;
+    const unsigned R = findFieldImm("r").value_or(0) & 1u;
+    OS << "HL.QPOP";
+    if (E || R) {
+      OS << ".";
+      if (E)
+        OS << "e";
+      if (R)
+        OS << "r";
+    }
+    OS << "\t" << reg5Name(findFieldImm("SrcL").value_or(0)) << ", ->"
+       << reg5Name(findFieldImm("RegDst0").value_or(0)) << ", "
+       << reg5Name(findFieldImm("RegDst1").value_or(0));
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  if (AsmFmt.starts_with_insensitive("hl.qpush[")) {
+    const unsigned E = findFieldImm("e").value_or(0) & 1u;
+    const unsigned H = findFieldImm("h").value_or(0) & 1u;
+    const unsigned R = findFieldImm("r").value_or(0) & 1u;
+    OS << "HL.QPUSH";
+    if (E || H || R) {
+      OS << ".";
+      if (H)
+        OS << "h";
+      if (E)
+        OS << "e";
+      if (R)
+        OS << "r";
+    }
+    OS << "\t" << reg5Name(findFieldImm("SrcL").value_or(0)) << ", "
+       << reg5Name(findFieldImm("SrcR").value_or(0)) << ", ->"
+       << reg5Name(findFieldImm("RegDst").value_or(0));
     printAnnotation(OS, Annot);
     return;
   }

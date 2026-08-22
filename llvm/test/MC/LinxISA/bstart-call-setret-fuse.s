@@ -8,7 +8,7 @@
 	.globl	foo
 	.type	foo,@function
 foo:
-	# PTO ISA 0.58.1 returning calls are a single atomic instruction.
+	# PTO ISA 0.58.3 returning calls are a single atomic instruction.
 	BSTART.CALL	bar, foo_ret, ->ra
 foo_ret:
 	C.BSTOP

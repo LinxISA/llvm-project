@@ -835,6 +835,14 @@ public:
           reject("linx_tile_intrinsic_loop");
           return false;
         }
+        // PTO ISA 0.58.3 reserves every block-body conditional branch form.
+        // Reject structurally non-linear candidates before analysis or IR
+        // construction can mutate the scalar loop.  A future lowering may
+        // accept these only after it can prove a branch-free predicated body.
+        if (HasInnerCF) {
+          reject("pto0583_body_branch_reserved");
+          return false;
+        }
         if (HasCalls) {
           reject("contains_call");
           return false;
@@ -6835,6 +6843,7 @@ public:
             return false;
           }
         }
+
         OS << "  C.BSTOP\n";
         F.removeFnAttr("linx-vblock-ts-bytes");
         if (LocalScratchWordCount != 0) {

@@ -68,6 +68,38 @@ entry:
   ret void
 }
 
+define void @vseq_local_scratch_16b() #5 {
+entry:
+  call void @llvm.linx.vblock.launch(i32 0, ptr null, i64 1, i64 1, i64 1, i32 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+  ret void
+}
+
+define void @vseq_local_scratch_32b() #6 {
+entry:
+  call void @llvm.linx.vblock.launch(i32 0, ptr null, i64 1, i64 1, i64 1, i32 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+  ret void
+}
+
+define void @vseq_local_scratch_128b() #7 {
+entry:
+  call void @llvm.linx.vblock.launch(i32 0, ptr null, i64 1, i64 1, i64 1, i32 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+  ret void
+}
+
+define void @vseq_local_scratch_256b() #8 {
+entry:
+  call void @llvm.linx.vblock.launch(i32 0, ptr null, i64 1, i64 1, i64 1, i32 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0,
+                                     i64 0, i64 0, i64 0, i64 0, i64 0, i64 0)
+  ret void
+}
+
 ; CHECK-LABEL: vseq:
 ; CHECK:      BSTART.MSEQ
 ; CHECK-NEXT: B.TEXT {{\.__linx_vblock_body\.[0-9]+}}
@@ -130,8 +162,28 @@ entry:
 ; CHECK:      v.swi.u.local vu#1, [ts, lc0<<2, 12]
 ; CHECK:      C.BSTOP
 
+; CHECK-LABEL: vseq_local_scratch_16b:
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111,{{[[:space:]]+}}->t<128B>
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111, last,{{[[:space:]]+}}->u<128B>
+
+; CHECK-LABEL: vseq_local_scratch_32b:
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111,{{[[:space:]]+}}->t<128B>
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111, last,{{[[:space:]]+}}->u<128B>
+
+; CHECK-LABEL: vseq_local_scratch_128b:
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111,{{[[:space:]]+}}->t<128B>
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111, last,{{[[:space:]]+}}->u<128B>
+
+; CHECK-LABEL: vseq_local_scratch_256b:
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111,{{[[:space:]]+}}->t<128B>
+; CHECK:      B.IOT{{[[:space:]]+}}mask=1111, last,{{[[:space:]]+}}->u<256B>
+
 attributes #0 = { "linx-vblock-body-asm"="  v.rdadd vt#1.sw, ->a0\0A  C.BSTOP\0A" }
 attributes #1 = { "linx-vblock-body-asm"="  v.swi.u.local zero, [ts, lc0.uh<<2, 0]\0A  v.lwi.u.local [ts, lc0.uh<<2, 4], ->vt.w\0A  C.BSTOP\0A" "linx-vblock-ts-bytes"="64" }
 attributes #2 = { "linx-vblock-body-asm"="  v.add lc0.uh, lc1.uh<<5, ->vt.w\0A  v.sub vt#1.sw, lc0.uh, ->vt.w\0A  v.lw.brg [ri1, lc0.uh<<2, vt#2.sw<<2], ->vt#3.w\0A  C.BSTOP\0A" }
 attributes #3 = { "linx-vblock-body-asm"="  v.sdi.u.local zero, [ts, lc0.uh<<3, 8]\0A  v.ldi.u.local [ts, lc0.uh<<3, 16], ->vn.d\0A  C.BSTOP\0A" "linx-vblock-ts-bytes"="64" }
 attributes #4 = { "linx-vblock-body-asm"="  v.lwi.u.local [ts, lc0.uh<<2, 8], ->vt.w\0A  v.add vt#1.reuse.sw, lc0.uh, ->vu.w\0A  v.swi.u.local vu#1.reuse.uw, [ts, lc0.uh<<2, 12]\0A  C.BSTOP\0A" "linx-vblock-ts-bytes"="64" }
+attributes #5 = { "linx-vblock-body-asm"="  C.BSTOP\0A" "linx-vblock-ts-bytes"="16" }
+attributes #6 = { "linx-vblock-body-asm"="  C.BSTOP\0A" "linx-vblock-ts-bytes"="32" }
+attributes #7 = { "linx-vblock-body-asm"="  C.BSTOP\0A" "linx-vblock-ts-bytes"="128" }
+attributes #8 = { "linx-vblock-body-asm"="  C.BSTOP\0A" "linx-vblock-ts-bytes"="256" }

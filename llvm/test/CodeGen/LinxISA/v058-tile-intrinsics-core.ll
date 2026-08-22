@@ -16,10 +16,10 @@ entry:
 
 ; CHECK-LABEL: tile_intrinsics_v2v:
 ; CHECK: BSTART.TLOAD
-; CHECK: B.DATR{{[[:space:]]+}}Layout17
+; CHECK: B.DATR{{[[:space:]]+}}ZN2ND, DTYPE_NONE, Null
 ; A killed source can be coalesced with the TMOV result without emitting a copy.
 ; CHECK-NOT: BSTART.TMOV
 ; CHECK: BSTART.TSTORE
-; CHECK: B.DATR{{[[:space:]]+}}Layout17
+; CHECK: B.DATR{{[[:space:]]+}}ZN2ND, DTYPE_NONE, Null
 ; CHECK-NOT: BSTART.TMOV
 ; CHECK-NOT: B.ARG

@@ -24,4 +24,4 @@ entry:
 ; CHECK: BSTART.VEC TADD, U32
 ; CHECK: B.IOT t#{{[1-8]}}, t#{{[1-8]}}, mask=1111, last, ->t<4KB>
 ; CHECK-LABEL: inlineasm_tile_dtype:
-; CHECK: B.DATR NORM.normal, FP16, Null
+; CHECK: B.DATR NORM, FP16, Null

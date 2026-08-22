@@ -27,9 +27,10 @@ let TargetPrefix = "linx" in {
   //                                  i64 immStrideBytes)
   //
   // PTO 0.58 legality (enforced in Linx backend):
-  // - tsize in [1, 7] (128B..8KB)
-  // - dtype in u5
-  // - layout/lb0/lb1/stride are immediate scalar descriptor fields
+  // - tsize in [1, 10] (128B..64KB)
+  // - dtype is concrete: 0..14, 16..20, or 24..28
+  // - layout is assigned: 0,1,3,4,6,8,9,17,18,20..28,30
+  // - lb0/lb1/stride are immediate scalar descriptor fields
   def int_linx_tile_tload :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_ptr_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty,
@@ -43,6 +44,9 @@ let TargetPrefix = "linx" in {
   // void @llvm.linx.tile.tstore(ptr base, %linx.tile tile, i32 immTSize,
   //                             i32 immDType, i64 immLayout, i64 immLB0,
   //                             i64 immLB1, i64 immStrideBytes)
+  //
+  // PTO 0.58 legality matches tile.tload: SizeCode 1..10, concrete dtype
+  // 0..14/16..20/24..28, and an assigned B.DATR Layout.
   def int_linx_tile_tstore :
       Intrinsic<[],
                 [llvm_ptr_ty, llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty,
@@ -58,9 +62,9 @@ let TargetPrefix = "linx" in {
   //                                 i64 immLayout, i1 immHasLayout)
   //
   // PTO 0.58 legality (enforced in Linx backend):
-  // - tsize in [1, 7] (128B..8KB)
-  // - dtype in u5
-  // - has_layout in {0,1}
+  // - tsize in [1, 10] (128B..64KB)
+  // - dtype is concrete or DTYPE_NONE=31 for source-descriptor inference
+  // - has_layout=0 requires layout=0; has_layout=1 requires an assigned layout
   def int_linx_tile_tmov :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty,
@@ -71,6 +75,11 @@ let TargetPrefix = "linx" in {
 
   // %linx.tile @llvm.linx.cube.tmatmul(%linx.tile a, %linx.tile b,
   //                                  i32 immM, i32 immN, i32 immK)
+  //
+  // M/N/K are arbitrary positive integers in [1,65535]. This bridge uses
+  // CUBE_M32 for A/output and CUBE_N8 for B with S32 elements, so M <= 32.
+  // Each operand and the rounded output SizeCode must fit 64 KiB Local
+  // capacity; A, B, and output capacities are validated independently.
   def int_linx_cube_tmatmul :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -87,6 +96,8 @@ let TargetPrefix = "linx" in {
   // - the result is written to an explicit Local tile destination;
   // - destination/accumulator aliasing is legal read-old/write-new when their
   //   descriptor metadata is identical.
+  // - dimensions and CUBE_M32/CUBE_N8 capacity rules match cube.tmatmul;
+  //   the explicit accumulator has the same required capacity as the output.
   def int_linx_cube_tmatmul_acc :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -94,14 +105,14 @@ let TargetPrefix = "linx" in {
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
 
-  // %linx.tile @llvm.linx.tileop.unary(%linx.tile src, i32 immTileOp10,
+  // %linx.tile @llvm.linx.tileop.unary(%linx.tile src, i32 immTileOp7,
   //                                  i32 immTSize, i32 immDType)
   //
   // PTO 0.58 tile-operation surface (header-only template dispatch).
   // PTO 0.58 legality (enforced in Linx backend):
-  // - tileop10 in [0, 1023]
-  // - tsize in [1, 7] (128B..8KB)
-  // - dtype in u5
+  // - tileop7 is the packed Mode/Function selector in [0, 127]
+  // - tsize in [1, 10] (128B..64KB)
+  // - dtype is concrete: 0..14, 16..20, or 24..28
   def int_linx_tileop_unary :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
@@ -110,7 +121,7 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<3>>]>;
 
   // %linx.tile @llvm.linx.tileop.binary(%linx.tile a, %linx.tile b,
-  //                                   i32 immTileOp10, i32 immTSize,
+  //                                   i32 immTileOp7, i32 immTSize,
   //                                   i32 immDType)
   def int_linx_tileop_binary :
       Intrinsic<[llvm_linx_tile_ty],
@@ -121,7 +132,7 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<4>>]>;
 
   // %linx.tile @llvm.linx.tileop.binary.scalar(%linx.tile a, i64 scalar,
-  //                                          i32 immTileOp10, i32 immTSize,
+  //                                          i32 immTileOp7, i32 immTSize,
   //                                          i32 immDType, i32 immMode)
   //
   // Scalar tile-operation mode extension for PTO 0.58:
@@ -134,7 +145,7 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
                  ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
 
-  // %linx.tile @llvm.linx.tileop.splat(i64 scalar, i32 immTileOp10,
+  // %linx.tile @llvm.linx.tileop.splat(i64 scalar, i32 immTileOp7,
   //                                  i32 immTSize, i32 immDType,
   //                                  i32 immMode)
   //
@@ -149,11 +160,12 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
 
   // Engine-typed tile-operation wrappers:
-  // - map to fixed TileOp10 values while keeping explicit size/dtype controls.
+  // - map to fixed packed Mode/Function values while keeping explicit
+  //   size/dtype controls.
   //
   // %linx.tile @llvm.linx.vec.tadd(%linx.tile a, %linx.tile b,
   //                                 i32 immTSize, i32 immDType)
-  //   TileOp10 = 0x000 (TADD)
+  //   packed Mode/Function = 0x000 (TADD)
   def int_linx_vec_tadd :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -163,7 +175,7 @@ let TargetPrefix = "linx" in {
 
   // %linx.tile @llvm.linx.vec.tsub(%linx.tile a, %linx.tile b,
   //                                 i32 immTSize, i32 immDType)
-  //   TileOp10 = 0x001 (TSUB)
+  //   packed Mode/Function = 0x001 (TSUB)
   def int_linx_vec_tsub :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -173,7 +185,7 @@ let TargetPrefix = "linx" in {
 
   // %linx.tile @llvm.linx.sfu.trowmax(%linx.tile src,
   //                                    i32 immTSize, i32 immDType)
-  //   TileOp10 = 0x020 (TROWMAX)
+  //   packed Mode/Function = 0x041 (TROWMAX)
   def int_linx_sfu_trowmax :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty],

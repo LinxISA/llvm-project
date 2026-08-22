@@ -12,6 +12,14 @@ removed_spellings:
 	BSTART.FP ICALL
 	BSTART.STD CALL, removed_std_call
 	BSTART.STD ICALL
+	B.EQ t, u, removed_std_call
+	B.NE t, u, removed_std_call
+	B.LT t, u, removed_std_call
+	B.GE t, u, removed_std_call
+	B.LTU t, u, removed_std_call
+	B.GEU t, u, removed_std_call
+	B.Z removed_std_call
+	B.NZ removed_std_call
 
 # CHECK: error:
 # CHECK: B.IOD
@@ -33,3 +41,11 @@ removed_spellings:
 # CHECK: BSTART.STD
 # CHECK: error:
 # CHECK: BSTART.STD
+# CHECK: error: unrecognized instruction 'b.eq'
+# CHECK: error: unrecognized instruction 'b.ne'
+# CHECK: error: unrecognized instruction 'b.lt'
+# CHECK: error: unrecognized instruction 'b.ge'
+# CHECK: error: unrecognized instruction 'b.ltu'
+# CHECK: error: unrecognized instruction 'b.geu'
+# CHECK: error: unrecognized instruction 'b.z'
+# CHECK: error: unrecognized instruction 'b.nz'

@@ -584,35 +584,38 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     StringRef AsmFmt;
     if (HasDestination)
       AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>, "
-                         "->DstTile<TSize>"
+                         "->DstTile<SizeCode>"
                : HasSrc0
-                   ? "B.IOT SrcTile0, mask=PE_MASK, <last>, ->DstTile<TSize>"
-                   : "B.IOT mask=PE_MASK, <last>, ->DstTile<TSize>";
+                   ? "B.IOT SrcTile0, mask=PE_MASK, <last>, ->DstTile<SizeCode>"
+                   : "B.IOT mask=PE_MASK, <last>, ->DstTile<SizeCode>";
     else
       AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>"
                        : "B.IOT SrcTile0, mask=PE_MASK, <last>";
-    OutMI.setOpcode(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32));
-    // Emit operands in the selected canonical form's catalog field order.
-    if (HasDestination)
-      OutMI.addOperand(MCOperand::createImm(I(0))); // DstTile
-    OutMI.addOperand(MCOperand::createImm(Last));   // L
-    OutMI.addOperand(MCOperand::createImm(I(1)));   // PE_MASK
-    if (HasSrc0) {
-      const unsigned SrcIndex = Src0Valid ? 4 : 5;
-      if (!HasDestination) {
-        OutMI.addOperand(MCOperand::createImm(0)); // PTOU0_7
-        OutMI.addOperand(MCOperand::createImm(0)); // PTOU0_8
-      }
-      OutMI.addOperand(MCOperand::createImm(I(SrcIndex))); // SrcTile0
-      if (HasSrc1)
-        OutMI.addOperand(MCOperand::createImm(I(5))); // SrcTile1
-    }
-    if (HasDestination) {
-      const int64_t TSize = I(6);
-      if (TSize < 1 || TSize > 7)
-        report_fatal_error("LinxISA: B.IOT destination size must be 128B..8KB");
-      OutMI.addOperand(MCOperand::createImm(TSize));
-    }
+    const int64_t PEMask = I(1);
+    const int64_t PEMode = PEMask == 0x0   ? 0
+                           : PEMask == 0x8 ? 1
+                           : PEMask == 0x4 ? 2
+                           : PEMask == 0x2 ? 3
+                           : PEMask == 0x1 ? 4
+                           : PEMask == 0xc ? 5
+                           : PEMask == 0xe ? 6
+                           : PEMask == 0xf ? 7
+                                           : -1;
+    if (PEMode < 0)
+      report_fatal_error("LinxISA: B.IOT PE mask has no PTO ISA 0.58.3 mode");
+    const int64_t SizeCode = HasDestination ? I(6) : 0;
+    if (HasDestination && (SizeCode < 1 || SizeCode > 10))
+      report_fatal_error("LinxISA: B.IOT destination size must be 128B..64KB");
+    const unsigned SrcIndex = Src0Valid ? 4 : 5;
+    emitNamedImmFields(getSpecOpcodeByAsmFmt(AsmFmt, /*LengthBits=*/32),
+                       {{"DstTile", I(0)},
+                        {"L", Last},
+                        {"PEMode", PEMode},
+                        {"PTOU0_7", 0},
+                        {"PTOU0_8", 0},
+                        {"SizeCode", SizeCode},
+                        {"SrcTile0", HasSrc0 ? I(SrcIndex) : 0},
+                        {"SrcTile1", HasSrc1 ? I(5) : 0}});
     return;
   }
 
@@ -935,56 +938,28 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     return;
   }
   case LinxISA::PSEUDO_V_B_EQ: {
-    OutMI.setOpcode(getSpecOpcode("B.EQ", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.EQ is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_NE: {
-    OutMI.setOpcode(getSpecOpcode("B.NE", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.NE is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_LT: {
-    OutMI.setOpcode(getSpecOpcode("B.LT", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.LT is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_GE: {
-    OutMI.setOpcode(getSpecOpcode("B.GE", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.GE is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_LTU: {
-    OutMI.setOpcode(getSpecOpcode("B.LTU", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.LTU is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_GEU: {
-    OutMI.setOpcode(getSpecOpcode("B.GEU", /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(I(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(I(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.GEU is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_Z: {
-    OutMI.setOpcode(getSpecOpcode("B.Z", /*LengthBits=*/32, /*Fields=*/1));
-    OutMI.addOperand(lowerBranchTarget(0)); // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.Z is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_B_NZ: {
-    OutMI.setOpcode(getSpecOpcode("B.NZ", /*LengthBits=*/32, /*Fields=*/1));
-    OutMI.addOperand(lowerBranchTarget(0)); // simm12 (pcrel)
-    return;
+    report_fatal_error("LinxISA: B.NZ is reserved by PTO ISA 0.58.3");
   }
   case LinxISA::PSEUDO_V_C_MOVR: {
     OutMI.setOpcode(getSpecOpcode("C.MOVR", /*LengthBits=*/16, /*Fields=*/2));
@@ -2647,35 +2622,9 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::BGE:
   case LinxISA::BLTU:
   case LinxISA::BGEU: {
-    StringRef Mnem;
-    switch (Opc) {
-    case LinxISA::BEQ:
-      Mnem = "B.EQ";
-      break;
-    case LinxISA::BNE:
-      Mnem = "B.NE";
-      break;
-    case LinxISA::BLT:
-      Mnem = "B.LT";
-      break;
-    case LinxISA::BGE:
-      Mnem = "B.GE";
-      break;
-    case LinxISA::BLTU:
-      Mnem = "B.LTU";
-      break;
-    case LinxISA::BGEU:
-      Mnem = "B.GEU";
-      break;
-    default:
-      llvm_unreachable("Unexpected opcode");
-    }
-
-    OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/3));
-    OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
-    OutMI.addOperand(MCOperand::createImm(R(1))); // SrcR
-    OutMI.addOperand(lowerBranchTarget(2));       // simm12 (pcrel)
-    return;
+    report_fatal_error(
+        "LinxISA: conditional branch survived block formation; PTO ISA "
+        "0.58.3 reserves B.EQ/B.NE/B.LT/B.GE/B.LTU/B.GEU");
   }
 
   case LinxISA::JR: {

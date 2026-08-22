@@ -39,8 +39,9 @@ The compiler emits operation-specific TLSU headers:
 stride selects the architectural dense-stride default; an explicitly encoded
 zero remains zero and is not treated as omission.
 
-`B.IOT` supplies Local tile operands. PTO 0.58 uses a four-bit PE mask and a
-TSize code in `[1, 7]`, representing 128 B through 8 KiB per participating PE.
+`B.IOT` supplies Local tile operands. PTO 0.58.3 encodes a three-bit PEMode
+that expands to one of eight fixed four-PE masks and a SizeCode in `[1, 10]`,
+representing 128 B through 64 KiB per participating PE.
 A zero PE mask is a strict no-op. Source-only and destination forms retain their
 distinct v0.58 encodings.
 
@@ -54,8 +55,11 @@ does not use an implicit accumulator singleton and does not synthesize an
 - `TMATMUL.ACC` additionally consumes explicit Local C and writes explicit
   Local D. Aliasing C and D is legal read-old/write-new when descriptors match.
 
-Matrix dimensions M, N, and K are positive powers of two and must fit the
-allocated tile capacity.
+Matrix dimensions M, N, and K are arbitrary positive integers in `[1, 65535]`
+and are independent of SizeCode. The current intrinsic bridge uses CUBE_M32
+for A/C/D and CUBE_N8 for B, requires `M <= 32`, validates A, B, C, and D
+capacity independently, and rounds the D requirement up to a legal Local
+SizeCode.
 
 ## Operand and descriptor rules
 

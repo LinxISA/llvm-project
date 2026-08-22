@@ -6,8 +6,8 @@ declare %linx.tile @llvm.linx.tile.tload(ptr, i32, i32, i64, i64, i64, i64)
 
 define void @bad_size_code(ptr %src) {
 entry:
-  %t = call %linx.tile @llvm.linx.tile.tload(ptr %src, i32 0, i32 0, i64 0, i64 8, i64 8, i64 0)
+  %t = call %linx.tile @llvm.linx.tile.tload(ptr %src, i32 0, i32 0, i64 0, i64 8, i64 11, i64 0)
   ret void
 }
 
-; CHECK: Linx: tile.tload requires TSize in [1,7] (128B..8KB)
+; CHECK: Linx: tile.tload requires SizeCode in [1,10] (128B..64KB)

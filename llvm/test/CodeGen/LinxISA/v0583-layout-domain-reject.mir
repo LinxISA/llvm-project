@@ -1,0 +1,149 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=linx64 -run-pass=linx-blockify -o - %t/hidden.mir 2>&1 | FileCheck %s --check-prefix=HIDDEN
+# RUN: not --crash llc -mtriple=linx64 -run-pass=linx-blockify -o - %t/reserved.mir 2>&1 | FileCheck %s --check-prefix=RESERVED
+# RUN: not --crash llc -mtriple=linx64 -run-pass=linx-blockify -o - %t/has-two.mir 2>&1 | FileCheck %s --check-prefix=HAS-FLAG
+# RUN: not --crash llc -mtriple=linx64 -run-pass=linx-tile-ssa-balance -o - %t/has-two.mir 2>&1 | FileCheck %s --check-prefix=HAS-FLAG
+# RUN: not --crash llc -mtriple=linx64 -run-pass=linx-blockify -o - %t/has-negative.mir 2>&1 | FileCheck %s --check-prefix=HAS-FLAG
+# RUN: not --crash llc -mtriple=linx64 -run-pass=linx-tile-ssa-balance -o - %t/has-negative.mir 2>&1 | FileCheck %s --check-prefix=HAS-FLAG
+# RUN: llc -mtriple=linx64 -run-pass=linx-tile-ssa-balance,linx-blockify -o - %t/has-zero-one.mir | FileCheck %s --check-prefix=VALID
+
+# HIDDEN: Linx: TMOV requires layout=0 when has_layout=0
+# RESERVED: Linx: TMOV requires an assigned B.DATR Layout
+# HAS-FLAG: Linx: TMOV has_layout must be exactly 0 or 1
+# VALID: B_DATR 0, 17, 31, 3, 0, 0, 0
+
+#--- hidden.mir
+--- |
+  define void @hidden(ptr %src) {
+  entry:
+    ret void
+  }
+...
+---
+name:            hidden
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r3
+    $tile0 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile1 = PSEUDO_TLSU_TMOV killed $tile0, 6, 31, 17, 0, 0
+    PSEUDO_RET implicit $r10
+...
+
+#--- reserved.mir
+--- |
+  define void @reserved(ptr %src) {
+  entry:
+    ret void
+  }
+...
+---
+name:            reserved
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r3
+    $tile0 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile1 = PSEUDO_TLSU_TMOV killed $tile0, 6, 31, 2, 1, 0
+    PSEUDO_RET implicit $r10
+...
+
+#--- has-two.mir
+--- |
+  define void @has_two(ptr %src) {
+  entry:
+    ret void
+  }
+...
+---
+name:            has_two
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r3
+    $tile0 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile1 = PSEUDO_TLSU_TMOV killed $tile0, 6, 31, 0, 2, 0
+    PSEUDO_RET implicit $r10
+...
+
+#--- has-negative.mir
+--- |
+  define void @has_negative(ptr %src) {
+  entry:
+    ret void
+  }
+...
+---
+name:            has_negative
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r3
+    $tile0 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile1 = PSEUDO_TLSU_TMOV killed $tile0, 6, 31, 0, -1, 0
+    PSEUDO_RET implicit $r10
+...
+
+#--- has-zero-one.mir
+--- |
+  define void @has_zero_one(ptr %src) {
+  entry:
+    ret void
+  }
+...
+---
+name:            has_zero_one
+alignment:       2
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+isSSA:           false
+noVRegs:         true
+liveins:
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    liveins: $r3
+    $tile0 = PSEUDO_TLSU_TLOAD $r3, 6
+    $tile1 = PSEUDO_TLSU_TMOV killed $tile0, 6, 31, 0, 0, 0
+    $tile2 = PSEUDO_TLSU_TMOV killed $tile1, 6, 31, 17, 1, 0
+    PSEUDO_RET implicit $r10
+...

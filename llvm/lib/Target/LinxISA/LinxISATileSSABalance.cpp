@@ -23,6 +23,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <optional>
@@ -77,14 +78,30 @@ static bool isTilePhysReg(Register Reg) {
 static Register reservedPhiCycleTempTile() { return LinxISA::TILE31; }
 
 static std::optional<uint64_t> tSizeToBytes(unsigned TSize) {
-  if (TSize < 1u || TSize > 7u)
+  if (TSize < 1u || TSize > 10u)
     return std::nullopt;
   return 1ull << (TSize + 6u);
 }
 
 static bool isStrictTileTSizeCode(unsigned TSize) {
   std::optional<uint64_t> Bytes = tSizeToBytes(TSize);
-  return Bytes && *Bytes >= 128u && *Bytes <= 8192u;
+  return Bytes && *Bytes >= 128u && *Bytes <= 65536u;
+}
+
+static bool validateHasLayoutFlag(int64_t HasLayout, StringRef Context) {
+  if (HasLayout != 0 && HasLayout != 1)
+    report_fatal_error(Twine("Linx: ") + Context +
+                       " has_layout must be exactly 0 or 1");
+  return HasLayout == 1;
+}
+
+static unsigned cubeM32OutputTSize(int64_t N, StringRef Context) {
+  if (N <= 0 || N > 512)
+    report_fatal_error(Twine("Linx: ") + Context +
+                       " output exceeds Local CUBE_M32 capacity");
+  const uint64_t RequiredBytes = static_cast<uint64_t>(N) * 128u;
+  const uint64_t Capacity = PowerOf2Ceil(RequiredBytes);
+  return static_cast<unsigned>(Log2_64(Capacity) - 6u);
 }
 
 static unsigned getTileRegId(const TargetRegisterInfo &TRI, Register Reg) {
@@ -142,7 +159,7 @@ static bool metadataCompatible(const TileMeta &A, const TileMeta &B,
     return false;
   }
   if (!isStrictTileTSizeCode(A.TSize) || !isStrictTileTSizeCode(B.TSize)) {
-    Reason = "TSize outside 128B..8KB policy";
+    Reason = "SizeCode outside 128B..64KB policy";
     return false;
   }
   if (A.TSize != B.TSize) {
@@ -219,9 +236,17 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     return true;
 
   case LinxISA::PSEUDO_CUBE_TMATMUL:
+    Meta.HasSize = true;
+    Meta.TSize = static_cast<uint8_t>(
+        cubeM32OutputTSize(MI.getOperand(4).getImm(), "CUBE.TMATMUL"));
+    Meta.HasDataType = true;
+    Meta.DataType = 17;
+    return true;
+
   case LinxISA::PSEUDO_CUBE_TMATMUL_ACC:
     Meta.HasSize = true;
-    Meta.TSize = 6; // PTO 0.58: TSize 6 denotes a 4KB tile value
+    Meta.TSize = static_cast<uint8_t>(
+        cubeM32OutputTSize(MI.getOperand(5).getImm(), "CUBE.TMATMUL.ACC"));
     Meta.HasDataType = true;
     Meta.DataType = 17;
     return true;
@@ -279,7 +304,7 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     Meta.TSize = static_cast<uint8_t>(MI.getOperand(2).getImm() & 0x1f);
     Meta.HasDataType = true;
     Meta.DataType = static_cast<uint8_t>(MI.getOperand(3).getImm() & 0x1f);
-    Meta.HasLayout = (MI.getOperand(5).getImm() & 1) != 0;
+    Meta.HasLayout = validateHasLayoutFlag(MI.getOperand(5).getImm(), "TMOV");
     if (Meta.HasLayout)
       Meta.Layout = MI.getOperand(4).getImm();
     return true;
@@ -437,9 +462,10 @@ public:
         return;
 
       if (Incoming.HasSize && !isStrictTileTSizeCode(Incoming.TSize)) {
-        reportTileBalanceError(MF, DefMI,
-                               Twine("TSize outside 128B..8KB policy (size=") +
-                                   Twine(unsigned(Incoming.TSize)) + ")");
+        reportTileBalanceError(
+            MF, DefMI,
+            Twine("SizeCode outside 128B..64KB policy (size=") +
+                Twine(unsigned(Incoming.TSize)) + ")");
       }
 
       const unsigned TileId = getTileRegId(TRI, Reg);
@@ -616,7 +642,7 @@ public:
           if (!isStrictTileTSizeCode(CopyMeta.TSize)) {
             reportTileBalanceError(
                 MF, *CopyMI,
-                Twine("TSize outside 128B..8KB policy (src id=") +
+                Twine("SizeCode outside 128B..64KB policy (src id=") +
                     Twine(SrcId) + ", size=" + Twine(unsigned(CopyMeta.TSize)) +
                     ")");
           }

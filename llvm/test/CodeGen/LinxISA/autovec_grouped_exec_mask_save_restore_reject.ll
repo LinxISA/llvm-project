@@ -117,35 +117,27 @@ exit:
 }
 
 ; AUTO-LABEL: search_store_index_nested:
-; AUTO: BSTART.MSEQ
-; AUTO: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; AUTO: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; AUTO: v.rdor
-; AUTO: v.csel
+; AUTO-NOT: BSTART.MSEQ
 
 ; REMARK-AUTO: "function":"search_store_index_nested"
-; REMARK-AUTO: "status":"lowered"
+; REMARK-AUTO: "status":"reject"
+; REMARK-AUTO: "reason":"pto0583_body_branch_reserved"
 ; REMARK-AUTO: "layout_policy":"auto"
-; REMARK-AUTO: "layout_kind":"grouped-strip-mined"
-; REMARK-AUTO: "cf_strategy":"active-replay"
+; REMARK-AUTO: "layout_kind":"none"
+; REMARK-AUTO: "cf_strategy":"none"
 
 ; GROUPED-LABEL: search_store_index_split_addrs:
-; GROUPED: BSTART.MSEQ
-; GROUPED: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; GROUPED: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; GROUPED: v.psel p,
-; GROUPED: b.nz
-; GROUPED: v.sw.brg
-; GROUPED: v.sw.brg
-; GROUPED: v.cmp.ne
+; GROUPED-NOT: BSTART.MSEQ
 
 ; REMARK-GROUPED: "function":"search_store_index_split_addrs"
-; REMARK-GROUPED: "status":"lowered"
+; REMARK-GROUPED: "status":"reject"
+; REMARK-GROUPED: "reason":"pto0583_body_branch_reserved"
 ; REMARK-GROUPED: "layout_policy":"grouped"
-; REMARK-GROUPED: "layout_kind":"grouped-strip-mined"
-; REMARK-GROUPED: "cf_strategy":"active-replay"
+; REMARK-GROUPED: "layout_kind":"none"
+; REMARK-GROUPED: "cf_strategy":"none"
 ; REMARK-GROUPED: "function":"store_split_addrs_raw"
 ; REMARK-GROUPED: "status":"reject"
-; REMARK-GROUPED: "reason":"grouped_layout_requires_exec_mask_save_restore"
+; REMARK-GROUPED: "reason":"pto0583_body_branch_reserved"
 ; REMARK-GROUPED: "layout_policy":"grouped"
-; REMARK-GROUPED: "cf_strategy":"exec-mask-save-restore-required"
+; REMARK-GROUPED: "layout_kind":"none"
+; REMARK-GROUPED: "cf_strategy":"none"
