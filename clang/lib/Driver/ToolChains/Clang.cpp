@@ -939,6 +939,16 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
   if (JA.isOffloading(Action::OFK_SYCL))
     getToolChain().addSYCLIncludeArgs(Args, CmdArgs);
 
+  const llvm::Triple::ArchType TargetArch =
+      getToolChain().getTriple().getArch();
+  if ((TargetArch == llvm::Triple::linx32 ||
+       TargetArch == llvm::Triple::linx64) &&
+      !Inputs.empty() && types::isCXX(Inputs[0].getType()) &&
+      !Args.hasArg(options::OPT_nostdinc, options::OPT_nobuiltininc)) {
+    CmdArgs.push_back("-include");
+    CmdArgs.push_back("linx_blkc.h");
+  }
+
   // If we are offloading to a target via OpenMP we need to include the
   // openmp_wrappers folder which contains alternative system headers.
   if (JA.isDeviceOffloading(Action::OFK_OpenMP) &&

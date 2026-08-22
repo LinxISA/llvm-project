@@ -8,6 +8,7 @@
 
 #include "CGBuiltin.h"
 #include "clang/Basic/TargetBuiltins.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsLinx.h"
 
@@ -25,6 +26,13 @@ llvm::Value *CodeGenFunction::EmitLinxISABuiltinExpr(unsigned BuiltinID,
   };
 
   switch (BuiltinID) {
+  case LinxISA::BI__builtin_linx_get_thread_idx: {
+    llvm::FunctionType *FTy =
+        llvm::FunctionType::get(Builder.getInt32Ty(), /*Variadic=*/false);
+    llvm::InlineAsm *ReadPEID = llvm::InlineAsm::get(
+        FTy, "ssrget 0x0802, ->$0", "=r", /*hasSideEffects=*/false);
+    return Builder.CreateCall(ReadPEID, {}, "linx.thread.idx");
+  }
   case LinxISA::BI__builtin_linx_tile_tload: {
     llvm::Value *Base = EmitScalarExpr(E->getArg(0));
     llvm::Value *Size = castToI32(EmitScalarExpr(E->getArg(1)));

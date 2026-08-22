@@ -1587,6 +1587,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
   bool IsTileIODesc = false;
   bool IsSharedIODesc = false;
   bool IsBlockAttr = false;
+  bool HasDataTypeField = false;
   unsigned MaxArrowDests = 0;
   {
     std::string Key = toUpperStr(Name);
@@ -1643,6 +1644,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
       }
       for (unsigned FormIndex : It->second) {
         const linxisa_inst_form &F = linxisa_inst_forms[FormIndex];
+        HasDataTypeField |= hasField(F, "DataType");
         if (hasField(F, "RegDst1") || hasField(F, "RegDst0"))
           MaxArrowDests = std::max(MaxArrowDests, 2u);
         else if (hasField(F, "RegDst"))
@@ -2032,6 +2034,15 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
           Operands.push_back(LinxOperand::createKeyword(Text, L, E));
           continue;
         }
+      }
+
+      if (HasDataTypeField && parseDataTypeKeyword(getTok().getString())) {
+        const MCExpr *Expr = nullptr;
+        SMLoc Start, End;
+        if (parseImmOperand(Expr, Start, End))
+          return true;
+        Operands.push_back(LinxOperand::createImm(Expr, Start, End));
+        continue;
       }
 
       // Registers (including suffixed forms like a0.sw).

@@ -10,6 +10,7 @@ set(core_files
   inttypes.h
   iso646.h
   limits.h
+  linx_blkc.h
   module.modulemap
   stdalign.h
   stdarg.h

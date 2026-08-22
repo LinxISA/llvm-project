@@ -10,6 +10,7 @@
 #include "LinxISASubtarget.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
@@ -28,6 +29,17 @@ void LinxISAInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
                                    Register SrcReg, bool KillSrc,
                                    bool RenamableDest,
                                    bool RenamableSrc) const {
+  const bool DestShared = LinxISA::SHAREDRegClass.contains(DestReg);
+  const bool SrcShared = LinxISA::SHAREDRegClass.contains(SrcReg);
+  if (DestShared || SrcShared) {
+    Function &F = MBB.getParent()->getFunction();
+    F.getContext().emitError(
+        F.getName() +
+        ": Sr values are compiler-local Shared handles and cannot be copied "
+        "to or from ordinary registers");
+    return;
+  }
+
   if (!LinxISA::GPRRegClass.contains(DestReg, SrcReg))
     report_fatal_error("Linx: unsupported reg-to-reg copy");
 

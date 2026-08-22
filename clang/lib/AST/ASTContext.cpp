@@ -4632,10 +4632,12 @@ QualType ASTContext::getDependentVectorType(QualType VecType, Expr *SizeExpr,
 }
 
 /// getExtVectorType - Return the unique reference to an extended vector type of
-/// the specified element type and size. VectorType must be a built-in type.
+/// the specified element type and size. VectorType must be a built-in type,
+/// or a target-approved fixed-underlying enum used as an opaque storage type.
 QualType ASTContext::getExtVectorType(QualType vecType,
                                       unsigned NumElts) const {
-  assert(vecType->isBuiltinType() || vecType->isDependentType() ||
+  assert(vecType->isBuiltinType() || vecType->isEnumeralType() ||
+         vecType->isDependentType() ||
          (vecType->isBitIntType() &&
           // Only support _BitInt elements with byte-sized power of 2 NumBits.
           llvm::isPowerOf2_32(vecType->castAs<BitIntType>()->getNumBits())));
