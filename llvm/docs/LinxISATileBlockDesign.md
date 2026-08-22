@@ -55,8 +55,11 @@ does not use an implicit accumulator singleton and does not synthesize an
 - `TMATMUL.ACC` additionally consumes explicit Local C and writes explicit
   Local D. Aliasing C and D is legal read-old/write-new when descriptors match.
 
-Matrix dimensions M, N, and K are positive powers of two and must fit the
-allocated tile capacity.
+Matrix dimensions M, N, and K are arbitrary positive integers in `[1, 65535]`
+and are independent of SizeCode. The current intrinsic bridge uses CUBE_M32
+for A/C/D and CUBE_N8 for B, requires `M <= 32`, validates A, B, C, and D
+capacity independently, and rounds the D requirement up to a legal Local
+SizeCode.
 
 ## Operand and descriptor rules
 

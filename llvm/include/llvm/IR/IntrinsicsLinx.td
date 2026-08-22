@@ -28,8 +28,9 @@ let TargetPrefix = "linx" in {
   //
   // PTO 0.58 legality (enforced in Linx backend):
   // - tsize in [1, 10] (128B..64KB)
-  // - dtype in u5
-  // - layout/lb0/lb1/stride are immediate scalar descriptor fields
+  // - dtype is concrete: 0..14, 16..20, or 24..28
+  // - layout is assigned: 0,1,3,4,6,8,9,17,18,20..28,30
+  // - lb0/lb1/stride are immediate scalar descriptor fields
   def int_linx_tile_tload :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_ptr_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty,
@@ -43,6 +44,9 @@ let TargetPrefix = "linx" in {
   // void @llvm.linx.tile.tstore(ptr base, %linx.tile tile, i32 immTSize,
   //                             i32 immDType, i64 immLayout, i64 immLB0,
   //                             i64 immLB1, i64 immStrideBytes)
+  //
+  // PTO 0.58 legality matches tile.tload: SizeCode 1..10, concrete dtype
+  // 0..14/16..20/24..28, and an assigned B.DATR Layout.
   def int_linx_tile_tstore :
       Intrinsic<[],
                 [llvm_ptr_ty, llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty,
@@ -59,8 +63,8 @@ let TargetPrefix = "linx" in {
   //
   // PTO 0.58 legality (enforced in Linx backend):
   // - tsize in [1, 10] (128B..64KB)
-  // - dtype in u5
-  // - has_layout in {0,1}
+  // - dtype is concrete or DTYPE_NONE=31 for source-descriptor inference
+  // - has_layout=0 requires layout=0; has_layout=1 requires an assigned layout
   def int_linx_tile_tmov :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty,
@@ -71,6 +75,11 @@ let TargetPrefix = "linx" in {
 
   // %linx.tile @llvm.linx.cube.tmatmul(%linx.tile a, %linx.tile b,
   //                                  i32 immM, i32 immN, i32 immK)
+  //
+  // M/N/K are arbitrary positive integers in [1,65535]. This bridge uses
+  // CUBE_M32 for A/output and CUBE_N8 for B with S32 elements, so M <= 32.
+  // Each operand and the rounded output SizeCode must fit 64 KiB Local
+  // capacity; A, B, and output capacities are validated independently.
   def int_linx_cube_tmatmul :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -87,6 +96,8 @@ let TargetPrefix = "linx" in {
   // - the result is written to an explicit Local tile destination;
   // - destination/accumulator aliasing is legal read-old/write-new when their
   //   descriptor metadata is identical.
+  // - dimensions and CUBE_M32/CUBE_N8 capacity rules match cube.tmatmul;
+  //   the explicit accumulator has the same required capacity as the output.
   def int_linx_cube_tmatmul_acc :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -101,7 +112,7 @@ let TargetPrefix = "linx" in {
   // PTO 0.58 legality (enforced in Linx backend):
   // - tileop7 is the packed Mode/Function selector in [0, 127]
   // - tsize in [1, 10] (128B..64KB)
-  // - dtype in u5
+  // - dtype is concrete: 0..14, 16..20, or 24..28
   def int_linx_tileop_unary :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],

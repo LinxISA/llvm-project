@@ -27,6 +27,18 @@ B.CATR FP16
 B.DATR NORM, DTYPE_NONE, Null, atomic
 B.DATR NORM, DTYPE_NONE, Null, cmode6
 B.DATR Layout2, DTYPE_NONE, Null
+B.CATR trap, trap
+B.CATR atomic, atomic
+B.CATR aq, rl
+B.CATR far, far
+B.CATR dr, dr
+B.DATR NORM, ND2DN, DTYPE_NONE, Null
+B.DATR NORM, DTYPE_NONE, FP16, Null
+B.DATR NORM, DTYPE_NONE, Zero, Null
+B.DATR NORM, DTYPE_NONE, Null, cmode1, cmode2
+B.DATR NORM, DTYPE_NONE, Null, rmode1, rmode2
+B.DATR NORM, DTYPE_NONE, Null, sat, sat
+B.DATR NORM, DTYPE_NONE, Null, canonicalize, canonicalize
 
 # CHECK: error: unrecognized instruction 'b.arg'
 # CHECK: error: unrecognized instruction 'bstart.cube'
@@ -47,6 +59,18 @@ B.DATR Layout2, DTYPE_NONE, Null
 # CHECK: error: unknown block attribute: ATOMIC
 # CHECK: error: unknown block attribute: CMODE6
 # CHECK: error: unknown block attribute: LAYOUT2
+# CHECK: error: duplicate block attribute: TRAP
+# CHECK: error: duplicate block attribute: ATOMIC
+# CHECK: error: duplicate block attribute: ORDER
+# CHECK: error: duplicate block attribute: FAR
+# CHECK: error: duplicate block attribute: DR
+# CHECK: error: duplicate block attribute: LAYOUT
+# CHECK: error: duplicate block attribute: DTYPE
+# CHECK: error: duplicate block attribute: PAD
+# CHECK: error: duplicate block attribute: CMODE
+# CHECK: error: duplicate block attribute: RMODE
+# CHECK: error: duplicate block attribute: SAT
+# CHECK: error: duplicate block attribute: CANONICALIZE
 # OLD: warning: invalid instruction encoding
 # RETIRED: warning: invalid instruction encoding
 # CUBE-NAMED: BSTART.TMATMULMX.BIAS{{[[:space:]]+}}TF32

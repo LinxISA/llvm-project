@@ -100,9 +100,10 @@ static std::optional<uint64_t> tileTSizeToBytes(unsigned TSize) {
 }
 
 static std::optional<unsigned> localTileBytesToTSize(uint64_t Bytes) {
-  if (Bytes < 128u || Bytes > 65536u || !isPowerOf2_64(Bytes))
+  if (Bytes == 0 || Bytes > 65536u)
     return std::nullopt;
-  return static_cast<unsigned>(Log2_64(Bytes) - 6u);
+  const uint64_t Capacity = PowerOf2Ceil(std::max<uint64_t>(Bytes, 128u));
+  return static_cast<unsigned>(Log2_64(Capacity) - 6u);
 }
 
 static std::optional<unsigned> scratchBytesToTSize(uint64_t Bytes) {
@@ -112,7 +113,9 @@ static std::optional<unsigned> scratchBytesToTSize(uint64_t Bytes) {
   // architectural minimum TSize 1.
   if (Bytes < 16u || Bytes > 8192u || !isPowerOf2_64(Bytes))
     return std::nullopt;
-  return std::max(1u, static_cast<unsigned>(Log2_64(Bytes) - 6u));
+  if (Bytes <= 128u)
+    return 1u;
+  return static_cast<unsigned>(Log2_64(Bytes) - 6u);
 }
 
 static bool isConcreteTileDataType(int64_t DType) {
@@ -122,6 +125,33 @@ static bool isConcreteTileDataType(int64_t DType) {
 
 static bool isTileDataTypeFieldValue(int64_t DType) {
   return isConcreteTileDataType(DType) || DType == 31;
+}
+
+static bool isAssignedDataLayout(int64_t Layout) {
+  switch (Layout) {
+  case 0:
+  case 1:
+  case 3:
+  case 4:
+  case 6:
+  case 8:
+  case 9:
+  case 17:
+  case 18:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 30:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static void validateStrictTileTSize(int64_t TSize, StringRef Context) {
@@ -149,9 +179,42 @@ static void validateCanonicalTileOperation(int64_t TileOperation,
 
 static void validateCubeDimImm(int64_t Dim, StringRef DimName,
                                StringRef Context) {
-  if (Dim <= 0 || Dim > 65536 || !isPowerOf2_64(static_cast<uint64_t>(Dim)))
+  if (Dim <= 0 || Dim > 65535)
     report_fatal_error(Twine("Linx: ") + Context + " requires " + DimName +
-                       " to be a positive power of two in range 1..65536");
+                       " to be in arbitrary positive range 1..65535");
+}
+
+static uint64_t cubeM32RequiredBytes(uint64_t Rows, uint64_t Columns,
+                                     StringRef Context, StringRef OperandName) {
+  if (Rows > 32)
+    report_fatal_error(Twine("Linx: ") + Context + " requires " + OperandName +
+                       " CUBE_M32 rows <= 32 (got " + Twine(Rows) + ")");
+  return Columns * 128u;
+}
+
+static uint64_t cubeN8RequiredBytes(uint64_t Rows, uint64_t Columns) {
+  return ((Rows + 3u) / 4u) * ((Columns + 7u) / 8u) * 128u;
+}
+
+static void validateLocalCubeCapacity(uint64_t RequiredBytes, StringRef Context,
+                                      StringRef OperandName) {
+  if (RequiredBytes == 0 || RequiredBytes > 65536)
+    report_fatal_error(Twine("Linx: ") + Context + " requires " + OperandName +
+                       " CUBE capacity " + Twine(RequiredBytes) +
+                       "B, exceeding Local maximum 65536B");
+}
+
+static uint64_t validateCubeMatmulCapacities(uint64_t M, uint64_t N, uint64_t K,
+                                             StringRef Context,
+                                             bool HasAccumulator) {
+  validateLocalCubeCapacity(cubeM32RequiredBytes(M, K, Context, "A"), Context,
+                            "A");
+  validateLocalCubeCapacity(cubeN8RequiredBytes(K, N), Context, "B");
+  const uint64_t OutputBytes = cubeM32RequiredBytes(M, N, Context, "output");
+  validateLocalCubeCapacity(OutputBytes, Context, "output");
+  if (HasAccumulator)
+    validateLocalCubeCapacity(OutputBytes, Context, "accumulator");
+  return OutputBytes;
 }
 
 static uint64_t dtypeElementBitsForTileCheck(int64_t DType) {
@@ -2495,6 +2558,9 @@ public:
         if (!isConcreteTileDataType(DType))
           report_fatal_error(
               "Linx: TLSU.TLOAD requires an assigned concrete tile dtype");
+        if (!isAssignedDataLayout(Layout))
+          report_fatal_error(
+              "Linx: TLSU.TLOAD requires an assigned B.DATR Layout");
         validateStrictTileTSize(Size, "TLSU.TLOAD");
         if (!IsShape) {
           const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TLSU.TLOAD");
@@ -2609,6 +2675,9 @@ public:
         if (!isConcreteTileDataType(DType))
           report_fatal_error(
               "Linx: TLSU.TSTORE requires an assigned concrete tile dtype");
+        if (!isAssignedDataLayout(Layout))
+          report_fatal_error(
+              "Linx: TLSU.TSTORE requires an assigned B.DATR Layout");
         validateStrictTileTSize(Size, "TLSU.TSTORE");
         if (!IsShape) {
           const uint64_t Dim0 =
@@ -2676,6 +2745,10 @@ public:
         if (!isTileDataTypeFieldValue(Meta.DataType))
           report_fatal_error(
               "Linx: TMOV requires an assigned tile dtype or DTYPE_NONE");
+        if (!Meta.HasLayout && Meta.Layout != 0)
+          report_fatal_error("Linx: TMOV requires layout=0 when has_layout=0");
+        if (Meta.HasLayout && !isAssignedDataLayout(Meta.Layout))
+          report_fatal_error("Linx: TMOV requires an assigned B.DATR Layout");
 
         const bool ReuseForLiveness =
             (PseudoMI->getOperand(6).getImm() & 1) != 0;
@@ -2721,18 +2794,13 @@ public:
         validateCubeDimImm(M, "m", "CUBE.TMATMUL");
         validateCubeDimImm(N, "n", "CUBE.TMATMUL");
         validateCubeDimImm(K, "k", "CUBE.TMATMUL");
-        validateTileByteBudget(
-            "CUBE.TMATMUL", requirePositiveDimImm(M, "m", "CUBE.TMATMUL"),
-            requirePositiveDimImm(N, "n", "CUBE.TMATMUL"),
-            requirePositiveDimImm(K, "k", "CUBE.TMATMUL"),
-            dtypeElementBitsForTileCheck(DType_I32), std::nullopt);
+        const uint64_t DstBytes = validateCubeMatmulCapacities(
+            static_cast<uint64_t>(M), static_cast<uint64_t>(N),
+            static_cast<uint64_t>(K), "CUBE.TMATMUL",
+            /*HasAccumulator=*/false);
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         const TileRelRef DstRef = tileRelRefFromId(DstID);
-        const uint64_t DstBytes = std::max<uint64_t>(
-            128u,
-            computeTileBytesOrDie("CUBE.TMATMUL output", M, N, 1u,
-                                  dtypeElementBitsForTileCheck(DType_I32)));
         const auto DstTSize = localTileBytesToTSize(DstBytes);
         if (!DstTSize)
           report_fatal_error("Linx: CUBE.TMATMUL output does not fit TSize");
@@ -2786,19 +2854,13 @@ public:
         validateCubeDimImm(M, "m", "CUBE.TMATMUL.ACC");
         validateCubeDimImm(N, "n", "CUBE.TMATMUL.ACC");
         validateCubeDimImm(K, "k", "CUBE.TMATMUL.ACC");
-        validateTileByteBudget(
-            "CUBE.TMATMUL.ACC",
-            requirePositiveDimImm(M, "m", "CUBE.TMATMUL.ACC"),
-            requirePositiveDimImm(N, "n", "CUBE.TMATMUL.ACC"),
-            requirePositiveDimImm(K, "k", "CUBE.TMATMUL.ACC"),
-            dtypeElementBitsForTileCheck(DType_I32), std::nullopt);
+        const uint64_t DstBytes = validateCubeMatmulCapacities(
+            static_cast<uint64_t>(M), static_cast<uint64_t>(N),
+            static_cast<uint64_t>(K), "CUBE.TMATMUL.ACC",
+            /*HasAccumulator=*/true);
 
         const unsigned DstID = tileRegIdFromReg(TRI, Dst);
         const TileRelRef DstRef = tileRelRefFromId(DstID);
-        const uint64_t DstBytes = std::max<uint64_t>(
-            128u,
-            computeTileBytesOrDie("CUBE.TMATMUL.ACC output", M, N, 1u,
-                                  dtypeElementBitsForTileCheck(DType_I32)));
         const auto DstTSize = localTileBytesToTSize(DstBytes);
         if (!DstTSize)
           report_fatal_error(

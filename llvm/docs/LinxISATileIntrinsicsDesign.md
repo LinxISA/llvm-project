@@ -75,10 +75,17 @@ Examples include:
 The backend enforces before instruction selection:
 
 - SizeCode is an immediate in `[1, 10]` (128 B through 64 KiB per PE).
-- DataType is an assigned PTO 0.58 value.
+- TLOAD/TSTORE and tile operations require a concrete DataType in
+  `0..14`, `16..20`, or `24..28`; TMOV additionally accepts
+  `DTYPE_NONE=31` for source-descriptor inference.
+- Layout is an assigned B.DATR code. TMOV requires `layout=0` when
+  `has_layout=0` and validates the encoded layout when `has_layout=1`.
 - Tile-operation selectors are assigned PTO 0.58 selectors.
 - VEC/SFU operand modes match the intrinsic form.
-- M, N, and K are positive powers of two and satisfy tile capacity.
+- CUBE M, N, and K are arbitrary positive integers in `[1, 65535]`. The
+  compiler bridge uses CUBE_M32 for A/C/D and CUBE_N8 for B, requires
+  `M <= 32`, validates each operand capacity independently, and rounds the
+  output requirement up to a legal Local SizeCode.
 - TLOAD/TSTORE strides are nonnegative, element-aligned, and large enough for
   the selected row span when explicitly nonzero.
 - Dynamic values are accepted only for descriptor fields whose bridge contract

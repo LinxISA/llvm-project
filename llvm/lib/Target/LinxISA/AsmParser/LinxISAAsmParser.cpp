@@ -13,6 +13,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
@@ -3012,9 +3013,18 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
 
     const bool IsBCATR = AsmFmt.starts_with("B.CATR");
     StringMap<StringRef> Attrs;
+    StringSet<> SeenAttrs;
+    std::string AttrError;
     unsigned CMode = 0;
     unsigned RMode = 0;
     auto recordAttrToken = [&](StringRef RawText) -> bool {
+      AttrError.clear();
+      auto claim = [&](StringRef Key) {
+        if (SeenAttrs.insert(Key).second)
+          return true;
+        AttrError = (Twine("duplicate block attribute: ") + Key).str();
+        return false;
+      };
       StringRef Text = RawText;
       if (Text.starts_with("."))
         Text = Text.drop_front();
@@ -3023,6 +3033,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         if (!IsBCATR && (Parts.first.equals_insensitive("LAYOUT") ||
                          Parts.first.equals_insensitive("DTYPE") ||
                          Parts.first.equals_insensitive("PAD"))) {
+          if (!claim(Parts.first.upper()))
+            return false;
           Attrs[Parts.first.upper()] = Parts.second;
           return true;
         }
@@ -3031,6 +3043,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       if (IsBCATR &&
           (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
            Text.equals_insensitive("AQRL"))) {
+        if (!claim("ORDER"))
+          return false;
         Attrs["ORDER"] = Text;
         return true;
       }
@@ -3038,17 +3052,23 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
           (Text.equals_insensitive("ATOMIC") ||
            Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
            Text.equals_insensitive("FAR"))) {
+        if (!claim(Text.upper()))
+          return false;
         Attrs[Text] = "ON";
         return true;
       }
       if (!IsBCATR && (Text.equals_insensitive("SAT") ||
                        Text.equals_insensitive("CANONICALIZE"))) {
+        if (!claim(Text.upper()))
+          return false;
         Attrs[Text] = "ON";
         return true;
       }
       if (!IsBCATR && Text.starts_with_insensitive("CMODE")) {
         unsigned Value = 0;
         if (Text.drop_front(5).getAsInteger(0, Value) || Value > 5)
+          return false;
+        if (!claim("CMODE"))
           return false;
         CMode = Value;
         return true;
@@ -3057,33 +3077,46 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         unsigned Value = 0;
         if (Text.drop_front(5).getAsInteger(0, Value) || Value >= 8)
           return false;
+        if (!claim("RMODE"))
+          return false;
         RMode = Value;
         return true;
       }
       if (!IsBCATR && parseLayoutKeyword(Text)) {
+        if (!claim("LAYOUT"))
+          return false;
         Attrs["LAYOUT"] = Text;
         return true;
       }
       if (!IsBCATR && parseDataTypeKeyword(Text)) {
+        if (!claim("DTYPE"))
+          return false;
         Attrs["DTYPE"] = Text;
         return true;
       }
       if (!IsBCATR && parsePadValueKeyword(Text)) {
+        if (!claim("PAD"))
+          return false;
         Attrs["PAD"] = Text;
         return true;
       }
       return false;
     };
     for (const ParsedKeyword &KW : PI.Keywords) {
-      if (!require(recordAttrToken(KW.TextUpper),
-                   (Twine("unknown block attribute: ") + KW.TextUpper).str()))
+      if (!require(
+              recordAttrToken(KW.TextUpper),
+              AttrError.empty()
+                  ? (Twine("unknown block attribute: ") + KW.TextUpper).str()
+                  : AttrError))
         return false;
     }
     for (const ParsedImm &Imm : PI.Imms) {
       if (const auto *S = dyn_cast<MCSymbolRefExpr>(Imm.Expr)) {
         const std::string Text = toUpperStr(S->getSymbol().getName());
         if (!require(recordAttrToken(Text),
-                     (Twine("unknown block attribute: ") + Text).str()))
+                     AttrError.empty()
+                         ? (Twine("unknown block attribute: ") + Text).str()
+                         : AttrError))
           return false;
       } else if (!require(false, "block attributes must use assigned names"))
         return false;

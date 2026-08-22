@@ -23,6 +23,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #include <optional>
@@ -85,6 +86,15 @@ static std::optional<uint64_t> tSizeToBytes(unsigned TSize) {
 static bool isStrictTileTSizeCode(unsigned TSize) {
   std::optional<uint64_t> Bytes = tSizeToBytes(TSize);
   return Bytes && *Bytes >= 128u && *Bytes <= 65536u;
+}
+
+static unsigned cubeM32OutputTSize(int64_t N, StringRef Context) {
+  if (N <= 0 || N > 512)
+    report_fatal_error(Twine("Linx: ") + Context +
+                       " output exceeds Local CUBE_M32 capacity");
+  const uint64_t RequiredBytes = static_cast<uint64_t>(N) * 128u;
+  const uint64_t Capacity = PowerOf2Ceil(RequiredBytes);
+  return static_cast<unsigned>(Log2_64(Capacity) - 6u);
 }
 
 static unsigned getTileRegId(const TargetRegisterInfo &TRI, Register Reg) {
@@ -219,9 +229,17 @@ static bool extractDefMetadata(const MachineInstr &MI, TileMeta &Meta) {
     return true;
 
   case LinxISA::PSEUDO_CUBE_TMATMUL:
+    Meta.HasSize = true;
+    Meta.TSize = static_cast<uint8_t>(
+        cubeM32OutputTSize(MI.getOperand(4).getImm(), "CUBE.TMATMUL"));
+    Meta.HasDataType = true;
+    Meta.DataType = 17;
+    return true;
+
   case LinxISA::PSEUDO_CUBE_TMATMUL_ACC:
     Meta.HasSize = true;
-    Meta.TSize = 6; // PTO 0.58: TSize 6 denotes a 4KB tile value
+    Meta.TSize = static_cast<uint8_t>(
+        cubeM32OutputTSize(MI.getOperand(5).getImm(), "CUBE.TMATMUL.ACC"));
     Meta.HasDataType = true;
     Meta.DataType = 17;
     return true;

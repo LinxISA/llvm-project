@@ -107,6 +107,39 @@ static bool isConcreteTileDataType(uint64_t DType) {
          (DType >= 24 && DType <= 28);
 }
 
+static bool isAssignedDataLayout(int64_t Layout) {
+  switch (Layout) {
+  case 0:
+  case 1:
+  case 3:
+  case 4:
+  case 6:
+  case 8:
+  case 9:
+  case 17:
+  case 18:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 30:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static void validateDataLayout(int64_t Layout, StringRef IntrinsicName) {
+  if (!isAssignedDataLayout(Layout))
+    report_fatal_error(Twine("Linx: ") + IntrinsicName +
+                       " requires an assigned B.DATR Layout");
+}
+
 static uint64_t dtypeElementBitsForTileCheck(uint64_t DType) {
   switch (DType) {
   case 0:  // FP64
@@ -261,14 +294,51 @@ static void validateTileDataTypeField(uint64_t DType, StringRef IntrinsicName) {
   }
 }
 
-static void validateCubeDimU17(uint64_t Dim, StringRef IntrinsicName,
-                               StringRef DimName) {
-  if (!isUInt<17>(Dim) || !isPowerOf2_64(Dim)) {
+static void validateCubeDim(uint64_t Dim, StringRef IntrinsicName,
+                            StringRef DimName) {
+  if (Dim == 0 || Dim > 65535) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName + " requires " +
-                       DimName +
-                       " to be a positive power of two in range "
-                       "1..65536");
+                       DimName + " to be in arbitrary positive range 1..65535");
   }
+}
+
+static uint64_t cubeM32RequiredBytes(uint64_t Rows, uint64_t Columns,
+                                     StringRef IntrinsicName,
+                                     StringRef OperandName) {
+  if (Rows > 32)
+    report_fatal_error(Twine("Linx: ") + IntrinsicName + " requires " +
+                       OperandName + " CUBE_M32 rows <= 32 (got " +
+                       Twine(Rows) + ")");
+  return Columns * 128u;
+}
+
+static uint64_t cubeN8RequiredBytes(uint64_t Rows, uint64_t Columns) {
+  const uint64_t RowCells = (Rows + 3u) / 4u;
+  const uint64_t ColumnCells = (Columns + 7u) / 8u;
+  return RowCells * ColumnCells * 128u;
+}
+
+static void validateLocalCubeCapacity(uint64_t RequiredBytes,
+                                      StringRef IntrinsicName,
+                                      StringRef OperandName) {
+  if (RequiredBytes == 0 || RequiredBytes > 65536) {
+    report_fatal_error(Twine("Linx: ") + IntrinsicName + " requires " +
+                       OperandName + " CUBE capacity " + Twine(RequiredBytes) +
+                       "B, exceeding Local maximum 65536B");
+  }
+}
+
+static void validateCubeMatmulCapacities(uint64_t M, uint64_t N, uint64_t K,
+                                         StringRef IntrinsicName,
+                                         bool HasAccumulator) {
+  validateLocalCubeCapacity(cubeM32RequiredBytes(M, K, IntrinsicName, "A"),
+                            IntrinsicName, "A");
+  validateLocalCubeCapacity(cubeN8RequiredBytes(K, N), IntrinsicName, "B");
+  const uint64_t OutputBytes =
+      cubeM32RequiredBytes(M, N, IntrinsicName, "output");
+  validateLocalCubeCapacity(OutputBytes, IntrinsicName, "output");
+  if (HasAccumulator)
+    validateLocalCubeCapacity(OutputBytes, IntrinsicName, "accumulator");
 }
 
 static void validateTileOperation(uint64_t TileOperation,
@@ -917,6 +987,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 8, "tlsu.tload.shape", "tsize");
       validateStrictTileTSize(TSize, "tlsu.tload.shape");
       validateConcreteTileDataType(DType, "tlsu.tload.shape");
+      validateDataLayout(Layout, "tlsu.tload.shape");
       SDValue Ops[] = {N->getOperand(2),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        CurDAG->getTargetConstant(Layout, DL, MVT::i64),
@@ -947,6 +1018,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstSImmOperand(N, 8, "tile.tload", "stride_bytes");
       validateStrictTileTSize(TSize, "tile.tload");
       validateConcreteTileDataType(DType, "tile.tload");
+      validateDataLayout(Layout, "tile.tload");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tile.tload", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tile.tload", "lb1");
       validateTileByteBudget("tile.tload", Dim0, Dim1, /*dim2=*/1u,
@@ -1001,6 +1073,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstSImmOperand(N, 8, "tlsu.tload.desc", "stride_bytes");
       validateStrictTileTSize(TSize, "tlsu.tload.desc");
       validateConcreteTileDataType(DType, "tlsu.tload.desc");
+      validateDataLayout(Layout, "tlsu.tload.desc");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tlsu.tload.desc", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tlsu.tload.desc", "lb1");
       validateTileByteBudget("tlsu.tload.desc", Dim0, Dim1, /*dim2=*/1u,
@@ -1053,6 +1126,11 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       validateTileDataTypeField(DType, "tile.tmov");
       if (HasLayout > 1)
         report_fatal_error("Linx: tile.tmov has_layout must be 0 or 1");
+      if (HasLayout == 0 && Layout != 0)
+        report_fatal_error(
+            "Linx: tile.tmov requires layout=0 when has_layout=0");
+      if (HasLayout == 1)
+        validateDataLayout(Layout, "tile.tmov");
 
       SDValue Chain = N->getOperand(0);
       SDValue Src = N->getOperand(2);
@@ -1076,12 +1154,11 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t M = requireConstUImmOperand(N, 4, "cube.tmatmul", "m");
       const uint64_t NDim = requireConstUImmOperand(N, 5, "cube.tmatmul", "n");
       const uint64_t K = requireConstUImmOperand(N, 6, "cube.tmatmul", "k");
-      validateCubeDimU17(M, "cube.tmatmul", "m");
-      validateCubeDimU17(NDim, "cube.tmatmul", "n");
-      validateCubeDimU17(K, "cube.tmatmul", "k");
-      validateTileByteBudget("cube.tmatmul", M, NDim, K,
-                             dtypeElementBitsForTileCheck(/*DType=*/17),
-                             std::nullopt);
+      validateCubeDim(M, "cube.tmatmul", "m");
+      validateCubeDim(NDim, "cube.tmatmul", "n");
+      validateCubeDim(K, "cube.tmatmul", "k");
+      validateCubeMatmulCapacities(M, NDim, K, "cube.tmatmul",
+                                   /*HasAccumulator=*/false);
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
@@ -1104,12 +1181,11 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t NDim =
           requireConstUImmOperand(N, 6, "cube.tmatmul.acc", "n");
       const uint64_t K = requireConstUImmOperand(N, 7, "cube.tmatmul.acc", "k");
-      validateCubeDimU17(M, "cube.tmatmul.acc", "m");
-      validateCubeDimU17(NDim, "cube.tmatmul.acc", "n");
-      validateCubeDimU17(K, "cube.tmatmul.acc", "k");
-      validateTileByteBudget("cube.tmatmul.acc", M, NDim, K,
-                             dtypeElementBitsForTileCheck(/*DType=*/17),
-                             std::nullopt);
+      validateCubeDim(M, "cube.tmatmul.acc", "m");
+      validateCubeDim(NDim, "cube.tmatmul.acc", "n");
+      validateCubeDim(K, "cube.tmatmul.acc", "k");
+      validateCubeMatmulCapacities(M, NDim, K, "cube.tmatmul.acc",
+                                   /*HasAccumulator=*/true);
 
       SDValue Chain = N->getOperand(0);
       SDValue Acc = N->getOperand(2);
@@ -1541,6 +1617,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstSImmOperand(N, 9, "tile.tstore", "stride_bytes");
       validateStrictTileTSize(TSize, "tile.tstore");
       validateConcreteTileDataType(DType, "tile.tstore");
+      validateDataLayout(Layout, "tile.tstore");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tile.tstore", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tile.tstore", "lb1");
       validateTileByteBudget("tile.tstore", Dim0, Dim1, /*dim2=*/1u,
@@ -1595,6 +1672,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstSImmOperand(N, 9, "tlsu.tstore.desc", "stride_bytes");
       validateStrictTileTSize(TSize, "tlsu.tstore.desc");
       validateConcreteTileDataType(DType, "tlsu.tstore.desc");
+      validateDataLayout(Layout, "tlsu.tstore.desc");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tlsu.tstore.desc", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tlsu.tstore.desc", "lb1");
       validateTileByteBudget("tlsu.tstore.desc", Dim0, Dim1, /*dim2=*/1u,
@@ -1641,6 +1719,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 9, "tlsu.tstore.shape", "tsize");
       validateStrictTileTSize(TSize, "tlsu.tstore.shape");
       validateConcreteTileDataType(DType, "tlsu.tstore.shape");
+      validateDataLayout(Layout, "tlsu.tstore.shape");
       SDValue Ops[] = {N->getOperand(2),
                        N->getOperand(3),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
