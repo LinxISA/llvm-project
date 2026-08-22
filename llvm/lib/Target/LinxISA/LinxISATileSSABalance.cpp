@@ -77,14 +77,14 @@ static bool isTilePhysReg(Register Reg) {
 static Register reservedPhiCycleTempTile() { return LinxISA::TILE31; }
 
 static std::optional<uint64_t> tSizeToBytes(unsigned TSize) {
-  if (TSize < 1u || TSize > 7u)
+  if (TSize < 1u || TSize > 10u)
     return std::nullopt;
   return 1ull << (TSize + 6u);
 }
 
 static bool isStrictTileTSizeCode(unsigned TSize) {
   std::optional<uint64_t> Bytes = tSizeToBytes(TSize);
-  return Bytes && *Bytes >= 128u && *Bytes <= 8192u;
+  return Bytes && *Bytes >= 128u && *Bytes <= 65536u;
 }
 
 static unsigned getTileRegId(const TargetRegisterInfo &TRI, Register Reg) {
@@ -142,7 +142,7 @@ static bool metadataCompatible(const TileMeta &A, const TileMeta &B,
     return false;
   }
   if (!isStrictTileTSizeCode(A.TSize) || !isStrictTileTSizeCode(B.TSize)) {
-    Reason = "TSize outside 128B..8KB policy";
+    Reason = "SizeCode outside 128B..64KB policy";
     return false;
   }
   if (A.TSize != B.TSize) {
@@ -437,9 +437,10 @@ public:
         return;
 
       if (Incoming.HasSize && !isStrictTileTSizeCode(Incoming.TSize)) {
-        reportTileBalanceError(MF, DefMI,
-                               Twine("TSize outside 128B..8KB policy (size=") +
-                                   Twine(unsigned(Incoming.TSize)) + ")");
+        reportTileBalanceError(
+            MF, DefMI,
+            Twine("SizeCode outside 128B..64KB policy (size=") +
+                Twine(unsigned(Incoming.TSize)) + ")");
       }
 
       const unsigned TileId = getTileRegId(TRI, Reg);
@@ -616,7 +617,7 @@ public:
           if (!isStrictTileTSizeCode(CopyMeta.TSize)) {
             reportTileBalanceError(
                 MF, *CopyMI,
-                Twine("TSize outside 128B..8KB policy (src id=") +
+                Twine("SizeCode outside 128B..64KB policy (src id=") +
                     Twine(SrcId) + ", size=" + Twine(unsigned(CopyMeta.TSize)) +
                     ")");
           }

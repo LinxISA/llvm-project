@@ -74,33 +74,19 @@ exit:
 }
 
 ; ASM-LABEL: vector_inner_diamond:
-; ASM: BSTART.MSEQ
-; ASM: B.TEXT
-; ASM: B.IOR
-; ASM: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; ASM: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb2}}
-; ASM: v.lw.brg
-; ASM: v.sw.brg
-; ASM: C.BSTOP
-; ASM-NOT: v.rdor
+; ASM-NOT: BSTART.MSEQ
 
 ; ASM-LABEL: vector_nested_diamond:
-; ASM: BSTART.MSEQ
-; ASM: B.TEXT
-; ASM: B.IOR
-; ASM: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; ASM: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; ASM: C.B.DIMI{{[[:space:]]+}}1,{{.*->lb2}}
-; ASM: v.lw.brg
-; ASM: v.sw.brg
-; ASM: C.BSTOP
-; ASM-NOT: v.rdor
+; ASM-NOT: BSTART.MSEQ
 
 ; REMARK: "function":"vector_inner_diamond"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
 ; REMARK: "layout_kind":"grouped-strip-mined"
 ; REMARK: "cf_strategy":"if-converted-diamond"
 
 ; REMARK: "function":"vector_nested_diamond"
+; REMARK: "status":"reject"
+; REMARK: "reason":"pto0583_body_branch_reserved"
 ; REMARK: "layout_kind":"grouped-strip-mined"
 ; REMARK: "cf_strategy":"if-converted-diamond"

@@ -7,10 +7,10 @@ declare %linx.tile @llvm.linx.vec.tadd(%linx.tile, %linx.tile, i32, i32)
 
 define void @bad_vec_tadd_size(ptr %a, ptr %b) {
 entry:
-  %ta = call %linx.tile @llvm.linx.tile.tload(ptr %a, i32 6, i32 0, i64 0, i64 8, i64 8, i64 0)
-  %tb = call %linx.tile @llvm.linx.tile.tload(ptr %b, i32 6, i32 0, i64 0, i64 8, i64 8, i64 0)
+  %ta = call %linx.tile @llvm.linx.tile.tload(ptr %a, i32 6, i32 0, i64 0, i64 8, i64 10, i64 0)
+  %tb = call %linx.tile @llvm.linx.tile.tload(ptr %b, i32 6, i32 0, i64 0, i64 8, i64 10, i64 0)
   %tc = call %linx.tile @llvm.linx.vec.tadd(%linx.tile %ta, %linx.tile %tb, i32 0, i32 0)
   ret void
 }
 
-; CHECK: Linx: vec.tadd requires TSize in [1,7] (128B..8KB)
+; CHECK: Linx: vec.tadd requires SizeCode in [1,10] (128B..64KB)

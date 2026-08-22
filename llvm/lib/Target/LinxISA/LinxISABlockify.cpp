@@ -94,7 +94,7 @@ enum class TileOperationMode : uint8_t {
 };
 
 static std::optional<uint64_t> tileTSizeToBytes(unsigned TSize) {
-  if (TSize < 1 || TSize > 7)
+  if (TSize < 1 || TSize > 10)
     return std::nullopt;
   return 1ull << (TSize + 6u);
 }
@@ -110,9 +110,9 @@ static std::optional<unsigned> tileBytesToTSize(uint64_t Bytes) {
 }
 
 static void validateStrictTileTSize(int64_t TSize, StringRef Context) {
-  if (TSize < 1 || TSize > 7) {
+  if (TSize < 1 || TSize > 10) {
     report_fatal_error(Twine("Linx: ") + Context +
-                       " requires TSize in [1,7] (128B..8KB)");
+                       " requires SizeCode in [1,10] (128B..64KB)");
   }
 }
 
@@ -1040,56 +1040,13 @@ public:
         return;
       }
 
-      if (Head.equals_insensitive("b.z") || Head.equals_insensitive("b.nz")) {
-        std::string Label = normalizeLabel(Rest);
-        if (Label.empty())
-          fail("missing label in b.z/b.nz");
-        MCSymbol *Sym = LookupLabelSym(Label);
-        if (!Sym)
-          fail("undefined vector body label");
-        const unsigned Opc = Head.equals_insensitive("b.z")
-                                 ? LinxISA::PSEUDO_V_B_Z
-                                 : LinxISA::PSEUDO_V_B_NZ;
-        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc)).addSym(Sym);
-        return;
-      }
-
       if (Head.equals_insensitive("b.eq") || Head.equals_insensitive("b.ne") ||
           Head.equals_insensitive("b.lt") || Head.equals_insensitive("b.ge") ||
           Head.equals_insensitive("b.ltu") ||
-          Head.equals_insensitive("b.geu")) {
-        SmallVector<StringRef, 4> Ops;
-        splitCSV(Rest, Ops);
-        if (Ops.size() != 3)
-          fail("expected 'b.<cc> SrcL, SrcR, label'");
-        auto SrcL = parseVecRegToken(Ops[0]);
-        auto SrcR = parseVecRegToken(Ops[1]);
-        std::string Label = normalizeLabel(Ops[2]);
-        if (!SrcL || !SrcR || Label.empty())
-          fail("failed to parse operands for branch");
-        MCSymbol *Sym = LookupLabelSym(Label);
-        if (!Sym)
-          fail("undefined vector body label");
-
-        unsigned Opc = 0;
-        if (Head.equals_insensitive("b.eq"))
-          Opc = LinxISA::PSEUDO_V_B_EQ;
-        else if (Head.equals_insensitive("b.ne"))
-          Opc = LinxISA::PSEUDO_V_B_NE;
-        else if (Head.equals_insensitive("b.lt"))
-          Opc = LinxISA::PSEUDO_V_B_LT;
-        else if (Head.equals_insensitive("b.ge"))
-          Opc = LinxISA::PSEUDO_V_B_GE;
-        else if (Head.equals_insensitive("b.ltu"))
-          Opc = LinxISA::PSEUDO_V_B_LTU;
-        else if (Head.equals_insensitive("b.geu"))
-          Opc = LinxISA::PSEUDO_V_B_GEU;
-        BuildMI(BodyBB, BodyBB.end(), DebugLoc(), TII.get(Opc))
-            .addImm(SrcL->Code)
-            .addImm(SrcR->Code)
-            .addSym(Sym);
-        return;
-      }
+          Head.equals_insensitive("b.geu") || Head.equals_insensitive("b.z") ||
+          Head.equals_insensitive("b.nz"))
+        fail("PTO ISA 0.58.3 reserves B.EQ/B.NE/B.LT/B.GE/B.LTU/B.GEU/"
+             "B.Z/B.NZ body branches");
 
       auto parseArrow = [&](StringRef Expr, StringRef &SrcPart,
                             ParsedVReg &Dst) -> bool {

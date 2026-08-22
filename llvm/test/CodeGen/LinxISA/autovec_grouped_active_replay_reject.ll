@@ -31,42 +31,21 @@ exit:
 }
 
 ; AUTO-LABEL: search_store_index_grouped_boundary:
-; AUTO: BSTART.MSEQ
-; AUTO: B.TEXT
-; AUTO: B.IOT{{.*}}->t<128B>
-; AUTO: B.IOT{{.*}}->u<256B>
-; AUTO: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; AUTO: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; AUTO: v.add{{[[:space:]]+}}lc0, lc1.uw<<5, ->vt#1
-; AUTO: v.sw.brg.local{{.*}}ri1, [ts, lc0<<2, lc1<<7]
-; AUTO: v.lw.brg.local{{.*}}[ts, lc0<<2, lc1<<7]
-; AUTO: v.rdor
-; AUTO: b.ne
-; AUTO: v.sw.brg{{[[:space:]]+}}vt#1,
-; AUTO: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
-; AUTO: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
+; AUTO-NOT: BSTART.MSEQ
 
 ; REMARK-AUTO: "function":"search_store_index_grouped_boundary"
-; REMARK-AUTO: "status":"lowered"
+; REMARK-AUTO: "status":"reject"
+; REMARK-AUTO: "reason":"pto0583_body_branch_reserved"
 ; REMARK-AUTO: "layout_policy":"auto"
 ; REMARK-AUTO: "layout_kind":"grouped-strip-mined"
 ; REMARK-AUTO: "cf_strategy":"active-replay"
 
 ; GROUPED-LABEL: search_store_index_grouped_boundary:
-; GROUPED: BSTART.MSEQ
-; GROUPED: B.TEXT
-; GROUPED: B.IOT{{.*}}->t<128B>
-; GROUPED: B.IOT{{.*}}->u<256B>
-; GROUPED: C.B.DIMI{{[[:space:]]+}}32,{{.*->lb0}}
-; GROUPED: C.B.DIMI{{[[:space:]]+}}2,{{.*->lb1}}
-; GROUPED: v.sw.brg.local{{.*}}ri1, [ts, lc0<<2, lc1<<7]
-; GROUPED: v.lw.brg.local{{.*}}[ts, lc0<<2, lc1<<7]
-; GROUPED: v.sw.brg{{[[:space:]]+}}vt#1,
-; GROUPED: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
-; GROUPED: v.sw.brg.local{{.*}}zero, [ts, lc0<<2, lc1<<7]
+; GROUPED-NOT: BSTART.MSEQ
 
 ; REMARK-GROUPED: "function":"search_store_index_grouped_boundary"
-; REMARK-GROUPED: "status":"lowered"
+; REMARK-GROUPED: "status":"reject"
+; REMARK-GROUPED: "reason":"pto0583_body_branch_reserved"
 ; REMARK-GROUPED: "layout_policy":"grouped"
 ; REMARK-GROUPED: "layout_kind":"grouped-strip-mined"
 ; REMARK-GROUPED: "cf_strategy":"active-replay"

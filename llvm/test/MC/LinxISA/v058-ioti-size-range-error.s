@@ -1,7 +1,7 @@
 # RUN: not llvm-mc -triple=linx64 -show-encoding %s 2>&1 | FileCheck %s
 
 BSTART.TMOV FP16
-B.IOT t#1, mask=1111, last, ->u<16KB>
+B.IOT t#1, mask=1111, last, ->u<128KB>
 C.BSTOP
 
-# CHECK: error: tile size must be in strict range 128B..8KB
+# CHECK: error: tile size must be in strict range 128B..64KB

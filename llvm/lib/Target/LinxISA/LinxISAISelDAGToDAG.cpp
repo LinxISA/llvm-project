@@ -66,6 +66,20 @@ FunctionPass *llvm::createLinxISAISelDag(LinxISATargetMachine &TM) {
   return new LinxISADAGToDAGISelLegacy(TM);
 }
 
+static SDValue materializeSignedI32(SelectionDAG &DAG, const SDLoc &DL, EVT VT,
+                                    int32_t Value) {
+  const int64_t Upper = static_cast<int64_t>(Value) >> 12;
+  const uint64_t Lower = static_cast<uint32_t>(Value) & 0xfffu;
+  SDValue UpperImm = DAG.getSignedTargetConstant(Upper, DL, MVT::i64);
+  SDValue Base = SDValue(DAG.getMachineNode(LinxISA::LUI, DL, VT, UpperImm), 0);
+  if (Lower == 0)
+    return Base;
+
+  SDValue LowerImm = DAG.getTargetConstant(Lower, DL, MVT::i64);
+  const unsigned AddOpc = VT == MVT::i32 ? LinxISA::ADDIWri : LinxISA::ADDIri;
+  return SDValue(DAG.getMachineNode(AddOpc, DL, VT, Base, LowerImm), 0);
+}
+
 static int64_t getMemScaleForVT(MVT MemVT) {
   if (MemVT == MVT::i8)
     return 1;
@@ -83,7 +97,7 @@ static int64_t getMemScaleForVT(MVT MemVT) {
 }
 
 static bool isStrictTileTSize(uint64_t TSize) {
-  return TSize >= 1 && TSize <= 7;
+  return TSize >= 1 && TSize <= 10;
 }
 
 static uint64_t tSizeToBytes(uint64_t TSize) { return 1ull << (TSize + 6u); }
@@ -218,7 +232,7 @@ static int64_t requireConstSImmOperand(const SDNode *N, unsigned OperandIdx,
 static void validateStrictTileTSize(uint64_t TSize, StringRef IntrinsicName) {
   if (!isStrictTileTSize(TSize)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " requires TSize in [1,7] (128B..8KB)");
+                       " requires SizeCode in [1,10] (128B..64KB)");
   }
 }
 
@@ -849,17 +863,12 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
               CurDAG->getMachineNode(LinxISA::LUI, DL, MVT::i64, Imm), 0);
         }
       }
-      if (isInt<32>(Val)) {
-        SDValue Imm = CurDAG->getTargetConstant(Val, DL, MVT::i64);
-        return SDValue(
-            CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, Imm), 0);
-      }
+      if (isInt<32>(Val))
+        return materializeSignedI32(*CurDAG, DL, MVT::i64,
+                                    static_cast<int32_t>(Val));
       if (isUInt<32>(Val)) {
-        SDValue Imm = CurDAG->getTargetConstant(
-            static_cast<int64_t>(static_cast<int32_t>(UVal & 0xffffffffu)), DL,
-            MVT::i64);
-        SDValue Res = SDValue(
-            CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, Imm), 0);
+        SDValue Res = materializeSignedI32(
+            *CurDAG, DL, MVT::i64, static_cast<int32_t>(UVal & 0xffffffffu));
         SDValue ShImm = CurDAG->getTargetConstant(32, DL, MVT::i64);
         SDValue ShAmt = SDValue(
             CurDAG->getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm),
@@ -1472,17 +1481,12 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
               CurDAG->getMachineNode(LinxISA::LUI, DL, MVT::i64, Imm), 0);
         }
       }
-      if (isInt<32>(Val)) {
-        SDValue Imm = CurDAG->getTargetConstant(Val, DL, MVT::i64);
-        return SDValue(
-            CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, Imm), 0);
-      }
+      if (isInt<32>(Val))
+        return materializeSignedI32(*CurDAG, DL, MVT::i64,
+                                    static_cast<int32_t>(Val));
       if (isUInt<32>(Val)) {
-        SDValue Imm = CurDAG->getTargetConstant(
-            static_cast<int64_t>(static_cast<int32_t>(UVal & 0xffffffffu)), DL,
-            MVT::i64);
-        SDValue Res = SDValue(
-            CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, Imm), 0);
+        SDValue Res = materializeSignedI32(
+            *CurDAG, DL, MVT::i64, static_cast<int32_t>(UVal & 0xffffffffu));
         SDValue ShImm = CurDAG->getTargetConstant(32, DL, MVT::i64);
         SDValue ShAmt = SDValue(
             CurDAG->getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm),
@@ -1840,18 +1844,18 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       }
 
       if (isInt<32>(Val)) {
-        SDValue Imm = CurDAG->getTargetConstant(Val, DL, MVT::i64);
-        ReplaceNode(N, CurDAG->getMachineNode(LinxISA::HLLUI, DL, VT, Imm));
+        ReplaceNode(
+            N, materializeSignedI32(*CurDAG, DL, VT, static_cast<int32_t>(Val))
+                   .getNode());
         return;
       }
 
       if (isUInt<32>(Val)) {
         // Materialize the same 32-bit bit-pattern as a sign-extended value,
         // then clear the upper 32 bits.
-        SDValue Imm = CurDAG->getTargetConstant(
-            static_cast<int32_t>(static_cast<uint32_t>(Val)), DL, MVT::i64);
-        SDValue Res = SDValue(
-            CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, Imm), 0);
+        SDValue Res = materializeSignedI32(
+            *CurDAG, DL, MVT::i64,
+            static_cast<int32_t>(static_cast<uint32_t>(Val)));
 
         SDValue Zero = CurDAG->getRegister(LinxISA::R0, MVT::i64);
         SDValue ShImm = CurDAG->getTargetConstant(32, DL, MVT::i64);
@@ -1869,15 +1873,8 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
         return;
       }
 
-      // Generic 64-bit materialization: build from high/low 32-bit halves.
-      //
-      //   hi = sext_i64((int32_t)(UVal >> 32))
-      //   lo = zext_i64((uint32_t)UVal)
-      //   res = (hi << 32) | lo
-      //
-      // This avoids the bring-up fatal error for i64 constants used in tests
-      // and allows the backend to select legal i64 materializations without
-      // requiring HL.* immediate arithmetic instructions.
+      // PTO ISA 0.58.3 HL.LUI materializes the high 32-bit half directly.
+      // Build the low half through LUI+ADDI and zero-extend it before ORing.
       uint32_t Hi32 = static_cast<uint32_t>(UVal >> 32);
       uint32_t Lo32 = static_cast<uint32_t>(UVal & 0xffffffffu);
 
@@ -1887,28 +1884,21 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           CurDAG->getMachineNode(LinxISA::ADDIri, DL, MVT::i64, Zero, ShImm32),
           0);
 
-      // Load hi32 (sign-extended) and shift it into the upper 32 bits.
-      SDValue HiImm = CurDAG->getTargetConstant(
-          static_cast<int64_t>(static_cast<int32_t>(Hi32)), DL, MVT::i64);
+      SDValue HiImm = CurDAG->getTargetConstant(Hi32, DL, MVT::i64);
       SDValue Hi = SDValue(
           CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, HiImm), 0);
-      SDValue HiShifted = SDValue(
-          CurDAG->getMachineNode(LinxISA::SLLrr, DL, MVT::i64, Hi, ShAmt32), 0);
 
       // Load lo32 and clear the upper 32 bits to obtain a zero-extended i64.
-      SDValue LoImm = CurDAG->getTargetConstant(
-          static_cast<int64_t>(static_cast<int32_t>(Lo32)), DL, MVT::i64);
-      SDValue Lo = SDValue(
-          CurDAG->getMachineNode(LinxISA::HLLUI, DL, MVT::i64, LoImm), 0);
+      SDValue Lo = materializeSignedI32(*CurDAG, DL, MVT::i64,
+                                        static_cast<int32_t>(Lo32));
       SDValue LoShl = SDValue(
           CurDAG->getMachineNode(LinxISA::SLLrr, DL, MVT::i64, Lo, ShAmt32), 0);
       SDValue LoZext = SDValue(
           CurDAG->getMachineNode(LinxISA::SRLrr, DL, MVT::i64, LoShl, ShAmt32),
           0);
 
-      SDValue Res = SDValue(CurDAG->getMachineNode(LinxISA::ORrr, DL, MVT::i64,
-                                                   HiShifted, LoZext),
-                            0);
+      SDValue Res = SDValue(
+          CurDAG->getMachineNode(LinxISA::ORrr, DL, MVT::i64, Hi, LoZext), 0);
       ReplaceNode(N, Res.getNode());
       return;
     } else if (VT == MVT::i32) {
@@ -1937,10 +1927,10 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
         }
       }
 
-      // Materialize sign-extended 32-bit constants using HL.LUI.
       if (isInt<32>(Val)) {
-        SDValue Imm = CurDAG->getTargetConstant(Val, DL, MVT::i64);
-        ReplaceNode(N, CurDAG->getMachineNode(LinxISA::HLLUI, DL, VT, Imm));
+        ReplaceNode(
+            N, materializeSignedI32(*CurDAG, DL, VT, static_cast<int32_t>(Val))
+                   .getNode());
         return;
       }
     }

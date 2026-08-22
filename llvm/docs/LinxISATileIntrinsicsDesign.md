@@ -74,7 +74,7 @@ Examples include:
 
 The backend enforces before instruction selection:
 
-- TSize is an immediate in `[1, 7]` (128 B through 8 KiB per PE).
+- SizeCode is an immediate in `[1, 10]` (128 B through 64 KiB per PE).
 - DataType is an assigned PTO 0.58 value.
 - Tile-operation selectors are assigned PTO 0.58 selectors.
 - VEC/SFU operand modes match the intrinsic form.
@@ -85,7 +85,7 @@ The backend enforces before instruction selection:
   explicitly permits them.
 
 Failure is explicit. The backend does not normalize deleted names, reserved
-selectors, illegal TSize values, or incompatible descriptors.
+selectors, illegal SizeCode values, or incompatible descriptors.
 
 ## Machine pseudos
 

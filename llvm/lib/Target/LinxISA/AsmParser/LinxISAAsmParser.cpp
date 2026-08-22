@@ -260,6 +260,29 @@ static std::optional<unsigned> parsePEMaskKeyword(StringRef Text) {
   return Value;
 }
 
+static std::optional<unsigned> encodePEMode(unsigned PEMask) {
+  switch (PEMask) {
+  case 0b0000:
+    return 0;
+  case 0b1000:
+    return 1;
+  case 0b0100:
+    return 2;
+  case 0b0010:
+    return 3;
+  case 0b0001:
+    return 4;
+  case 0b1100:
+    return 5;
+  case 0b1110:
+    return 6;
+  case 0b1111:
+    return 7;
+  default:
+    return std::nullopt;
+  }
+}
+
 static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
   const std::string Up = toUpperStr(Name.trim());
   return StringSwitch<std::optional<unsigned>>(Up)
@@ -1516,10 +1539,14 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest,
       TSize = *Code;
     }
 
-    // PTO 0.58 TSize codes 1..7 map to 128B..8KB per participating PE.
-    if (TSize < 1u || TSize > 7u) {
+    // PTO 0.58.3 SizeCode extends Local destinations through 64 KiB and
+    // Shared destinations through 256 KiB per participating PE.
+    const unsigned MaxSizeCode = AllowShared ? 12u : 10u;
+    if (TSize < 1u || TSize > MaxSizeCode) {
       return Error(getTok().getLoc(),
-                   "tile size must be in strict range 128B..8KB");
+                   AllowShared
+                       ? "tile size must be in strict range 128B..256KB"
+                       : "tile size must be in strict range 128B..64KB");
     }
 
     if (parseToken(AsmToken::Greater, "expected '>' to close size suffix"))
@@ -2931,6 +2958,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (!require(PEMask.has_value(),
                  "PE mask must contain exactly four binary digits"))
       return false;
+    auto PEMode = encodePEMode(*PEMask);
+    if (!require(PEMode.has_value(),
+                 "PE mask must be one of 0000, 1000, 0100, 0010, 0001, "
+                 "1100, 1110, or 1111"))
+      return false;
 
     const bool IsSource = PI.Imms.size() == 1 && PI.ArrowDests.empty();
     const bool IsDestination = PI.Imms.empty() && PI.ArrowDests.size() == 1;
@@ -2940,7 +2972,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       return false;
 
     unsigned SharedTID = 0;
-    unsigned TSize = 0;
+    unsigned SizeCode = 0;
     if (IsSource) {
       int64_t Value = 0;
       if (!require(isConstExpr(PI.Imms[0].Expr, Value) && Value >= 0 &&
@@ -2950,22 +2982,22 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       SharedTID = static_cast<unsigned>(Value);
     } else {
       SharedTID = PI.ArrowDests[0].Code;
-      TSize = PI.ArrowDests[0].AngleSize;
+      SizeCode = PI.ArrowDests[0].AngleSize;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
-                       !PI.ArrowDests[0].HasAngleReg && TSize >= 1u &&
-                       TSize <= 7u,
-                   "B.IOS destination size must be 128B..8KB"))
+                       !PI.ArrowDests[0].HasAngleReg && SizeCode >= 1u &&
+                       SizeCode <= 12u,
+                   "B.IOS destination size must be 128B..256KB"))
         return false;
     }
 
     for (unsigned I = 0; I < Form.field_count; ++I) {
       StringRef FieldName(linxisa_fields[Form.field_start + I].name);
-      if (FieldName == "PE_MASK")
-        emitFieldImm(*PEMask);
+      if (FieldName == "PEMode")
+        emitFieldImm(*PEMode);
       else if (FieldName == "SharedTID")
         emitFieldImm(SharedTID);
-      else if (FieldName == "TSize")
-        emitFieldImm(TSize);
+      else if (FieldName == "SizeCode")
+        emitFieldImm(SizeCode);
       else
         return require(false, ("unsupported B.IOS field: " + FieldName).str());
     }
@@ -3220,6 +3252,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (!require(PEMask.has_value(),
                  "B.IOT requires exactly one mask=PE_MASK operand"))
       return false;
+    const std::optional<unsigned> PEMode = encodePEMode(*PEMask);
+    if (!require(PEMode.has_value(),
+                 "PE mask must be one of 0000, 1000, 0100, 0010, 0001, "
+                 "1100, 1110, or 1111"))
+      return false;
     const bool FormHasDestination = AsmFmt.contains("->DstTile");
     if (!require(
             PI.ArrowDests.size() == (FormHasDestination ? 1u : 0u),
@@ -3229,18 +3266,18 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       return false;
 
     unsigned DstTile = 0u;
-    unsigned TSize = 0u;
+    unsigned SizeCode = 0u;
     if (FormHasDestination) {
       DstTile = PI.ArrowDests[0].Code & 0x7u;
-      TSize = PI.ArrowDests[0].AngleSize;
+      SizeCode = PI.ArrowDests[0].AngleSize;
       if (!require(DstTile <= 3u, "B.IOT destination must be one of t/u/m/n"))
         return false;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
                        !PI.ArrowDests[0].HasAngleReg,
                    "B.IOT expects size suffix '->t<Size>'"))
         return false;
-      if (!require(TSize >= 1u && TSize <= 7u,
-                   "B.IOT destination size must be 128B..8KB"))
+      if (!require(SizeCode >= 1u && SizeCode <= 10u,
+                   "B.IOT destination size must be 128B..64KB"))
         return false;
     }
 
@@ -3282,16 +3319,16 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         emitFieldImm(DstTile);
       else if (FN == "L")
         emitFieldImm(WantLast);
-      else if (FN == "PE_MASK")
-        emitFieldImm(*PEMask);
+      else if (FN == "PEMode")
+        emitFieldImm(*PEMode);
       else if (FN == "PTOU0_7" || FN == "PTOU0_8")
         emitFieldImm(0);
       else if (FN == "SrcTile0")
         emitFieldImm(Src0);
       else if (FN == "SrcTile1")
         emitFieldImm(Src1);
-      else if (FN == "TSize")
-        emitFieldImm(TSize);
+      else if (FN == "SizeCode")
+        emitFieldImm(SizeCode);
       else
         return require(false, ("unsupported B.IOT field: " + FN).str());
     }
@@ -3306,8 +3343,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                      PI.ArrowDests.empty() && !PI.SetRetTarget,
                  "unexpected operands for B.FPATR"))
       return false;
-    if (!require(PI.Imms.size() == 7,
-                 "expected seven descriptor fields for B.FPATR"))
+    if (!require(PI.Imms.size() == 9,
+                 "expected nine descriptor fields for B.FPATR"))
       return false;
 
     auto sourceIndex = [](StringRef FieldName) -> std::optional<unsigned> {
@@ -3319,6 +3356,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
           .Case("GroupMaxEn", 4u)
           .Case("RowMaxInit", 5u)
           .Case("MaxAbsEn", 6u)
+          .Case("TransA", 7u)
+          .Case("TransB", 8u)
           .Default(std::nullopt);
     };
 

@@ -39,8 +39,9 @@ The compiler emits operation-specific TLSU headers:
 stride selects the architectural dense-stride default; an explicitly encoded
 zero remains zero and is not treated as omission.
 
-`B.IOT` supplies Local tile operands. PTO 0.58 uses a four-bit PE mask and a
-TSize code in `[1, 7]`, representing 128 B through 8 KiB per participating PE.
+`B.IOT` supplies Local tile operands. PTO 0.58.3 encodes a three-bit PEMode
+that expands to one of eight fixed four-PE masks and a SizeCode in `[1, 10]`,
+representing 128 B through 64 KiB per participating PE.
 A zero PE mask is a strict no-op. Source-only and destination forms retain their
 distinct v0.58 encodings.
 
