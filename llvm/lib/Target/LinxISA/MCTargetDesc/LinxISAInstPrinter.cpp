@@ -182,17 +182,43 @@ static unsigned cubeStateOpFromFunction(unsigned Func) {
 static StringRef layoutFormatName(unsigned Format) {
   switch (Format & 0x1fu) {
   case 0:
-    return "NORM.normal";
-  case 2:
-    return "ND2NZ.normal";
+    return "NORM";
+  case 1:
+    return "ND2DN";
   case 3:
-    return "ND2ZN.normal";
+    return "ND2ZN";
+  case 4:
+    return "ND2NZ";
+  case 6:
+    return "DN2ND";
   case 8:
-    return "DN2ZN.normal";
+    return "DN2ZN";
   case 9:
-    return "DN2NZ.normal";
+    return "DN2NZ";
+  case 17:
+    return "ZN2ND";
+  case 18:
+    return "ZN2DN";
+  case 20:
+    return "ZN2NZ";
+  case 21:
+    return "ND2M32";
+  case 22:
+    return "ND2M16";
+  case 23:
+    return "ND2N8";
+  case 24:
+    return "M322ND";
+  case 25:
+    return "M162ND";
+  case 26:
+    return "N82ND";
+  case 27:
+    return "NZ2ND";
   case 28:
-    return "NZ2DN.canon";
+    return "NZ2DN";
+  case 30:
+    return "NZ2ZN";
   default:
     return StringRef();
   }
@@ -212,13 +238,13 @@ static StringRef vectorBlockModeName(unsigned Mode) {
 static StringRef padValueName(unsigned Pad) {
   switch (Pad & 0x1fu) {
   case 0:
-    return "Null";
-  case 1:
     return "Zero";
-  case 2:
+  case 1:
     return "Max";
-  case 3:
+  case 2:
     return "Min";
+  case 3:
+    return "Null";
   default:
     return StringRef();
   }

@@ -219,6 +219,59 @@ static bool isLegalBIOTDestination(const linxisa_inst_form &Form,
   return false;
 }
 
+static bool isConcreteTileDataType(uint64_t DType) {
+  return DType <= 14 || (DType >= 16 && DType <= 20) ||
+         (DType >= 24 && DType <= 28);
+}
+
+static bool isAssignedDataLayout(uint64_t Layout) {
+  switch (Layout) {
+  case 0:
+  case 1:
+  case 3:
+  case 4:
+  case 6:
+  case 8:
+  case 9:
+  case 17:
+  case 18:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 30:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isLegalTileAttributeFields(const linxisa_inst_form &Form,
+                                       ArrayRef<int64_t> FieldVals) {
+  StringRef Mnemonic(Form.mnemonic ? Form.mnemonic : "");
+  for (unsigned I = 0; I != FieldVals.size(); ++I) {
+    const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+    StringRef Name(Field.name ? Field.name : "");
+    const uint64_t Value = static_cast<uint64_t>(FieldVals[I]);
+    if (Name == "DataType") {
+      const bool AllowNone = Mnemonic == "B.DATR" || Mnemonic == "BSTART.TMOV";
+      if (!isConcreteTileDataType(Value) && !(AllowNone && Value == 31))
+        return false;
+    } else if (Mnemonic == "B.DATR" && Name == "CMode" && Value > 5) {
+      return false;
+    } else if (Mnemonic == "B.DATR" && Name == "Layout" &&
+               !isAssignedDataLayout(Value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 MCDisassembler::DecodeStatus
 LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
                                     ArrayRef<uint8_t> Bytes, uint64_t Address,
@@ -288,7 +341,8 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
   extractFields(*Matched, Insn, FieldVals);
   if (!isLegalCompressedStdBrType(*Matched, FieldVals) ||
       !isLegalFrameTemplate(*Matched, FieldVals) ||
-      !isLegalBIOTDestination(*Matched, FieldVals)) {
+      !isLegalBIOTDestination(*Matched, FieldVals) ||
+      !isLegalTileAttributeFields(*Matched, FieldVals)) {
     Instr.clear();
     return Fail;
   }

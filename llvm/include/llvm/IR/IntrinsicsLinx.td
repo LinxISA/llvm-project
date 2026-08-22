@@ -94,12 +94,12 @@ let TargetPrefix = "linx" in {
                 [IntrNoMem, IntrHasSideEffects,
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
 
-  // %linx.tile @llvm.linx.tileop.unary(%linx.tile src, i32 immTileOp10,
+  // %linx.tile @llvm.linx.tileop.unary(%linx.tile src, i32 immTileOp7,
   //                                  i32 immTSize, i32 immDType)
   //
   // PTO 0.58 tile-operation surface (header-only template dispatch).
   // PTO 0.58 legality (enforced in Linx backend):
-  // - tileop10 in [0, 1023]
+  // - tileop7 is the packed Mode/Function selector in [0, 127]
   // - tsize in [1, 10] (128B..64KB)
   // - dtype in u5
   def int_linx_tileop_unary :
@@ -110,7 +110,7 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<3>>]>;
 
   // %linx.tile @llvm.linx.tileop.binary(%linx.tile a, %linx.tile b,
-  //                                   i32 immTileOp10, i32 immTSize,
+  //                                   i32 immTileOp7, i32 immTSize,
   //                                   i32 immDType)
   def int_linx_tileop_binary :
       Intrinsic<[llvm_linx_tile_ty],
@@ -121,7 +121,7 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<4>>]>;
 
   // %linx.tile @llvm.linx.tileop.binary.scalar(%linx.tile a, i64 scalar,
-  //                                          i32 immTileOp10, i32 immTSize,
+  //                                          i32 immTileOp7, i32 immTSize,
   //                                          i32 immDType, i32 immMode)
   //
   // Scalar tile-operation mode extension for PTO 0.58:
@@ -134,7 +134,7 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
                  ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
 
-  // %linx.tile @llvm.linx.tileop.splat(i64 scalar, i32 immTileOp10,
+  // %linx.tile @llvm.linx.tileop.splat(i64 scalar, i32 immTileOp7,
   //                                  i32 immTSize, i32 immDType,
   //                                  i32 immMode)
   //
@@ -149,11 +149,12 @@ let TargetPrefix = "linx" in {
                  ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
 
   // Engine-typed tile-operation wrappers:
-  // - map to fixed TileOp10 values while keeping explicit size/dtype controls.
+  // - map to fixed packed Mode/Function values while keeping explicit
+  //   size/dtype controls.
   //
   // %linx.tile @llvm.linx.vec.tadd(%linx.tile a, %linx.tile b,
   //                                 i32 immTSize, i32 immDType)
-  //   TileOp10 = 0x000 (TADD)
+  //   packed Mode/Function = 0x000 (TADD)
   def int_linx_vec_tadd :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -163,7 +164,7 @@ let TargetPrefix = "linx" in {
 
   // %linx.tile @llvm.linx.vec.tsub(%linx.tile a, %linx.tile b,
   //                                 i32 immTSize, i32 immDType)
-  //   TileOp10 = 0x001 (TSUB)
+  //   packed Mode/Function = 0x001 (TSUB)
   def int_linx_vec_tsub :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_linx_tile_ty,
@@ -173,7 +174,7 @@ let TargetPrefix = "linx" in {
 
   // %linx.tile @llvm.linx.sfu.trowmax(%linx.tile src,
   //                                    i32 immTSize, i32 immDType)
-  //   TileOp10 = 0x020 (TROWMAX)
+  //   packed Mode/Function = 0x041 (TROWMAX)
   def int_linx_sfu_trowmax :
       Intrinsic<[llvm_linx_tile_ty],
                 [llvm_linx_tile_ty, llvm_i32_ty, llvm_i32_ty],

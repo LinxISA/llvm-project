@@ -19,5 +19,5 @@ test_v058_block_descriptor_roundtrip:
 # CHECK: B.IOT{{[[:space:]]+}}u#3, mask=1111, last,{{[[:space:]]+}}->t<1KB>
 # CHECK: B.IOT{{[[:space:]]+}}mask=1111, last,{{[[:space:]]+}}->u<128B>
 # CHECK: B.CATR{{[[:space:]]+}}trap, atomic, aqrl, far, dr
-# CHECK: B.DATR{{[[:space:]]+}}NORM.normal, S8, Zero, cmode3, rmode2, sat
+# CHECK: B.DATR{{[[:space:]]+}}NORM, S8, Zero, cmode3, rmode2, sat
 # CHECK: C.BSTOP

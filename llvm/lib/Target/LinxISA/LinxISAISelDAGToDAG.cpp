@@ -102,35 +102,46 @@ static bool isStrictTileTSize(uint64_t TSize) {
 
 static uint64_t tSizeToBytes(uint64_t TSize) { return 1ull << (TSize + 6u); }
 
+static bool isConcreteTileDataType(uint64_t DType) {
+  return DType <= 14 || (DType >= 16 && DType <= 20) ||
+         (DType >= 24 && DType <= 28);
+}
+
 static uint64_t dtypeElementBitsForTileCheck(uint64_t DType) {
-  switch (DType & 0x1fu) {
+  switch (DType) {
   case 0:  // FP64
-  case 16: // INT64
-  case 24: // UINT64
+  case 16: // S64
+  case 24: // U64
     return 64u;
   case 1:  // FP32
-  case 17: // INT32
-  case 25: // UINT32
+  case 2:  // TF32
+  case 3:  // HF32
+  case 17: // S32
+  case 25: // U32
     return 32u;
-  case 2:  // FP16
-  case 6:  // BF16
-  case 18: // INT16
-  case 26: // UINT16
+  case 4:  // FP16
+  case 5:  // BF16
+  case 18: // S16
+  case 26: // U16
     return 16u;
-  case 3:  // FP8
-  case 7:  // FPL8
-  case 19: // INT8
-  case 27: // UINT8
+  case 6:  // HiF8
+  case 7:  // E4M3
+  case 8:  // E5M2
+  case 9:  // E3M2
+  case 10: // E2M3
+  case 13: // E8M0
+  case 19: // S8
+  case 27: // U8
     return 8u;
-  case 11: // FP4
-  case 12: // FPL4
-  case 20: // INT4
-  case 28: // UINT4
+  case 11: // E2M1X2
+  case 12: // E1M2X2
+  case 14: // HiF4X2
+  case 20: // S4X2
+  case 28: // U4X2
     return 4u;
   default:
-    // Keep bring-up compatibility for unknown dtype encodings and apply a
-    // conservative 32-bit element width for strict byte-budget checks.
-    return 32u;
+    report_fatal_error(Twine("Linx: reserved tile dtype ") + Twine(DType) +
+                       " has no architectural element width");
   }
 }
 
@@ -235,10 +246,18 @@ static void validateStrictTileTSize(uint64_t TSize, StringRef IntrinsicName) {
   }
 }
 
-static void validateTileDataTypeU5(uint64_t DType, StringRef IntrinsicName) {
-  if (!isUInt<5>(DType)) {
+static void validateConcreteTileDataType(uint64_t DType,
+                                         StringRef IntrinsicName) {
+  if (!isConcreteTileDataType(DType)) {
     report_fatal_error(Twine("Linx: ") + IntrinsicName +
-                       " requires dtype that fits u5");
+                       " requires an assigned concrete tile dtype");
+  }
+}
+
+static void validateTileDataTypeField(uint64_t DType, StringRef IntrinsicName) {
+  if (!isConcreteTileDataType(DType) && DType != 31) {
+    report_fatal_error(Twine("Linx: ") + IntrinsicName +
+                       " requires an assigned tile dtype or DTYPE_NONE");
   }
 }
 
@@ -897,7 +916,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t TSize =
           requireConstUImmOperand(N, 8, "tlsu.tload.shape", "tsize");
       validateStrictTileTSize(TSize, "tlsu.tload.shape");
-      validateTileDataTypeU5(DType, "tlsu.tload.shape");
+      validateConcreteTileDataType(DType, "tlsu.tload.shape");
       SDValue Ops[] = {N->getOperand(2),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
                        CurDAG->getTargetConstant(Layout, DL, MVT::i64),
@@ -927,7 +946,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const int64_t StrideBytes =
           requireConstSImmOperand(N, 8, "tile.tload", "stride_bytes");
       validateStrictTileTSize(TSize, "tile.tload");
-      validateTileDataTypeU5(DType, "tile.tload");
+      validateConcreteTileDataType(DType, "tile.tload");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tile.tload", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tile.tload", "lb1");
       validateTileByteBudget("tile.tload", Dim0, Dim1, /*dim2=*/1u,
@@ -981,7 +1000,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const int64_t StrideBytes =
           requireConstSImmOperand(N, 8, "tlsu.tload.desc", "stride_bytes");
       validateStrictTileTSize(TSize, "tlsu.tload.desc");
-      validateTileDataTypeU5(DType, "tlsu.tload.desc");
+      validateConcreteTileDataType(DType, "tlsu.tload.desc");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tlsu.tload.desc", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tlsu.tload.desc", "lb1");
       validateTileByteBudget("tlsu.tload.desc", Dim0, Dim1, /*dim2=*/1u,
@@ -1031,7 +1050,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t HasLayout =
           requireConstUImmOperand(N, 6, "tile.tmov", "has_layout");
       validateStrictTileTSize(TSize, "tile.tmov");
-      validateTileDataTypeU5(DType, "tile.tmov");
+      validateTileDataTypeField(DType, "tile.tmov");
       if (HasLayout > 1)
         report_fatal_error("Linx: tile.tmov has_layout must be 0 or 1");
 
@@ -1112,7 +1131,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t TSize = requireConstUImmOperand(N, 4, "vec.tadd", "tsize");
       const uint64_t DType = requireConstUImmOperand(N, 5, "vec.tadd", "dtype");
       validateStrictTileTSize(TSize, "vec.tadd");
-      validateTileDataTypeU5(DType, "vec.tadd");
+      validateConcreteTileDataType(DType, "vec.tadd");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
@@ -1133,7 +1152,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t TSize = requireConstUImmOperand(N, 4, "vec.tsub", "tsize");
       const uint64_t DType = requireConstUImmOperand(N, 5, "vec.tsub", "dtype");
       validateStrictTileTSize(TSize, "vec.tsub");
-      validateTileDataTypeU5(DType, "vec.tsub");
+      validateConcreteTileDataType(DType, "vec.tsub");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
@@ -1156,7 +1175,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t DType =
           requireConstUImmOperand(N, 4, "sfu.trowmax", "dtype");
       validateStrictTileTSize(TSize, "sfu.trowmax");
-      validateTileDataTypeU5(DType, "sfu.trowmax");
+      validateConcreteTileDataType(DType, "sfu.trowmax");
 
       SDValue Chain = N->getOperand(0);
       SDValue Src = N->getOperand(2);
@@ -1181,7 +1200,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 5, "tileop.unary.shape", "dtype");
       validateCanonicalTileOperation(TileOperation, "tileop.unary.shape");
       validateStrictTileTSize(TSize, "tileop.unary.shape");
-      validateTileDataTypeU5(DType, "tileop.unary.shape");
+      validateConcreteTileDataType(DType, "tileop.unary.shape");
       SDValue Ops[] = {N->getOperand(2),
                        CurDAG->getTargetConstant(TileOperation, DL, MVT::i64),
                        CurDAG->getTargetConstant(TSize, DL, MVT::i64),
@@ -1206,7 +1225,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 6, "tileop.binary.shape", "dtype");
       validateCanonicalTileOperation(TileOperation, "tileop.binary.shape");
       validateStrictTileTSize(TSize, "tileop.binary.shape");
-      validateTileDataTypeU5(DType, "tileop.binary.shape");
+      validateConcreteTileDataType(DType, "tileop.binary.shape");
       SDValue Ops[] = {N->getOperand(2),
                        N->getOperand(3),
                        CurDAG->getTargetConstant(TileOperation, DL, MVT::i64),
@@ -1235,7 +1254,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       validateCanonicalTileOperation(TileOperation,
                                      "tileop.binary.scalar.shape");
       validateStrictTileTSize(TSize, "tileop.binary.scalar.shape");
-      validateTileDataTypeU5(DType, "tileop.binary.scalar.shape");
+      validateConcreteTileDataType(DType, "tileop.binary.scalar.shape");
       if (Mode != TILEOP_MODE_VS)
         report_fatal_error(
             "Linx: tileop.binary.scalar.shape requires mode=1 (VS)");
@@ -1267,7 +1286,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 6, "tileop.splat.shape", "mode");
       validateCanonicalTileOperation(TileOperation, "tileop.splat.shape");
       validateStrictTileTSize(TSize, "tileop.splat.shape");
-      validateTileDataTypeU5(DType, "tileop.splat.shape");
+      validateConcreteTileDataType(DType, "tileop.splat.shape");
       if (Mode != TILEOP_MODE_SV)
         report_fatal_error("Linx: tileop.splat.shape requires mode=2 (SV)");
       SDValue Ops[] = {N->getOperand(2),
@@ -1296,7 +1315,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 5, "tileop.unary", "dtype");
       validateCanonicalTileOperation(TileOperation, "tileop.unary");
       validateStrictTileTSize(TSize, "tileop.unary");
-      validateTileDataTypeU5(DType, "tileop.unary");
+      validateConcreteTileDataType(DType, "tileop.unary");
 
       SDValue Chain = N->getOperand(0);
       SDValue Src = N->getOperand(2);
@@ -1322,7 +1341,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 6, "tileop.binary", "dtype");
       validateCanonicalTileOperation(TileOperation, "tileop.binary");
       validateStrictTileTSize(TSize, "tileop.binary");
-      validateTileDataTypeU5(DType, "tileop.binary");
+      validateConcreteTileDataType(DType, "tileop.binary");
 
       SDValue Chain = N->getOperand(0);
       SDValue A = N->getOperand(2);
@@ -1351,7 +1370,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 7, "tileop.binary.scalar", "mode");
       validateCanonicalTileOperation(TileOperation, "tileop.binary.scalar");
       validateStrictTileTSize(TSize, "tileop.binary.scalar");
-      validateTileDataTypeU5(DType, "tileop.binary.scalar");
+      validateConcreteTileDataType(DType, "tileop.binary.scalar");
       if (Mode != TILEOP_MODE_VS)
         report_fatal_error("Linx: tileop.binary.scalar requires operand mode=1 "
                            "(VS) in canonical LinxISA 0.58");
@@ -1384,7 +1403,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
           requireConstUImmOperand(N, 6, "tileop.splat", "mode");
       validateCanonicalTileOperation(TileOperation, "tileop.splat");
       validateStrictTileTSize(TSize, "tileop.splat");
-      validateTileDataTypeU5(DType, "tileop.splat");
+      validateConcreteTileDataType(DType, "tileop.splat");
       if (Mode != TILEOP_MODE_SV)
         report_fatal_error("Linx: tileop.splat requires operand mode=2 (SV) in "
                            "canonical LinxISA 0.58");
@@ -1521,7 +1540,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const int64_t StrideBytes =
           requireConstSImmOperand(N, 9, "tile.tstore", "stride_bytes");
       validateStrictTileTSize(TSize, "tile.tstore");
-      validateTileDataTypeU5(DType, "tile.tstore");
+      validateConcreteTileDataType(DType, "tile.tstore");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tile.tstore", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tile.tstore", "lb1");
       validateTileByteBudget("tile.tstore", Dim0, Dim1, /*dim2=*/1u,
@@ -1575,7 +1594,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const int64_t StrideBytes =
           requireConstSImmOperand(N, 9, "tlsu.tstore.desc", "stride_bytes");
       validateStrictTileTSize(TSize, "tlsu.tstore.desc");
-      validateTileDataTypeU5(DType, "tlsu.tstore.desc");
+      validateConcreteTileDataType(DType, "tlsu.tstore.desc");
       const uint64_t Dim0 = requirePositiveDim(LB0, "tlsu.tstore.desc", "lb0");
       const uint64_t Dim1 = requirePositiveDim(LB1, "tlsu.tstore.desc", "lb1");
       validateTileByteBudget("tlsu.tstore.desc", Dim0, Dim1, /*dim2=*/1u,
@@ -1621,7 +1640,7 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       const uint64_t TSize =
           requireConstUImmOperand(N, 9, "tlsu.tstore.shape", "tsize");
       validateStrictTileTSize(TSize, "tlsu.tstore.shape");
-      validateTileDataTypeU5(DType, "tlsu.tstore.shape");
+      validateConcreteTileDataType(DType, "tlsu.tstore.shape");
       SDValue Ops[] = {N->getOperand(2),
                        N->getOperand(3),
                        CurDAG->getTargetConstant(DType, DL, MVT::i64),
@@ -1952,10 +1971,9 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
       SDValue Size = CurDAG->getTargetConstant(6, DL, MVT::i64);
       SDVTList VTs = CurDAG->getVTList(LD->getValueType(0), MVT::Other);
       SDValue Ops[] = {LD->getBasePtr(), Size, LD->getChain()};
-      SDNode *Res = CurDAG->getMachineNode(
-          LinxISA::PSEUDO_TLSU_TLOAD_ANY, DL, VTs, Ops);
-      CurDAG->setNodeMemRefs(cast<MachineSDNode>(Res),
-                             {LD->getMemOperand()});
+      SDNode *Res =
+          CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TLOAD_ANY, DL, VTs, Ops);
+      CurDAG->setNodeMemRefs(cast<MachineSDNode>(Res), {LD->getMemOperand()});
       ReplaceNode(N, Res);
       return;
     }
@@ -2108,12 +2126,10 @@ void LinxISADAGToDAGISel::Select(SDNode *N) {
 
     if (MemVT == MVT::linxtile) {
       SDValue Size = CurDAG->getTargetConstant(6, DL, MVT::i64);
-      SDValue Ops[] = {ST->getBasePtr(), ST->getValue(), Size,
-                       ST->getChain()};
-      SDNode *Res = CurDAG->getMachineNode(
-          LinxISA::PSEUDO_TLSU_TSTORE, DL, MVT::Other, Ops);
-      CurDAG->setNodeMemRefs(cast<MachineSDNode>(Res),
-                             {ST->getMemOperand()});
+      SDValue Ops[] = {ST->getBasePtr(), ST->getValue(), Size, ST->getChain()};
+      SDNode *Res = CurDAG->getMachineNode(LinxISA::PSEUDO_TLSU_TSTORE, DL,
+                                           MVT::Other, Ops);
+      CurDAG->setNodeMemRefs(cast<MachineSDNode>(Res), {ST->getMemOperand()});
       ReplaceNode(N, Res);
       return;
     }

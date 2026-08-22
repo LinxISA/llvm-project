@@ -23,7 +23,7 @@ BSTART.SFU TSORT, FP16
 L.BSTOP
 
 # ENC: B.CATR trap, atomic, aqrl, far, dr{{.*}}encoding: [0x23,0x80,0x0f,0x04]
-# ENC: B.DATR ND2NZ.normal, FP16, Max, cmode5, rmode6, sat, canonicalize{{.*}}encoding: [0x23,0x11,0x43,0xb6]
+# ENC: B.DATR ND2NZ, FP16, Max, cmode5, rmode6, sat, canonicalize{{.*}}encoding: [0x23,0x12,0x43,0xae]
 # ENC: B.FPATR 1, 2, 3, 1, 0, 1, 1, 1, 1{{.*}}encoding: [0xa3,0xa1,0x1d,0x05]
 # ENC: B.IOT t#1, mask=1111, last, ->u<64KB>{{.*}}encoding: [0x93,0x5e,0x0d,0x00]
 # ENC: B.IOT t#1, u#2, mask=1100, last, ->m<8KB>{{.*}}encoding:
@@ -36,7 +36,7 @@ L.BSTOP
 # ENC: BSTART.SFU TSORT, FP16{{.*}}encoding:
 # ENC: L.BSTOP{{.*}}encoding: [0x0f,0x00,0x00,0x00,0x01,0x00,0x00,0x00]
 
-# DIS: B.DATR{{[[:space:]]+}}ND2NZ.normal, FP16, Max, cmode5, rmode6, sat, canonicalize
+# DIS: B.DATR{{[[:space:]]+}}ND2NZ, FP16, Max, cmode5, rmode6, sat, canonicalize
 # DIS: B.FPATR{{[[:space:]]+}}1, 2, 3, 1, 0, 1, 1, 1, 1
 # DIS: B.IOT{{[[:space:]]+}}t#1, u#2, mask=1100, last,{{[[:space:]]+}}->m<8KB>
 # DIS: BSTART.SFU{{[[:space:]]+}}TTRANS, FP16

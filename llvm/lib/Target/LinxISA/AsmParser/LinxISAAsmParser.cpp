@@ -315,6 +315,42 @@ static std::optional<unsigned> parseDataTypeKeyword(StringRef Name) {
       .Default(std::nullopt);
 }
 
+static bool isConcreteTileDataType(unsigned DType) {
+  return DType <= 14 || (DType >= 16 && DType <= 20) ||
+         (DType >= 24 && DType <= 28);
+}
+
+static bool isTileDataTypeFieldValue(unsigned DType) {
+  return isConcreteTileDataType(DType) || DType == 31;
+}
+
+static bool isAssignedDataLayout(unsigned Layout) {
+  switch (Layout) {
+  case 0:
+  case 1:
+  case 3:
+  case 4:
+  case 6:
+  case 8:
+  case 9:
+  case 17:
+  case 18:
+  case 20:
+  case 21:
+  case 22:
+  case 23:
+  case 24:
+  case 25:
+  case 26:
+  case 27:
+  case 28:
+  case 30:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static std::optional<unsigned> parseTileOperationKeyword(StringRef Name) {
   const std::string Up = toUpperStr(Name.trim());
   return LinxISA::parseTileOperationV058(Up);
@@ -326,20 +362,35 @@ static std::optional<unsigned> parseLayoutKeyword(StringRef Name) {
   if (Ref == "NORM" || Ref == "NORMAL" || Ref == "CANON" ||
       Ref == "NORM.NORMAL")
     return 0u;
-  if (Ref == "ND2NZ.NORMAL")
-    return 2u;
-  if (Ref == "ND2ZN.NORMAL")
-    return 3u;
-  if (Ref == "DN2ZN.NORMAL")
-    return 8u;
-  if (Ref == "DN2NZ.NORMAL")
-    return 9u;
-  if (Ref == "NZ2DN.CANON")
-    return 28u;
+  const auto [Base, Suffix] = Ref.split('.');
+  if (!Suffix.empty() && Suffix != "NORMAL" && Suffix != "CANON")
+    return std::nullopt;
+  if (std::optional<unsigned> Named =
+          StringSwitch<std::optional<unsigned>>(Base)
+              .Case("ND2DN", 1u)
+              .Case("ND2ZN", 3u)
+              .Case("ND2NZ", 4u)
+              .Case("DN2ND", 6u)
+              .Case("DN2ZN", 8u)
+              .Case("DN2NZ", 9u)
+              .Case("ZN2ND", 17u)
+              .Case("ZN2DN", 18u)
+              .Case("ZN2NZ", 20u)
+              .Case("ND2M32", 21u)
+              .Case("ND2M16", 22u)
+              .Case("ND2N8", 23u)
+              .Case("M322ND", 24u)
+              .Case("M162ND", 25u)
+              .Case("N82ND", 26u)
+              .Case("NZ2ND", 27u)
+              .Case("NZ2DN", 28u)
+              .Case("NZ2ZN", 30u)
+              .Default(std::nullopt))
+    return Named;
   if (Ref.starts_with("LAYOUT")) {
     StringRef Tail = Ref.drop_front(6);
     unsigned Value = 0;
-    if (!Tail.getAsInteger(0, Value) && Value < 32u)
+    if (!Tail.getAsInteger(0, Value) && isAssignedDataLayout(Value))
       return Value;
   }
   return std::nullopt;
@@ -811,13 +862,13 @@ static std::optional<unsigned> parseVectorBlockModeKeyword(StringRef Name) {
 }
 
 static std::optional<unsigned> parsePadValueKeyword(StringRef Name) {
-  if (Name.equals_insensitive("Null"))
-    return 0u;
   if (Name.equals_insensitive("Zero"))
-    return 1u;
+    return 0u;
   if (Name.equals_insensitive("Max"))
-    return 2u;
+    return 1u;
   if (Name.equals_insensitive("Min"))
+    return 2u;
+  if (Name.equals_insensitive("Null"))
     return 3u;
   return std::nullopt;
 }
@@ -2959,6 +3010,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                  "unexpected operands for B.CATR"))
       return false;
 
+    const bool IsBCATR = AsmFmt.starts_with("B.CATR");
     StringMap<StringRef> Attrs;
     unsigned CMode = 0;
     unsigned RMode = 0;
@@ -2968,49 +3020,55 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         Text = Text.drop_front();
       auto Parts = Text.split('=');
       if (!Parts.second.empty()) {
-        if (Parts.first.equals_insensitive("LAYOUT") ||
-            Parts.first.equals_insensitive("DTYPE") ||
-            Parts.first.equals_insensitive("PAD")) {
+        if (!IsBCATR && (Parts.first.equals_insensitive("LAYOUT") ||
+                         Parts.first.equals_insensitive("DTYPE") ||
+                         Parts.first.equals_insensitive("PAD"))) {
           Attrs[Parts.first.upper()] = Parts.second;
           return true;
         }
         return false;
       }
-      if (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
-          Text.equals_insensitive("AQRL")) {
+      if (IsBCATR &&
+          (Text.equals_insensitive("AQ") || Text.equals_insensitive("RL") ||
+           Text.equals_insensitive("AQRL"))) {
         Attrs["ORDER"] = Text;
         return true;
       }
-      if (Text.equals_insensitive("ATOMIC") ||
-          Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
-          Text.equals_insensitive("FAR") || Text.equals_insensitive("SAT") ||
-          Text.equals_insensitive("CANONICALIZE")) {
+      if (IsBCATR &&
+          (Text.equals_insensitive("ATOMIC") ||
+           Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
+           Text.equals_insensitive("FAR"))) {
         Attrs[Text] = "ON";
         return true;
       }
-      if (Text.starts_with_insensitive("CMODE")) {
+      if (!IsBCATR && (Text.equals_insensitive("SAT") ||
+                       Text.equals_insensitive("CANONICALIZE"))) {
+        Attrs[Text] = "ON";
+        return true;
+      }
+      if (!IsBCATR && Text.starts_with_insensitive("CMODE")) {
         unsigned Value = 0;
-        if (Text.drop_front(5).getAsInteger(0, Value) || Value >= 8)
+        if (Text.drop_front(5).getAsInteger(0, Value) || Value > 5)
           return false;
         CMode = Value;
         return true;
       }
-      if (Text.starts_with_insensitive("RMODE")) {
+      if (!IsBCATR && Text.starts_with_insensitive("RMODE")) {
         unsigned Value = 0;
         if (Text.drop_front(5).getAsInteger(0, Value) || Value >= 8)
           return false;
         RMode = Value;
         return true;
       }
-      if (parseLayoutKeyword(Text)) {
+      if (!IsBCATR && parseLayoutKeyword(Text)) {
         Attrs["LAYOUT"] = Text;
         return true;
       }
-      if (parseDataTypeKeyword(Text)) {
+      if (!IsBCATR && parseDataTypeKeyword(Text)) {
         Attrs["DTYPE"] = Text;
         return true;
       }
-      if (parsePadValueKeyword(Text)) {
+      if (!IsBCATR && parsePadValueKeyword(Text)) {
         Attrs["PAD"] = Text;
         return true;
       }
@@ -3027,7 +3085,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         if (!require(recordAttrToken(Text),
                      (Twine("unknown block attribute: ") + Text).str()))
           return false;
-      }
+      } else if (!require(false, "block attributes must use assigned names"))
+        return false;
     }
 
     auto onBit = [&](StringRef Key) -> unsigned {
@@ -3055,18 +3114,19 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       Layout = *L;
     }
 
-    unsigned DType = 0;
+    unsigned DType = IsBCATR ? 0u : 31u;
     if (auto It = Attrs.find("DTYPE"); It != Attrs.end()) {
       auto DT = parseDataTypeKeyword(It->second);
-      if (!require(DT.has_value(), "invalid B.CATR dtype"))
+      if (!require(DT.has_value() && isTileDataTypeFieldValue(*DT),
+                   "invalid B.DATR dtype"))
         return false;
       DType = *DT;
     }
 
-    unsigned Pad = 0;
+    unsigned Pad = IsBCATR ? 0u : 3u;
     if (auto It = Attrs.find("PAD"); It != Attrs.end()) {
       auto P = parsePadValueKeyword(It->second);
-      if (!require(P.has_value(), "invalid B.CATR pad value"))
+      if (!require(P.has_value(), "invalid B.DATR pad value"))
         return false;
       Pad = *P;
     }
@@ -3396,7 +3456,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                  "DataType must be a constant or one of "
                  "{FP64,FP32,TF32,HF32,FP16,BF16,HiF8,E4M3,E5M2,E3M2,"
                  "E2M3,E2M1X2,E1M2X2,E8M0,HiF4X2,"
-                 "S64,S32,S16,S8,S4X2,U64,U32,U16,U8,U4X2,DTYPE_NONE}"))
+                 "S64,S32,S16,S8,S4X2,U64,U32,U16,U8,U4X2}"))
       return false;
     if (!require(ModeVal.has_value() && FuncVal.has_value(),
                  "BSTART.TEPL Mode and Function must be constants"))
@@ -3410,8 +3470,9 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                      static_cast<unsigned>(*FuncVal)),
                  "BSTART.TEPL Mode/Function is reserved in PTO ISA 0.58"))
       return false;
-    if (!require(*DataTypeVal >= 0 && *DataTypeVal <= 31,
-                 (Twine(Kind) + " DataType out of range")))
+    if (!require(*DataTypeVal >= 0 && isConcreteTileDataType(
+                                          static_cast<unsigned>(*DataTypeVal)),
+                 (Twine(Kind) + " requires an assigned concrete DataType")))
       return false;
 
     for (unsigned i = 0; i < Form.field_count; ++i) {
@@ -3768,11 +3829,21 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       int64_t V = 0;
       if (!isConstExpr(E, V)) {
         if (FN == "DataType") {
-          if (const auto *S = dyn_cast<MCSymbolRefExpr>(E))
+          if (const auto *S = dyn_cast<MCSymbolRefExpr>(E)) {
             if (auto DT = parseDataTypeKeyword(S->getSymbol().getName())) {
+              const bool AllowNone =
+                  AsmFmt.equals_insensitive("BSTART.TMOV DataType");
+              if (!require(
+                      isConcreteTileDataType(*DT) || (AllowNone && *DT == 31),
+                      AllowNone ? "BSTART.TMOV requires an assigned DataType "
+                                  "or DTYPE_NONE"
+                                : "BSTART requires an assigned concrete "
+                                  "DataType"))
+                return false;
               emitFieldImm(*DT);
               continue;
             }
+          }
         }
         if (FN == "Mode") {
           if (const auto *S = dyn_cast<MCSymbolRefExpr>(E))
@@ -3783,6 +3854,17 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
             }
         }
         if (!require(false, (FN + " must be a constant for now").str()))
+          return false;
+      }
+      if (FN == "DataType") {
+        const bool AllowNone =
+            AsmFmt.equals_insensitive("BSTART.TMOV DataType");
+        if (!require(
+                V >= 0 && (isConcreteTileDataType(static_cast<unsigned>(V)) ||
+                           (AllowNone && V == 31)),
+                AllowNone ? "BSTART.TMOV requires an assigned DataType or "
+                            "DTYPE_NONE"
+                          : "BSTART requires an assigned concrete DataType"))
           return false;
       }
       emitFieldImm(V);

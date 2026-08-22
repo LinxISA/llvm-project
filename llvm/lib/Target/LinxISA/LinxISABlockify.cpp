@@ -99,7 +99,13 @@ static std::optional<uint64_t> tileTSizeToBytes(unsigned TSize) {
   return 1ull << (TSize + 6u);
 }
 
-static std::optional<unsigned> tileBytesToTSize(uint64_t Bytes) {
+static std::optional<unsigned> localTileBytesToTSize(uint64_t Bytes) {
+  if (Bytes < 128u || Bytes > 65536u || !isPowerOf2_64(Bytes))
+    return std::nullopt;
+  return static_cast<unsigned>(Log2_64(Bytes) - 6u);
+}
+
+static std::optional<unsigned> scratchBytesToTSize(uint64_t Bytes) {
   // Local VBLOCK scratch sizing is independent of the active B.IOT
   // destination-size policy and retains the backend's 16B..8KB input
   // contract. The wire descriptor rounds sub-128B reservations up to the
@@ -107,6 +113,15 @@ static std::optional<unsigned> tileBytesToTSize(uint64_t Bytes) {
   if (Bytes < 16u || Bytes > 8192u || !isPowerOf2_64(Bytes))
     return std::nullopt;
   return std::max(1u, static_cast<unsigned>(Log2_64(Bytes) - 6u));
+}
+
+static bool isConcreteTileDataType(int64_t DType) {
+  return (DType >= 0 && DType <= 14) || (DType >= 16 && DType <= 20) ||
+         (DType >= 24 && DType <= 28);
+}
+
+static bool isTileDataTypeFieldValue(int64_t DType) {
+  return isConcreteTileDataType(DType) || DType == 31;
 }
 
 static void validateStrictTileTSize(int64_t TSize, StringRef Context) {
@@ -140,34 +155,40 @@ static void validateCubeDimImm(int64_t Dim, StringRef DimName,
 }
 
 static uint64_t dtypeElementBitsForTileCheck(int64_t DType) {
-  switch (DType & 0x1f) {
+  switch (DType) {
   case 0:  // FP64
-  case 16: // INT64
-  case 24: // UINT64
+  case 16: // S64
+  case 24: // U64
     return 64u;
   case 1:  // FP32
-  case 17: // INT32
-  case 25: // UINT32
+  case 2:  // TF32
+  case 3:  // HF32
+  case 17: // S32
+  case 25: // U32
     return 32u;
-  case 2:  // FP16
-  case 6:  // BF16
-  case 18: // INT16
-  case 26: // UINT16
+  case 4:  // FP16
+  case 5:  // BF16
+  case 18: // S16
+  case 26: // U16
     return 16u;
-  case 3:  // FP8
-  case 7:  // FPL8
-  case 19: // INT8
-  case 27: // UINT8
+  case 6:  // HiF8
+  case 7:  // E4M3
+  case 8:  // E5M2
+  case 9:  // E3M2
+  case 10: // E2M3
+  case 13: // E8M0
+  case 19: // S8
+  case 27: // U8
     return 8u;
-  case 11: // FP4
-  case 12: // FPL4
-  case 20: // INT4
-  case 28: // UINT4
+  case 11: // E2M1X2
+  case 12: // E1M2X2
+  case 14: // HiF4X2
+  case 20: // S4X2
+  case 28: // U4X2
     return 4u;
   default:
-    // Keep bring-up compatibility for unknown dtype encodings and apply a
-    // conservative 32-bit element width for strict byte-budget checks.
-    return 32u;
+    report_fatal_error(Twine("Linx: reserved tile dtype ") + Twine(DType) +
+                       " has no architectural element width");
   }
 }
 
@@ -2214,8 +2235,7 @@ public:
           if (Flag.isRegUseKind()) {
             if (MO.isKill() && !llvm::is_contained(Consumed, Reg))
               Consumed.push_back(Reg);
-          } else if (Flag.isRegDefKind() ||
-                     Flag.isRegDefEarlyClobberKind()) {
+          } else if (Flag.isRegDefKind() || Flag.isRegDefEarlyClobberKind()) {
             if (!llvm::is_contained(Defined, Reg))
               Defined.push_back(Reg);
           } else if (Flag.isClobberKind()) {
@@ -2229,8 +2249,7 @@ public:
       for (Register Reg : Consumed)
         consumeTileQueueValue(TRI, State, Reg, "inline asm");
       for (Register Reg : Clobbered) {
-        const unsigned Hand =
-            physicalTileHandIndex(tileRegIdFromReg(TRI, Reg));
+        const unsigned Hand = physicalTileHandIndex(tileRegIdFromReg(TRI, Reg));
         auto &Queue = State.Hands[Hand];
         if (auto It = llvm::find(Queue, Reg); It != Queue.end())
           Queue.erase(It);
@@ -2365,8 +2384,8 @@ public:
         BuildMI(AttrMBB, AttrInsertPt, DL, TII.get(LinxISA::B_DATR))
             .addImm(0)      // CMode
             .addImm(Layout) // Layout
-            .addImm(0)      // DataType (carried by BSTART)
-            .addImm(0)      // PadValueOrByteId
+            .addImm(31)     // DTYPE_NONE: inherit DataType from BSTART
+            .addImm(3)      // Null padding
             .addImm(0)      // RMode
             .addImm(0)      // Sat
             .addImm(0);     // Canonicalize
@@ -2473,8 +2492,9 @@ public:
         const int64_t Size = PseudoMI->getOperand(IsShape ? 7 : 6).getImm();
         const Register StrideReg =
             PseudoMI->getOperand(IsShape ? 8 : 7).getReg();
-        if (DType < 0 || DType > 31)
-          report_fatal_error("Linx: TLSU.TLOAD dtype must fit u5");
+        if (!isConcreteTileDataType(DType))
+          report_fatal_error(
+              "Linx: TLSU.TLOAD requires an assigned concrete tile dtype");
         validateStrictTileTSize(Size, "TLSU.TLOAD");
         if (!IsShape) {
           const uint64_t Dim0 = requirePositiveDimImm(LB0, "lb0", "TLSU.TLOAD");
@@ -2586,8 +2606,9 @@ public:
         const int64_t Size = PseudoMI->getOperand(IsShape ? 7 : 6).getImm();
         const Register StrideReg =
             PseudoMI->getOperand(IsShape ? 8 : 7).getReg();
-        if (DType < 0 || DType > 31)
-          report_fatal_error("Linx: TLSU.TSTORE dtype must fit u5");
+        if (!isConcreteTileDataType(DType))
+          report_fatal_error(
+              "Linx: TLSU.TSTORE requires an assigned concrete tile dtype");
         validateStrictTileTSize(Size, "TLSU.TSTORE");
         if (!IsShape) {
           const uint64_t Dim0 =
@@ -2652,6 +2673,9 @@ public:
         Meta.Layout = PseudoMI->getOperand(4).getImm();
         Meta.HasLayout = (PseudoMI->getOperand(5).getImm() & 1) != 0;
         validateStrictTileTSize(Meta.TSize, "TMOV");
+        if (!isTileDataTypeFieldValue(Meta.DataType))
+          report_fatal_error(
+              "Linx: TMOV requires an assigned tile dtype or DTYPE_NONE");
 
         const bool ReuseForLiveness =
             (PseudoMI->getOperand(6).getImm() & 1) != 0;
@@ -2709,7 +2733,7 @@ public:
             128u,
             computeTileBytesOrDie("CUBE.TMATMUL output", M, N, 1u,
                                   dtypeElementBitsForTileCheck(DType_I32)));
-        const auto DstTSize = tileBytesToTSize(DstBytes);
+        const auto DstTSize = localTileBytesToTSize(DstBytes);
         if (!DstTSize)
           report_fatal_error("Linx: CUBE.TMATMUL output does not fit TSize");
 
@@ -2775,7 +2799,7 @@ public:
             128u,
             computeTileBytesOrDie("CUBE.TMATMUL.ACC output", M, N, 1u,
                                   dtypeElementBitsForTileCheck(DType_I32)));
-        const auto DstTSize = tileBytesToTSize(DstBytes);
+        const auto DstTSize = localTileBytesToTSize(DstBytes);
         if (!DstTSize)
           report_fatal_error(
               "Linx: CUBE.TMATMUL.ACC output does not fit TSize");
@@ -2898,8 +2922,9 @@ public:
 
         validateCanonicalTileOperation(TileOperation, Ctx);
         validateStrictTileTSize(Size, Ctx);
-        if (DType < 0 || DType > 31)
-          report_fatal_error(Twine("Linx: ") + Ctx + " dtype must fit u5");
+        if (!isConcreteTileDataType(DType))
+          report_fatal_error(Twine("Linx: ") + Ctx +
+                             " requires an assigned concrete tile dtype");
         if (Mode < 0 || Mode > 2)
           report_fatal_error(Twine("Linx: ") + Ctx +
                              " mode must be in range 0..2");
@@ -3131,10 +3156,10 @@ public:
                 "Linx: linx-vblock-ts-bytes must be a decimal byte count");
           }
           if (ScratchBytes != 0) {
-            auto TSize = tileBytesToTSize(ScratchBytes);
+            auto TSize = scratchBytesToTSize(ScratchBytes);
             if (!TSize) {
               report_fatal_error("Linx: linx-vblock-ts-bytes must be a "
-                                 "power-of-two byte size in [16,4096]");
+                                 "power-of-two byte size in [16,8192]");
             }
             EmitLocalScratch = true;
             LocalScratchTSize = *TSize;
