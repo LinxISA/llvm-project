@@ -345,6 +345,46 @@ enum ArgFormat {
 #undef TRANS
 };
 
+// Persistent CUBE cell layout classes carried by Local Matrix descriptors
+// (ADR-0071). The GM<->Local transport selectors ND2M32/ND2M16/ND2N8 (load)
+// and M322ND/M162ND/N82ND (store) install or read these classes.
+enum class CubeLayoutClass { None, M16, M32, N8 };
+
+/// CUBE layout class for a B.DATR Layout transport code (21..26); None for
+/// any other code. 21/24 -> M32, 22/25 -> M16, 23/26 -> N8.
+inline CubeLayoutClass tileDataLayoutCubeLayout(unsigned Code) {
+  switch (Code) {
+  case ArgFormat::ND2M32:
+  case ArgFormat::M322ND:
+    return CubeLayoutClass::M32;
+  case ArgFormat::ND2M16:
+  case ArgFormat::M162ND:
+    return CubeLayoutClass::M16;
+  case ArgFormat::ND2N8:
+  case ArgFormat::N82ND:
+    return CubeLayoutClass::N8;
+  default:
+    return CubeLayoutClass::None;
+  }
+}
+
+/// True if Code is one of the six CUBE transport selectors (21..26).
+inline bool isCubeConversion(unsigned Code) {
+  return tileDataLayoutCubeLayout(Code) != CubeLayoutClass::None;
+}
+
+/// True if Code is a GM->Local CUBE transport selector (21..23), legal only
+/// for TLOAD.
+inline bool isCubeLoadConversion(unsigned Code) {
+  return Code >= ArgFormat::ND2M32 && Code <= ArgFormat::ND2N8;
+}
+
+/// True if Code is a Local->GM CUBE transport selector (24..26), legal only
+/// for TSTORE.
+inline bool isCubeStoreConversion(unsigned Code) {
+  return Code >= ArgFormat::M322ND && Code <= ArgFormat::N82ND;
+}
+
 enum Canon { NORMAL_CANON = 0, CANON = 1, EMPTY_Canon };
 
 enum Sat { NOSAT = 0, SAT = 1, EMPTY_Sat };

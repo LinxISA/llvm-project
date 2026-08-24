@@ -419,6 +419,42 @@ static DecodeStatus decodeFail(MCInst &Inst, const InsnType &insn,
   return MCDisassembler::Fail;
 }
 
+// B.DATR/tile layout transport operand decoder. Receives the already
+// extracted 5-bit layout code; only the active ISA assigned set decodes,
+// and reserved codes (2,5,7,10..16,19,29,31) fail closed so a raw word with
+// a reserved layout prints <unknown>.
+template <typename InsnType>
+static DecodeStatus decodeBArgFormat(MCInst &Inst, const InsnType &insn,
+                                     int64_t Address,
+                                     const MCDisassembler *Decoder) {
+  uint64_t Code = static_cast<uint64_t>(insn) & 0x1f;
+  switch (Code) {
+  case LinxV5Op::ArgFormat::NORM:
+  case LinxV5Op::ArgFormat::ND2DN:
+  case LinxV5Op::ArgFormat::ND2ZN:
+  case LinxV5Op::ArgFormat::ND2NZ:
+  case LinxV5Op::ArgFormat::DN2ND:
+  case LinxV5Op::ArgFormat::DN2ZN:
+  case LinxV5Op::ArgFormat::DN2NZ:
+  case LinxV5Op::ArgFormat::ZN2ND:
+  case LinxV5Op::ArgFormat::ZN2DN:
+  case LinxV5Op::ArgFormat::ZN2NZ:
+  case LinxV5Op::ArgFormat::ND2M32:
+  case LinxV5Op::ArgFormat::ND2M16:
+  case LinxV5Op::ArgFormat::ND2N8:
+  case LinxV5Op::ArgFormat::M322ND:
+  case LinxV5Op::ArgFormat::M162ND:
+  case LinxV5Op::ArgFormat::N82ND:
+  case LinxV5Op::ArgFormat::NZ2ND:
+  case LinxV5Op::ArgFormat::NZ2DN:
+  case LinxV5Op::ArgFormat::NZ2ZN:
+    Inst.addOperand(MCOperand::createImm(Code));
+    return MCDisassembler::Success;
+  default:
+    return MCDisassembler::Fail; // reserved layout code
+  }
+}
+
 // B.IOS SizeCode operand decoder. The operand decoder receives the
 // already-extracted 4-bit field value (fieldFromInstruction(insn, 15, 4) in
 // the generated table), not the full instruction word. SizeCode=0 is the

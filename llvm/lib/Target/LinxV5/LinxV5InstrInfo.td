@@ -973,7 +973,7 @@ def BArgFormatAsmOperand : AsmOperandClass {
 def BArgFormat : Operand<i64> {
   let ParserMatchClass = BArgFormatAsmOperand;
   let PrintMethod = "printBArgFormat";
-  let DecoderMethod = "decodeUImmOperand<5>";
+  let DecoderMethod = "decodeBArgFormat";
 }
 
 def RModeAsmOperand : AsmOperandClass {

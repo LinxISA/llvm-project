@@ -252,6 +252,13 @@ public:
   static bool classifySymbolRef(const MCExpr *Expr,
                                 LinxV5MCExpr::VariantKind &Kind);
 
+  // Direction of the TLOAD./TSTORE. layout being parsed, for CUBE transport
+  // direction legality (PTO-ISA ADR-0070). 0 = not a TLOAD/TSTORE layout;
+  // 1 = TLOAD (GM->Local, codes 21..23); 2 = TSTORE (Local->GM, codes
+  // 24..26).
+  unsigned CurLayoutDirection = 0;
+  unsigned PendingLayoutDirection = 0;
+
   LinxV5AsmParser(const MCSubtargetInfo &STI, MCAsmParser &Parser,
                   const MCInstrInfo &MII, const MCTargetOptions &Options)
       : MCTargetAsmParser(Options, STI, MII) {
@@ -3359,12 +3366,12 @@ static unsigned calculateBArgFormat(StringRef Identifier) {
 #define TRANS(NAME, CODE) .Case(#NAME, ArgFormat::NAME)
 #include "MCTargetDesc/LinxV5TileTrans.def"
 #undef TRANS
-                        .Default(ArgFormat::RESERVE);
+                        .Default(static_cast<unsigned>(-1));
   return Format;
 }
 
 OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
-  unsigned Format = ArgFormat::RESERVE;
+  unsigned Format = static_cast<unsigned>(-1);
   StringRef Str = getLexer().getTok().getString();
   StringRef LexStr = Str;
   StringRef UnLexStr;
@@ -3373,17 +3380,42 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
     LexStr = Str.slice(0, DotPosition);
     UnLexStr = Str.substr(DotPosition, Str.size());
   }
-  Format = calculateBArgFormat(LexStr);
-  if (Format == ArgFormat::RESERVE)
-    return MatchOperand_NoMatch;
-
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer() + LexStr.size());
+  Format = calculateBArgFormat(LexStr);
+  if (Format == static_cast<unsigned>(-1))
+    return MatchOperand_NoMatch;
+
+  // PTO-ISA ADR-0070: CUBE transport selectors are direction-restricted.
+  // ND2M32/ND2M16/ND2N8 (21..23) are legal only for TLOAD; M322ND/M162ND/
+  // N82ND (24..26) only for TSTORE. A TLOAD/TSTORE layout must match its
+  // direction; a CUBE code used from a non-TLOAD/TSTORE context is also
+  // rejected (the CUBE selectors are only legal on GM<->Local transport).
+  if (LinxV5Op::isCubeConversion(Format)) {
+    bool InTLoad = CurLayoutDirection == 1;
+    bool InTStore = CurLayoutDirection == 2;
+    if (!InTLoad && !InTStore) {
+      getParser().Error(S, "CUBE layout selectors are legal only on "
+                           "TLOAD/TSTORE");
+      return MatchOperand_ParseFail;
+    }
+    if (InTLoad && !LinxV5Op::isCubeLoadConversion(Format)) {
+      return MatchOperand_ParseFail;
+    }
+    if (InTStore && !LinxV5Op::isCubeStoreConversion(Format)) {
+      return MatchOperand_ParseFail;
+    }
+  }
+
   const MCExpr *Res = MCConstantExpr::create(Format, getContext());
   Operands.push_back(LinxV5Operand::createImm(Res, S, E));
   getLexer().Lex(); // Eat identifier token.
   if (!UnLexStr.empty())
     getLexer().UnLex(AsmToken(AsmToken::Identifier, UnLexStr));
+  if (LinxV5Op::isCubeConversion(Format)) {
+    CurLayoutDirection = 0;
+    PendingLayoutDirection = 0;
+  }
   return MatchOperand_Success;
 }
 
@@ -3836,13 +3868,42 @@ bool LinxV5AsmParser::parseDirectiveOption() {
 bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
+  CurLayoutDirection = PendingLayoutDirection;
+  if (!Name.startswith_insensitive("BSTART.TLSU") &&
+      !Name.startswith_insensitive("BSTART.TLOAD") &&
+      !Name.startswith_insensitive("BSTART.TSTORE") &&
+      !Name.startswith_insensitive("B.DATR"))
+    PendingLayoutDirection = 0;
   if (Name.startswith_insensitive("TLOAD.")) {
     getLexer().UnLex(llvm::AsmToken(AsmToken::Identifier, Name.substr(6)));
     Name = "tload.";
+    CurLayoutDirection = 1; // GM->Local (load); CUBE codes 21..23
+    PendingLayoutDirection = 0;
   }
   if (Name.startswith_insensitive("TSTORE.")) {
     getLexer().UnLex(llvm::AsmToken(AsmToken::Identifier, Name.substr(7)));
     Name = "tstore.";
+    CurLayoutDirection = 2; // Local->GM (store); CUBE codes 24..26
+    PendingLayoutDirection = 0;
+  }
+  // TileOP TLOAD_CUBE/TSTORE_CUBE emit "BSTART.TLSU TLOAD/TSTORE, %D[..]"
+  // blocks; their B.DATR carries the canonical CUBE transport selector, so
+  // record the transport direction (from the TileOP word after TLSU) for the
+  // CUBE-layout direction check, which also covers "BSTART.TLOAD" spellings.
+  if (Name.startswith_insensitive("BSTART.TLSU") ||
+      Name.startswith_insensitive("BSTART.TLOAD") ||
+      Name.startswith_insensitive("BSTART.TSTORE")) {
+    StringRef Op = getLexer().getTok().getString();
+    if (Op.empty())
+      Op = getLexer().getTok().getIdentifier();
+    if (Op.startswith_insensitive("TLOAD"))
+      PendingLayoutDirection = CurLayoutDirection = 1;
+    else if (Op.startswith_insensitive("TSTORE"))
+      PendingLayoutDirection = CurLayoutDirection = 2;
+    if (Name.startswith_insensitive("BSTART.TLOAD"))
+      PendingLayoutDirection = CurLayoutDirection = 1;
+    else if (Name.startswith_insensitive("BSTART.TSTORE"))
+      PendingLayoutDirection = CurLayoutDirection = 2;
   }
 
   // First operand is token for instruction

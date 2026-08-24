@@ -1,10 +1,251 @@
 # Codex 工作交接记录
 
-> 最新状态日期：2026-08-19
+> 最新状态日期：2026-08-20
 > LLVM 仓库：`/home/zhuwei/linx-llvm`
 > TileOP API 当前仓库：`/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`
-> PTO-SPEC 最新审计快照：`/tmp/pto-spec-current`（v0.58.1，`c381465b2b8e`）
+> PTO-SPEC 最新审计快照：`/tmp/pto-spec-current`（`origin/main@0b8ce516ffe998b24c4bae4c1a9dbca2e0d76510`，v0.58.2 后续主线）
 > **重启后必须先阅读紧接本段的“2026-08-18 PTO 0.58.1 剩余实现工作包”，再按其中顺序实施。后续 TSORT 专章和较早章节是补充/历史记录；发生冲突时，以当前 PTO-SPEC normative ASL 为准。**
+
+## 2026-08-20 最新 PTO-ISA 未实现项复核
+
+### 2026-08-20 对 TileOP commit `21525a5` 的验收意见
+
+审查对象：`[tileop-api] Add Shared->GM TSTORE and TSTORE.SPART; canonical TPREFETCH`。
+本轮只审查 LLVM/TileOP，不修改 SuperScalarModel。
+
+#### 验收通过的部分
+
+- ✅ `TSTORE(gm, SharedTile)` 发射 TLSU Function 1，只有一个 source `B.IOS`，mask 固定
+  `1111`，无 `B.IOT`，并通过 `B.IOR` 传 GM base/row stride。
+- ✅ `TSTORE_PART<3>` 发射 TLSU Function 14 (`TSTORE.SPART`)，source `B.IOS` mask 为
+  `0011`；`PEMask=0/16` 均被 `static_assert` 拒绝。
+- ✅ `TPREFETCH` 从 numeric selector `3` 改为 LLVM 当前支持的 named selector；目标对象
+  编码仍为 Function 3，反汇编为 `BSTART.TLSU TPREFETCH`。
+- ✅ 使用当前工具链、`--target=linx64v5-unknown-linux-musl -O2` 手工编译
+  `TStoreShared.cpp` 成功，object 中 Function 1/14、B.DIM、B.IOS、B.IOR 均符合预期。
+
+#### P0：必须补充后才能验收
+
+1. **GM/Shared dtype 没有编译期一致性检查，会静默生成错误 store。**
+
+   当前 `TSTORE`/`TSTORE_PART` 的 `SrcType` 来自 `SharedTile::LocalTileType::DType`，但 GM
+   可以是另一种 dtype。实测 `SharedTile<float>` 存入 `global_tensor<int16_t>` 能成功编译，
+   指令仍发射 `TSTORE FP32`，而 GM stride/地址按 `int16_t` tensor 提供。这不满足 TSTORE
+   source descriptor/DataType 与内存元素类型的 API 合同，可能造成地址步长和数据解释错误。
+
+   两个 overload 都必须增加：
+
+   ```cpp
+   static_assert(std::is_same_v<typename LocalType::DType,
+                                typename gm_shape::DType>,
+                 "Shared TSTORE requires matching GM and Shared dtypes");
+   ```
+
+   并增加 compile-fail 负测，覆盖普通 Shared TSTORE 和 SPART 两条路径。
+
+2. **两个 Shared store wrapper 必须使用 `PTO_SHARED_INLINE`。**
+
+   当前函数只是普通 `void` template。`-O0 -emit-llvm` 证明调用不会内联：`SharedTile`
+   对象经普通函数参数 ABI 传入独立的 `TSTORE`/`TSTORE_PART` 实例，opaque Shared handle
+   被物化在普通内存对象中。Shared 的既有设计要求 handle 不得跨普通 ABI/GPR/stack，所有
+   使用 `Sr` constraint 的 wrapper 必须 `always_inline`。本次 `-O0` object 编译也触发了
+   register reload 后端崩溃，虽然崩溃栈含其他代码，IR 已足以证明 wrapper 合同不满足。
+
+   应将两条接口改为：
+
+   ```cpp
+   PTO_SHARED_INLINE void TSTORE(...);
+   PTO_SHARED_INLINE void TSTORE_PART(...);
+   ```
+
+   并至少增加 `-O0 -emit-llvm` 检查，确认调用点不存在独立 wrapper call/definition；object
+   测试仍以项目支持的优化等级运行。
+
+#### P1：合同与测试需补齐
+
+3. **Layout 合同未处理。** wrapper 不发射 `B.DATR`，因此实际只表达 NORM layout，却接受
+   任意 `SharedTile<LocalTile>`。需要二选一：
+
+   - 首版显式 `static_assert` 只接受当前可正确表达的 NORM/RowMajor layout；或
+   - 按 active TSTORE ASL 发射合法的 `B.DATR Layout`，并为支持/不支持 layout 增加正负测。
+
+   不应让任意 boxed/ColMajor Shared type进入 NORM store。当前非 NORM 复现会在 Shared
+   register allocation pass 崩溃，而不是得到清晰的 API diagnostic。
+
+4. **缺少动态 valid shape 与 reduced valid rectangle 测试。** active ASL 允许 allocated
+   Shared source 使用不超过 persistent valid region 的显式缩小矩形。请增加动态
+   `ValidRow/ValidCol` 正例，确认 `GetValidRow/GetValidCol` 经运行时 GPR 发到 LB0/LB1；再加
+   超出 descriptor valid region 的负例或明确说明此项只能由 model/runtime legality 拒绝。
+
+5. **缺少正式文档。** commit 未修改 `docs/`。请在 `docs/tileop-usage/tlsu.md` 至少补充：
+   - `TSTORE(gm, shared)` 为 Function 1 full store，mask 固定 `1111`；
+   - `TSTORE_PART<PEMask>(gm, shared)` 为 Function 14，mask 为 1..15；
+   - dtype/layout/shape/stride 合同；
+   - 当前 API 名 `TSTORE_PART` 与 ISA variant `TSTORE.SPART` 的对应关系。
+
+6. **测试驱动仍使用过时 target。** `test/common/Makefile.common` 当前写
+   `--target=linx64`，现有工具链只列出 `linx64v5`，因此直接
+   `make TESTCASE=TStoreShared` 会失败。该问题不是 commit `21525a5` 引入，但提交中声称
+   新测试已注册并验证时必须给出可复现命令。可以在不扩大改动范围的前提下记录手工编译
+   命令，或另行修复测试基础设施后再跑 `compile.all`。
+
+#### LLVM/canonical spelling 说明
+
+active ISA 的独立 canonical 文本是 `BSTART.TPREFETCH DataType`，而当前 LLVM parser 仍不接受
+这一直接形式，只接受兼容形式 `BSTART.TLSU TPREFETCH, DataType`，objdump 也打印后者。因此
+本 commit 完成的是“从 numeric selector 改为 LLVM named selector”，不能宣称 LLVM 已完全
+对齐 ISA standalone canonical spelling。TileOP 功能和编码正确；若要完全 canonical，需单独
+补 LLVM alias/parser/printer 工作包，不应在本补丁里混改。
+
+#### 验收结论
+
+`21525a5` 的 Function 1/14 编码方向正确，但在补齐 **dtype static_assert** 与
+**PTO_SHARED_INLINE** 前不能标记为完整验收。layout、动态 shape、文档和可复现测试属于下一轮
+必须补充项。建议在同一 TileOP 分支追加一个小修复 commit，不要重写已正确的汇编序列。
+
+#### 修订状态（2026-08-20，commit `02f5556`）
+
+已按上述意见补齐，追加 TileOP commit `02f5556`（未重写 21525a5）：
+
+- ✅ P0-1 dtype static_assert：TSTORE/TSTORE_PART 检查 `GM DType == Shared
+  LocalType DType`；负测（Shared<float>→GM<int16_t>）两者均编译拒绝。
+- ✅ P0-2 `PTO_SHARED_INLINE`：两个 wrapper 均 always_inline；宏移到 header 顶
+  （此前 TSTORE 所在行 <2046 看不到定义）。`-O0 -emit-llvm` 验证无独立 wrapper。
+- ✅ P1-3 layout：仅接受 RowMajor/non-boxed（NORM），发射清晰 diagnostic。
+- ✅ P1-4 动态 valid：TStoreShared.cpp 增加 DYNAMIC 4x128 缩小矩形正例。
+- ✅ P1-5 文档：tlsu.md 补 Shared store 段（Function 1/14、dtype/layout/stride
+  合同、TSTORE_PART↔TSTORE.SPART 对应）。
+- ⚠️ P1-6 测试驱动 `--target=linx64` 过时：属既有基础设施问题，未在本 commit
+  扩大范围修复；手工验证命令为 `clang++ --target=linx64v5-unknown-linux-musl
+  -mlxbc -fenable-matrix -O2 ...`。
+- ⚠️ canonical `BSTART.TPREFETCH DataType`：LLVM 仅接受 `BSTART.TLSU
+  TPREFETCH, DataType`；完全 canonical 需 LLVM alias/parser 工作包（未混入）。
+
+#### 对 commit `02f5556` 的独立复验结论
+
+以下整改已独立验证通过：
+
+- ✅ `-O2` object 中 Function 1 full store、Function 14 SPART、`B.IOS` mask、
+  `B.DIM` 与 `B.IOR` 均正确；动态 valid case 的 LB0/LB1 来自运行时 GPR。
+- ✅ `-O0 -emit-llvm` 中 `TSTORE`/`TSTORE_PART` 已直接内联到调用者，不再存在
+  Shared store wrapper 的独立 call/definition。
+- ✅ `SharedTile<float> -> global_tensor<int16_t>` 的 full/partial 两个负例均由 dtype
+  `static_assert` 拒绝。
+- ✅ ColMajor source 的 full/partial 两个负例均由 NORM/RowMajor `static_assert` 拒绝，
+  不再进入 Shared register allocation pass。
+- ✅ `PEMask=0` 与 `PEMask=16` 均由明确 diagnostic 拒绝。
+- ✅ `docs/tileop-usage/tlsu.md` 已记录 Function 1/14、mask、dtype、layout 和 API 名映射。
+
+仍需补一个 P0/P1 边界后才能把 Shared TSTORE 标为完整验收：
+
+1. **缺少 Shared source capacity/TSize 静态合同。** active Shared Tile per-PE capacity 只能是
+   128 B、256 B、512 B、1 KiB、2 KiB、4 KiB 或 8 KiB。当前两个 wrapper 没有检查
+   `LocalType` 的 `IsValidActiveSize`。实测默认构造的 `SharedTile<32B Tile>` 和
+   `SharedTile<16KiB Tile>` 可以进入 wrapper，随后在 LLVM register coalescing 阶段 assertion
+   崩溃，而不是由 TileOP 给出 compile-time diagnostic。
+
+   两个 wrapper 均应补与 Shared TLOAD/TMOV 一致的检查，例如：
+
+   ```cpp
+   static_assert(
+       tile_type_traits<typename LocalType::TileDType>::IsValidActiveSize,
+       "Shared TSTORE source size must be 128 B..8 KB (TSize=1..7)");
+   ```
+
+   `TSTORE_PART` 使用对应的 SPART diagnostic。必须增加 32B 与 16KiB compile-fail 负测，
+   以防非法 Shared register class 再次进入 LLVM 后端。
+
+2. **本提交声称的 dtype/layout/mask contract tests 没有作为仓内自动化负测提交。** 当前
+   `test/tileop_api/src/TStoreShared.cpp` 只有正例，`run_negatives.sh` 也只运行 postprocess
+   cases。请新增 `TStoreSharedNegatives.cpp`（或扩展统一 negative runner），至少覆盖：
+   full dtype mismatch、SPART dtype mismatch、full/SPART non-NORM、mask 0/16、size 32B/16KiB。
+
+3. **测试入口既有问题仍在。** `make TESTCASE=TStoreShared` 仍因
+   `test/common/Makefile.common` 使用 `--target=linx64` 而失败；手工
+   `--target=linx64v5-unknown-linux-musl` 验证通过。该项可以单独修测试基础设施，但在此之前
+   不应把 `compile.all` 中注册用例等同于 CI 可执行通过。
+
+因此 `02f5556` 已解决上一轮所有核心 P0（dtype/ABI）和 layout/dynamic/docs 问题；当前仅剩
+**Shared capacity static_assert + 仓内负测落地**。修复这两项后，TileOP Shared TSTORE/SPART
+接口即可验收；TPREFETCH standalone canonical alias 继续作为独立 LLVM 工作包。
+
+#### 复验修订状态（2026-08-20，commit `0961464`）
+
+- ✅ 容量检查：TSTORE/TSTORE_PART 均加
+  `tile_type_traits<LocalType::TileDType>::IsValidActiveSize` static_assert
+  （128 B..8 KiB）；32B 与 16KiB 负例均在 TileOP 层拒绝。
+- ✅ 仓内负测：新增 `TStoreSharedNegatives.cpp`（full/SPART dtype mismatch、
+  full/SPART non-NORM、mask 0/16、size 32B/16KiB），`run_negatives.sh` 现共
+  17 负例全过。
+- ⚠️ 仍未做：`make TESTCASE=TStoreShared` 因 `Makefile.common` 的
+  `--target=linx64` 失败（既有测试基础设施问题）；手工
+  `--target=linx64v5-unknown-linux-musl` 验证通过。该项属测试基建修复，独立处理。
+
+本节覆盖 LLVM 与 `Linx-TileOP-API`；**SuperScalarModel 仅审计、不修改**。基线为
+`/tmp/pto-spec-current` 的 `origin/main@0b8ce51`。v0.58.1 之后的主线变更主要集中在
+Tile dtype 合同、`B.FPATR` 数值语义和 extension-first-use profile hook；没有发现新的
+TileOP mnemonic 集合需要另外增加。
+
+### 已确认完成
+
+- ✅ CUBE active 集合：`TMATMUL/TMATMUL.BIAS/TMATMUL.ACC`、`TMATMULMX` 三种变体，
+  以及 `TGEMV/TGEMV.BIAS/TGEMV.ACC`、`TGEMVMX` 三种变体（Function 0–6、16–18、20–22）。
+  LLVM parser/printer、pseudo expansion、`B.FPATR` bundle 发射和 TileOP 六个 TGEMV
+  wrapper 均已存在；历史 `TMATMUL*.FIXP` Function 9–14 已按 reserved 处理。
+- ✅ TileOP `TCI`、`TSORT`/`TMRGSORT`、`MGATHER.CAS`、`TPREFETCH`、`TIMG2COL` 的
+  当前 wrapper 或 canonical selector 已落地；Group TMATMUL 的 per-PE `LB0` 修复已推送。
+- ✅ Shared movement 的 `TMOV.L2S.INSERT/PUBLISH`、`TMOV.S2L.BROADCAST/EXTRACT`、
+  `GMOV` 以及 GM→Shared `TLOAD(SharedTile, GM)` 已有 LLVM/TileOP 实现。
+- ✅ LLVM `B.FPATR` 字段及组合 legality 已有 parser 检查；最新 ISA 新增的 FPATR mode
+  集合与当前 `LegalPreQuant` 列表一致，不需要因为 v0.58.2 再增加编码字段。
+- ⚠️ **Shared→GM `TSTORE` + `TSTORE.SPART` 编码已完成、合同未验收**（TileOP commit `21525a5`）：`TSTORE(gm,
+  SharedTile)` 用 Function 1 Shared 形式（唯一源 `B.IOS` PE_MASK=1111，无 B.IOT）；
+  `TSTORE_PART<PEMask>` 用 Function 14（任意非零 PE 子集）。正向编码通过，但仍须补
+  dtype static_assert、`PTO_SHARED_INLINE`、layout 合同、动态 shape 负测与 docs，详见本节顶部验收意见。
+- ⚠️ **TPREFETCH LLVM named selector**（同 commit）：wrapper 改用
+  `BSTART.TLSU TPREFETCH`（原 numeric `3`，编码不变）。这不是 active ISA 独立 canonical
+  `BSTART.TPREFETCH`；后者仍需 LLVM parser/printer alias 工作包。
+- ✅ LLVM P0-5（`21e31b4` `DTYPE_NONE` token、数字 31、reserved 15/21-23/29-30 拒绝）
+  与 P0-2（`e287135` `B.FPATR` 字段/组合 legality）已完成并本地 commit。
+
+### 确认仍未完成
+
+- 🟡 **LLVM physical ACC/legacy path**：`Tile_ACC1`、`ACC_SRC/ACC_DST`、
+  `acc/acc#1` 解析以及 `expandMAMUL*AC` 的 ACC 判断仍在代码中。经可达性评估：
+  `Tile_ACC1` 仍被 `ExpandPseudoInsts.cpp:544-564` 与 `InstrInfo.cpp:547` 引用
+  （pseudo 展开 active 路径），非纯 dead；清理需重写这些展开逻辑并回归 matmul ACC
+  行为，**标为专门工作包**。
+- 🟡 **LLVM decoder collision**（P0-3/P0-4）：`lui/BDATR` 及 `BWT/trap` 的
+  `llvm-mc --disassemble` 匹配重叠。初步定位：LUI 定义在 BDATR 前且共享低 7 位
+  `{6-4}=010` 组，LUI 的 `FilterValue 23` 分支吞掉 BDATR 的 `{3-1}=001` 编码。
+  修复涉及 TableGen decoder 顺序/约束，风险中高，须重建 + 全 MC 反汇编回归；**
+  不影响 TileOP inline asm 功能（汇编正常，仅反汇编有误）**。
+- ⚪ **P1-2 八个 32-bit scalar form**（CASB/CASH/CASW/CASD/DMA/PRF/PRFI.U/BWT）：
+  需 ISA owner 确认 + MC skeleton 刚补，暂缓。
+
+### 不应继续标为缺失的历史项
+
+- `TGEMV*` 六个接口、TCI、B6 contract tests、deleted selector cleanup、Shared TLOAD
+  和 Shared MX scale binder 已完成；旧章节中相反的状态矩阵均为历史记录。
+- `RecordEvent`/`WaitEvents`、`core_scope`/`pe_scope`/convergence 不是当前 active ASL
+  中的独立 TileOP API。最新规范通过 block/memory ordering、Core4 rendezvous 和
+  `FENCE.D`/memory-event 语义描述这些行为，因此不能据此要求新增同名 wrapper。
+- v0.58.2 后续的 `B.FPATR` 数值 pipeline、dtype 扩展和 extension-first-use hook 属于
+  ISA/model 或运行时语义；本轮未修改 LLVM/TileOP 来伪造执行语义。若要验证 bit-exact
+  数值行为，应在 Model/硬件侧完成，Model 仓保持只读。
+
+### 当前建议执行顺序
+
+1. 补齐 TileOP `TSTORE(SharedTile, GM)` dtype/inline/layout/dynamic-shape 合同。⚠️ 待补
+2. 补齐 `TSTORE.SPART` 同类合同、compile-fail 负测和使用文档。⚠️ 待补
+3. 最后清理 LLVM physical ACC legacy surface，并将 `TPREFETCH` wrapper 改为 canonical
+   named spelling（如不会影响现有 assembler 兼容性）。  ⚠️ TPREFETCH named 已改
+   （21525a5）；ACC legacy 评估：Tile_ACC1 仍被 ExpandPseudoInsts.cpp:544-564 /
+   InstrInfo.cpp:547 引用（pseudo 展开 active 路径），非纯 dead，清理需重写展开逻辑，
+   标为专门工作包。
+
+除上述项目外，按当前 LLVM 与 TileOP HEAD 未发现新的、已由 active ISA 明确定义但完全
+没有实现的 Tile operation。Model 的 execution/legality 状态本轮不作结论，也不作修改。
 
 ## 2026-08-19 PTO 0.58.1 剩余实现工作包（TileOP 合同修复已推送，模型仍待做）
 
@@ -57,20 +298,20 @@ SuperScalarModel audit snapshot:
 建议按以下顺序提交；不要把所有操作塞入一个大 commit：
 
 ```text
-1. LLVM：TSORT canonical 名称 + deleted selector 清理        [1a 完成: 49d63a6（TSORT 名）；1b deleted selector 清理待做]
+1. LLVM：TSORT canonical 名称 + deleted selector 清理        [完成: 49d63a6（TSORT 名）+ e3a57f8（deleted selector 清理）]
 2. LLVM：修复 MGATHER.CAS TwoSrc_NoDst inline-asm operand 匹配  [完成: 澄清为误判，无需改 LLVM]
 3. TileOP：MGATHER_CAS API（依赖第 2 步）                     [完成: 2088886；合同修复: 7c1dead]
-4. Model：MGATHER_CAS decode/bundle/atomic execution           [待做]
-5. Model：共享 sorting helper + TSORT + TMRGSORT               [待做]
+4. Model：MGATHER_CAS decode/bundle/atomic execution           [不改 Model，不实施]
+5. Model：共享 sorting helper + TSORT + TMRGSORT               [不改 Model，不实施]
 6. TileOP：修正 TMRGSORT API                                  [完成: 50541a0；shape 合同修复: 7c1dead]
-7. Model：TQUANT/TDEQUANT scalar-attribute contract            [待做]
+7. Model：TQUANT/TDEQUANT scalar-attribute contract            [不改 Model，不实施]
 8. TileOP：修正 TQUANT/TDEQUANT API                           [完成: 968a5a2；RMode/shape 修复: 7c1dead]
-9. Model：feature-map descriptor infrastructure + TIMG2COL     [待做]
-10. TileOP：补 TIMG2COL descriptor/config API                  [待做]
-11. Model：TGEMV_MX / BIAS / ACC                               [待做]
-12. TileOP/LLVM：删除或拒绝 retired operation surface          [TileOP 完成: a15297f; LLVM parser 侧待做]
-13. TileOP：按 v0.58.1 重建 operation contract tests           [待做, 即 B6]
-14. 三仓联合 assemble + model execution 回归                   [待做]
+9. Model：feature-map descriptor infrastructure + TIMG2COL     [不改 Model，不实施]
+10. TileOP：TIMG2COL posM/posK API                            [完成: 0978eda（descriptor 是源 tile 属性，无独立命令）]
+11. Model：TGEMV_MX / BIAS / ACC                               [不改 Model，不实施]
+12. TileOP/LLVM：删除或拒绝 retired operation surface          [完成: TileOP a15297f + LLVM e3a57f8]
+13. TileOP：按 v0.58.1 重建 operation contract tests           [完成: 1892b6a（17 测试全绿）]
+14. 三仓联合 assemble + model execution 回归                   [不改 Model；LLVM/TileOP assemble 已分别回归]
 ```
 
 可以调整相邻步骤，但必须保持两条依赖：
@@ -1779,17 +2020,17 @@ PTO 0.58.1 canonical/PTO-only 模式：拒绝或明确标注 extension；
 ### 9. 建议执行顺序
 
 ```text
-P0-1 reserved/deleted Tile selector 清理 + TSORT canonical
-P0-2 B.FPATR MC legality
-P0-3 B.DATR/B.CACR.STD decoder collision
-P0-4 BWT/trap collision
-P0-5 DTYPE_NONE token/per-form legality
+P0-1 reserved/deleted Tile selector 清理 + TSORT canonical   [完成: 49d63a6 + e3a57f8]
+P0-2 B.FPATR MC legality                                     [完成: e287135, validateInstruction 校验]
+P0-3 B.DATR/B.CACR.STD decoder collision                     [待做: lui/BDATR 表优先级冲突]
+P0-4 BWT/trap collision                                      [待做]
+P0-5 DTYPE_NONE token/per-form legality                      [完成: 21e31b4]
 P1-1 BSTART.<operation> aliases + BSTART.ICALL
 P1-2 其余 7 个缺失 scalar forms
 P1-3 XB/旧 command 的 PTO-vendor-extension 边界
 P1-4 B.IOR canonical/bundle legality
 P2-1 native Matrix FPATR operand threading
-P2-2 TileOP TPREFETCH/MGATHER_CAS/TSORT API
+P2-2 TileOP TPREFETCH/MGATHER_CAS/TSORT API                   [完成: TPREFETCH/MGATHER_CAS/TSORT/TQUANT/TDEQUANT/TIMG2COL/TMRGSORT]
 ```
 
 每个工作包必须先跑最窄 raw MC encode/decode tests，再扩大到 LinxV5 MC、
@@ -6231,3 +6472,2262 @@ reinterpret 属于后续工作包，不应由当前通用 Local view 路径放�
 
 实现提交到 TileOP `linx` 分支后，handoff 本身提交到 LLVM `dev-llvm15_56` 分支；
 两者分别使用各自仓库的远端。不得把 TileOP 头文件误提交到 LLVM 仓库。
+
+## 2026-08-21 PTO-ISA SizeCode 扩展（最新 `pto-spec` 主线 `1e91bf9`）实现交接
+
+### 背景与基线
+
+最新 PTO-ISA 主线在 commit `1e91bf98ad2f918c24ddbb394c3be73fa9d5de9`
+（`Define B.IOT/B.IOS SizeCode and PEMode encoding (#119)`）扩大了 Block Tile
+I/O 的 SIZE 编码范围，并把参与 PE 的编码从 4-bit `PE_MASK` 改成 3-bit
+`PEMode`。当前 LLVM LinxV5 后端仍按旧 v0.58 reissue 逻辑实现：
+
+```text
+B.IOT/B.IOS Size/TSize：3 bit，合法 1..7，对应 128 B..8 KiB
+B.IOT/B.IOS PE_MASK：4 bit，直接编码 mask=0000..1111
+B.IOT/B.IOS 展开路径：固定注入 PE_MASK=1111
+```
+
+本工作包只针对编译器/汇编器/MC 层；**不要修改 SuperScalarModel 仓库**，也不要
+在本工作包中创建新分支。实现 agent 应在当前 LLVM 分支完成修改和测试，是否提交、
+推送由主 agent 另行决定。
+
+### 最新 ISA 语义
+
+#### 1. SizeCode 扩大
+
+最新 `pto-spec/asl/tile/model/state/descriptors.asl` 定义：
+
+```text
+SizeCode 1  -> 128 B
+SizeCode 2  -> 256 B
+SizeCode 3  -> 512 B
+SizeCode 4  -> 1 KiB
+SizeCode 5  -> 2 KiB
+SizeCode 6  -> 4 KiB
+SizeCode 7  -> 8 KiB
+SizeCode 8  -> 16 KiB
+SizeCode 9  -> 32 KiB
+SizeCode 10 -> 64 KiB
+SizeCode 11 -> 128 KiB
+SizeCode 12 -> 256 KiB
+```
+
+此外：
+
+```text
+TileSizeCodeIsLegal      : 1..12（通用/Shared 语义）
+LocalTileSizeCodeIsLegal : 1..10（Local B.IOT destination）
+SizeCode 0               : source-only 语义，不分配 destination
+SizeCode 13..15          : reserved，必须拒绝
+```
+
+注意：最新主线对 B.IOT 的 destination 合同使用 `1..10`，即 Local 每个参与 PE
+最大 64 KiB；B.IOS Shared destination 使用 `1..12`，最大 256 KiB。不能简单地把
+所有旧的 `TSize <= 7` 检查替换成 `<= 12`，必须按指令/角色区分：
+
+```text
+B.IOT destination：SizeCode 1..10
+B.IOS destination：SizeCode 1..12
+B.IOT/B.IOS source-only：SizeCode 固定 0
+```
+
+`TSize` 是旧命名；编码字段和文档建议统一改称 `SizeCode`。为降低不必要的 API
+破坏，内部 LLVM operand/class 名称可暂时保留 `TSize`，但注释、parser 诊断、打印
+和新测试必须说明它实际承载 4-bit SizeCode。
+
+#### 2. PE participation 从 PE_MASK 改为 PEMode
+
+最新 ISA 仍在机器语义层使用四 PE mask，但指令编码不再直接携带 4-bit mask：
+
+```text
+PEMode field：3 bit，位于原 PE_MASK/TSize 区域
+PEMode 000：mask 0000，严格 no-op
+PEMode 001：PE0
+PEMode 010：PE1
+PEMode 011：PE2
+PEMode 100：PE3
+PEMode 101：PE0+PE1
+PEMode 110：PE0+PE1+PE2
+PEMode 111：四个 PE
+```
+
+最终语义 mask 由 common decoder/profile decoder 从 PEMode 展开得到。编译器汇编
+接口仍可接受用户友好的 `mask=0000/0001/0011/1111` 等 spelling，但编码时必须
+经过统一的 `mask -> PEMode` 映射；不能把 4-bit mask 的数值直接塞入 3-bit field，
+也不能继续在所有展开路径固定写入 `0b1111`。
+
+当前 LLVM 中需要重点清理的旧假设包括：
+
+```text
+bits<4> PE_MASK;
+Inst{18-15} = PE_MASK;
+固定 addImm(0b1111);
+parsePE_MASK() 直接返回 0..15；
+printPE_MASK() 直接按 4-bit 数值打印；
+TSize_Op / B_IOT_TileSize_Op 只有 3-bit；
+matchTileSizeHelper() 只支持到 8KB；
+```
+
+### 影响文件与建议修改方式
+
+以下路径属于本工作包的主要写入范围；实现 agent 应先逐项确认实际 operand 顺序，
+不要只改一个 `.td` 字段而遗漏 parser、printer、encoder、disassembler 或 pseudo
+展开。
+
+#### A. TableGen 指令字段和 operand 合同
+
+文件：
+
+```text
+llvm/lib/Target/LinxV5/LinxV5InstrInfo.td
+```
+
+修改要求：
+
+1. `B_IOT_Base`：
+
+```text
+PE_MASK 4 bit  -> PEMode 3 bit
+TSize   3 bit  -> SizeCode 4 bit
+```
+
+按最新编码保留字段位置/固定位约束，最终以最新 pto-spec catalog 的 encoding
+为准；不能仅凭旧注释推断 bit slice。B.IOT/B.IOS 最新 catalog 仍是 32-bit，
+但 `SizeCode` 和 `PEMode` 的位置/宽度必须与 active encoding 一致。
+
+2. B.IOS 同步改为 `SizeCode` 4 bit、`PEMode` 3 bit。
+
+3. operand predicate：
+
+```text
+PEMode operand：isUInt<3>
+SizeCode operand：isUInt<4>
+```
+
+source-only form 必须允许且固定生成 `SizeCode=0`；destination form 只允许：
+
+```text
+B.IOT：1..10
+B.IOS：1..12
+```
+
+如果 TableGen 的 `ImmLeaf` 无法表达“同一 operand class 在不同 form 有不同合法范围”，
+保留宽 predicate `isUInt<4>`，把 role-specific legality 放在 matcher/parser 或
+disassembler decode 中，避免把 `13..15` 和 B.IOT `11..12` 当作有效 destination。
+
+4. 保留 `DstTile` 0..3、SharedTID 0..255 和 reserved bit 检查。
+
+5. 重新检查 instruction alias 的 operand 顺序，尤其是：
+
+```text
+B.IOT source-only
+B.IOT destination
+B.IOS source
+B.IOS destination
+```
+
+不能因为把 `TSize` 改成 4 bit 导致 alias 把 `PEMode`、`Last` 或 `DstTile` 错位。
+
+#### B. 汇编 parser
+
+文件：
+
+```text
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+```
+
+修改要求：
+
+1. 新增或重构 `parsePEMode`。推荐保留 `parsePE_MASK` 作为兼容入口，但内部统一
+   调用：
+
+```cpp
+Optional<unsigned> decodePEMaskToPEMode(unsigned Mask);
+Optional<unsigned> parsePEModeOrMask(StringRef Spelling);
+```
+
+建议明确区分：
+
+```text
+PEMode=0..7       -> 直接作为 3-bit PEMode
+mask=0000..1111   -> 4-bit mask 转 PEMode；不在 8 项映射中的 mask 拒绝
+```
+
+注意最新 ISA 的 PEMode 表不是任意 4-bit mask 的可逆压缩。根据 active 表，允许
+的 mask 集合为：
+
+```text
+0000, 1000, 0100, 0010, 0001, 1100, 1110, 1111
+```
+
+`mask=0101/0110/1001/1010/1011/1100/1101/1110` 没有对应 PEMode，必须报错，不能
+静默选择最接近的 mode。
+
+2. `parseTSize` 改为解析 4-bit SizeCode，允许数值 `0..15` 进入统一 operand；随后
+   按上下文限制 destination 合法范围：
+
+```text
+B.IOT destination：1..10
+B.IOS destination：1..12
+source-only：0
+```
+
+3. `matchTileSizeHelper` 扩展：
+
+```text
+128B, 256B, 512B, 1KB, 2KB, 4KB, 8KB,
+16KB, 32KB, 64KB, 128KB, 256KB
+```
+
+建议同时接受规范化的 `KiB` spelling（如果当前 parser 已支持 KB 习惯写法，则至少
+保持已有 spelling 不回归）。`<0B>`/`<zero>` 只在 source/implicit form 允许，
+不能作为 destination capacity。
+
+4. 错误信息要明确指出 role-specific 范围，例如：
+
+```text
+B.IOT destination SizeCode must be 1..10
+B.IOS destination SizeCode must be 1..12
+SizeCode 13..15 is reserved
+mask=0101 has no PEMode encoding
+```
+
+#### C. Inst printer / MC encoder / disassembler
+
+涉及文件：
+
+```text
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.h
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5MCCodeEmitter.cpp
+llvm/lib/Target/LinxV5/Disassembler/LinxV5Disassembler.cpp
+```
+
+实现要求：
+
+1. printer 的 SizeCode 表扩展到 12：
+
+```text
+0B, 128B, 256B, 512B, 1KB, 2KB, 4KB, 8KB,
+16KB, 32KB, 64KB, 128KB, 256KB
+```
+
+2. printer 的 PEMode 必须先解码为 mask 再打印 canonical `mask=....`。如果遇到
+   reserved/不可映射模式，应打印明确的 `.invalid` 或返回 decode error，不能把 3-bit
+   mode 当成 4-bit mask 直接输出。
+
+3. encoder 的 `getImmOpValueTSize` 改为 4-bit SizeCode，并对 0..15 做宽度检查；
+   role-specific 合法性由 matcher/MC 层保持一致。
+
+4. encoder 的 PE operand 不再使用 `getImmOpValuePE_MASK` 直接写 4 bit。应新增
+   `getImmOpValuePEMode`，接受已解析的 3-bit PEMode；如果 inline/pseudo 层传入
+   mask，必须在唯一的 helper 中转换，禁止各调用点自行 hardcode。
+
+5. disassembler 的 B.IOT/B.IOS decode table、field extraction 和 `BIOS_Dst_TSize`
+   需要同步 4-bit SizeCode/3-bit PEMode。特别验证 source/destination overlap：
+
+```text
+SizeCode=0：source form
+SizeCode=1..10：B.IOT destination
+SizeCode=1..12：B.IOS destination
+SizeCode=13..15：reserved / illegal
+```
+
+6. 固定位、funct3、opcode mask 必须从最新 catalog 重新生成/核对；不能只修改显示
+   文本。应为每个 active form 增加 encode/decode round-trip 向量。
+
+#### D. pseudo 展开与 inline asm carrier
+
+文件：
+
+```text
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5TileOpExpand.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5MCCodeEmitter.cpp
+llvm/lib/Target/LinxV5/LinxV5AsmPrinter.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5TileOpReader.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5TileOpReader.h
+```
+
+修改要求：
+
+1. 所有当前类似：
+
+```cpp
+.addOperand(MCOperand::createImm(0b1111)) // PE_MASK=all
+```
+
+必须改成统一 helper，例如：
+
+```cpp
+encodePEModeForMask(/*mask=*/0b1111)
+```
+
+对于最新表，`mask=1111` 的 PEMode 是 `111`，不是数值 `15`。
+
+2. 当前展开器中 local tile 的 implicit all-PE 行为可以继续生成 all-PE mode，但必须
+   生成 `PEMode=7`。不要把 `15` 放入 3-bit field。
+
+3. 如果某些 pseudo 的接口仍携带 4-bit mask，先在 pseudo 到 machine instruction
+   的边界转换；不要把 old `PE_MASK` operand 一路带到最终 B.IOT/B.IOS。
+
+4. `LinxV5AsmPrinter.cpp` 中 `%Z` 或类似 TileSize 打印表扩展到 `SizeCode=12`，并
+   检查 inline asm 的 `<16KB>`、`<32KB>`、`<64KB>`、`<128KB>`、`<256KB>`。
+
+5. `TileOpReader` 的 `getTileSize` / destination size 保存类型至少能承载 0..15，
+   不得在 reader 层截断为 3 bit；同时保留实际 Tile size enum 与 SizeCode 的明确
+   区分，避免把字节数误当编码值。
+
+#### E. 目标指令选择与 size 推导
+
+重点文件：
+
+```text
+llvm/lib/Target/LinxV5/LinxV5ISelLowering.cpp
+llvm/lib/Target/LinxV5/LinxV5InstrInfo.cpp
+llvm/lib/Target/LinxV5/LinxV5InstrInfo.h
+```
+
+当前 `LinxV5ISelLowering.cpp` 的 size 推导仍明确限制为：
+
+```text
+128B..8192B -> SizeCode 1..7
+```
+
+需要改为：
+
+```text
+SizeBytes = 128 * 2^(SizeCode - 1)
+```
+
+并按调用语义校验：
+
+```text
+Local B.IOT：128B..64KiB（1..10）
+Shared B.IOS：128B..256KiB（1..12）
+```
+
+不能只放宽 `isPowerOf2` 上限而忽略 Local/Shared 角色。
+
+所有从 LLVM IR/vector length/Tile descriptor 推导 SizeCode 的地方都必须使用统一
+helper，建议：
+
+```cpp
+unsigned encodeTileSizeCode(unsigned SizeBytes);
+unsigned encodeLocalTileSizeCode(unsigned SizeBytes);
+unsigned encodeSharedTileSizeCode(unsigned SizeBytes);
+Optional<unsigned> decodeTileSizeCode(unsigned Code);
+```
+
+建议 helper 放在 LinxV5 target common utility 中，供 ISel、MC、printer、expand 和
+测试共同使用；不要复制多份 `log2(Size)-6`。
+
+#### F. Tile register allocation / TRegToOffset 的边界检查
+
+SizeCode 扩大**不等于** Tile register hand 数量扩大，也不自动改变 ClockHand 算法。
+`Tile_TR/UR/MR/NR` 的相对寄存器窗口和 `TRegToOffset` 的 offset 范围仍必须按 ISA
+的 register allocation contract 单独确认。
+
+实现 agent 不得因为 SizeCode 扩大而直接修改：
+
+```text
+Tile hand 数量
+Tile hand 内寄存器数量
+TRegToOffset 的 relative offset 编码
+ClockHand spill/reload 策略
+```
+
+除非最新 ISA 明确同步修改这些内容。先验证：
+
+```text
+大 SizeCode 只改变 destination capacity/descriptor size；
+不会把一个 Tile 拆成多个 Tile register；
+不会把 SizeCode 当成 Tile register offset；
+不会改变 TRegToOffset 的 slot/window 语义。
+```
+
+### 建议测试矩阵
+
+#### 1. Parser / printer 正向
+
+覆盖：
+
+```text
+B.IOT destination：<16KB>, <32KB>, <64KB>（最大 Local）
+B.IOS destination：<16KB>, <32KB>, <64KB>, <128KB>, <256KB>
+B.IOT/B.IOS source：SizeCode=0
+mask=0000, 1000, 0100, 0010, 0001, 1100, 1110, 1111
+PEMode 0..7 与 canonical mask 的双向转换
+```
+
+#### 2. Parser / legality 负向
+
+覆盖：
+
+```text
+B.IOT destination <128KB>/<256KB>：拒绝
+B.IOS destination <512KB>：拒绝
+SizeCode 13..15：拒绝
+B.IOT/B.IOS destination SizeCode=0：拒绝
+不支持的 mask=0101/0110/1001/1010/1011/1100/1101/1110：拒绝
+```
+
+#### 3. MC encode/decode round trip
+
+每个 form 至少覆盖：
+
+```text
+SizeCode 0, 1, 7, 8, 10, 11, 12
+PEMode 0, 1, 4, 7
+DstTile T/U/M/N
+Source-only 与 destination form
+```
+
+检查：
+
+```text
+assembly -> encoding -> disassembly -> canonical assembly
+```
+
+并验证：
+
+```text
+SizeCode=0 不会误解为 destination；
+SizeCode=11/12 只有允许的 Shared destination 可解码；
+reserved 13..15 不会被接受；
+PEMode=7 打印 mask=1111，而不是 mask=0111 或数值 7。
+```
+
+#### 4. CodeGen / pseudo expand
+
+至少添加：
+
+```text
+Local TSTORE/TLOAD 或普通 Local B.IOT 的 16KB/32KB/64KB
+Shared B.IOS 的 16KB/32KB/64KB/128KB/256KB
+默认 all-PE 展开必须编码 PEMode=7
+不生成旧 4-bit PE_MASK=15 直接写入 3-bit field 的错误编码
+```
+
+如果当前 LLVM 目标/TileOP API 无法构造大于 8KB 的 Local tile，先添加 MC 层测试
+证明编码链路正确，并把 CodeGen/API 层限制记录为独立缺口，不要伪造不合法 Local
+组合。
+
+### 验收要求
+
+实现 agent 完成后必须报告：
+
+```text
+1. 使用的最新 pto-spec commit/hash；
+2. 实际修改的文件及每个文件的职责；
+3. SizeCode 0..12 的编码/打印/解析结果；
+4. B.IOT 1..10 与 B.IOS 1..12 的 role-specific 合法性证据；
+5. PEMode 0..7 与 canonical PE mask 的映射证据；
+6. 默认 pseudo 展开生成 PEMode=7 的反汇编证据；
+7. reserved SizeCode 13..15 和不可映射 mask 的负向测试；
+8. 是否修改了 ClockHand/TRegToOffset（默认应不修改）；
+9. 测试命令和结果；
+10. 未完成项及其原因。
+```
+
+### 不应采用的实现
+
+```text
+- 只把 TSize 的 TableGen 宽度从 3 改成 4，遗漏 parser/printer/disassembler。
+- 只把 8KB 显示表扩展，遗漏 ISel size 上限和 pseudo expand。
+- 把 4-bit PE_MASK 数值 15 直接写入 3-bit PEMode 字段。
+- 用 mask >> 1 等不可逆方式压缩任意 PE mask。
+- 把 B.IOT 的合法范围错误放宽到 256KiB。
+- 把 B.IOS 的合法范围错误限制在 64KiB。
+- 因 SizeCode 扩大而修改 Tile ClockHand 或 TRegToOffset。
+- 把 per-PE capacity 乘以 PE 数量后再编码回 SizeCode。
+- 把 SizeCode 数值、字节数、Tile register offset 混用。
+- 为了通过旧测试而保留 4-bit PE_MASK 机器编码。
+```
+
+### 当前状态
+
+```text
+分析完成：最新 ISA 变更已确认。
+待实现：LLVM B.IOT/B.IOS SizeCode 4-bit + PEMode 3-bit 全链路适配。
+待验证：TableGen/parser/printer/encoder/disassembler/TileOpExpand/ISel 的一致性。
+明确不动：SuperScalarModel 仓库、ClockHand、TRegToOffset（除非另有 ISA 依据）。
+```
+
+### 关键更正：最新编码不是旧字段的原位扩宽
+
+实现时必须以 `pto-spec` 最新 catalog 的 field pieces 为准。最新 B.IOT/B.IOS 的有效
+字段布局是：
+
+```text
+B.IOT destination：
+  SrcTile1  [31:26]
+  SrcTile0  [25:20]
+  L         [19]
+  SizeCode  [18:15]   // 4 bit
+  Func      [14:12]
+  PEMode    [11:9]    // 3 bit
+  DstTile   [8:7]
+
+B.IOT source-only：
+  SrcTile1/SrcTile0/L 按 form 使用
+  [18:15] 为 form 固定/保留区域，不再作为 PE_MASK
+  [11:9]  为 PEMode
+
+B.IOS：
+  SharedTID [27:20]
+  [19]      fixed zero
+  SizeCode  [18:15]   // 4 bit
+  Func      [14:12]
+  PEMode    [11:9]    // 3 bit
+  [8:7]     fixed zero
+  [6:0]     0x13
+```
+
+因此旧实现：
+
+```text
+B_IOT_Base: Inst{18-15}=PE_MASK, Inst{11-9}=TSize
+B_IOS_Base: Inst{18-15}=PE_MASK, Inst{11-9}=TSize
+```
+
+必须改成：
+
+```text
+B_IOT/B_IOS destination:
+  Inst{18-15}=SizeCode
+  Inst{11-9}=PEMode
+```
+
+对于 source-only form，要按照最新 catalog 的 match/mask 设置 `[18:15]` 的固定值，
+不能继续接受任意 4-bit PE_MASK。最新 active catalog 中 B.IOT source-only form 的
+`PEMode` 位于 `[11:9]`，而 destination form 的 SizeCode 位于 `[18:15]`；这是本次
+SIZE 扩大能够成立的必要编码变化。
+
+实现 agent 必须先核对以下最新 form 的 `mask/match/fields`，再改 TableGen：
+
+```text
+b_iot_32_10db6db84f5d
+b_iot_32_2c07e7177fad
+b_iot_32_8b8bce6bffe8
+b_iot_32_c11eb189dd83
+b_ios_32_4ba5ef98fdaa
+```
+
+验收时必须提供至少一个原始 word 的 bit-level 证据，证明：
+
+```text
+SizeCode=10 能写入 [18:15]；
+PEMode=7 能写入 [11:9]；
+B.IOS SizeCode=12 不会被截断为 3 bit；
+旧的 mask=15 不会直接写入任何 3-bit PEMode 字段。
+```
+
+## 2026-08-21 SizeCode/PEMode LLVM 实现第一次验收意见
+
+### 验收结论
+
+当前未提交实现的核心编码方向正确，但仍存在影响 ISA legality 的缺口，暂不能验收或
+推送。实现 agent 应在当前分支继续修改，不要创建新分支，不要修改
+SuperScalarModel 仓库。
+
+已确认正确的部分：
+
+```text
+B.IOT/B.IOS 使用 SizeCode[18:15] + PEMode[11:9]；
+SizeCode printer/parser 已覆盖 16KB/32KB/64KB/128KB/256KB；
+PEMode 映射符合 active ASL：0,8,4,2,1,12,14,15；
+mask=1111 正确编码为 PEMode=7；
+B.IOT 64KB 编码为 0x000d6e13；
+B.IOS 256KB 编码为 0x00061e13；
+新增的正向/负向 MC 测试可以通过；
+llvm-mc、llvm-objdump、llc 可以完成构建。
+```
+
+注意：此前 handoff 中将可编码 mask 写成包含 `0011/0111` 是错误的，现已修正。
+active ASL `PTOv0PEMaskOfPEMode` 的正确映射是：
+
+```text
+PEMode 0 -> 0000
+PEMode 1 -> 1000  (PE0)
+PEMode 2 -> 0100  (PE1)
+PEMode 3 -> 0010  (PE2)
+PEMode 4 -> 0001  (PE3)
+PEMode 5 -> 1100  (PE0+PE1)
+PEMode 6 -> 1110  (PE0+PE1+PE2)
+PEMode 7 -> 1111  (all)
+```
+
+当前实现的映射是正确的，不要改回旧集合。
+
+### P0：B.IOT legacy 数值语法绕过 Local SizeCode 合同
+
+当前 `TSize_Op` 接受 `0..12`，B.IOT legacy aliases 又直接使用 `TSize_Op`，导致以下
+非法 destination 都能汇编：
+
+```asm
+B.IOT mask=1111, TSize=0,  last, ->t
+B.IOT mask=1111, TSize=11, last, ->t
+B.IOT mask=1111, TSize=12, last, ->t
+```
+
+ISA 合同：
+
+```text
+B.IOT source-only：SizeCode 固定为 0，并且没有 destination；
+B.IOT destination：SizeCode 只能是 1..10；
+```
+
+修改建议：
+
+1. 为 legacy `TSize=N` destination syntax 增加 B.IOT 专用 operand/predicate；
+2. 该 operand 只接受 `1..10`；
+3. 或删除不再需要的 legacy aliases；
+4. 不要继续让 B.IOT destination alias 使用通用 `TSize_Op`。
+
+必须增加负向测试：
+
+```text
+B.IOT destination TSize=0：拒绝；
+B.IOT destination TSize=11：拒绝；
+B.IOT destination TSize=12：拒绝；
+B.IOT destination TSize=13..15：拒绝。
+```
+
+### P0：Disassembler 接受非法 B.IOT destination SizeCode
+
+当前 B.IOT destination size operand 没有专用 decoder legality。直接构造 raw word
+后，以下编码仍被反汇编为合法 B.IOT：
+
+```text
+SizeCode=0  -> B.IOT ... ->t<0B>
+SizeCode=11 -> B.IOT ... ->t<128KB>
+SizeCode=12 -> B.IOT ... ->t<256KB>
+```
+
+这违反 Local B.IOT destination `1..10` 合同。当前只为 B.IOS 实现了
+`decodeBIOSDstTSize`，B.IOT 也必须增加专用 decoder，例如：
+
+```cpp
+decodeBIOTDstSizeCode(...)
+```
+
+要求：
+
+```text
+1..10：Success；
+0、11..15：Fail；
+source-only B.IOT 仍由自己的 form 正常解码；
+不能影响 B.IOS 的 1..12 范围。
+```
+
+必须增加 raw-word/objdump 负向测试，不能只测试 assembler parser，因为 parser
+拒绝不代表 disassembler 会拒绝非法 ELF。
+
+### P0：`sizeCodeForBytes()` 公式错误
+
+当前：
+
+```cpp
+unsigned Code = Log2_64(Bytes) + 1; // 128 -> 1
+```
+
+实际 `Log2_64(128)+1 == 8`。正确公式应为：
+
+```cpp
+unsigned Code = Log2_64(Bytes) - 6;
+```
+
+应增加 helper 单元验证或 compile-time assertions，至少证明：
+
+```text
+128 -> 1
+256 -> 2
+8192 -> 7
+16384 -> 8
+65536 -> 10
+131072 -> 11
+262144 -> 12
+非 2 次幂、<128、>256KiB -> None
+```
+
+该 helper 当前尚未被调用，但错误实现不能作为死代码保留后验收。
+
+### P0：B.IOS destination `<0B>` 被静默解释为 source
+
+当前以下 assembly 可以成功：
+
+```asm
+B.IOS mask=1111, ->S0<0B>
+B.IOS mask=1111, ->S0<0>
+```
+
+并在反汇编时变成：
+
+```asm
+B.IOS S0, mask=1111
+```
+
+这会把用户写出的 destination 静默改成 source。正确合同应为：
+
+```text
+B.IOS source alias：内部固定 SizeCode=0；
+B.IOS destination spelling：只接受 SizeCode 1..12；
+```
+
+建议把“底层统一 instruction operand 可承载 0..12”和“destination parser operand
+只接受 1..12”拆开。destination alias 不得使用允许 0 的 parser class。
+
+必须增加负向测试：
+
+```text
+B.IOS mask=1111, ->S0<0B>：拒绝；
+B.IOS mask=1111, ->S0<0>：拒绝；
+B.IOS S0, mask=1111：仍成功并编码 SizeCode=0。
+```
+
+### P1：重新检查 ISel 中 Local/Shared 的 MaxCode
+
+`calculateVCallSizeMask()` 默认 Local 上限 10 是正确的，但当前若干调用显式传入
+`12`，需要逐个按最终 binder role 复核，特别是：
+
+```text
+lowerV5GMOV：最终有 Local B.IOT destination，应限制为 10；
+lowerV5SharedS2L：最终有 Local B.IOT destination，应限制为 10；
+lowerV5SharedL2S：Size 来自 Local source tile，Local descriptor 本身应限制为 10；
+lowerTileOpWithBody：普通 operation 的输出是 Local B.IOT destination，应限制为 10。
+```
+
+不能因为一条路径涉及 Shared，就把所有 Tile type size 放宽到 12。B.IOS 的
+`11..12` 应只用于真正的 Shared destination capacity，不应让 Local Tile type
+突破 64KiB。
+
+### 测试补充要求
+
+现有新增 MC 测试只覆盖了 canonical suffix 路径，尚不足以验收。至少补充：
+
+```text
+1. B.IOT legacy TSize=0/11/12/13..15 负向；
+2. raw B.IOT SizeCode=0/11/12/13/15 的 disassembler 负向；
+3. B.IOS destination <0B>/<0> 负向；
+4. B.IOS source SizeCode=0 正向；
+5. Local CodeGen 16KB/32KB/64KB 正向；
+6. Local CodeGen 128KB/256KB 负向；
+7. Shared B.IOS 128KB/256KB 正向；
+8. SizeCode byte/code helper 的边界验证；
+9. 所有 8 个 PEMode 的 encode/decode round trip；
+10. 默认 pseudo 中 mask=1111 最终 raw field 必须是 PEMode=7。
+```
+
+### 本次验证命令与结果
+
+```bash
+ninja llvm-mc llvm-objdump llc
+```
+
+结果：构建通过。
+
+```bash
+llvm-lit -sv \
+  llvm/test/MC/LinxV5/v5-b-iot-sizecode-pemode.s \
+  llvm/test/MC/LinxV5/v5-b-iot-sizecode-pemode-neg.s
+```
+
+结果：2/2 通过。
+
+完整 `llvm/test/MC/LinxV5` 当前仍有历史/过期测试失败；基线旧 build 失败 13 个，
+当前 build 失败 10 个，因此不能把全部失败归因于本次实现，但也不能据此宣称完整
+MC 回归通过。实现完成后应至少更新并跑通所有直接涉及 B.IOT/B.IOS 编码的测试。
+
+### 下一轮验收门槛
+
+实现 agent 回报时必须提供：
+
+```text
+B.IOT canonical 与 legacy syntax 都无法产生 SizeCode 0/11/12 destination；
+objdump 对 raw B.IOT destination SizeCode 0/11..15 返回 unknown/fail；
+B.IOS destination <0B> 被拒绝，source form 仍正常；
+sizeCodeForBytes 映射边界全部正确；
+所有 Local output lowering 使用 MaxCode=10；
+Shared destination 的 11/12 仍可编码；
+新增测试和实际测试结果；
+未修改 ClockHand/TRegToOffset；
+未修改 SuperScalarModel 仓库。
+```
+
+## 2026-08-24：最新 PTO-ISA CUBE layout 类型支持设计（待实现）
+
+### 背景与结论
+
+最新 `PTO-ISA/pto-spec` 主线已经把 CUBE Matrix 的 layout 从普通
+row/column 或旧的 transport conversion 概念，提升为 Tile descriptor 的
+persistent layout 类型。相关合同为 `ADR-0070`（GM/Local CUBE layout
+transport）和 `ADR-0071`（Local CUBE Matrix operand contract），当前主线
+已经正式使用以下三个 layout 类别：
+
+```text
+CUBE_M16：Local Matrix A/C/D 的 M-side layout，允许 M <= 16
+CUBE_M32：Local Matrix A/C/D 的 M-side layout，允许 M <= 32
+CUBE_N8 ：Local Matrix B 的 N-side layout
+```
+
+这三个名称不是普通的 `BArgFormat` 转换方向，也不是现有
+`Tile_M16`/`Tile_N8` 寄存器枚举的别名。当前 LLVM 中虽然已经存在
+`Tile_M16` 和 `Tile_N8` 这类寄存器选择器，但没有完整实现对应的
+persistent descriptor layout、shape 合同和 CUBE operand legality；当前
+`LinxV5TileTrans.def` 中的 `NORM`、`ND2DN`、`ND2ZZ` 等仍是旧的内存布局
+transport/conversion 编码，不能直接替代 `CUBE_M16/M32/N8`。
+
+本任务只修改 LLVM 和 TileOP API；**不要修改 SuperScalarModel 仓库**。
+Model 侧只作为最新 ASL 合同的只读参考。
+
+### 最新 ISA layout 合同
+
+#### Matrix primary layout
+
+```text
+Local A：CUBE_M16 或 CUBE_M32，logical shape = M x K
+Local B：CUBE_N8，logical shape = K x N
+Local C：如果是 accumulator，layout 必须与 A 的 M layout 兼容，shape = M x N
+Local D：新分配 destination，layout 必须与 A 的 M layout 兼容，shape = M x N
+```
+
+额外要求：
+
+1. `CUBE_M16` 只允许 `1 <= M <= 16`；
+2. `CUBE_M32` 只允许 `1 <= M <= 32`；
+3. 当 `M <= 16` 时，`CUBE_M16` 和 `CUBE_M32` 都可以合法使用；
+4. `N`、`K` 可以跨多个 CELL，不应被错误限制为单个 CELL 的尺寸；
+5. `M/N/K` 是 logical dimensions，与 per-PE `SizeCode/TSize` 独立；
+6. layout、dtype、valid rows/columns、CELL geometry、capacity、definedness
+   必须在操作产生副作用前整体校验；
+7. 普通 row-major/column-major Local Tile 不能作为 CUBE Matrix primary；
+8. Bias 和 MX scale 是辅助 operand，仍保持 operation 规定的普通 Local
+   layout，不能把它们强制转成 CUBE layout。
+
+#### Shared Matrix layout
+
+Shared primary 仍由 Shared descriptor 持有 layout 和 shape。最新
+cooperative M-sharding 合同要求：
+
+```text
+Shared A：group shape = (4 * M) x K
+Shared B：shape = K x N
+PE i：消费 Shared A 的 [i*M, (i+1)*M) 行
+每个 PE：发布一个 M x N 的 Local result
+```
+
+因此 Shared A/B 不能只通过“普通 Tile vector 的 byte size”表达；Shared
+descriptor 必须保留 matrix layout、logical shape 和 ready/defined 状态。
+
+#### TIMG2COL 的 layout 不同于 CUBE Matrix layout
+
+不要把下面两组名称合并：
+
+```text
+TIMG2COL source feature-map descriptor：NC1HWC0 或 NDC1HWC0
+TIMG2COL destination：standard Left Matrix、row-major
+
+TMATMUL Matrix primary：CUBE_M16、CUBE_M32、CUBE_N8
+```
+
+TIMG2COL source 的 layout、N/D/H/W、filter、stride、dilation、padding、
+logical channels 和 typed padding value 都属于 persistent feature-map
+descriptor；`posM/posK` 只是执行窗口位置，不能替代 descriptor。
+
+### LLVM 实现分层
+
+#### A. 建立独立的 layout 类型命名空间
+
+不要直接把 `CUBE_M16/M32/N8` 塞进现有 `ArgFormat`。建议新增独立的
+target layout enum，例如：
+
+```cpp
+enum class TileLayout : uint8_t {
+  RowMajor,
+  ColMajor,
+  CubeM16,
+  CubeM32,
+  CubeN8,
+  NC1HWC0,
+  NDC1HWC0,
+};
+```
+
+实际落地时应遵循当前 LLVM 的 generated `.def`/TableGen 风格；如果只在
+LLVM 的 instruction operand 层需要编码，可以使用 `LinxV5TileLayout.def`
+和对应 `TileLayout` namespace。关键要求是：
+
+- transport conversion enum 与 persistent descriptor layout enum 分离；
+- `CUBE_M16/M32/N8` 不得复用 `NORM` 或 `ND2*` 数值；
+- `NC1HWC0/NDC1HWC0` 只用于 feature-map descriptor/TIMG2COL 语义；
+- 普通 VEC/TLSU layout 的现有数值和打印结果保持兼容；
+- 对未知/保留 layout 编码，parser 和 disassembler 都必须 fail closed。
+
+#### B. TableGen operand 和 descriptor metadata
+
+需要分别增加：
+
+1. `MatrixLayout`/`TileLayout` 的 parser operand class；
+2. CUBE source/destination 的 layout role predicate；
+3. descriptor metadata 在 MachineInstr/MCInst 中的保存方式；
+4. layout 的 printer/encoder/decoder helper；
+5. CUBE Matrix 专用的 shape/layout legality helper。
+
+不要把 layout 当作单纯的 `TileSizeWithBracket`。`TSize` 只表达容量编码，
+layout 还必须和 tile role、logical shape、dtype、valid dimensions 一起参与
+校验。
+
+建议提供类似以下 helper，名称可按代码风格调整：
+
+```cpp
+bool isCubeMLayout(TileLayout Layout);
+bool isCubeNLayout(TileLayout Layout);
+bool isFeatureMapLayout(TileLayout Layout);
+bool isCubeLayoutCompatible(TileLayout A, TileLayout B);
+bool isCubeShapeLegal(TileLayout Layout, unsigned M, unsigned N,
+                      unsigned K);
+```
+
+`isCubeShapeLegal` 至少保证：
+
+```text
+CubeM16: M in [1,16]
+CubeM32: M in [1,32]
+CubeN8 : 作为 B operand 使用；shape role 为 K x N
+```
+
+不要把 `M=16` 或 `M=32` 简化成“寄存器编号”；M 是 logical dimension，
+layout class 是 descriptor property，两者必须同时保存。
+
+#### C. CUBE TLOAD/TSTORE transport
+
+最新 ISA 的 CUBE transport 要求把 `B.DATR`/layout selector 解析为实际
+Cube layout，并在 load/store 前后检查 descriptor：
+
+```text
+TLOAD：根据 layout + dtype + valid_rows + valid_columns 建立 destination
+       persistent descriptor；检查 capacity 和 row stride。
+
+TSTORE：要求 source descriptor 合法、contents_defined、dtype/layout/shape
+        与当前 bundle 参数一致，再执行 store。
+```
+
+不能只生成普通 `TLOAD.NORM`/`TSTORE.NORM` 并依赖 vector type 推断 CUBE
+layout。也不要擅自发明 `TLOAD.CUBE_M16` 这种 mnemonic；最终汇编拼接必须
+以 active ISA 的 B.DATR/layout selector 形式为准。
+
+需要检查并修改：
+
+```text
+llvm/lib/Target/LinxV5/LinxV5InstrInfo.td
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5MCCodeEmitter.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.cpp
+llvm/lib/Target/LinxV5/Disassembler/LinxV5Disassembler.cpp
+llvm/lib/Target/LinxV5/LinxV5ISelLowering.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5BaseInfo.h
+```
+
+如果当前硬件编码没有为 persistent CUBE layout 分配新的 instruction bits，
+layout 就不能被伪造为额外 raw field；应将其作为 descriptor/operand-role
+metadata 传递，并由 B.DATR/CUBE transport 的已有字段承载。若 active ISA
+已经为某个 layout selector 分配了新编码，必须以 pto-spec 的字段表为准，
+同时补齐 raw encoding 和 reserved-value rejection。
+
+#### D. TMATMUL operand role 和 lowering
+
+当前 LLVM 的 `TMATMUL` 主要是普通 Local A/B 加 Shared Right 形式；最新 ISA
+还需要覆盖：
+
+```text
+Local A + Local B
+Local A + Shared B
+Shared A + Local B
+Shared A + Shared B
+```
+
+并覆盖 ordinary、ACC、BIAS、MX、MX_ACC、MX_BIAS 变体。实现要求：
+
+1. Local A/C/D 的 layout 必须是兼容的 `CUBE_M16/M32`；
+2. Local B 必须是 `CUBE_N8`；
+3. Shared A/B 从 Shared descriptor 读取 layout、shape 和 readiness；
+4. Shared A 时，`LB0/LB1/LB2` 按每个 PE 解释；
+5. Shared A 的 M 维按 PE 分片，输出是 Local `M x N`；
+6. Shared-B-only 继续保持 Local A + common Shared B；
+7. TGEMV 仍为 Local-only，M=1；
+8. ACC 的 C 与 D 必须是不同 Tile，不能复用同一个 selector；
+9. BIAS/MX 等辅助 Tile 不应被当成 CUBE primary；
+10. 非法 layout/shape/dtype/readiness 必须在 source snapshot 和 destination
+    allocation 之前失败。
+
+### 汇编器、反汇编器和编码实现
+
+#### 汇编器
+
+新增 layout spelling 时需要：
+
+1. 在 parser 中区分 persistent layout 名称和 transport conversion 名称；
+2. 只接受 ISA 明确允许的 role/layout 组合；
+3. `TMATMUL` 中不允许通过一个普通 `layout=` 参数绕过 A/B/C/D role
+   检查；
+4. 对 `CUBE_M16`、`CUBE_M32`、`CUBE_N8` 生成 canonical spelling；
+5. 对普通 Local primary 使用 row-major/column-major 时给出明确拒绝；
+6. 对保留值和错误 role 返回 parser error，而不是静默降级到 `NORM`。
+
+#### 编码器
+
+需要确认 layout 是否实际占据 instruction field：
+
+- 若 layout 由 persistent descriptor 表示，则编码器不应额外插入虚假 bits；
+- 若 B.DATR/layout selector 有 active raw encoding，则按 spec field table
+  编码，并检查 width、role、reserved bits；
+- B.IOT/B.IOS 的 SizeCode 仍只表示容量，不能把 SizeCode 当 layout code；
+- CUBE layout 的 descriptor geometry 不能在 emitter 中用 tile byte size
+  反推，必须从 MachineInstr/operand metadata 传入。
+
+#### 反汇编器
+
+需要覆盖：
+
+1. 合法 CUBE layout selector 的 canonical spelling；
+2. 非法 layout/role 组合返回 `<unknown>` 或 disassembler fail；
+3. 保留编码拒绝；
+4. raw encoding 与 assembler 的 round-trip；
+5. B.DATR、TLOAD/TSTORE 和 TMATMUL 的 layout metadata 不丢失。
+
+### TileOP API 实现要求
+
+当前 TileOP API 的 `Tile` 主要使用：
+
+```cpp
+Tile<Location, Element, Rows, Cols, BLayout, ValidRow, ValidCol,
+     SLayout, SLayoutSize, PadValue, CompactMode>
+```
+
+当前 `BLayout` 主要是 `RowMajor/ColMajor`，`SLayout` 主要表达 boxed/fractal
+布局。建议增加独立的 Matrix layout 参数或 traits，而不是把
+`CUBE_M16/M32/N8` 强行塞入 `BLayout`：
+
+```cpp
+enum class MatrixLayout {
+  None,
+  CUBE_M16,
+  CUBE_M32,
+  CUBE_N8,
+};
+```
+
+推荐兼容方案：
+
+```cpp
+template <Location Loc, typename Element, int Rows, int Cols,
+          BLayout BaseLayout = BLayout::RowMajor,
+          int ValidRow = Rows, int ValidCol = Cols,
+          SLayout StorageLayout = SLayout::NoneBox,
+          int StorageLayoutSize = 512,
+          PadValue Pad = PadValue::Null,
+          CompactMode Compact = CompactMode::Null,
+          MatrixLayout Matrix = MatrixLayout::None>
+struct Tile;
+```
+
+如果改模板参数会破坏现有调用，则可以增加包装类型/traits：
+
+```cpp
+template <typename Tile, MatrixLayout Layout>
+struct MatrixTile;
+```
+
+但最终必须让程序员可以在 tile type 中静态表达：
+
+```cpp
+using A = Tile<Location::Left, float, M, K, ..., MatrixLayout::CUBE_M16>;
+using B = Tile<Location::Right, float, K, N, ..., MatrixLayout::CUBE_N8>;
+using D = Tile<Location::Left, float, M, N, ..., MatrixLayout::CUBE_M16>;
+```
+
+实现时必须增加：
+
+1. `tile_type_traits<T>::MatrixLayout`；
+2. `is_cube_m_layout<T>`、`is_cube_n_layout<T>`；
+3. `cube_m_layout_legal<T, M>`；
+4. `matrix_layout_compatible<A,C,D>`；
+5. layout 对应的 CELL geometry、physical rows/columns、padding 和 byte
+   capacity 计算；
+6. `SharedTile<LocalTile>` 保留底层 Matrix layout 和 descriptor metadata；
+7. 普通 TileOP（TADD、TMUL、TSORT 等）明确是否允许 CUBE layout，不能
+   默认把 CUBE Tile 当作普通 row-major Tile 使用；
+8. TMATMUL/TGEMV/TLOAD/TSTORE 的模板 static_assert 和 inline-asm path
+   使用同一套 traits，避免 API 合法但汇编非法。
+
+建议在 `include/common/pto_tile.hpp`、`include/common/type.hpp` 和
+`include/jcore/template_asm.hpp` 统一实现 traits；不要只在单个
+`MatMul.hpp` 中硬编码判断。
+
+### TileOP inline assembly 设计
+
+TileOP 的 inline assembly 必须由 tile type traits 推导：
+
+```text
+MatrixLayout -> CUBE layout selector/descriptor metadata
+Rows/Cols/ValidRow/ValidCol -> logical shape fields
+DType -> BSTART/B.DATR data type
+Tile capacity -> SizeCode/TSize
+Location/role -> A/B/C/D operand schema
+```
+
+要求：
+
+- 不要根据 `sizeof(Tile)` 猜测 `CUBE_M16/M32/N8`；
+- 不要把 `M16` 当成固定 `Rows==16`，它表示 M-side layout class，实际 M
+  可以是 `1..16`；
+- 不要把 `M32` 当成固定 `Rows==32`，实际 M 可以是 `1..32`；
+- `N8` 是 B-side layout class，不代表逻辑 N 必须等于 8；
+- M/N/K 的 logical dimensions 应独立传给 `B.DIM`；
+- Shared-A M-sharding 需要传每 PE 的 M/N/K，不得传 Shared A 的总行数
+  `4*M` 作为 LB0。
+
+### 测试要求
+
+#### LLVM MC/assembler tests
+
+至少增加：
+
+```text
+1. 合法 CUBE layout canonical assembly；
+2. CUBE_M16/CUBE_M32/N8 的合法 role 组合；
+3. Local A 使用 CUBE_M16/CUBE_M32；
+4. Local B 使用 CUBE_N8；
+5. A/B/C/D layout mismatch 负向；
+6. M=16 在 M16/M32 上均通过；
+7. M=17 在 M16 失败、在 M32 通过；
+8. M=33 在 M32 失败；
+9. 保留 layout raw encoding 反汇编为 `<unknown>`；
+10. assembler -> obj -> disassembler round-trip。
+```
+
+#### LLVM CodeGen tests
+
+至少覆盖：
+
+```text
+Local TMATMUL：M16 A + N8 B + M16 D；
+Local TMATMUL：M32 A + N8 B + M32 D；
+M <= 16 时 M16/M32 两条路径；
+M > 16 时只能 M32；
+Shared B-only；
+Shared A + Local B 的 M-sharding；
+Shared A + Shared B 的 M-sharding；
+ACC/BIAS/MX variants；
+错误 layout、错误 shape、错误 descriptor readiness 必须在生成前失败。
+```
+
+#### TileOP API tests
+
+增加 compile-time negative/positive tests：
+
+```cpp
+static_assert(is_cube_m_layout_v<A16>);
+static_assert(is_cube_m_layout_v<A32>);
+static_assert(is_cube_n_layout_v<B>);
+static_assert(matrix_layout_compatible_v<A16, D16>);
+static_assert(!cube_m_layout_legal_v<A16, 17>);
+static_assert(cube_m_layout_legal_v<A32, 17>);
+static_assert(!matrix_layout_compatible_v<A16, B>);
+```
+
+运行时/生成测试还要检查：
+
+- TileOP 生成的 assembly 使用 canonical ISA layout/descriptor 形式；
+- 编译后 raw encoding 与 LLVM MC encoder 一致；
+- `TLOAD/TSTORE` 保持 descriptor layout、dtype、valid shape 一致；
+- SharedTile publish/load 不丢失 Matrix layout metadata；
+- 非法组合在编译期 static_assert 失败，而不是运行时生成非法指令。
+
+### 实现顺序与验收门槛
+
+建议按以下顺序实现：
+
+1. 先在 TileOP 和 LLVM 中建立独立 layout enum/traits；
+2. 实现 `CUBE_M16/M32/N8` 的 parser/printer/metadata，不改变已有 raw bits；
+3. 实现 CUBE TLOAD/TSTORE descriptor transport；
+4. 实现 Local TMATMUL 的 layout/shape legality；
+5. 实现 Shared descriptor layout 和 Shared-A M-sharding；
+6. 补齐 ACC/BIAS/MX/TGEMV 合同；
+7. 最后更新 assembler/disassembler/CodeGen/TileOP 回归测试和文档。
+
+agent 回报时必须提供：
+
+```text
+最新 pto-spec commit/hash；
+CUBE_M16/M32/N8 的 layout enum 和 role 定义；
+raw encoding 是否改变以及对应 field table；
+assembler/disassembler round-trip 结果；
+LLVM CodeGen 结果；
+TileOP 程序员可用的 tile type 示例；
+compile-time positive/negative test 结果；
+没有修改 SuperScalarModel 仓库。
+```
+
+## 2026-08-24：LLVM CUBE layout 适配验收意见（第一轮）
+
+### 当前 agent 修改已覆盖的部分
+
+当前 LLVM 工作区新增/修改了：
+
+```text
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5TileTrans.def
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5BaseInfo.h
+llvm/lib/Target/LinxV5/LinxV5InstrInfo.td
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+llvm/lib/Target/LinxV5/Disassembler/LinxV5Disassembler.cpp
+```
+
+这部分实现的是 `B.DATR.Layout` 的 CUBE transport selector：
+
+```text
+21 ND2M32：GM -> Local CUBE_M32
+22 ND2M16：GM -> Local CUBE_M16
+23 ND2N8 ：GM -> Local CUBE_N8
+24 M322ND：Local CUBE_M32 -> GM
+25 M162ND：Local CUBE_M16 -> GM
+26 N82ND ：Local CUBE_N8  -> GM
+```
+
+selector 的方向约束、保留值拒绝、assembler spelling、disassembler spelling
+和 raw encoding 测试目前已经有基础实现。定向测试结果：
+
+```text
+v5-cube-layout.s             PASS
+v5-cube-layout-neg.s         PASS
+v5-cube-layout-encoding.s    PASS
+```
+
+构建：
+
+```text
+ninja llvm-mc llvm-objdump llc split-file   PASS
+```
+
+因此，**B.DATR 21..26 transport selector 这一层可以初步接受**。
+
+### 不能宣称“CUBE layout 已完成”的原因
+
+当前修改没有改变以下组件：
+
+```text
+llvm/lib/Target/LinxV5/LinxV5ISelLowering.cpp
+llvm/lib/Target/LinxV5/LinxV5MCCodeEmitter.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.cpp
+TileOP API 仓库
+```
+
+因此当前实现尚未完成最新 ISA 所要求的 persistent descriptor/layout 支持：
+
+1. `CUBE_M16/M32/N8` 目前只是通过 `ND2M32/ND2M16/ND2N8/M322ND/M162ND/N82ND`
+   作为 B.DATR transport selector 名称出现；
+2. LLVM 没有新增独立的 persistent `TileLayout`/`MatrixLayout` metadata；
+3. LLVM 没有实现 A/C/D 必须使用兼容 `CUBE_M16/M32`、B 必须使用
+   `CUBE_N8` 的 operand-role legality；
+4. LLVM 没有实现 `M<=16` 时 M16/M32 overlap、`M=17..32` 只能 M32 的 shape
+   检查；
+5. LLVM 没有实现 CUBE descriptor 的 valid rows/columns、dtype、CELL geometry、
+   capacity、definedness 检查；
+6. LLVM 没有实现 Shared A/B descriptor layout 和 cooperative M-sharding；
+7. `TMATMUL` 仍主要是 Local A + Local B 或 Local A + Shared B 的旧 pseudo
+   形式，没有 Shared A + Local B、Shared A + Shared B 的完整 lowering；
+8. TileOP API 没有增加 `MatrixLayout::CUBE_M16/CUBE_M32/CUBE_N8` 或等价
+   traits，程序员还不能通过 tile type 静态声明这些 layout；
+9. TileOP 的 `TLOAD/TSTORE/TMATMUL` inline assembly 仍不能从 tile type traits
+   自动推导 CUBE layout/role/shape；
+10. 没有 TileOP compile-time positive/negative tests 证明上述类型可以被程序员
+    定义并传入 TMATMUL。
+
+当前 LLVM 中已有 `Tile_M16`、`Tile_N8` 寄存器定义，但它们只是寄存器/selector
+    类别，不能替代 persistent CUBE descriptor layout；当前也没有完成
+`CUBE_M32` 的完整 descriptor/type path。
+
+### 需要继续补充的实现
+
+#### LLVM
+
+继续增加独立 layout metadata/traits，不要把 CUBE layout 继续当作普通
+`ArgFormat` conversion enum。至少需要：
+
+```text
+TileLayout/MatrixLayout enum 或等价 generated .def
+CUBE_M16/CUBE_M32/CUBE_N8 role predicate
+descriptor shape/layout compatibility helper
+TLOAD/TSTORE CUBE descriptor transport metadata
+TMATMUL operand legality and lowering
+Shared-A cooperative M-sharding lowering
+```
+
+如果 active ISA 没有为 persistent layout 分配新的 raw bits，不应伪造新的
+instruction field；应使用 B.DATR 的 21..26 transport selector 建立 descriptor，
+并让后续 TMATMUL 从 descriptor metadata 读取 layout。只有 spec 明确分配了新
+field 时，才增加 MC emitter/decoder 的 raw field。
+
+#### TileOP API
+
+在 TileOP API 的公共 tile type 层增加独立 Matrix layout 参数或 traits。例如：
+
+```cpp
+enum class MatrixLayout {
+  None,
+  CUBE_M16,
+  CUBE_M32,
+  CUBE_N8,
+};
+```
+
+并让以下信息可以从 tile type 静态取得：
+
+```text
+tile_type_traits<T>::MatrixLayout
+tile_type_traits<T>::Rows/Cols/ValidRow/ValidCol
+tile_type_traits<T>::DType
+tile_role_v<T>
+```
+
+必须增加类似以下 compile-time 合同：
+
+```cpp
+static_assert(is_cube_m_layout_v<A16>);
+static_assert(is_cube_m_layout_v<A32>);
+static_assert(is_cube_n_layout_v<B>);
+static_assert(cube_m_layout_legal_v<A16, 16>);
+static_assert(!cube_m_layout_legal_v<A16, 17>);
+static_assert(cube_m_layout_legal_v<A32, 17>);
+static_assert(matrix_layout_compatible_v<A16, D16>);
+```
+
+然后由 `template_asm.hpp`/`MatMul.hpp` 的公共 helper 统一生成：
+
+```text
+layout selector
+logical M/N/K
+dtype
+TSize/SizeCode
+Local/Shared operand role
+```
+
+不能只在某一个 MatMul overload 中硬编码，否则 API tile type、inline asm、LLVM
+MC parser 之间会继续出现不一致。
+
+### 第一轮验收结论
+
+```text
+结论：B.DATR CUBE transport selector 层通过定向 MC 验证；
+结论：最新 ISA 的完整 CUBE persistent layout + TileOP programmable tile type
+支持未完成，不能整体验收。
+```
+
+下一轮 agent 必须额外提供：
+
+```text
+TileOP 公共 tile type 示例（A=M16/M32，B=N8，D=M16/M32）；
+LLVM CodeGen 对应 TMATMUL 的输出；
+M16/M32/N8 role/shape static_assert 结果；
+TLOAD/TSTORE descriptor round-trip；
+Shared-A/Shared-B M-sharding 测试；
+没有修改 SuperScalarModel 仓库。
+```
+
+## TileOP CUBE layout 支持验收意见（2026-08-24）
+
+### 当前验收结论
+
+对 TileOP API 仓库当前未提交的 CUBE layout 修改进行审查后，结论为：**暂不能验收通过**。
+当前修改完成了 `CubeLayout::{M16,M32,N8}` 类型标签、`Tile` 尾部模板参数、`SharedTile` layout 转发，以及部分 compile-time traits；但还没有完成可用的 persistent CUBE descriptor 建立、传输和 TMATMUL 合同闭环。
+
+### 已完成部分
+
+- `include/common/layout.hpp` 增加了独立的 `CubeLayout` 枚举，避免与普通 `BLayout`/`SLayout` 混用，方向合理。
+- `Tile` 支持通过尾部模板参数声明 `M16`、`M32`、`N8`。
+- `SharedTile` 可以转发底层 Local Tile 的 CUBE layout 属性。
+- 新增 traits 可区分 M-side 与 N-side layout，并检查 M16/M32 的 M 范围。
+- 新增 `CubeLayoutTraits.cpp`，覆盖了部分正向和负向 compile-time trait 检查。
+
+### 必须补充的问题
+
+#### 1. TLOAD/TSTORE 没有真正生成 CUBE transport selector
+
+当前 `ND2M16`、`ND2M32`、`ND2N8`、`M162ND`、`M322ND`、`N82ND` 只出现在注释中，代码中没有对应的 inline assembly 生成路径。现有 TLOAD/TSTORE 仍然使用普通 `NORM`/默认 transport，导致程序员虽然可以声明 `CubeLayout`，但无法通过 TileOP API 建立或保持 persistent CUBE descriptor。
+
+必须根据 tile type 的 layout traits 实际选择：
+
+```text
+TLOAD  Local/GM -> ND2M16 / ND2M32 / ND2N8
+TSTORE Local/GM -> M162ND / M322ND / N82ND
+```
+
+同时保留普通非 CUBE tile 的原有路径，并明确 Shared 形式的 selector 和 descriptor 生命周期，不要只修改注释或打印逻辑。
+
+#### 2. TMATMUL 只检查了一个基础重载
+
+当前只有基础 `TMATMUL` 重载增加了少量 `N8`/M-side 排除断言；以下接口及 options 重载必须统一使用公共 legality helper：
+
+```text
+TMATMUL
+TMATMUL_ACC
+TMATMUL_BIAS
+TMATMUL_MX
+TMATMUL_MX_ACC
+TMATMUL_MX_BIAS
+上述接口的 basic/options 版本
+```
+
+统一检查至少包括：
+
+```text
+A：CUBE_M16 或 CUBE_M32
+B：CUBE_N8
+C/D：与 A 使用相同的 M-side layout
+M16：1 <= M <= 16
+M32：1 <= M <= 32
+K：A.Cols == B.Rows
+N：B.Cols == C/D.Cols
+```
+
+`BIAS`、scale、quant、row/group max 等辅助 operand 不应被误判为 CUBE primary，但其 shape、dtype 和 matrix 主 operand 的约束仍需按现有 ISA contract 检查。
+
+#### 3. 不应继续默认放行普通 None Matrix primary
+
+当前代码注释和测试仍将 `CubeLayout::None` 的普通 Matrix tile 视为 legacy plain-Matrix path。若 active PTO-ISA 已移除普通 Local primary Matrix path，则在 TMATMUL primary contract 中，普通 `None` A/B/C/D 应被拒绝，而不是继续静默生成旧 pseudo。
+
+如仓库仍需兼容旧版本，必须通过明确的版本开关或独立 legacy API 表达，不能在最新接口中无条件放行。
+
+#### 4. layout compatibility helper 需要按接口形态拆分
+
+当前类似 `matrix_layout_compatible_v<A, C, D, M>` 的 helper 固定要求存在 C，不能自然覆盖普通 TMATMUL、BIAS 和 MX 变体。建议拆成可复用的最小合同：
+
+```text
+validate_cube_a_b(a, b, K, N)
+validate_cube_a_d(a, d, M)
+validate_cube_acc(a, c, d, M)
+validate_cube_primary_roles(a, b, c_or_d)
+```
+
+再由各个 TMATMUL family 调用同一套 helper，避免某个 overload 漏检查或使用不适合的模板参数。
+
+#### 5. 测试必须验证真实汇编，而不只是 traits
+
+现有 `CubeLayoutTraits.cpp` 主要验证静态 traits，不能证明接口功能完成。至少需要增加：
+
+```text
+M16 正向：TLOAD/TSTORE + TMATMUL
+M32 正向：TLOAD/TSTORE + TMATMUL
+N8 B-side 正向：TLOAD/TSTORE
+M16 M=17 负向
+M32 M=33 负向
+B 使用 M16/M32 负向
+A 使用 N8 负向
+A/C/D layout 不一致负向
+CUBE 与普通 None primary 混用负向
+Shared-A/Shared-B cooperative M-sharding 汇编检查
+```
+
+汇编检查应确认出现对应 selector，而不是只确认源代码编译通过：
+
+```text
+ND2M16 / ND2M32 / ND2N8
+M162ND / M322ND / N82ND
+TMATMUL 及各变体
+```
+
+#### 6. 先处理独立的 TileDType 编译回归
+
+当前 Linx 目标编译被已有提交 `8b2ee780` 引入的代码阻断：
+
+```cpp
+using TileDType =
+    DType tile_size(...);
+```
+
+该写法不是合法的 C++ 类型别名，导致 `pto_tile.hpp` 在 Linx 编译下出现：
+
+```text
+error: expected ';' after alias declaration
+```
+
+这属于与 CUBE layout 无关的既有回归，但在修复前无法对 CUBE layout 的 Linx 汇编生成进行有效验收。请先恢复合法的 TileDType carrier 实现，再进行本节功能验证；不要把该问题误判为 CUBE layout traits 的失败。
+
+### 建议实现顺序
+
+1. 修复 `TileDType` 的独立语法/类型 carrier 回归。
+2. 提取 CUBE layout selector 和 operand legality 公共 helper。
+3. 接入 TLOAD/TSTORE 的正向和反向 selector 生成。
+4. 将 helper 接入全部 TMATMUL family 及 options overload。
+5. 增加正向、负向和 assembly FileCheck/反汇编测试。
+6. 运行 TileOP compile suite，并用 Linx clang 验证生成的 selector 和 TMATMUL。
+7. 仅在上述验证通过后报告完成；本任务禁止修改 `SuperScalarModel` 仓库。
+
+### 验收门槛
+
+```text
+1. TileOP tile type 可以声明 M16/M32/N8；
+2. TLOAD/TSTORE 实际生成正确的 CUBE transport selector；
+3. 所有 TMATMUL family 统一执行 role/layout/shape 合同；
+4. 正向和负向编译测试均通过；
+5. 生成汇编与最新 PTO-ISA selector 定义一致；
+6. Linx 目标编译不再被 8b2ee780 的独立语法回归阻断；
+7. 未修改 SuperScalarModel 仓库。
+```
+
+当前状态：**CUBE layout 类型标签和部分 traits 已完成；transport、完整 TMATMUL 合同、真实汇编测试和 Linx 编译验证未完成。**
+
+## TileOP CUBE layout 第二轮验收意见（2026-08-24）
+
+### 结论
+
+另一个 agent 已补充 CUBE selector、统一检查宏和 `TileDType` 修改，整体比第一轮完整，但当前实现仍有若干阻塞性问题，**暂不能提交或验收**。以下问题应优先修复，并补充真实接口测试。
+
+### 1. `TileDType` 不能改成普通 C 数组
+
+当前实现：
+
+```cpp
+using TileDType = DType[Rows * Cols];
+```
+
+该修改虽然避开了旧环境中 `tile_size` 未定义导致的语法错误，但会破坏 TileOP inline asm 的 tile register operand。TileOP 大量使用：
+
+```cpp
+"Tr"(tile.data())
+"=Tr"(tile.data())
+```
+
+使用现有 Linx clang 对普通数组进行最小验证时，编译器明确报错：
+
+```text
+error: impossible constraint in asm: can't store value into a register
+```
+
+LLVM 当前定义中：
+
+```text
+clang/lib/Headers/linx_blkc.h
+#define tile_size(n) __attribute__((ext_vector_type(n)))
+```
+
+因此 `TileDType` 必须继续是编译器可识别的 tile/vector register carrier，而不能是普通数组。正确方向是恢复类似：
+
+```cpp
+#ifdef __linx
+using TileDType = DType tile_size(
+    Rows * Cols / (sizeof(DType) * 8 / type_traits<DType>::bits));
+#else
+using TileDType = DType[Rows * Cols];
+#endif
+```
+
+需要修正的是 Linx driver/resource header 注入或正确工具链环境，而不是删除 `tile_size` 类型。请同时验证：
+
+```text
+tile_size 宏在 __linx 编译时可见；
+TileDType sizeof 等于逻辑 tile bytes；
+"Tr"/"=Tr" inline asm operand 可以正常 lower；
+SizeCode 仍由正确的 TileDType 大小推导。
+```
+
+### 2. Group Matmul 的 M 不能使用 `A::Rows`
+
+当前宏包含：
+
+```cpp
+validate_cube_a_m<A, A::Rows>()
+```
+
+对于 Shared A + Shared B 的 4-PE Group Matmul，Shared A 的 Rows 是整个 Group 的 M，例如：
+
+```text
+A.Rows = 64
+local C/D.Rows = 16
+per-PE M = 16
+```
+
+若 A 声明 `CUBE_M16`，使用 `A::Rows == 64` 会错误拒绝本来合法的 per-PE M=16。
+
+必须复用此前 Issue #18 的 shape 推导规则：
+
+```text
+普通 Local/Local：M = A.Rows = destination.Rows
+Group Shared A+B：M = local destination.ValidRow/Rows
+Group 合同：SharedA.Rows == 4 * local destination.Rows
+```
+
+静态 CUBE layout bound 应检查 per-PE local M，而不是 whole-group A.Rows。建议将宏改为接收显式的 M-bearing destination type，使用：
+
+```cpp
+validate_cube_a_m<A, Output::Rows>()
+```
+
+但仍需确保动态 shape 和 Group runtime helper 使用同一逻辑，避免 compile-time 和 runtime 两套 M 定义不一致。
+
+### 3. ACC family 漏检最终 destination D
+
+当前 ACC 接口调用类似：
+
+```cpp
+PTO_CUBE_PRIMARY_ASSERTS(A, B, C);
+```
+
+这只验证 A/B/C，没有验证最终 destination D。以下接口都需要额外检查 D：
+
+```text
+TMATMUL_ACC basic/options
+TMATMUL_MX_ACC basic/options
+TGEMV_ACC basic/options（若 ISA 确认 TGEMV 使用同一 CUBE primary contract）
+TGEMV_MX_ACC basic/options（同上）
+```
+
+ACC 正确合同应为：
+
+```text
+A 为 M16/M32；
+B 为 N8；
+C 与 A 使用相同 M-side layout；
+D 与 A 使用相同 M-side layout；
+C.Rows/Cols 与 D.Rows/Cols 匹配；
+M 使用 per-PE destination 的逻辑 M；
+K=A.Cols==B.Rows；
+N=B.Cols==C.Cols==D.Cols。
+```
+
+建议不要继续使用只能表达单一 output 的三参数宏。拆分为公共 constexpr helper，例如：
+
+```cpp
+validate_cube_ab<A, B>();
+validate_cube_output<A, C, M>();
+validate_cube_output<A, D, M>();
+validate_matmul_shapes<A, B, C>();
+validate_acc_shapes<C, D>();
+```
+
+### 4. 不允许部分 primary 使用 CUBE、部分使用 None
+
+当前 `validate_cube_a_b_roles()`：
+
+```cpp
+if constexpr (A::Cube == None || B::Cube == None)
+  return true;
+```
+
+这会错误放行：
+
+```text
+A=M16, B=None
+A=None, B=N8
+A=M16, B=N8, C/D=None
+A=None, B=N8, C/D=M16
+```
+
+如果暂时保留 legacy path，只能允许：
+
+```text
+A=None && B=None && C/D=None
+```
+
+一旦任一 Matrix primary 使用 CUBE layout，全部 primary 必须完整声明：
+
+```text
+A=M16/M32
+B=N8
+C/D=A 的 M-side layout
+```
+
+建议增加统一模式判断：
+
+```cpp
+constexpr bool AllLegacy =
+    A::Cube == None && B::Cube == None && Output::Cube == None;
+constexpr bool AllCube =
+    is_cube_m_layout_v<A> && is_cube_n_layout_v<B> &&
+    Output::Cube == A::Cube;
+static_assert(AllLegacy || AllCube, "partial CUBE primary declaration is illegal");
+```
+
+若 active ISA 已彻底删除 ordinary Local Matrix primary path，则直接只允许 `AllCube`，不再保留 `AllLegacy`。实现前应以 active pto-spec 为最终依据。
+
+### 5. 当前 selector helper 是未使用的死代码
+
+当前文件顶部增加了：
+
+```cpp
+cube_transport_selector<T, Load>()
+cube_datr_line<T, Load>()
+```
+
+但实际 TLOAD/TSTORE 使用六段硬编码 `if constexpr + asm`，上述 helper 没有调用点。不要同时保留两套 selector 来源。
+
+可选方案：
+
+```text
+方案 A：删除未使用 helper，保留明确的 if constexpr asm 分支；
+方案 B：设计编译器可接受的统一 asm emission helper，确保 selector 是汇编文本而不是错误地作为整数 immediate 传递。
+```
+
+考虑 GCC/Clang extended inline asm 无法把普通 `const char *` operand 直接替换为 mnemonic token，当前阶段优先建议方案 A，避免制造看似抽象但无法工作的字符串 operand。
+
+### 6. TGEMV 不应未经确认直接复用 TMATMUL 合同
+
+当前 23 处宏接入不仅覆盖 TMATMUL family，还覆盖 TGEMV、TGEMV_BIAS、TGEMV_ACC、TGEMV_MX 等全部接口。
+
+必须先从 active PTO-ISA 确认：
+
+```text
+TGEMV 的 vec/mtx/output 是否也要求 CUBE_M16/M32/N8 persistent layout；
+vec 是否作为 M-side A，且 M 恒为 1；
+mtx 是否作为 N8 B；
+ACC 的 C/D 是否要求相同 M-side layout；
+TGEMV layout 是否存在与 TMATMUL 不同的 shape/role 合同。
+```
+
+如果 TGEMV 合同不同，应创建独立的 `PTO_CUBE_GEMV_ASSERTS`/helper，不能直接复用假设 `A.Rows`、`A.Cols==B.Rows` 的 TMATMUL 宏。
+
+### 7. 测试必须实例化真实接口
+
+当前 `CubeLayoutTraits.cpp` 主要是 traits 静态断言，无法发现 Group M、ACC D、mixed None/CUBE 和 inline asm operand 问题。
+
+必须增加以下测试。
+
+#### 正向 compile/assembly tests
+
+```text
+TLOAD CUBE_M16 -> B.DATR ND2M16.normal, Zero
+TLOAD CUBE_M32 -> B.DATR ND2M32.normal, Zero
+TLOAD CUBE_N8  -> B.DATR ND2N8.normal, Zero
+TSTORE CUBE_M16 -> B.DATR M162ND.normal, Null
+TSTORE CUBE_M32 -> B.DATR M322ND.normal, Null
+TSTORE CUBE_N8  -> B.DATR N82ND.normal, Null
+TMATMUL M16 + N8 + M16
+TMATMUL M32 + N8 + M32
+TMATMUL_ACC A/C/D layout 一致
+TMATMUL_MX/BIAS 各至少一个实例
+Group Shared A+B：whole A.Rows=4*D.Rows，per-PE M16/M32 合法
+```
+
+#### 负向 compile tests
+
+```text
+A=N8
+B=M16/M32
+M16 with per-PE M=17
+M32 with per-PE M=33
+A=M16 + B=None
+A=None + B=N8
+A=M16 + B=N8 + output=None
+A=M16 + C=M32
+A=M16 + D=M32
+ACC C/D layout 不一致
+K mismatch
+N mismatch
+Group whole/per-PE M mismatch
+```
+
+#### Tile register carrier test
+
+至少一个真实 TLOAD/TMATMUL/TSTORE 源文件必须进入 Linx CodeGen，证明：
+
+```text
+TileDType 可以绑定 Tr/=Tr；
+不会退化成普通内存数组 operand；
+不会因 tile register 数量/SizeCode 发生 compiler crash；
+objdump 能看到正确 B.DATR selector。
+```
+
+### 8. 当前静态核对可确认的部分
+
+当前 TLOAD/TSTORE 中的 selector 拼写与 LLVM MC 测试一致：
+
+```text
+ND2M32.normal, Zero
+ND2M16.normal, Zero
+ND2N8.normal, Zero
+M322ND.normal, Null
+M162ND.normal, Null
+N82ND.normal, Null
+```
+
+对应代码 21..26 的 LLVM MC assemble/objdump round-trip 测试已存在。该结论只能证明 selector 文本和 MC 定义一致，不能替代 TileOP inline asm 的真实 Linx 编译验证。
+
+### 建议修复顺序
+
+1. 恢复合法的 Linx tile/vector `TileDType` carrier，禁止普通数组用于 `Tr`。
+2. 修正 CUBE helper 的 legacy/full-CUBE 模式判断，拒绝 partial declaration。
+3. 将 M bound 改为 per-PE destination M，兼容 Group Matmul。
+4. 为 ACC helper 同时检查 C 和 D。
+5. 根据 active ISA 确认 TGEMV 合同，必要时拆分 GEMV helper。
+6. 删除未使用 selector helper，保持单一实现来源。
+7. 增加真实 TLOAD/TSTORE/TMATMUL/Group/ACC 正负测试。
+8. 使用包含最新 LLVM MC 修改的 Linx clang 完成 compile -> assembly/object -> objdump 验证。
+9. 验证通过前不要提交或推送；禁止修改 `SuperScalarModel` 仓库。
+
+### 第二轮状态
+
+```text
+CubeLayout 类型声明与透传：基本完成
+TLOAD/TSTORE selector 文本：基本完成
+selector LLVM MC 定义：已验证
+TileDType carrier：实现错误，阻塞
+Group per-PE M：实现错误，阻塞
+ACC C/D layout：漏检查，阻塞
+partial CUBE/None：错误放行，阻塞
+TGEMV 合同：待 active ISA 确认
+真实 TileOP Linx 编译：未完成
+```
+
+## TileOP CUBE layout 第三轮实测验收意见（2026-08-24）
+
+### 验收结论
+
+第二轮之后的修改中，Group per-PE M、ACC C/D layout、partial CUBE/None 拒绝等核心逻辑方向已经修正；LLVM MC 的六种 CUBE transport selector 定义也通过了定向测试。
+
+但是，新增 TileOP 端到端测试本身无法编译，`pto_tile.hpp` 中还误插入了与本任务无关且无法独立编译的 removed-op stub。因此当前工作区仍然**不能验收、不能提交或推送**。
+
+### 已验证通过的部分
+
+#### LLVM MC selector
+
+重新构建了当前 LLVM 工作区中的：
+
+```text
+llvm-mc
+llvm-objdump
+clang
+```
+
+以下测试通过：
+
+```text
+llvm/test/MC/LinxV5/v5-cube-layout.s
+llvm/test/MC/LinxV5/v5-cube-layout-neg.s
+llvm/test/MC/LinxV5/v5-cube-layout-encoding.s
+```
+
+结果：
+
+```text
+Passed: 3
+Failed: 0
+```
+
+六种 selector 的汇编文本与 LLVM MC 定义一致：
+
+```text
+TLOAD:
+  ND2M32.normal, Zero
+  ND2M16.normal, Zero
+  ND2N8.normal, Zero
+
+TSTORE:
+  M322ND.normal, Null
+  M162ND.normal, Null
+  N82ND.normal, Null
+```
+
+#### CUBE legality helper
+
+静态审查确认以下修复方向正确：
+
+```text
+PTO_CUBE_PRIMARY_ASSERTS 使用 Out::Rows 检查 per-PE M；
+Group Shared A+B 不再使用 whole-group A::Rows 判断 M16/M32；
+PTO_CUBE_ACC_ASSERTS 同时检查 C 和 D；
+cube_primary_mode_ok 拒绝 CUBE/None 部分混用；
+未使用的 cube_transport_selector/cube_datr_line helper 已删除。
+```
+
+### 阻塞问题 1：`CubeEndToEnd.cpp` 包含了错误的头文件
+
+当前：
+
+```cpp
+#include <common/pto_tile.hpp>
+```
+
+但测试直接调用：
+
+```cpp
+TLOAD(...);
+TSTORE(...);
+TMATMUL(...);
+```
+
+这些接口不由 `pto_tile.hpp` 声明，因此真实 Linx 编译报错：
+
+```text
+use of undeclared identifier 'TLOAD'
+use of undeclared identifier 'TSTORE'
+use of undeclared identifier 'TMATMUL'
+```
+
+应改为包含公共 TileOP API：
+
+```cpp
+#include <common/pto_tileop.hpp>
+```
+
+或者包含仓库规定的、能够引入 `jcore/template_asm.hpp` 的公共接口头。测试不能依赖 stub 环境预先声明这些函数。
+
+### 阻塞问题 2：`global_tensor` 被错误默认构造
+
+当前测试：
+
+```cpp
+GM16 g16;
+GM8 g8;
+```
+
+但 `global_tensor` 没有默认构造函数，必须传入 backing storage 地址。真实编译报错：
+
+```text
+no matching constructor for initialization of 'GM16'
+no matching constructor for initialization of 'GM8'
+```
+
+建议改为类似：
+
+```cpp
+float input[16 * 16];
+float output[16 * 16];
+GM16 g16(input);
+GM8 g8(output);
+```
+
+如果测试只需要生成汇编，可将 backing pointer 作为测试函数参数，避免在 `main` 中创建较大的对象：
+
+```cpp
+void cube_transport(float *src, float *dst) {
+  GM16 input(src);
+  GM8 output(dst);
+  // ...
+}
+```
+
+### 阻塞问题 3：端到端测试没有覆盖全部六种 selector
+
+`CubeEndToEnd.cpp` 注释声称覆盖：
+
+```text
+ND2M16 / ND2M32 / ND2N8
+M162ND / M322ND / N82ND
+```
+
+但当前实际只实例化：
+
+```text
+TLOAD M16 -> ND2M16
+TLOAD M32 -> ND2M32
+TSTORE M16 -> M162ND
+```
+
+缺少：
+
+```text
+TLOAD N8 -> ND2N8
+TSTORE M32 -> M322ND
+TSTORE N8 -> N82ND
+```
+
+必须为六种 selector 分别增加真实 TileOP API 调用，并通过生成汇编或 object disassembly 检查每一种 selector。
+
+### 阻塞问题 4：`pto_tile.hpp` 误插入 removed-op stub
+
+当前 CUBE traits 后面新增了：
+
+```cpp
+ACCSCALE_T(...)
+ACCSCALE_NZ2DN(...)
+ACCCVT_RMAX_SCALE_NZ2DN(...)
+```
+
+这些函数与 CUBE layout traits 无关，而且内部使用：
+
+```cpp
+pto_dependent_false_v<...>
+```
+
+但 `pto_dependent_false_v` 定义在 `jcore/template_asm.hpp` 中，`pto_tile.hpp` 被包含时该定义尚不可见，导致基础类型头无法独立编译：
+
+```text
+use of undeclared identifier 'pto_dependent_false_v'
+```
+
+处理要求：
+
+```text
+1. 从 pto_tile.hpp 删除这三个 unrelated removed-op stub；
+2. 如果这些 stub 原本属于 template_asm.hpp/API compatibility 层，应保留在原来的位置；
+3. 不要为了让 pto_tile.hpp 编译而把 asm/API helper 依赖继续扩散到基础类型头；
+4. CubeLayoutTraits.cpp 必须能够只包含 pto_tile.hpp 并完成 compile-time traits 验证。
+```
+
+### 阻塞问题 5：真实 Linx 编译门槛仍未完成
+
+本轮不是只做人工审查，而是执行了实际验证：
+
+```text
+重新构建当前 LLVM clang/llvm-mc/llvm-objdump；
+使用 LinxV5 target、现有 musl sysroot 和当前 TileOP 工作区；
+尝试将 CubeEndToEnd.cpp 编译为 Linx assembly。
+```
+
+测试在进入 CUBE selector inline assembly 验证之前，就被以下问题阻断：
+
+```text
+错误公共头文件；
+TLOAD/TSTORE/TMATMUL 未声明；
+global_tensor 无默认构造；
+pto_tile.hpp 的 pto_dependent_false_v 未声明。
+```
+
+因此不能声称“测试文件已就绪”或“只差环境”。当前至少包含明确的测试源码和头文件组织问题，必须先修正。
+
+### 阻塞问题 6：负向测试没有实例化真实公共 API
+
+`CubeLayoutTraits.cpp` 当前主要验证：
+
+```cpp
+static_assert(!cube_primary_mode_ok<...>());
+static_assert(!validate_cube_a_m<...>());
+```
+
+这只能证明 helper 返回值，不能证明以下公共 API 已正确调用 helper：
+
+```text
+TMATMUL
+TMATMUL_ACC
+TMATMUL_BIAS
+TMATMUL_MX
+TMATMUL_MX_ACC
+TMATMUL_MX_BIAS
+TGEMV family（若 active ISA 确认合同一致）
+```
+
+必须增加由脚本驱动的 negative compilation tests，直接实例化错误 API，并确认命中预期 diagnostic，例如：
+
+```text
+A=M16, B=None, D=None -> fail
+A=M16, B=N8, D=None -> fail
+A=N8, B=N8, D=M16 -> fail
+A=M16, B=M16, D=M16 -> fail
+M16 with per-PE M=17 -> fail
+A=M16, C=M32, D=M16 -> fail
+A=M16, C=M16, D=M32 -> fail
+ACC C/D shape mismatch -> fail
+K mismatch -> fail
+N mismatch -> fail
+```
+
+### 阻塞问题 7：Group 测试只测 helper，没有实例化 Group Matmul
+
+当前所谓 Group 验证只是：
+
+```cpp
+validate_cube_a_m<A16, 16>()
+```
+
+没有创建：
+
+```text
+Shared A：whole-group Rows = 4 * per-PE M
+Shared B
+Local C/D：Rows = per-PE M
+TMATMUL/TMATMUL_ACC 调用
+```
+
+必须增加真实 Shared A+B Group 接口测试，至少覆盖：
+
+```text
+A.Rows=64, D.Rows=16, A/D=M16 -> pass
+A.Rows=68, D.Rows=17, A/D=M16 -> fail
+A.Rows=68, D.Rows=17, A/D=M32 -> pass（其他 Group shape 合同满足时）
+SharedA.Rows != 4 * D.Rows -> fail
+```
+
+验证生成的 LB0 仍是 per-PE destination M，而不是 whole-group A.Rows。
+
+### 建议修复顺序
+
+1. 从 `pto_tile.hpp` 删除误插入的 ACCSCALE/ACCCVT stub。
+2. 确保 `CubeLayoutTraits.cpp` 仅包含 `pto_tile.hpp` 即可编译。
+3. 将 `CubeEndToEnd.cpp` 改为包含正确公共 TileOP API 头。
+4. 为 `global_tensor` 提供有效 backing pointer。
+5. 补齐全部六种 CUBE transport selector 调用。
+6. 增加真实 TMATMUL/ACC/Group 正向测试。
+7. 增加由编译脚本驱动的公共 API 负向测试。
+8. 使用当前重建后的 Linx clang 完成：
+
+```text
+TileOP C++ -> Linx assembly/object -> llvm-objdump
+```
+
+9. FileCheck/grep 确认六种 B.DATR selector 和 TMATMUL 均出现。
+10. 所有测试通过后再提交和推送；禁止修改 `SuperScalarModel` 仓库。
+
+### 第三轮状态
+
+```text
+LLVM MC selector round-trip：通过（3/3）
+Group per-PE M helper：静态逻辑通过
+ACC C/D helper：静态逻辑通过
+partial CUBE/None 拒绝：静态逻辑通过
+CubeEndToEnd.cpp：无法编译
+六种 TileOP selector 覆盖：仅 3/6
+pto_tile.hpp 独立编译：被误插入 stub 阻断
+真实公共 API 负向测试：未完成
+真实 Group Matmul 测试：未完成
+TileOP Linx compile/objdump：未完成
+```
+
+最终结论：**核心 helper 修复方向正确，但测试和头文件组织仍有明确代码问题，不能归因于“仅缺工具链环境”。修复上述问题并完成真实 Linx 编译前，不得验收、提交或推送。**
+
+## CUBE transport 后续修正：禁止扩展 `layout<N>` 汇编语法
+
+### 最终设计结论
+
+`layout21`、`layout22`、...、`layout26` 不是 PTO-ISA 定义的正式汇编语法，也不是 Linx LLVM 后端原有语法。该写法来自当前未提交 TileOP 实现中的 workaround：
+
+```cpp
+"B.DATR layout%c[Layout], DTYPE_NONE, Null\n"
+```
+
+它试图通过 inline-asm immediate operand 将数值 layout code 拼接成 mnemonic token。为支持该写法而增加的 LLVM parser 特判：
+
+```cpp
+if (LexStr.startswith_insensitive("layout")) { ... }
+```
+
+属于额外的非 ISA 汇编语法扩展，不应合入。
+
+用户已明确：**不扩展 `layout<N>`；复用已有 layout selector 的实现方式，只增加新的 layout 类型。**
+
+### ISA 定义的正式 selector
+
+必须使用以下 canonical 名称：
+
+| Layout code | Canonical selector | 方向 |
+|---:|---|---|
+| 21 | `ND2M32` | `TLOAD`，GM -> Local CUBE_M32 |
+| 22 | `ND2M16` | `TLOAD`，GM -> Local CUBE_M16 |
+| 23 | `ND2N8` | `TLOAD`，GM -> Local CUBE_N8 |
+| 24 | `M322ND` | `TSTORE`，Local CUBE_M32 -> GM |
+| 25 | `M162ND` | `TSTORE`，Local CUBE_M16 -> GM |
+| 26 | `N82ND` | `TSTORE`，Local CUBE_N8 -> GM |
+
+### LLVM 侧必须修改
+
+保留：
+
+- `LinxV5TileTrans.def` 中 21..26 的 canonical selector 编码；
+- assembler 对 canonical selector 的解析；
+- disassembler 对 canonical selector 的还原；
+- TLOAD/TSTORE 的方向合法性检查；
+- reserved layout code 的拒绝；
+- `DTYPE_NONE` 和三参数 `B.DATR` alias（如果 TileOP canonical 形式确实需要）。
+
+删除：
+
+- `parseBArgFormat` 中对 `layout<N>` 的特殊解析；
+- `FromLayoutN` 及其绕过方向检查的逻辑；
+- `v5-cube-layout.s` 中 `B.DATR layout21..layout26` 的正向测试；
+- 所有把 `layout<N>` 描述为 TileOP/ISA 支持语法的注释。
+
+LLVM MC 测试只允许覆盖正式形式，例如：
+
+```asm
+B.DATR ND2M32.normal, Zero
+B.DATR ND2M16.normal, Zero
+B.DATR ND2N8.normal, Zero
+B.DATR M322ND.normal, Null
+B.DATR M162ND.normal, Null
+B.DATR N82ND.normal, Null
+```
+
+注意：2026-08-24 本地实际运行三个 CUBE MC 测试的结果为 **2/3 PASS**，不是此前汇报的 3/3：
+
+```text
+PASS v5-cube-layout-encoding.s
+PASS v5-cube-layout-neg.s
+FAIL v5-cube-layout.s
+```
+
+失败项正是六条未被当前构建接受的 `layout21..layout26`。删除非标准语法并重新构建 LLVM 后，必须重新运行三项测试确认全部通过。
+
+### TileOP 侧必须修改
+
+不要再生成：
+
+```cpp
+"B.DATR layout%c[Layout], DTYPE_NONE, Null\n"
+```
+
+应复用已有的静态 layout 生成方式，根据 `BLayout::CubeM16`、`BLayout::CubeM32`、`BLayout::CubeN8` 使用 `if constexpr` 或宏展开固定的 canonical 汇编文本。
+
+TLOAD 示例：
+
+```cpp
+if constexpr (cube_shape::BFractal == BLayout::CubeM32) {
+  // B.DATR ND2M32.normal, Zero
+} else if constexpr (cube_shape::BFractal == BLayout::CubeM16) {
+  // B.DATR ND2M16.normal, Zero
+} else if constexpr (cube_shape::BFractal == BLayout::CubeN8) {
+  // B.DATR ND2N8.normal, Zero
+}
+```
+
+TSTORE 示例：
+
+```cpp
+if constexpr (cube_shape::BFractal == BLayout::CubeM32) {
+  // B.DATR M322ND.normal, Null
+} else if constexpr (cube_shape::BFractal == BLayout::CubeM16) {
+  // B.DATR M162ND.normal, Null
+} else if constexpr (cube_shape::BFractal == BLayout::CubeN8) {
+  // B.DATR N82ND.normal, Null
+}
+```
+
+要求：
+
+- 复用当前主线的 `BLayout::CubeM16/CubeM32/CubeN8`，不要重新引入独立 `CubeLayout` API；
+- 不通过整数 operand 动态拼接 selector 名称；
+- 保留已有 `BSTART.TLOAD/TSTORE`、`B.DIM`、`B.IOT`、`B.IOR` 和 tile register operand 约束；
+- load padding 使用 ISA 要求的 `Zero`，store padding 使用 `Null`；
+- 六个 selector 都必须由真实 TileOP API 用例实例化。
+
+### 更新后的验收门槛
+
+1. LLVM 源码中无 `layout<N>` parser 扩展。
+2. TileOP 源码中无 `B.DATR layout%c[...]`。
+3. 六个 canonical selector 的 assemble -> object -> objdump round-trip 全部通过。
+4. load/store 方向错误仍被 assembler 拒绝。
+5. reserved layout code 仍被拒绝或反汇编为 unknown。
+6. TileOP `CubeCellTransport.cpp` 覆盖六个 selector、TMATMUL、ACC 和 Group。
+7. 在正确 Linx 工具链中完成 TileOP compile -> object -> objdump，并确认输出仅包含 canonical selector。
+8. 未完成第 7 项前可以提交为待验证工作，但不得宣称端到端验收通过；未经用户指示不得推送。
+9. 禁止修改 `SuperScalarModel` 仓库。
+
+## CUBE layout 验收状态（2026-08-24）
+
+本轮完成并验证了 CUBE layout transport 的验收闭环，结论如下：
+
+- LLVM MC 侧的 canonical selector 21--26 已通过 assembler/disassembler round-trip：
+  - TLOAD：`ND2M32`、`ND2M16`、`ND2N8`；
+  - TSTORE：`M322ND`、`M162ND`、`N82ND`。
+- CUBE selector 仅允许出现在对应的 TLOAD/TSTORE 数据传输上下文；方向错误和 reserved selector 均有负向测试并被拒绝。
+- 分离式 TLSU 语法已验证：`BSTART.TLSU TLOAD/TSTORE` 后接 canonical `B.DATR`，不使用非 ISA 的 `layout<N>`，也不使用 `BSTART.TLOAD`/`BSTART.TSTORE`。
+- LLVM 定向测试通过：`v5-cube-layout.s`、`v5-cube-layout-encoding.s`、`v5-cube-layout-neg.s` 共 3 个测试全部 PASS。
+- TileOP contract 测试通过：32 个 Python contract tests、C++ syntax-only tests、shell syntax checks 和 `git diff --check` 全部 PASS。
+- TileOP 的 `verify_pto0583_asm.sh` 已修正为检查 7 参数 `B.FPATR`、完整的 `B.IOT` 条件绑定，以及 `.normal`/`Zero`/`Null` 的 canonical B.DATR 输出；MC/disassembly/negative contract 验证 PASS。
+- `TLOAD_CUBE`/`TSTORE_CUBE` 仍是 TileOP 高层 helper，不是 ISA 原生 mnemonic；它们通过 `if constexpr` 选择正式的 B.DATR selector。
+- `CubeCellTransport.cpp` 仅验证 Local CUBE transport、basic matmul 和 ACC transport；Group matmul 继续由既有 `GroupMatmul.cpp` 覆盖，不虚构 lone Shared-A 语义。
+
+尚未宣称完成的部分：
+
+- 本机官方工具链对完整 TileOP C++ 目标编译仍受 `_Float16`/target frontend 限制，尚未完成真实 C++ -> object -> objdump 的端到端 CUBE 测试；host stub/syntax-only 结果不能替代该验证。
+- CUBE persistent descriptor 的完整 Model 状态机、Shared-A/Shared-B cooperative M-sharding，以及完整 ISA lowering 不属于本轮 LLVM MC/TileOP transport 验收范围。
+- 未修改 `SuperScalarModel`，未创建新分支；当前改动仍需在用户明确要求后再提交/推送。
