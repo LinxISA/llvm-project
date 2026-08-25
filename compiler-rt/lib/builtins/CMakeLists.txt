@@ -869,6 +869,7 @@ set(s390x_SOURCES
 # Linx ISA (linx32 and linx64)
 set(linx_SOURCES
   linx/fp_mode.c
+  linx/group_runtime.c
   ${GENERIC_SOURCES}
 )
 set(linx32_SOURCES
