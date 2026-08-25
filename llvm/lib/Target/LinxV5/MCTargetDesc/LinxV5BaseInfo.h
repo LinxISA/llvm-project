@@ -173,8 +173,8 @@ enum TOF {
 // B.IOT/B.IOS SizeCode / PEMode helpers (PTO-ISA commit 1e91bf9, ADR 0069).
 //
 // SizeCode  : 4-bit, Inst{18-15}. 0 is the source-only encoding; B.IOT
-//             destination uses 1..10 (128 B..64 KiB per PE), B.IOS
-//             destination uses 1..12 (128 B..256 KiB per PE); 13..15 are
+//             destination uses 1..12 (128 B..256 KiB per PE), B.IOS
+//             destination uses 1..12 (128 B..256 KiB per core-wide object); 13..15 are
 //             reserved.
 //
 // PEMode    : 3-bit, Inst{11-9}. The common decoder expands it to a fixed
@@ -185,7 +185,7 @@ enum TOF {
 //             Masks with no PEMode (0011,0101,0110,0111,1001,1010,1011,1101)
 //             are not encodable and must be rejected.
 namespace LinxV5SizeCode {
-constexpr unsigned LocalMaxSizeCode = 10;   // B.IOT destination 1..10
+constexpr unsigned LocalMaxSizeCode = 12;   // B.IOT destination 1..12
 constexpr unsigned SharedMaxSizeCode = 12;  // B.IOS destination 1..12
 constexpr unsigned ReservedMinSizeCode = 13;
 

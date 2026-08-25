@@ -472,7 +472,7 @@ static DecodeStatus decodeBIOSDstTSize(MCInst &Inst, const InsnType &insn,
 }
 
 // B.IOT destination SizeCode operand decoder (Local SizeCode contract
-// 1..10). A size code of 0 encodes the source-only form, and 11..15 are
+// 1..12). A size code of 0 encodes the source-only form, and 13..15 are
 // reserved, so an instruction word that lands on a B_IOT_*_Dst form with
 // any of these must fail to decode as a destination (the decoder then falls
 // through to the source-only form for SizeCode=0).
@@ -481,8 +481,8 @@ static DecodeStatus decodeBIOTDstSizeCode(MCInst &Inst, const InsnType &insn,
                                           int64_t Address,
                                           const MCDisassembler *Decoder) {
   uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
-  if (SizeCode < 1 || SizeCode > 10)
-    return MCDisassembler::Fail; // source form (0) or reserved (11..15)
+  if (SizeCode < 1 || SizeCode > 12)
+    return MCDisassembler::Fail; // source form (0) or reserved (13..15)
   Inst.addOperand(MCOperand::createImm(SizeCode));
   return MCDisassembler::Success;
 }

@@ -2,8 +2,8 @@
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s --check-prefix=DIS
 
 # PTO-ISA ADR 0069 (commit 1e91bf9): B.IOT/B.IOS re-encode size and PE mode.
-#   SizeCode 4-bit @ [18:15]: 0=source-only; B.IOT dest 1..10 (128B..64KB/PE);
-#     B.IOS dest 1..12 (128B..256KB/PE); 13..15 reserved.
+#   SizeCode 4-bit @ [18:15]: 0=source-only; B.IOT/B.IOS dest 1..12
+#     (128B..256KB); 13..15 reserved.
 #   PEMode 3-bit @ [11:9]: 000->0000 001->1000(PE0) 010->0100 011->0010
 #     100->0001(PE3) 101->1100 110->1110 111->1111.
 
@@ -11,6 +11,8 @@
 B.IOT mask=1111, last, ->t<16KB>
 B.IOT mask=1111, last, ->t<32KB>
 B.IOT mask=1111, last, ->t<64KB>
+B.IOT mask=1111, last, ->t<128KB>
+B.IOT mask=1111, last, ->t<256KB>
 B.IOS mask=1111, ->S0<64KB>
 B.IOS mask=1111, ->S0<128KB>
 B.IOS mask=1111, ->S0<256KB>
@@ -30,6 +32,8 @@ B.IOS S4, mask=1100
 # ENC: B.IOT{{.*}}->t<16KB>
 # ENC: B.IOT{{.*}}->t<32KB>
 # ENC: B.IOT{{.*}}->t<64KB>
+# ENC: B.IOT{{.*}}->t<128KB>
+# ENC: B.IOT{{.*}}->t<256KB>
 # ENC: B.IOS{{.*}}->S0<64KB>
 # ENC: B.IOS{{.*}}->S0<128KB>
 # ENC: B.IOS{{.*}}->S0<256KB>

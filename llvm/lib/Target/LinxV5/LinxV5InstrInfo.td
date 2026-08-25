@@ -2876,7 +2876,7 @@ let Format = InstFormatBlockModifier;
   //   [18:15] SizeCode (4b), [14:12] Func (3b), [11:9] PEMode (3b),
   //   [8:7] DstTile (2b: T/U/M/N), [6:4]/[3:1] fixed, [0] fixed 1.
   // PTO-ISA ADR 0069 (commit 1e91bf9): [18:15] carries the 4-bit SizeCode
-  // (0 = source-only, 1..10 = destination capacity 128B..64KB per PE; 13..15
+  // (0 = source-only, 1..12 = destination capacity 128B..256KB per PE; 13..15
   // reserved) and [11:9] carries the 3-bit PEMode expanded to a 4-PE mask.
   // The TSize operand drives the SizeCode field; the PE_MASK operand drives
   // the PEMode field (the PE_MASK encoder converts a 4-bit mask to PEMode).
@@ -2933,7 +2933,7 @@ def TileSizeWithBracketAsmOperand : AsmOperandClass {
 }
 
 // v5: B.IOT destination-suffix SizeCode (e.g. "->t<8KB>"). Matches
-// 1..10 (B.IOT destination capacity; 0 is source, 11..15 reserved).
+// 1..12 (B.IOT destination capacity; 0 is source, 13..15 reserved).
 def B_IOT_TileSizeAsmOperand : AsmOperandClass {
   let Name = "B_IOT_TileSize";
   let ParserMethod = "parseTileSizeWithBracket";
@@ -3050,15 +3050,15 @@ def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]> {
 }
 
 // B.IOT destination legacy "TSize=N" spelling must honor the Local SizeCode
-// contract 1..10 (128B..64KB per PE). 0 is the source form (a destination
-// spelling with TSize=0 is illegal) and 11..15 reserved. Used only by the
+// contract 1..12 (128B..256KB per PE). 0 is the source form (a destination
+// spelling with TSize=0 is illegal) and 13..15 reserved. Used only by the
 // B.IOT_*_Dst legacy aliases; PseudoV5* keep the wide TSize_Op above.
 def B_IOT_TSizeAsmOperand : AsmOperandClass {
   let Name = "B_IOT_TSize";
   let ParserMethod = "parseTSize";
   let RenderMethod = "addImmOperands";
 }
-def B_IOT_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 10;}]> {
+def B_IOT_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 12;}]> {
   let ParserMatchClass = B_IOT_TSizeAsmOperand;
   let PrintMethod = "printTSize";
   let EncoderMethod = "getImmOpValueTSize";
@@ -3074,9 +3074,9 @@ def BIOS_Dst_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Im
   let DecoderMethod = "decodeBIOSDstTSize";
 }
 
-// v5: B.IOT destination-suffix SizeCode operand (1..10 for B.IOT destination,
-// 128 B..64 KB per PE; 0 is only the source form and 11..15 reserved).
-def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 10;}]> {
+// v5: B.IOT destination-suffix SizeCode operand (1..12 for B.IOT destination,
+// 128 B..256 KB per PE; 0 is only the source form and 13..15 reserved).
+def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 12;}]> {
   let ParserMatchClass = B_IOT_TileSizeAsmOperand;
   let PrintMethod = "printTileSizeWithBracket";
   let EncoderMethod = "getImmOpValueTSize";
@@ -3128,8 +3128,8 @@ def B_IOS : B_IOS_Base<0b001, (outs),
 def : InstAlias<"B.IOS\t$SharedTID, $PE_MASK",
     (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK, 0), 0>;
 // Destination input: "B.IOS mask=0011, ->S12<128B>". Must use the B.IOS
-// SizeCode operand (1..12); the B.IOT shared bracket operand (1..10) would
-// wrongly cap Shared destinations at 64KB.
+// SizeCode operand (1..12); both Local B.IOT and Shared B.IOS use the active
+// 0.58.4 destination range.
 def : InstAlias<"B.IOS\t$PE_MASK, $SharedTID$TSize",
     (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
      BIOS_Dst_TSize_Op:$TSize), 0>;

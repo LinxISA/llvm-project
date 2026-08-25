@@ -575,7 +575,7 @@ public:
   }
 
   // v5: B.IOT destination legacy "TSize=N" honors the Local SizeCode
-  // contract 1..10; 0 (source-only) and 11..15 are rejected in a
+  // contract 1..12; 0 (source-only) and 13..15 are rejected in a
   // destination spelling.
   bool isB_IOT_TSize() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
@@ -584,11 +584,11 @@ public:
       return false;
     if (!evaluateConstantImm(getImm(), Imm, VK))
       return true; // symbolic form falls through to encoder
-    return Imm >= 1 && Imm <= 10;
+    return Imm >= 1 && Imm <= 12;
   }
 
   // v5: B.IOT destination-suffix SizeCode ("<8KB>"). B.IOT destination
-  // capacity is 1..10 (128B..64KB per PE); 0 is the source form and 11..15
+  // capacity is 1..12 (128B..256KB per PE); 0 is the source form and 13..15
   // reserved, all rejected at match time.
   bool isB_IOT_TileSize() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
@@ -597,7 +597,7 @@ public:
       return false;
     if (!evaluateConstantImm(getImm(), Imm, VK))
       return true; // symbolic form falls through to encoder
-    return Imm >= 1 && Imm <= 10;
+    return Imm >= 1 && Imm <= 12;
   }
 
   // v5: B.IOS destination SizeCode ("<256KB>"). A destination spelling must

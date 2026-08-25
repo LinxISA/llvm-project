@@ -1102,11 +1102,11 @@ SDValue LinxV5TargetLowering::lowerMergeCF(SDLoc &DL, SDValue Op,
   return Result;
 }
 
-static unsigned calculateVCallSizeMask(EVT Type, unsigned MaxCode = 10) {
+static unsigned calculateVCallSizeMask(EVT Type, unsigned MaxCode = 12) {
   // The tile register type's size is the per-PE tile size and encodes directly
   // (no division by 4): SizeCode = Log2(SizeBytes)-6 (128 B -> 1). Local B.IOT
-  // destinations allow 1..10 (128 B..64 KB per PE); Shared B.IOS destinations
-  // allow 1..12 (128 B..256 KB per PE) so callers pass MaxCode accordingly.
+  // Local B.IOT and Shared B.IOS destinations both allow SizeCode 1..12
+  // (128 B..256 KB per the active PTO-ISA contract).
   uint64_t SizeBytes = Type.getFixedSizeInBits() / 8;
   if (!isPowerOf2_64(SizeBytes) || SizeBytes < 128)
     report_fatal_error(
