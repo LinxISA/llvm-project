@@ -3189,6 +3189,9 @@ def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, Grou
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
 }
 def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
+def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK",
+    (B_IOT_OneSrc_NoDst PE_MASK_Op:$PE_MASK, 0,
+     TILE_Src_Reg:$SrcTile0), 1>;
 
 // PTO v0.58 reissue: no mask-only Shared B.IOT companion exists (B.IOT binds
 // Local Tiles only). The retired no-src/no-dst TSize-only form is removed;
