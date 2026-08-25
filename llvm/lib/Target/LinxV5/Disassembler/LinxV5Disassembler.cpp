@@ -487,6 +487,33 @@ static DecodeStatus decodeBIOTDstSizeCode(MCInst &Inst, const InsnType &insn,
   return MCDisassembler::Success;
 }
 
+// B.SUBVIEW SubviewSizeCode operand decoder (ADR-0098): receives the
+// already-extracted 4-bit field value; only 1..12 decode, 0/13..15 fail.
+template <typename InsnType>
+static DecodeStatus decodeSUBVIEWSizeCode(MCInst &Inst, const InsnType &insn,
+                                          int64_t Address,
+                                          const MCDisassembler *Decoder) {
+  uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
+  if (SizeCode < 1 || SizeCode > 12)
+    return MCDisassembler::Fail; // reserved 0, 13..15
+  Inst.addOperand(MCOperand::createImm(SizeCode));
+  return MCDisassembler::Success;
+}
+
+// B.ASSEMBLE ParentSizeCode operand decoder (ADR-0098): 0..12 decode;
+// 13..15 reserved. (The INIT<->non-INIT size-0 association is checked by
+// the assembler predicate; the decoder only enforces the raw range.)
+template <typename InsnType>
+static DecodeStatus decodeParentSizeCode(MCInst &Inst, const InsnType &insn,
+                                         int64_t Address,
+                                         const MCDisassembler *Decoder) {
+  uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
+  if (SizeCode > 12)
+    return MCDisassembler::Fail; // reserved 13..15
+  Inst.addOperand(MCOperand::createImm(SizeCode));
+  return MCDisassembler::Success;
+}
+
 // PEMode operand decoder: receives the already-extracted 3-bit mode value
 // (fieldFromInstruction(insn, 9, 3) in the generated table) and expands it
 // back to the 4-bit semantic mask that the printer renders as mask=NNNN.
@@ -510,6 +537,40 @@ enum DecoderNS {
 
 static bool isShareSpace(ArrayRef<uint8_t> Bytes) {
   if ((Bytes[0] & 0x7) == 0x3 || (Bytes[0] & 0x7) == 0x5)
+    return true;
+  return false;
+}
+
+// PTO-ISA 0.58.4 ADR-0098 range modifiers: fail-closed validation of a
+// decoded B.SUBVIEW/B.ASSEMBLE word. The field-level operand decoders
+// enforce raw ranges, but the following cross-field contracts can only be
+// checked against the full word:
+//   B.SUBVIEW: SubviewSizeCode must be 1..12; RegSrc 0..23
+//   B.ASSEMBLE: INIT=1 requires ParentSizeCode 1..12; INIT=0 requires 0;
+//               RegSrc 0..23
+// Any violation makes the word fail to decode (<unknown>) instead of
+// printing a semantically-illegal instruction.
+static bool subviewWordIllegal(uint64_t Insn) {
+  uint64_t SubviewSizeCode = (Insn >> 7) & 0xf;
+  if (SubviewSizeCode < 1 || SubviewSizeCode > 12)
+    return true;
+  uint64_t RegSrc = (Insn >> 15) & 0x1f;
+  if (RegSrc > 23)
+    return true;
+  return false;
+}
+
+static bool assembleWordIllegal(uint64_t Insn) {
+  uint64_t Init = (Insn >> 31) & 0x1;
+  uint64_t ParentSizeCode = (Insn >> 7) & 0xf;
+  if (ParentSizeCode > 12)
+    return true; // reserved 13..15
+  if (Init == 1 && ParentSizeCode == 0)
+    return true; // INIT requires ParentSizeCode 1..12
+  if (Init == 0 && ParentSizeCode != 0)
+    return true; // non-INIT requires ParentSizeCode 0
+  uint64_t RegSrc = (Insn >> 15) & 0x1f;
+  if (RegSrc > 23)
     return true;
   return false;
 }
@@ -546,6 +607,15 @@ DecodeStatus LinxV5Disassembler::getInstruction(MCInst &MI, uint64_t &Size,
       }
       Size = 4;
       Insn = support::endian::read32le(Bytes.data());
+      // PTO-ISA 0.58.4 ADR-0098 range modifiers: reject words that hit the
+      // B.SUBVIEW/B.ASSEMBLE match but carry an illegal cross-field
+      // combination, before the table decoder can print them. Size stays 4
+      // so the disassembler skips the whole word and re-aligns (<unknown>
+      // is printed for the illegal word, then decoding continues).
+      if (((Insn & 0x787f) == 0x0053 && subviewWordIllegal(Insn)) ||
+          ((Insn & 0x707f) == 0x1053 && assembleWordIllegal(Insn))) {
+        return MCDisassembler::Fail;
+      }
       Result = decodeInstruction(DecoderTable32, MI, Insn, Address, this, STI);
     } else {
       if (Bytes.size() < 2) {

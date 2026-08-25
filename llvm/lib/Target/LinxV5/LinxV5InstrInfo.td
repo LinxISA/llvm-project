@@ -976,6 +976,31 @@ def BArgFormat : Operand<i64> {
   let DecoderMethod = "decodeBArgFormat";
 }
 
+// B.SUBVIEW SubviewSizeCode: 4-bit, legal 1..12 (128 B..256 KiB per PE);
+// 0 and 13..15 are reserved (`BundleRangeSubviewRawLegal`).
+def SubviewSizeCodeAsmOperand : AsmOperandClass {
+  let Name = "SubviewSizeCode";
+  let RenderMethod = "addImmOperands";
+}
+def SubviewSizeCode : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 12;}]> {
+  let ParserMatchClass = SubviewSizeCodeAsmOperand;
+  let PrintMethod = "printSubviewSizeCode";
+  let DecoderMethod = "decodeSUBVIEWSizeCode";
+}
+
+// B.ASSEMBLE ParentSizeCode: 4-bit, legal 0..12; 13..15 reserved. Size
+// code 0 is only legal on a non-INIT (MIDDLE/LAST) modifier and never on
+// INIT (checked by the assembler predicate and the decoder).
+def ParentSizeCodeAsmOperand : AsmOperandClass {
+  let Name = "ParentSizeCode";
+  let RenderMethod = "addImmOperands";
+}
+def ParentSizeCode : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm <= 12;}]> {
+  let ParserMatchClass = ParentSizeCodeAsmOperand;
+  let PrintMethod = "printParentSizeCode";
+  let DecoderMethod = "decodeParentSizeCode";
+}
+
 def RModeAsmOperand : AsmOperandClass {
   let Name = "RMode";
   let ParserMethod = "parseRMode";
@@ -1593,6 +1618,64 @@ def BDATR : BlockModifierBase {
   let Inst{3-1} = 0b001;
   let Inst{0} = 0b1;
   let AsmString = "B.DATR\t$DataLayout$canon, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, #sat";
+}
+
+// B.SUBVIEW / B.ASSEMBLE: PTO-ISA 0.58.4 range modifiers (ADR-0098,
+// pto-spec 564ac2d). Both are 32-bit block commands that attach to the
+// immediately preceding continuous B.IOT/B.IOS binder group.
+//   B.SUBVIEW  match=0x00000053 mask=0x0000787f
+//   B.ASSEMBLE match=0x00001053 mask=0x0000707f
+// Derived offset = GPR[RegSrc] + ZeroExtend(uimm11) modulo XLEN.
+//   SubviewSizeCode 1..12  (0 and 13..15 reserved)
+//   ParentSizeCode  0..12  (13..15 reserved; 0 legal only on non-INIT)
+def B_SUBVIEW : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+
+  let OutOperandList = (outs );
+  let InOperandList = (ins uimm1:$SrcSelect, GPRSrc:$RegSrc, uimm11:$uimm11,
+                           SubviewSizeCode:$SubviewSizeCode);
+
+  bits<1> SrcSelect;
+  bits<11> uimm11;
+  bits<5> RegSrc;
+  bits<4> SubviewSizeCode;
+  let Inst{31} = SrcSelect;
+  let Inst{30-20} = uimm11;
+  let Inst{19-15} = RegSrc;
+  let Inst{14-11} = 0b0000;
+  let Inst{10-7} = SubviewSizeCode;
+  let Inst{6-4} = 0b101;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+  let AsmString = "B.SUBVIEW\t$SrcSelect, $RegSrc, $uimm11, $SubviewSizeCode";
+}
+
+def B_ASSEMBLE : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+
+  let OutOperandList = (outs );
+  let InOperandList = (ins uimm1:$INIT, uimm1:$LAST, GPRSrc:$RegSrc,
+                           uimm11:$uimm11, ParentSizeCode:$ParentSizeCode);
+
+  bits<1> INIT;
+  bits<1> LAST;
+  bits<11> uimm11;
+  bits<5> RegSrc;
+  bits<4> ParentSizeCode;
+  let Inst{31} = INIT;
+  let Inst{30-20} = uimm11;
+  let Inst{19-15} = RegSrc;
+  let Inst{14-12} = 0b001;
+  let Inst{11} = LAST;
+  let Inst{10-7} = ParentSizeCode;
+  let Inst{6-4} = 0b101;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+  let AsmString = "B.ASSEMBLE\t$INIT, $LAST, $RegSrc, $uimm11, $ParentSizeCode";
 }
 
 // DavinciOO v5 FIXPIPE attributes. Required exactly once by every supported

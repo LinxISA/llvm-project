@@ -80,6 +80,13 @@ def uimm5 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isUInt<5>(Imm);}]> {
   let OperandNamespace = "LinxV5Op";
 }
 
+// Unsigned 11-bit offset for B.SUBVIEW / B.ASSEMBLE (range modifier offset
+// addend, PTO-ISA ADR-0098).
+def uimm11 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isUInt<11>(Imm);}]> {
+  let ParserMatchClass = UImmAsmOperand<11>;
+  let DecoderMethod = "decodeUImmOperand<11>";
+}
+
 def simm5 : Operand<XLenVT>, ImmLeaf<XLenVT, [{return isInt<5>(Imm);}]> {
   let ParserMatchClass = SImmAsmOperand<5>;
   let EncoderMethod = "getImmOpValue";

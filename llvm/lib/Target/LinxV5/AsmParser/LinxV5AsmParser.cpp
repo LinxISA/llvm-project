@@ -552,6 +552,28 @@ public:
   bool isPE_MASK() const { return isImm(); }
   bool isTSize() const { return isImm(); }
 
+  // B.SUBVIEW SubviewSizeCode: raw legal range 1..12 (ADR-0098).
+  bool isSubviewSizeCode() const {
+    LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
+    int64_t Imm;
+    if (!isImm())
+      return false;
+    if (!evaluateConstantImm(getImm(), Imm, VK))
+      return true; // symbolic form falls through to encoder
+    return Imm >= 1 && Imm <= 12;
+  }
+
+  // B.ASSEMBLE ParentSizeCode: raw legal range 0..12.
+  bool isParentSizeCode() const {
+    LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
+    int64_t Imm;
+    if (!isImm())
+      return false;
+    if (!evaluateConstantImm(getImm(), Imm, VK))
+      return true; // symbolic form falls through to encoder
+    return Imm >= 0 && Imm <= 12;
+  }
+
   // v5: B.IOT destination legacy "TSize=N" honors the Local SizeCode
   // contract 1..10; 0 (source-only) and 11..15 are rejected in a
   // destination spelling.
@@ -945,6 +967,7 @@ public:
   bool isSImm4() { return IsSImm<4>(); }
   bool isUImm5() { return IsUImm<5>(); }
   bool isSImm5() { return IsSImm<5>(); }
+  bool isUImm11() { return IsUImm<11>(); }
   bool isUImm6() { return IsUImm<6>(); }
   bool isUImm7() { return IsUImm<7>(); }
   bool isUImm24() { return IsUImm<24>(); }
@@ -4037,6 +4060,35 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       return true;
     if (RowMaxEn == 0 && GroupMaxEn == 0 && MaxAbs != 0)
       return true;
+  }
+  // PTO-ISA 0.58.4 ADR-0098 range modifiers. B.ASSEMBLE ties INIT to the
+  // ParentSizeCode contract:
+  //   INIT=1 -> ParentSizeCode must be 1..12 (INIT/INIT_LAST forms)
+  //   INIT=0 -> ParentSizeCode must be 0     (MIDDLE/LAST forms)
+  // RegSrc is an absolute GPR selector 0..23; VBXTR/TOS/UOS (encodings
+  // 24..31, all members of the MCSrc class that backs GPRSrc) are rejected.
+  if (Inst.getOpcode() == LinxV5::B_ASSEMBLE) {
+    auto GetImm = [&](unsigned OpNo) -> int64_t {
+      return Inst.getOperand(OpNo).getImm();
+    };
+    int64_t Init = GetImm(0);
+    int64_t ParentSize = GetImm(4);
+    if (Init == 1 && ParentSize == 0)
+      return true; // INIT with ParentSizeCode=0 is illegal
+    if (Init == 0 && ParentSize != 0)
+      return true; // non-INIT with ParentSizeCode!=0 is illegal
+  }
+  if (Inst.getOpcode() == LinxV5::B_SUBVIEW ||
+      Inst.getOpcode() == LinxV5::B_ASSEMBLE) {
+    unsigned RegSrcOpNo =
+        (Inst.getOpcode() == LinxV5::B_SUBVIEW) ? 1 : 2;
+    const MCOperand &RegSrc = Inst.getOperand(RegSrcOpNo);
+    if (RegSrc.isReg()) {
+      MCRegister Reg = RegSrc.getReg();
+      bool InGPR = Reg >= LinxV5::R0 && Reg <= LinxV5::R23;
+      if (!InGPR)
+        return true; // RegSrc must be an absolute GPR selector 0..23
+    }
   }
   return false;
 }

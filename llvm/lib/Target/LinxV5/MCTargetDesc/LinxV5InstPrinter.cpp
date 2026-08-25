@@ -548,6 +548,23 @@ void LinxV5InstPrinter::printBArgFormat(const MCInst *MI, unsigned OpNo,
   }
 }
 
+void LinxV5InstPrinter::printSubviewSizeCode(const MCInst *MI, unsigned OpNo,
+                                             const MCSubtargetInfo &STI,
+                                             raw_ostream &O) {
+  // B.SUBVIEW size code 1..12; prints the decimal code. (0/13..15 are
+  // reserved and never reach the printer.)
+  if (MI->getOperand(OpNo).isImm())
+    O << MI->getOperand(OpNo).getImm();
+}
+
+void LinxV5InstPrinter::printParentSizeCode(const MCInst *MI, unsigned OpNo,
+                                            const MCSubtargetInfo &STI,
+                                            raw_ostream &O) {
+  // B.ASSEMBLE parent size code 0..12; prints the decimal code.
+  if (MI->getOperand(OpNo).isImm())
+    O << MI->getOperand(OpNo).getImm();
+}
+
 void LinxV5InstPrinter::printRMode(const MCInst *MI, unsigned OpNo,
                                    const MCSubtargetInfo &STI, raw_ostream &O) {
   unsigned Imm = MI->getOperand(OpNo).getImm();

@@ -97,6 +97,10 @@ public:
                       const MCSubtargetInfo &STI, raw_ostream &O);
   void printBArgFormat(const MCInst *MI, unsigned OpNo,
                        const MCSubtargetInfo &STI, raw_ostream &O);
+  void printSubviewSizeCode(const MCInst *MI, unsigned OpNo,
+                            const MCSubtargetInfo &STI, raw_ostream &O);
+  void printParentSizeCode(const MCInst *MI, unsigned OpNo,
+                           const MCSubtargetInfo &STI, raw_ostream &O);
   void printRMode(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
                   raw_ostream &O);
   void printCanon(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
