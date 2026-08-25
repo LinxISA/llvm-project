@@ -190,6 +190,41 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     return false;
   }
 
+  if (ExtraCode && ExtraCode[0] == 'D' && ExtraCode[1] == 0) {
+    if (!MO.isImm())
+      return true;
+    switch (MO.getImm()) {
+    case LinxV5Op::DataType::FP64: OS << "FP64"; break;
+    case LinxV5Op::DataType::FP32: OS << "FP32"; break;
+    case LinxV5Op::DataType::TF32: OS << "TF32"; break;
+    case LinxV5Op::DataType::HF32: OS << "HF32"; break;
+    case LinxV5Op::DataType::FP16: OS << "FP16"; break;
+    case LinxV5Op::DataType::BF16: OS << "BF16"; break;
+    case LinxV5Op::DataType::HiF8: OS << "HiF8"; break;
+    case LinxV5Op::DataType::e4m3: OS << "e4m3"; break;
+    case LinxV5Op::DataType::e5m2: OS << "e5m2"; break;
+    case LinxV5Op::DataType::e3m2: OS << "e3m2"; break;
+    case LinxV5Op::DataType::e2m3: OS << "e2m3"; break;
+    case LinxV5Op::DataType::e2m1x2: OS << "e2m1x2"; break;
+    case LinxV5Op::DataType::e1m2x2: OS << "e1m2x2"; break;
+    case LinxV5Op::DataType::e8m0: OS << "e8m0"; break;
+    case LinxV5Op::DataType::HiF4x2: OS << "HiF4x2"; break;
+    case LinxV5Op::DataType::S64: OS << "S64"; break;
+    case LinxV5Op::DataType::S32: OS << "S32"; break;
+    case LinxV5Op::DataType::S16: OS << "S16"; break;
+    case LinxV5Op::DataType::S8: OS << "S8"; break;
+    case LinxV5Op::DataType::S4x2: OS << "S4x2"; break;
+    case LinxV5Op::DataType::U64: OS << "U64"; break;
+    case LinxV5Op::DataType::U32: OS << "U32"; break;
+    case LinxV5Op::DataType::U16: OS << "U16"; break;
+    case LinxV5Op::DataType::U8: OS << "U8"; break;
+    case LinxV5Op::DataType::U4x2: OS << "U4x2"; break;
+    case LinxV5Op::DataType::EMPTY_DataType: OS << "DTYPE_NONE"; break;
+    default: OS << "<invalid-dtype>"; break;
+    }
+    return false;
+  }
+
   // First try the generic code, which knows about modifiers like 'c' and 'n'.
   if (!AsmPrinter::PrintAsmOperand(MI, OpNo, ExtraCode, OS))
     return false;
