@@ -2837,7 +2837,7 @@ def C_B_DIMI : BlockModifierBase {
 }
 
 // v5: C.B.IOS replaces v4 C.B.DIM RegSrc form. It is a 16-bit compressed
-// Shared operand binder carrying an 8-bit absolute Shared architectural ID;
+// Shared operand binder carrying a 6-bit absolute Shared architectural ID;
 // it cannot execute alone — the next compatible B.IOT/B.IOR consumes it at
 // decode/rename. v4 C.B.DIMI (immediate) is kept; dynamic dimension uses
 // 32-bit B.DIM. (header/C.B.IOS.md)
@@ -2846,7 +2846,7 @@ def SharedTIDAsmOperand : AsmOperandClass {
   let ParserMethod = "parseSharedTID";
   let RenderMethod = "addImmOperands";
 }
-def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
+def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<6>(Imm);}]> {
   let ParserMatchClass = SharedTIDAsmOperand;
   let PrintMethod = "printSharedTID";
   let EncoderMethod = "getImmOpValueSharedTID";
@@ -2859,7 +2859,7 @@ def SharedTIDWithArrowAsmOperand : AsmOperandClass {
   let ParserMethod = "parseSharedTIDWithArrow";
   let RenderMethod = "addImmOperands";
 }
-def SharedTIDWithArrowOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<8>(Imm);}]> {
+def SharedTIDWithArrowOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<6>(Imm);}]> {
   let ParserMatchClass = SharedTIDWithArrowAsmOperand;
   let PrintMethod = "printSharedTIDWithArrow";
   let EncoderMethod = "getImmOpValueSharedTID";
@@ -3083,13 +3083,13 @@ def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Im
   let DecoderMethod = "decodeBIOTDstSizeCode";
 }
 
-// PTO v0.58 reissue: 32-bit B.IOS Shared operand binder, replacing the retired
-// 16-bit C.B.IOS. Carries an absolute Shared ID (S0..S255), the per-PE size
+// PTO v0.58.4: 32-bit B.IOS Shared operand binder, replacing the retired
+// 16-bit C.B.IOS. Carries an absolute Shared ID (S0..S63), the per-PE size
 // (SizeCode) and the participation mode (PEMode). SizeCode=0 selects a Shared
 // source; 1..12 selects a Shared destination capacity (128B..256KB per PE).
 //   source:      B.IOS S12, mask=1111
 //   destination: B.IOS mask=0011, ->S12<128B>
-// Encoding (ADR 0069): [31:28]=0, [27:20]=SharedTID, [19]=0,
+// Encoding (ADR 0097): [31:28]=0, [27:26]=0, [25:20]=SharedTID, [19]=0,
 //           [18:15]=SizeCode (4b), [14:12]=funct3=001, [11:9]=PEMode (3b),
 //           [8:7]=00, [6:0]=0x13. match=0x00001013, mask=0xf00871ff.
 class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
@@ -3098,12 +3098,13 @@ class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
   let Size = 4;
   let isDisassembleOnly = 0;
 
-  bits<8> SharedTID;
+  bits<6> SharedTID;
   bits<4> TSize;      // SizeCode value 0..12 (13..15 reserved); 0 = source
   bits<3> PE_MASK;    // PEMode value (encoder maps a 4-bit mask to the 3-bit mode)
 
   let Inst{31-28} = 0b0000;
-  let Inst{27-20} = SharedTID;
+  let Inst{27-26} = 0b00;
+  let Inst{25-20} = SharedTID;
   let Inst{19} = 0b0;
   let Inst{18-15} = TSize;   // SizeCode field
   let Inst{14-12} = Role;
@@ -3386,7 +3387,7 @@ class PseudoCUBE_MAMULB_Base_I<string TileOp> :
 def PseudoMAMULB_SizeI : PseudoCUBE_MAMULB_Base_I<"TMATMUL">;
 
 // v5: TMATMUL with a Shared Right operand. Same CUBE op (BSTART.CUBE TMATMUL)
-// but the Right tile is supplied by a C.B.IOS binder (SharedTID, S#0..S#255)
+// but the Right tile is supplied by a B.IOS binder (SharedTID, S0..S63)
 // instead of a B.IOT source stream. A stays a normal Local TILE_Src_Reg and
 // the result is an ordinary Local Tile (TILE_DstWithArrow). PE_MASK is forced
 // to 1111 at MC expansion. Internal mnemonic is CodeGen-only; the public API

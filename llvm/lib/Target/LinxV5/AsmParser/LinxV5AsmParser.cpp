@@ -174,7 +174,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   OperandMatchResultTy parseLoopBDstRWithArrow(OperandVector &Operands);
   OperandMatchResultTy parseTileReg(OperandVector &Operands);
   OperandMatchResultTy parseTileRegWithArrow(OperandVector &Operands);
-  // v5: parse "S#n" Shared architectural ID (C.B.IOS binder).
+  // v5: parse the Shared architectural ID for the B.IOS binder.
   OperandMatchResultTy parseSharedTID(OperandVector &Operands);
   // PTO v0.58 reissue: parse "->S17" destination Shared ID (B.IOS).
   OperandMatchResultTy parseSharedTIDWithArrow(OperandVector &Operands);
@@ -2445,15 +2445,17 @@ LinxV5AsmParser::parseSharedTIDWithArrow(OperandVector &Operands) {
   unsigned TID;
   if (NumStr.getAsInteger(10, TID))
     return MatchOperand_NoMatch;
-  if (TID > 255)
-    return MatchOperand_NoMatch;
+  if (TID > 63) {
+    getParser().Error(S, "SharedTileID must be in the range S0..S63");
+    return MatchOperand_ParseFail;
+  }
   const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
   Operands.push_back(LinxV5Operand::createImm(Val, S, E));
   getLexer().Lex();  // consume 'S17'
   return MatchOperand_Success;
 }
 
-// PTO v0.58 reissue: parse absolute Shared architectural ID "S0".."S255"
+// PTO v0.58.4: parse absolute Shared architectural ID "S0".."S63"
 // (no '#' prefix) for the 32-bit B.IOS binder operand. The leading "->" of a
 // destination ("->S17") is matched as a separate literal token by the AsmMatcher,
 // so this method only consumes the bare "S17". The retired "S#n" spelling is
@@ -2477,8 +2479,10 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   unsigned TID;
   if (NumStr.getAsInteger(10, TID))
     return MatchOperand_NoMatch;
-  if (TID > 255)
-    return MatchOperand_NoMatch;
+  if (TID > 63) {
+    getParser().Error(S, "SharedTileID must be in the range S0..S63");
+    return MatchOperand_ParseFail;
+  }
   const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
   Operands.push_back(LinxV5Operand::createImm(Val, S, E));
   getLexer().Lex();  // consume 'S17'
@@ -4063,6 +4067,30 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       return true;
     if (TransA > 1 || TransB > 1 || CScaleEn > 1)
       return true;
+  }
+  // ADR-0101: HiF4x2 is a Matrix-MX primary input only.  It is not part of
+  // ordinary TMATMUL or any GEMV type domain.  The two datatype operands are
+  // fixed by the CUBE pseudo classes at operand positions 6 and 7.
+  auto IsHiF4x2 = [&](unsigned OpNo) {
+    return Inst.getNumOperands() > OpNo && Inst.getOperand(OpNo).isImm() &&
+           Inst.getOperand(OpNo).getImm() == LinxV5Op::DataType::HiF4x2;
+  };
+  switch (Inst.getOpcode()) {
+  case LinxV5::PseudoMAMULB_SizeI:
+  case LinxV5::PseudoMAMULB_SharedRight_SizeI:
+  case LinxV5::PseudoMAMULBAC_SizeI:
+  case LinxV5::PseudoMAMULBACC_SizeI:
+  case LinxV5::PseudoTGEMV_SizeI:
+  case LinxV5::PseudoTGEMV_BIAS_SizeI:
+  case LinxV5::PseudoTGEMV_ACC_SizeI:
+  case LinxV5::PseudoTGEMVMX_SizeI:
+  case LinxV5::PseudoTGEMVMX_BIAS_SizeI:
+  case LinxV5::PseudoTGEMVMX_ACC_SizeI:
+    if (IsHiF4x2(6) || IsHiF4x2(7))
+      return true;
+    break;
+  default:
+    break;
   }
   // PTO-ISA 0.58.4 ADR-0098 range modifiers. B.ASSEMBLE ties INIT to the
   // ParentSizeCode contract:

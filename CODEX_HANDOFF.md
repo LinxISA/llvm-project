@@ -9856,3 +9856,55 @@ separate CScale operand abstraction; the current closure is the TileOP inline
 assembly/binder path plus the ISA-level FPATR encoding. Do not claim numerical
 CScale execution validation until a rebuilt toolchain and runtime/model test
 are available.
+
+## 0.58.4 ISA 对齐实施记录（2026-08-25，当前工作区）
+
+### 已完成：SharedTileID 迁移到 6 bit
+
+依据 ADR-0097，LLVM 已将 `B.IOS` Shared 标识统一为：
+
+```text
+SharedTileID = bits[25:20]
+bits[27:26] = reserved zero
+合法范围 = S0..S63
+```
+
+已修改：
+
+- `LinxV5InstrInfo.td`：Shared operand 改为 6 bit，编码固定 bits 27:26 为零；
+- `LinxV5RegisterInfo.td`：`Shared_ABS` 物理寄存器改为 `S0..S63`；
+- `LinxV5SharedRegAlloc.cpp`：分配池改为 64 个 Shared 寄存器；
+- AsmParser/MCCodeEmitter/InstPrinter：统一范围校验、编码和 canonical spelling；
+- 保留位 raw encoding 由 generated decoder fail closed 为 `<unknown>`。
+
+验证：
+
+- `S0`、`S63` assemble/object/disassemble round-trip 通过；
+- `S64`、`S255` assembler 明确拒绝；
+- bits 27:26 非零 raw B.IOS 反汇编为 `<unknown>`；
+- 相关 targeted MC tests 4/4 通过。
+
+### 已补齐的 LLVM 类型描述：MX/HiF4X2
+
+`LinxV5BaseInfo.h` 新增：
+
+- `isMatrixMXPrimaryType()`；
+- `matrixMXTypeNeedsScale()`；
+- `matrixMXScaleGroupSize()`：HiF4X2 为 64，其余 scaled MX 类型为 32；
+- `matrixMXScaleCarrierType()`：HiF4X2 为 U32，其余为 E8M0。
+
+AsmParser 对 Matrix CUBE pseudo 增加了类型域检查：
+
+- HiF4X2 只允许 Matrix-MX primary input；
+- 普通 TMATMUL、TGEMV、TGEMV-MX 不接受 HiF4X2；
+- 该检查只约束 LLVM 当前能看到的 datatype operand，不伪造 Cell payload 或 scale tile descriptor。
+
+### 尚未完成/不能在 LLVM MC 层臆造的部分
+
+- MX Local CUBE_M32 scale tile 的实际 Cell descriptor/shape carrier；
+- HiF4 raw U32 scale word 的逐 lane 数值解码；
+- Shared scale pair、Shared movement 的完整 source-group 合同；
+- RecordEvent/WaitEvents 的 SSA dependency、B.IOD/token 和 convergence 语义；
+- physical ACC/ACCCVT 清理（按当前工作安排暂不处理）。
+
+这些部分需要 TileOP API、runtime 或 SuperScalarModel 的配套定义；LLVM 当前只能继续补充明确的 operand/encoding/lowering 合同，不能把 Model 生命周期语义编码成不存在的 LLVM 指令。禁止修改 `SuperScalarModel` 仓库。

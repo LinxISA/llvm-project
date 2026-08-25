@@ -717,7 +717,7 @@ unsigned LinxV5MCCodeEmitter::getImmOpValueSharedTID(
   else
     report_fatal_error("SharedTID requires an absolute immediate");
 
-  if (!isUInt<8>(Value))
+  if (!isUInt<6>(Value))
     report_fatal_error("SharedTID immediate is out of range");
   return static_cast<unsigned>(Value);
 }

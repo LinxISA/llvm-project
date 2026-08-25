@@ -69,7 +69,7 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
     return LHS->beginIndex() < RHS->beginIndex();
   });
 
-  SmallVector<SmallVector<LiveInterval *, 4>, 256> Assigned(256);
+  SmallVector<SmallVector<LiveInterval *, 4>, 64> Assigned(64);
   for (LiveInterval *LI : SharedIntervals) {
     unsigned SharedIndex = 0;
     for (; SharedIndex < Assigned.size(); ++SharedIndex) {
@@ -82,7 +82,7 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
 
     if (SharedIndex == Assigned.size())
       report_fatal_error(
-          "LinxV5 Shared register allocation exhausted S#0..S#255");
+          "LinxV5 Shared register allocation exhausted S0..S63");
 
     MCPhysReg PhysReg = LinxV5::Shared_ABSRegClass.getRegister(SharedIndex);
     VRM.assignVirt2Phys(LI->reg(), PhysReg);

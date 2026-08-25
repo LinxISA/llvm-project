@@ -426,6 +426,32 @@ enum DataType {
   EMPTY_DataType = 31
 };
 
+/// Matrix-MX primary types and their scale contract.  HiF4x2 is a Matrix-MX
+/// input type with a 64-element raw U32 scale word; the other scaled MX
+/// inputs use 32-element E8M0 groups.  These helpers deliberately describe
+/// operand typing only; scale tile shape and CUBE cell descriptor legality
+/// remain a higher-level tile contract.
+inline bool isMatrixMXPrimaryType(unsigned Type) {
+  return Type == FP16 || Type == BF16 || Type == e4m3 || Type == e5m2 ||
+         Type == e2m1x2 || Type == e1m2x2 || Type == HiF4x2;
+}
+
+inline bool matrixMXTypeNeedsScale(unsigned Type) {
+  return isMatrixMXPrimaryType(Type) && Type != FP16 && Type != BF16;
+}
+
+inline unsigned matrixMXScaleGroupSize(unsigned Type) {
+  if (!matrixMXTypeNeedsScale(Type))
+    return 0;
+  return Type == HiF4x2 ? 64 : 32;
+}
+
+inline unsigned matrixMXScaleCarrierType(unsigned Type) {
+  if (!matrixMXTypeNeedsScale(Type))
+    return EMPTY_DataType;
+  return Type == HiF4x2 ? U32 : e8m0;
+}
+
 enum PadValue { Zero = 0, Max = 1, Min = 2, Null = 3, EMPTY_PadValue };
 
 enum TileOPMode {

@@ -429,7 +429,7 @@ void LinxV5InstPrinter::printPE_MASK(const MCInst *MI, unsigned OpNo,
 void LinxV5InstPrinter::printSharedTID(const MCInst *MI, unsigned OpNo,
                     const MCSubtargetInfo &STI, raw_ostream &O) {
   // PTO v0.58 reissue: Shared architectural ID prints as "S" followed by the
-  // absolute index (S0..S255); no '#' prefix.
+  // absolute index (S0..S63); no '#' prefix.
   const MCOperand &MO = MI->getOperand(OpNo);
   int64_t Value;
   if (MO.isImm())
