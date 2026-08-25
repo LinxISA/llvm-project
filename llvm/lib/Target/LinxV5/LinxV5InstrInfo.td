@@ -1679,9 +1679,8 @@ def B_ASSEMBLE : BlockModifierBase {
 }
 
 // DavinciOO v5 FIXPIPE attributes. Required exactly once by every supported
-// TMATMUL/TMATMULMX family (not just the .FIXP variants). The instruction
-// encoding itself is unchanged; the contract was widened so every CUBE bundle
-// carries one B.FPATR after B.DATR.
+// Matrix CUBE family. PTO 0.58.4 assigns TransA, TransB and CScaleEn to the
+// previously reserved bits 7, 8 and 9; bit 10 remains reserved and zero.
 def B_FPATR : BlockModifierBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;
@@ -1692,7 +1691,8 @@ def B_FPATR : BlockModifierBase {
   let InOperandList = (ins uimm6:$PreQuantMode, uimm3:$ReluMode,
                            uimm4:$GroupNCode, uimm1:$RowMaxEn,
                            uimm1:$GroupMaxEn, uimm1:$RowMaxInit,
-                           uimm1:$MaxAbsEn);
+                           uimm1:$MaxAbsEn, uimm1:$TransA, uimm1:$TransB,
+                           uimm1:$CScaleEn);
 
   bits<6> PreQuantMode;
   bits<3> ReluMode;
@@ -1701,6 +1701,9 @@ def B_FPATR : BlockModifierBase {
   bits<1> GroupMaxEn;
   bits<1> RowMaxInit;
   bits<1> MaxAbsEn;
+  bits<1> TransA;
+  bits<1> TransB;
+  bits<1> CScaleEn;
 
   let Inst{31-26} = PreQuantMode;
   let Inst{25-23} = ReluMode;
@@ -1711,13 +1714,17 @@ def B_FPATR : BlockModifierBase {
   let Inst{15} = MaxAbsEn;
   let Inst{14-12} = 0b010;
   let Inst{11} = 0b0;
-  let Inst{10-7} = 0b0000;
+  let Inst{10} = 0b0;
+  let Inst{9} = CScaleEn;
+  let Inst{8} = TransB;
+  let Inst{7} = TransA;
   let Inst{6-4} = 0b010;
   let Inst{3-1} = 0b001;
   let Inst{0} = 0b1;
 
   let AsmString = "B.FPATR	$PreQuantMode, $ReluMode, $GroupNCode, "
-                  "$RowMaxEn, $GroupMaxEn, $RowMaxInit, $MaxAbsEn";
+                  "$RowMaxEn, $GroupMaxEn, $RowMaxInit, $MaxAbsEn, "
+                  "$TransA, $TransB, $CScaleEn";
 }
 
 def B_IO : BlockModifierBase {

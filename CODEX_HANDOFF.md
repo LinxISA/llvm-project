@@ -8731,3 +8731,1128 @@ if constexpr (cube_shape::BFractal == BLayout::CubeM32) {
 - 本机官方工具链对完整 TileOP C++ 目标编译仍受 `_Float16`/target frontend 限制，尚未完成真实 C++ -> object -> objdump 的端到端 CUBE 测试；host stub/syntax-only 结果不能替代该验证。
 - CUBE persistent descriptor 的完整 Model 状态机、Shared-A/Shared-B cooperative M-sharding，以及完整 ISA lowering 不属于本轮 LLVM MC/TileOP transport 验收范围。
 - 未修改 `SuperScalarModel`，未创建新分支；当前改动仍需在用户明确要求后再提交/推送。
+
+## PTO ISA 0.58.4 最新主线差异与未实现工作包（2026-08-25）
+
+### 权威基线与仓库状态
+
+本次检查使用 PTO-ISA/pto-spec 最新 `main`：
+
+```text
+564ac2d8d868c441a8dc5e5f4d44efa7533a911d
+Fix 0.58.4 release ASL failures (#149)
+2026-08-25
+```
+
+发布边界：
+
+```text
+v0.58.3 tag: ce72e5da53ed8f3b7b58e08431c8945e5d09ccde
+latest main: v0.58.3-11-g564ac2d8
+working candidate: PTO ISA 0.58.4
+```
+
+本地实现基线：
+
+```text
+LLVM dev-llvm15_56: 76044f436100
+TileOP linx:         9745ebff3e58
+```
+
+当前 LLVM/TileOP 基本完成的是 PTO ISA 0.58.3 支持。不要把下面的
+0.58.4 candidate 设计误标为已完成，也不要通过修改 0.58.3 发布身份来
+吸收这些变化。
+
+0.58.4 的主要新增/变更来源：
+
+```text
+ADR-0097 Local/Shared capacity pools and SharedTileID
+ADR-0098 B.SUBVIEW/B.ASSEMBLE range modifiers
+ADR-0099 0.58.3 -> 0.58.4 compatibility boundary
+ADR-0100 cooperative Group-M distribution and inactive PE semantics
+ADR-0101 Matrix scale CELL layouts, HiF4 scale words and CScale
+```
+
+### P0：B.IOS SharedTileID 8 bit 改为 6 bit
+
+最新 ADR-0097 定义：
+
+```text
+SharedTileID = instruction bits [25:20]
+合法 Shared register = S0..S63
+bits [27:26] = reserved zero
+```
+
+当前 LLVM 仍是旧实现：
+
+```text
+SharedTID = bits [27:20]
+bits<8> SharedTID
+合法范围 S0..S255
+```
+
+主要位置：
+
+```text
+llvm/lib/Target/LinxV5/LinxV5InstrInfo.td
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+llvm/lib/Target/LinxV5/Disassembler/LinxV5Disassembler.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5MCCodeEmitter.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.cpp
+```
+
+需要实现：
+
+1. 将 Shared operand 类型、parser 和 encoder 的范围改为 6 bit。
+2. `B.IOS` 编码改为 `Inst{25-20}=SharedTileID`。
+3. 固定 `Inst{27-26}=0`，并更新 instruction mask。
+4. assembler 接受 `S0..S63`，拒绝 `S64..S255`。
+5. disassembler 遇到 bits 27:26 非零必须失败/unknown，不能把它们并入 ID。
+6. 更新 source/destination alias、printer 名称和注释中的 SharedTID/S255。
+7. 检查 Shared register class、寄存器分配器和 TileOP `%S` carrier 是否仍暴露
+   S64 以上的物理寄存器。
+
+必须增加测试：
+
+```text
+S0、S63 正向 assemble/disassemble
+S64、S255 汇编负向
+raw bits[27:26] 非零反汇编负向
+source/destination B.IOS round-trip
+```
+
+这是明确的编码 ABI 不一致，优先级最高。
+
+### P1：Cooperative Group-M 新语义
+
+ADR-0100 已部分取代旧的固定 per-PE M / `A.Rows == 4*C.Rows` 合同。
+
+最新规则：
+
+```text
+LB0 = group_M，表示 Core-total valid output rows，范围 1..128
+LB1 = N
+LB2 = K
+
+M_per_PE = 16, 1 <= group_M <= 64
+M_per_PE = 32, 65 <= group_M <= 128
+valid_M[i] = clamp(group_M - i*M_per_PE, 0, M_per_PE)
+```
+
+适用范围：
+
+```text
+Local-A / Shared-B TMATMUL family
+Shared-A / Shared-B TMATMUL family
+ordinary / ACC / BIAS / MX / MX+ACC / MX+BIAS
+```
+
+不适用：
+
+```text
+All-Local TMATMUL 继续使用 per-PE M
+TGEMV 继续只允许 Local operand
+```
+
+PE mask 合同：
+
+```text
+PE_MASK=1111：唯一合法的非零 cooperative mask
+任意 sparse nonzero mask：Fault_TileLegality
+PE_MASK=0000：严格 no-op
+```
+
+当前 TileOP 的 `resolve_matmul_shape()` 和 Group contract 仍主要按照 destination
+的 per-PE Rows，或固定 `SharedA.Rows == 4 * C.Rows` 推导。这不能表示
+`group_M=17/65/127` 等 tail group。
+
+需要实现：
+
+1. 将 cooperative 路径的 `LB0` 改为 `group_M`，不能再写 per-PE destination M。
+2. 新增 constexpr/runtime helper 计算 `M_per_PE` 和当前 PE 的 `valid_M`。
+3. Shared A descriptor 使用 `[group_M,K]`，Shared B 使用 `[K,N]`。
+4. Local-A cooperative 形式按当前 PE 的 `[valid_M,K]` fragment 检查。
+5. Local destination/ACC/output 使用 `[valid_M,N]`。
+6. `valid_M==0` 的 PE 不得解析或检查 compute-only Local descriptor、payload、
+   dependency、subview、alias、allocation、generation 或 output。
+7. Shared descriptor、mask、rendezvous、capacity 和 collective fault 检查仍对四 PE 执行。
+8. 所有 TMATMUL family basic/options 路径必须共用同一个 shape helper。
+9. 不要用简单的 `A.Rows/4` 或固定 destination Rows 替代新分布公式。
+
+建议测试 group_M：
+
+```text
+1, 17, 64, 65, 128
+sparse masks 0001/0011/1100 负向
+mask=0000 no-op
+tail PE valid_M=0 不访问未分配 Local tile
+Shared-A 每 PE 行起点 i*M_per_PE
+```
+
+### P1：B.FPATR TransA/TransB/CScaleEn 编码闭环
+
+最新 `B.FPATR` assembly 为十个字段：
+
+```asm
+B.FPATR PreQuantMode, ReluMode, GroupNCode,
+         RowMaxEn, GroupMaxEn, RowMaxInit, MaxAbsEn,
+         TransA, TransB, CScaleEn
+```
+
+位域：
+
+```text
+TransA   = bit 7
+TransB   = bit 8
+CScaleEn = bit 9
+bit 10   = reserved zero
+```
+
+当前 LLVM TableGen 的 `B_FPATR` 仍只有前七个 operand，并把 bits 10:7 全部写零。
+当前 TileOP 的 `PTO_FIXP_ATTR` 也尚未真正输出后三个字段，虽然部分 C++ legality
+已经具有 `Attr.TransA/TransB` 概念。
+
+需要实现：
+
+1. LLVM TableGen 增加三个 operand 和位域。
+2. parser/printer/disassembler round-trip 十字段 canonical syntax。
+3. 保持 bit 10 reserved，raw bit 10 非零必须拒绝。
+4. 更新 B.FPATR combination legality。
+5. TileOP `FixpAttr`、options、`PTO_FIXP_ATTR` 与所有 Matrix family emit path 同步。
+6. 更新当前仍按七字段检查的 MC/TileOP contract tests。
+
+注意：不能只在 TileOP C++ trait 中表示 TransA/TransB；最终 emitted `B.FPATR`
+必须真实编码 bits 7/8。
+
+### P1：CScale operand
+
+ADR-0101 定义：
+
+```text
+CScaleEn 仅允许 FP32 TMATMUL.ACC 和 FP32 TMATMULMX.ACC
+CScale 是最后一个 mathematical Local source
+CScale dtype/layout/shape = U8 CUBE_M32 [M,1]
+CScale 不得 alias D 或 auxiliary output
+C 在 reduction、activation、quantization 和 destination conversion 前
+按 2^-CScale[m,0] 缩放
+最大 Matrix Local source 数从 8 增加到 9
+```
+
+需要实现：
+
+1. TileOP options 增加可选 CScale tile carrier。
+2. 仅 ACC family 暴露/绑定 CScale，普通/BIAS/GEMV 必须编译期拒绝。
+3. CScaleEn 与 CScale operand 必须成对出现。
+4. 检查 dtype=U8、layout=CUBE_M32、shape=`[M,1]`。
+5. 检查 CScale 与 D、RowMaxOut、GroupMaxOut 等 destination 不 alias。
+6. 调整 asm operand 次序：CScale 是最终 mathematical Local source。
+7. LLVM pseudo/lowering/MC expansion 必须允许第九个 Local source。
+8. 增加 missing/surplus/wrong-opcode/wrong-dtype/wrong-layout/wrong-shape/alias
+   全套负向测试。
+
+### P1：HiF4X2 Matrix-MX 与 HiF4 scale word
+
+ADR-0101 新增 `HiF4X2`，但只允许作为 Matrix-MX primary input：
+
+```text
+普通 TMATMUL：拒绝 HiF4X2
+所有 TGEMV：拒绝 HiF4X2
+TMATMULMX family：允许符合合同的 HiF4X2
+```
+
+Scale group：
+
+```text
+FP8/FP4 Matrix-MX: group=32, scale=E8M0
+HiF4X2 Matrix-MX: group=64, scale=raw U32 HiF4 scale word
+```
+
+HiF4 U32 scale word：
+
+```text
+bits  7:0  = E6M2
+bits 15:8  = 8 个 E1_8 exponent bits
+bits 31:16 = 16 个 E1_16 exponent bits
+E6M2 0x00..0xFE 为 finite，bias=48，2 fraction bits
+E6M2 0xFF 为合法 quiet NaN scale
+```
+
+Scale tile layout：
+
+```text
+Local A scale: CUBE_M32 [M,G]
+Local B scale: CUBE_M32 [N,G]，semantic view BScale[g,n]
+Shared A scale: ordinary Tile [group_M,G]
+Shared B scale: ordinary Tile [G,N]
+```
+
+需要实现：
+
+1. LLVM/TileOP 增加 HiF4X2 datatype/type trait/type printer。
+2. 只把 HiF4X2 加入 Matrix-MX A/B input legality，不扩散到普通 Matrix/GEMV。
+3. 增加 group-size helper：FP8/FP4=32，HiF4X2=64。
+4. 增加 raw U32 HiF4 scale carrier 类型与 compile-time contract。
+5. 实现 Local CUBE_M32 scale grid 和 Shared ordinary scale descriptor。
+6. TransA/TransB 对 primary 和对应 scale 同步生效，但不修改 persistent source。
+7. 支持 partial final scale group / row block 作为 storage tail，不作为 operand。
+8. 增加 G5/N33、多 repeat、partial tail、E6M2 00/FE/FF 测试。
+
+### P2：B.SUBVIEW / B.ASSEMBLE 新 block modifier
+
+ADR-0098 新增两个正式编码：
+
+```text
+B.SUBVIEW   match=0x00000053 mask=0x0000787f
+B.ASSEMBLE  match=0x00001053 mask=0x0000707f
+```
+
+两者只属于紧邻的前一个连续 `B.IOT` 或 `B.IOS` binder group：
+
+```text
+B.IOT/B.IOS source + B.SUBVIEW
+B.IOT/B.IOS destination + B.ASSEMBLE
+```
+
+关键合同：
+
+```text
+Local/Shared SizeCode 1..12
+code 13..15 reserved
+derived offset = GPR[RegSrc] + ZeroExtend(uimm11) modulo XLEN
+source0/source1/destination 按固定次序消费
+遗漏、重复、倒序或 intervening command 均为 BundleControl fault
+PEMode=000 仍形成语法 group，但合法 modifier 被无副作用丢弃
+reserved raw encoding 即使 PEMode=000 也必须 IllegalInstruction
+multi-PE Shared destination 必须带 B.ASSEMBLE
+single-PE Shared destination 可保持 standalone B.IOS
+```
+
+LLVM 当前没有完整实现。需要：
+
+1. TableGen instruction/operand/encoding。
+2. parser/printer/disassembler 和 reserved/raw range 检查。
+3. assembler 对紧邻 binder group 的顺序与角色检查。
+4. MC round-trip 和 malformed-group 负向测试。
+5. pseudo/lowering 能携带 range modifier，而不是生成第二套 Tile register namespace。
+6. TileOP 设计 source subview 和 destination assemble API，生成 canonical inline asm。
+
+注意：ADR-0098 还定义了 generation、readiness、rollback、atomic publication 和
+replay 语义。这部分属于执行/model 生命周期。按照用户长期要求：
+
+```text
+禁止本 agent 修改 SuperScalarModel 仓库。
+```
+
+LLVM/TileOP 只能完成编码、前端 API 和 carrier/lowering；Model 行为由专门负责
+Model 的人员实现。
+
+### 已完成部分与新设计的边界
+
+以下 0.58.3 内容当前基本完成，不要重复实现或回退：
+
+```text
+B.IOT/B.IOS SizeCode 4-bit 和 PEMode 3-bit 基础编码
+Local/Shared SizeCode 1..12 基础范围
+PE mask -> PEMode 映射
+DTYPE_NONE=31
+CUBE transport selector 21..26
+ND2M32/ND2M16/ND2N8 与 M322ND/M162ND/N82ND
+CubeM16/CubeM32/CubeN8 TileOP 类型
+TLSU/CUBE canonical BSTART inline asm
+基础 TMATMUL/TGEMV CUBE family
+基础 Matrix-MX scale mask
+TSORT canonical spelling
+retired Tile selector 删除
+cttz/ctlz/ctpop native lowering
+```
+
+但这些不能被视为 0.58.4 完成：
+
+```text
+Shared B.IOS identifier 仍是旧 8-bit ABI
+Group matmul 仍是旧 per-PE/fixed-four-way shape 逻辑
+B.FPATR emitted encoding 仍缺 TransA/TransB/CScaleEn
+无 CScale source
+无 HiF4X2/HiF4 scale word
+无 B.SUBVIEW/B.ASSEMBLE
+```
+
+### 推荐实现顺序
+
+```text
+WP1 LLVM B.IOS SharedTileID 6-bit 编码闭环
+WP2 LLVM B.FPATR 十字段编码/parser/printer/disassembler
+WP3 TileOP B.FPATR emit 与 TransA/TransB 同步
+WP4 TileOP/LLVM CScale source 和第九 Local operand
+WP5 HiF4X2 datatype + Matrix-MX scale contract
+WP6 Group-M helper 和所有 cooperative TMATMUL family
+WP7 LLVM B.SUBVIEW/B.ASSEMBLE MC/assembler carrier
+WP8 TileOP range modifier API/lowering
+WP9 全链路 integration/regression
+```
+
+不要把 Group-M 与 B.SUBVIEW/B.ASSEMBLE 混在第一个提交里。优先完成可独立验证的
+编码闭环，再处理 shape/lifecycle 语义。
+
+### 总体验收门槛
+
+1. 以 `pto-spec` commit `564ac2d8` 为规范基线。
+2. 所有新增编码必须 assemble -> object -> objdump round-trip。
+3. 所有 reserved 值、越界 SharedTileID、错误 B.FPATR combination 必须有负向测试。
+4. TileOP inline asm 必须只使用当前 LLVM canonical syntax。
+5. Group-M 必须覆盖 1/17/64/65/128 和 inactive PE，不接受固定 `/4` 替代。
+6. HiF4X2 只允许 Matrix-MX，普通 Matrix/GEMV 必须拒绝。
+7. CScale 只允许 FP32 ACC family，且必须是 U8 CUBE_M32 `[M,1]`。
+8. B.SUBVIEW/B.ASSEMBLE 必须验证紧邻关联、顺序、重复、zero-mode 和 reserved fault。
+9. 0.58.3 原有 MC/CodeGen/TileOP tests 不得产生新增回归。
+10. 不创建新分支；未经用户指示不要提交或推送。
+11. 禁止修改 `SuperScalarModel` 仓库。
+
+### 当前结论
+
+相对最新 0.58.4 candidate，当前至少有五个实质性未完成工作包：
+
+```text
+1. SharedTileID 8-bit -> 6-bit
+2. Cooperative Group-M / inactive PE 新语义
+3. B.SUBVIEW / B.ASSEMBLE
+4. B.FPATR CScaleEn 和 CScale operand
+5. HiF4X2 Matrix-MX 与 HiF4 scale word
+```
+
+其中 SharedTileID 和 B.FPATR 位域属于明确编码不一致，应优先修复；Group-M 是
+shape/execution 语义重构；range modifier 和 HiF4/CScale 是新增能力。所有工作都应
+作为 0.58.4 适配处理，不能反向改写已发布的 0.58.3 合同。
+
+## B.SUBVIEW / B.ASSEMBLE 优先实现设计（0.58.4，供另一个 agent）
+
+### 目标与范围
+
+优先完成 PTO ISA 0.58.4 的 `B.SUBVIEW` / `B.ASSEMBLE` 编码与前端载体支持，
+不等待 Group-M、HiF4、CScale 或 SuperScalarModel 执行语义完成。
+
+本工作包的完成定义是：
+
+```text
+LLVM MC：TableGen + parser + encoder + disassembler + printer
+LLVM MC：assemble -> object -> objdump round-trip
+LLVM MC：reserved/range/组合负向测试
+TileOP：range descriptor/API 设计和 canonical inline-asm emission
+```
+
+本工作包暂不宣称完成完整 execution/model lifecycle semantics，包括 generation、
+readiness、coverage、rollback、squash、replay、atomic publication 和真实 payload
+view 更新。禁止修改 `SuperScalarModel` 仓库。
+
+规范基线：PTO-ISA/pto-spec main `564ac2d8`，ADR-0098，目标版本 0.58.4。
+
+### ISA 编码
+
+规范定义：
+
+```text
+B.SUBVIEW
+  match = 0x00000053
+  mask  = 0x0000787f
+
+B.ASSEMBLE
+  match = 0x00001053
+  mask  = 0x0000707f
+```
+
+两个指令均为 32-bit block command，具体 operand 字段必须以 active ASL/NDF 为准，
+不能根据旧 RFC 或历史 issue 猜字段。实现前必须从以下规范源确认完整字段：
+
+```text
+asl/block/operands/B.SUBVIEW.asl
+asl/block/operands/B.ASSEMBLE.asl
+asl/block/model/operands/range-modifiers.asl
+spec/catalog/block-instructions.json（或当前生成 catalog）
+```
+
+已确认的共同字段/语义：
+
+```text
+INIT/LAST：modifier sequence 的开始、继续和结束控制
+RegSrc：绝对 GPR selector
+uimm11：无符号地址加数
+ParentSizeCode：父 Tile/Shared Tile SizeCode
+```
+
+派生 offset：
+
+```text
+offset = GPR[RegSrc] + ZeroExtend(uimm11) modulo XLEN
+```
+
+`ParentSizeCode` 原始合法范围为 `0..12`：
+
+```text
+0       = 由 INIT/MIDDLE/LAST 组合解释的 no-parent-size/源语义
+1..12   = 128 B .. 256 KiB
+13..15  = reserved，必须拒绝
+```
+
+注意：`ParentSizeCode=0` 不能被简单当成非法；它在不同 modifier 位置由
+`INIT/LAST` 组合解释。raw reserved 值必须在任何 binder 或 PE mask 语义前拒绝。
+
+### B.SUBVIEW 语义
+
+`B.SUBVIEW` 只能修饰紧邻的前一个连续 binder group 中的 source。其作用是为
+source Tile/Shared Tile 记录一个范围/子视图 carrier，不创建新的 Tile register
+namespace。
+
+抽象语义：
+
+```text
+B.IOT source0/source1 或 B.IOS source
+B.SUBVIEW range modifier
+```
+
+必须满足：
+
+1. modifier 直接属于紧邻的前一个 `B.IOT/B.IOS` binder group。
+2. source 角色按规范顺序消费，不能把 destination 当 source。
+3. 缺少 source、重复 modifier、倒序 modifier 或跨命令关联必须报错。
+4. intervening command 会关闭 binder group，后续 modifier 不能 retroactively 关联。
+5. modifier 合法性、reserved 字段和 raw range 必须先于 GPR read/carrier update 检查。
+6. `PEMode=000` 对 raw-legal modifier 形成语法 group，但 modifier 无副作用地丢弃；
+   reserved raw encoding 仍为 `IllegalInstruction`。
+
+### B.ASSEMBLE 语义
+
+`B.ASSEMBLE` 只能修饰紧邻的 destination binder，用于指定 destination writer
+range 和 parent size。
+
+抽象语义：
+
+```text
+B.IOT/B.IOS destination
+B.ASSEMBLE destination range modifier
+```
+
+必须满足：
+
+1. destination binder 必须存在且角色正确。
+2. 多 PE Shared destination 必须携带 `B.ASSEMBLE`。
+3. 单 PE Shared destination 可以继续使用 standalone `B.IOS`。
+4. `B.ASSEMBLE` 不能绑定到 source binder，也不能绑定到别的 group。
+5. modifier 顺序、INIT/LAST、ParentSizeCode 和紧邻关系必须严格检查。
+6. `PEMode=000` 对 raw-legal modifier 为无副作用丢弃路径。
+
+### LLVM 实现分层
+
+#### WP-A：TableGen 和字段载体
+
+建议在 `llvm/lib/Target/LinxV5/LinxV5InstrInfo.td` 增加独立定义：
+
+```text
+B_SUBVIEW
+B_ASSEMBLE
+```
+
+同时增加专用 operand class，至少覆盖：
+
+```text
+Init/Last control
+absolute GPR selector（规范范围）
+uimm11
+ParentSizeCode raw 0..12
+```
+
+不要复用旧 `TSize` operand，除非其 parser 明确能表达 `0..12` 的 raw 语义；
+Local/Shared 都需要完整 `1..12` reach，不能误用只允许 `1..10` 的 Local destination
+operand。
+
+编码要求：
+
+- 固定 opcode/mask 与 active ASL 一致；
+- 所有 reserved bits 明确置零；
+- raw illegal ranges 在 encoder 前拒绝；
+- `ParentSizeCode=0` 只能在合法 INIT/MIDDLE/LAST 组合中出现；
+- 不新增第二套 Tile register 编号空间。
+
+#### WP-B：parser / printer / disassembler
+
+实现路径至少检查：
+
+```text
+llvm/lib/Target/LinxV5/AsmParser/LinxV5AsmParser.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5MCCodeEmitter.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5Disassembler.cpp
+llvm/lib/Target/LinxV5/MCTargetDesc/LinxV5InstPrinter.cpp
+```
+
+要求：
+
+1. 正向 canonical assembly 可以被 parser 接受。
+2. disassembler 输出 canonical spelling，不能输出旧 RFC spelling。
+3. object round-trip 保持所有字段。
+4. reserved field、ParentSizeCode 13..15、非法 GPR、uimm11 越界均拒绝。
+5. raw bits 触发 reserved 时 disassembler 返回 fail/unknown，而不是静默打印合法指令。
+6. INIT/MIDDLE/LAST 的 alias 规则与 active ASL 一致。
+
+#### WP-C：binder group 结构检查
+
+MC parser/assembler 必须建立最小的前序 binder-group 状态：
+
+```text
+open group -> consume B.IOT/B.IOS roles -> optional B.SUBVIEW/B.ASSEMBLE -> close
+```
+
+需要拒绝：
+
+```text
+modifier without preceding binder
+modifier after intervening B.DIM/B.DATR/B.IOR/body command
+source modifier attached to destination
+assemble modifier attached to source
+missing/duplicate/reversed roles
+multiple incompatible modifiers
+```
+
+这部分只实现编码/汇编结构合法性，不在 LLVM MC 中伪造完整 model 的 generation、
+readiness 或 rollback 状态。
+
+### TileOP API 设计
+
+TileOP 应提供显式、类型安全的 range descriptor，而不是让用户拼接 inline asm
+字符串。建议抽象为：
+
+```cpp
+namespace pto::range {
+
+template <typename Parent, unsigned ParentSizeCode>
+struct Subview;
+
+template <typename Parent, unsigned ParentSizeCode>
+struct Assemble;
+
+}
+```
+
+或者使用仓库现有 options 风格的等价类型。具体命名可由 agent 根据当前 API 风格
+决定，但必须满足：
+
+```text
+source -> Subview
+ destination -> Assemble
+ Local/Shared parent metadata preserved
+ ParentSizeCode compile-time checked
+ RegSrc/uimm11 carrier explicit
+```
+
+推荐的高层使用方向：
+
+```cpp
+auto src_view = pto::range::subview(source, base_reg, offset, parent_size);
+auto dst_view = pto::range::assemble(destination, base_reg, offset, parent_size);
+TADD(dst_view, src_view, rhs);
+```
+
+如果当前 TileOP 尚无统一 range API，第一步可以先提供最小 carrier/helper，并只在
+支持的 Tile operation 中接入；不能新增 `TLOAD_CUBE`、`BSTART.SUBVIEW` 等非 ISA
+mnemonic。最终 inline asm 必须使用 LLVM 已接受的 canonical block syntax。
+
+TileOP 编译期检查至少包括：
+
+- source 只能使用 `SUBVIEW`；
+- destination 只能使用 `ASSEMBLE`；
+- ParentSizeCode `1..12` 范围和 source/MIDDLE/LAST 的 `0` 语义；
+- `uimm11` 无符号范围；
+- GPR selector 范围；
+- modifier 数量、角色和顺序；
+- Local/Shared carrier 类型；
+- 多 PE Shared destination 必须提供 Assemble descriptor；
+- 不得把 range modifier 当成普通 tile register 或 spill slot。
+
+### TileOP inline asm emission
+
+第一阶段只要求正确发出 carrier/command，不承诺 model 执行：
+
+```asm
+B.IOT ...
+B.SUBVIEW ...
+
+B.IOT ..., ->...
+B.ASSEMBLE ...
+```
+
+真实字段顺序和逗号格式必须以 LLVM parser 的 canonical syntax 和 active ASL 为准，
+不能根据上面伪代码直接照抄。必须先用 `llvm-mc` 验证，再接入 TileOP。
+
+### 测试矩阵
+
+#### LLVM MC 正向
+
+至少覆盖：
+
+```text
+B.SUBVIEW INIT / MIDDLE / LAST / INIT_LAST
+B.ASSEMBLE INIT / MIDDLE / LAST / INIT_LAST
+ParentSizeCode 0、1、12
+uimm11 0、1、2047
+合法 GPR 边界
+Local binder association
+Shared binder association
+```
+
+#### LLVM MC 负向
+
+至少覆盖：
+
+```text
+ParentSizeCode 13、14、15
+uimm11 2048 或负值
+非法 GPR
+reserved bits 非零
+modifier 无 binder
+source/destination 角色错误
+intervening command
+重复、倒序或缺失 modifier
+PEMode=000 的 raw-legal no-op
+PEMode=000 + reserved raw encoding
+多 PE Shared destination 缺少 B.ASSEMBLE
+```
+
+#### TileOP API
+
+至少新增：
+
+```text
+Local source subview
+Local destination assemble
+Shared source subview
+multi-PE Shared destination assemble
+ParentSizeCode 1/12 边界
+uimm11 0/2047 边界
+compile-time 非法类型/角色/范围负向测试
+canonical inline asm text check
+```
+
+必须额外验证：
+
+```text
+TileOP 只生成 B.SUBVIEW/B.ASSEMBLE 正式 mnemonic
+不生成 BSTART.SUBVIEW/BSTART.ASSEMBLE
+不创建第二套 Tile register carrier
+```
+
+### 验收门槛
+
+1. `llvm-mc` 正向 assemble 通过。
+2. `llvm-objdump` 反汇编与 canonical source 一致。
+3. object bytes 对字段变化敏感，边界字段 round-trip 正确。
+4. reserved/range/role/order 负向测试通过。
+5. `PEMode=000` 和 reserved raw encoding 的优先级符合规范。
+6. TileOP host syntax/contract tests 通过。
+7. 在可用 Linx toolchain 中完成至少一个 TileOP source + destination range 的目标编译。
+8. 未完成真实 target compile 前，不宣称 0.58.4 range execution 完整支持。
+9. 不修改 `SuperScalarModel`。
+10. 不创建新分支；未经用户明确指示不提交/推送。
+
+### 不要做的事情
+
+```text
+不要使用旧 RFC 0x43 编码
+不要把 B.SUBVIEW/B.ASSEMBLE 做成 BSTART carrier
+不要复用错误的 1..10 Local SizeCode operand
+不要把 ParentSizeCode=0 统一拒绝
+不要只做 printer/反汇编字符串替换
+不要在 TileOP 里模拟 generation/rollback/readiness
+不要修改 SuperScalarModel
+```
+
+### Agent 交付格式
+
+另一个 agent 完成后必须报告：
+
+```text
+修改的文件列表
+active ASL/catalog 对应字段和编码依据
+LLVM MC 正向/负向测试结果
+assemble -> objdump round-trip 结果
+TileOP API 示例和生成的 canonical asm
+真实 Linx target compile 结果
+未完成的 model/lifecycle 部分
+是否提交/推送（未获用户指示前不提交/推送）
+```
+
+## B.SUBVIEW/B.ASSEMBLE 验收意见（2026-08-25）
+
+### 当前结论
+
+当前实现的基础编码字段、opcode 和 LLVM MC 普通 round-trip 方向基本正确，但暂不能验收为完整的 PTO-ISA 0.58.4 range modifier 支持。另一个 agent 继续修改前，必须先解决下面两个阻塞问题；在真实 Linx target compile 完成前，不要提交或推送，也不要宣称该功能完整支持。
+
+本节只涉及 LLVM 和 Linx-TileOP-API，禁止修改 `SuperScalarModel`。
+
+### 阻塞问题 A：B.ASSEMBLE 的 INIT/ParentSizeCode 组合合法性
+
+Active ASL 的合同是：
+
+```text
+INIT=1 && ParentSizeCode=0       非法
+INIT=0 && ParentSizeCode!=0      非法
+```
+
+含义：
+
+```text
+INIT=1, ParentSizeCode=1..12     INIT/INIT_LAST 形式
+INIT=0, ParentSizeCode=0         MIDDLE/LAST 形式
+```
+
+当前 LLVM TableGen 仅检查 `ParentSizeCode=0..12`，没有把 `INIT` 纳入合法性检查，以下非法指令仍可能被 assembler 接受：
+
+```asm
+B.ASSEMBLE 1, 0, zero, 0, 0
+B.ASSEMBLE 0, 1, a0, 0, 12
+```
+
+#### 修复要求
+
+1. 在 LLVM assembler parser 或 custom match predicate 中增加组合检查：
+   - `INIT=1` 时 ParentSizeCode 必须为 `1..12`；
+   - `INIT=0` 时 ParentSizeCode 必须为 `0`。
+2. 对常量立即数在汇编期直接报错，不能只依赖运行时 model。
+3. disassembler 对 raw word 也应 fail closed：如果 raw encoding 形成上述非法组合，应输出 `<unknown>`，不能打印成合法的 `B.ASSEMBLE`。
+4. 保留 ParentSizeCode 的边界覆盖：
+   - 合法：`INIT=1,size=1`、`INIT=1,size=12`、`INIT=0,size=0`；
+   - 非法：`INIT=1,size=0`、`INIT=0,size=1`、`INIT=0,size=12`。
+5. 现有正向测试中若包含 `B.ASSEMBLE 1, 0, ..., 0`，必须移到负向测试；不能把 ISA 非法组合当作 round-trip 正例。
+
+### 阻塞问题 B：TileOP 不能把 RegSrc 永久硬编码为 a0
+
+ISA canonical 形式为：
+
+```asm
+B.SUBVIEW SrcSelect, RegSrc, uimm11, SubviewSizeCode
+B.ASSEMBLE INIT, LAST, RegSrc, uimm11, ParentSizeCode
+```
+
+其中：
+
+```text
+derived_offset = GPR[RegSrc] + ZeroExtend(uimm11) modulo XLEN
+RegSrc 合法范围为绝对 GPR selector 0..23
+```
+
+当前 TileOP 的 inline asm 直接生成：
+
+```asm
+B.SUBVIEW ..., a0, ..., ...
+B.ASSEMBLE ..., ..., a0, ..., ...
+```
+
+wrapper 没有携带或传递 `RegSrc`，因此当前只是固定 `a0` 的特殊实现，不是完整的 ISA 对齐 API。
+
+#### 修复要求
+
+优先采用通用 API：
+
+1. `range::Subview` 和 `range::Assemble` 增加明确的 `RegSrc` 表达方式。
+2. 若 RegSrc 由 C++ 输入值提供，应通过 inline asm 的 `"r"` 约束传入，不能把寄存器名字写死在 asm 字符串中。
+3. `uimm11` 可以继续保持 compile-time immediate，并做 `0..2047` 静态检查。
+4. 若受 Linx inline asm 约束限制，确实只能固定 `a0`，必须：
+   - 在 API 和 docs 中明确声明 `a0` 是固定 ABI scratch/register contract；
+   - 不得把接口命名或注释描述成支持任意 RegSrc；
+   - 增加固定寄存器约束的验证；
+   - 由用户确认后才能接受该设计。
+5. 至少测试 `RegSrc=0`、`RegSrc=23`，并验证输出/编码字段 `[19:15]` 分别变化；不能只测试 `a0`。
+
+### 阻塞问题 C：modifier 必须绑定到前置 B.IOT/B.IOS
+
+`B.SUBVIEW/B.ASSEMBLE` 虽然在 LLVM MC 层是 standalone-encoded command，但 ISA 语义要求它们：
+
+```text
+紧跟在前一个 B.IOT 或 B.IOS 后面；
+属于同一个 contiguous modifier group；
+不能独立脱离 binder 产生有效执行语义。
+```
+
+因此测试必须区分：
+
+- MC 编码层：可以单独 assemble/disassemble 验证字段；
+- bundle 合同层：必须验证前置 binder、角色、顺序、重复和缺失 modifier。
+
+至少补齐以下负向语义测试：
+
+```text
+modifier 无前置 B.IOT/B.IOS
+B.SUBVIEW 作用于 destination
+B.ASSEMBLE 作用于 source
+modifier 与 binder 之间插入其他 command
+同一个 source/destination 重复 modifier
+source1 在 source0 前使用 SrcSelect=1
+modifier 出现在错误的 B.IOS/B.IOT group 后
+```
+
+不能仅凭独立的：
+
+```asm
+B.SUBVIEW ...
+B.ASSEMBLE ...
+```
+
+就宣称 range execution 合同已经验证。
+
+### 阻塞问题 D：Shared 语义和 capacity 必须单独覆盖
+
+Active ASL 允许 modifier 作用于前置 `B.IOT` 或 `B.IOS`，且 Shared destination 存在额外规则：
+
+```text
+multi-PE Shared destination 必须带 B.ASSEMBLE；
+single-PE Shared destination 可以不带 B.ASSEMBLE；
+Shared source 可使用 B.SUBVIEW；
+```
+
+TileOP 当前主要示例是 Local `TLOAD/TSTORE`，还没有证明以下路径：
+
+```text
+Shared source + B.SUBVIEW
+multi-PE Shared destination + B.ASSEMBLE
+single-PE Shared destination without B.ASSEMBLE
+Shared ParentSizeCode=1..12 边界
+```
+
+必须增加正向和负向测试，并确认：
+
+- Shared SizeCode 使用 `1..12`，不是 Local 的 `1..10`；
+- `SubviewSizeCode` 对 Local/Shared 都允许 `1..12`；
+- `ParentSizeCode` 的 `0` 只用于 non-INIT；
+- modifier 不改变 PE mask 合同；
+- 多 PE Shared destination 缺少 B.ASSEMBLE 时在正确层面拒绝。
+
+### TileOP wrapper 设计要求
+
+`range::Subview` / `range::Assemble` 可以继续作为 metadata carrier，但必须满足：
+
+1. 透传完整 Tile metadata：dtype、layout、Rows/Cols、ValidRow/ValidCol、physical capacity、SizeCode、Local/Shared location。
+2. 不创建第二套 Tile register carrier。
+3. wrapper 只携带 range descriptor，不改变逻辑 shape；不能用 wrapper 伪造新的 Tile allocation。
+4. source wrapper 只能出现在 source operand 位置；destination wrapper 只能出现在 destination operand 位置。
+5. `SubviewSizeCode` 和 `ParentSizeCode` 必须校验 raw field 合同；不能仅检查 C++ 数值范围而忽略 INIT 组合。
+6. 如果 offset 是编译期常量，接口必须明确其范围是 `0..2047`；如果 offset 需要运行时 GPR 基址，必须明确 RegSrc 和 offset 的分工：
+   - RegSrc：GPR selector；
+   - uimm11：立即数加数；
+   - 不能把一个普通 C++ pointer 当作整个 derived offset 直接编码。
+
+### LLVM MC 测试要求
+
+#### 正向
+
+```asm
+B.SUBVIEW 0, zero, 0, 1
+B.SUBVIEW 1, a0, 2047, 12
+B.SUBVIEW 0, a1, 100, 5
+B.ASSEMBLE 1, 0, zero, 0, 1
+B.ASSEMBLE 1, 1, a0, 2047, 12
+B.ASSEMBLE 0, 0, a1, 1, 0
+```
+
+注意：`B.ASSEMBLE 1,0,...,0` 和 `B.ASSEMBLE 0,1,...,12` 不能出现在正向测试。
+
+#### 负向
+
+```asm
+B.SUBVIEW 0, r0, 0, 0
+B.SUBVIEW 0, r0, 0, 13
+B.SUBVIEW 0, r0, 2048, 1
+B.SUBVIEW 0, r24, 0, 1
+B.ASSEMBLE 1, 0, r0, 0, 0
+B.ASSEMBLE 0, 1, r0, 0, 1
+B.ASSEMBLE 0, 0, r0, 0, 12
+B.ASSEMBLE 1, 0, r0, 0, 13
+B.ASSEMBLE 1, 0, r0, 0, 15
+B.ASSEMBLE 0, 1, r0, 2048, 0
+B.ASSEMBLE 1, 0, r24, 0, 1
+```
+
+#### Raw disassembler
+
+增加 raw-word 测试，确认：
+
+- reserved opcode/funct bits -> `<unknown>`；
+- SizeCode 0/13..15 -> `<unknown>`（Subview）；
+- SizeCode 13..15 -> `<unknown>`（Assemble）；
+- INIT/size 矛盾组合 -> `<unknown>`；
+- RegSrc 24..31 -> `<unknown>`；
+- 合法边界可完整还原 canonical spelling。
+
+### TileOP 目标编译要求
+
+在正确 Linx toolchain 中完成：
+
+```text
+RangeSubview.cpp -> object -> llvm-objdump
+RangeAssemble.cpp -> object -> llvm-objdump
+```
+
+并确认：
+
+```asm
+B.IOT ...
+B.SUBVIEW ...
+B.IOT ...
+B.ASSEMBLE ...
+```
+
+输出中的 RegSrc、uimm11、SizeCode、INIT、LAST 与源码一致。
+
+当前本机配置的普通 toolchain 对 `linx64-unknown-linux-musl` 报 unknown target triple，不能把 hosted `make check` 当成真实 Linx target 验证。若只能使用 `linx64v5`，必须说明这是不同 target，不能冒充正式 target compile。
+
+### 验收门槛
+
+在以下项目全部完成前，状态保持 `未验收`：
+
+- [ ] LLVM parser 拒绝 INIT/ParentSizeCode 矛盾组合；
+- [ ] LLVM disassembler 对矛盾 raw encoding fail closed；
+- [ ] LLVM 正向测试只包含 active ASL 合法组合；
+- [ ] LLVM 覆盖 RegSrc 0/23 和非法 24；
+- [ ] TileOP 不再无说明地硬编码 `a0`，或已获得固定 a0 ABI 设计确认；
+- [ ] TileOP 覆盖 Local/Shared source/destination range 组合；
+- [ ] bundle 绑定顺序/角色/重复/缺失负向测试齐全；
+- [ ] 正确 Linx target 完成 source/destination range object + objdump；
+- [ ] `SuperScalarModel` 未修改；
+- [ ] 验收前不提交、不推送。
+
+## B.SUBVIEW/B.ASSEMBLE RegSrc 修复记录（2026-08-25）
+
+### 已修复
+
+发现此前 TileOP range wrapper 使用：
+
+```cpp
+[RegSrc] "r"(static_cast<unsigned>(tile_shape::RegSrc))
+```
+
+这会把整数 selector（例如 23）放入编译器任意分配的 GPR，不能表达 ISA 要求的 architectural `RegSrc=23`。因此该实现会导致实际编码的 RegSrc 与模板参数不一致。
+
+当前修复方式：
+
+- `range::Subview` / `range::Assemble` 仍以模板参数保存 `RegSrc=0..23`；
+- wrapper 新增可选 `range_base` 运行时值，默认 0；
+- inline asm 按 `if constexpr` 将 selector 映射为真实固定寄存器文本 `r0..r23`；
+- 同时用 fixed-register local variable 将 `range_base` 放入对应的 Linx GPR，使 ISA 语义成立：
+
+```text
+derived_offset = GPR[RegSrc] + ZeroExtend(uimm11)
+```
+
+- 测试覆盖 `RegSrc=0`、`RegSrc=2` 和 `RegSrc=23`，不再将 selector 当作普通整数操作数。
+
+### 当前验证
+
+- TileOP `make check`：通过（32/32 contract tests、host syntax、shell syntax、diff check）；
+- `RangeSubview`/`RangeAssemble` 的正式 Linx target 编译：本机仍无法完成，现有工具链缺少完整 Linx PTO 类型/目标配置，不能据此宣称 object/objdump 端到端通过；
+- 未修改 `SuperScalarModel`；
+- 未提交、未推送。
+
+### 后续必须验证
+
+1. 使用包含本次 LLVM range modifier 改动的完整 Linx toolchain 编译：
+
+```text
+RangeSubview.cpp -> object -> llvm-objdump
+RangeAssemble.cpp -> object -> llvm-objdump
+```
+
+2. 反汇编必须确认：
+
+```text
+RegSrc=0  -> raw field [19:15] = 0
+RegSrc=2  -> raw field [19:15] = 2
+RegSrc=23 -> raw field [19:15] = 23
+```
+
+3. 同时确认反汇编中的 `uimm11`、`SubviewSizeCode`、`ParentSizeCode`、`INIT`、`LAST` 与源码一致。
+
+4. Shared `B.SUBVIEW/B.ASSEMBLE` overload、bundle role/order/state negative tests 仍未完成。
+
+## B.FPATR TransA/TransB/CScaleEn 编码闭环（2026-08-25）
+
+### 已完成
+
+依据 active PTO-ISA 0.58.4 candidate 的 ADR-0101，`B.FPATR` 已完成 LLVM MC 与 TileOP 的字段/编码闭环：
+
+- `TransA` 使用 bit 7；
+- `TransB` 使用 bit 8；
+- `CScaleEn` 使用 bit 9；
+- bit 10 保持 reserved zero；
+- 汇编 canonical spelling 从 7 个字段扩展为 10 个字段；
+- LLVM parser 对 `TransA/TransB/CScaleEn` 的非 0/1 值拒绝；
+- LLVM encoder/disassembler、active Matrix pseudo 自动生成路径同步使用 10 个 operand；
+- TileOP `FixpAttr` 增加 `CScaleEn` 属性、`cscale_enable()` builder 和 bit 9 编码；
+- TileOP `TMATMUL` inline asm 的 `B.FPATR` 输入扩展为 10 字段。
+
+### 验证结果
+
+- LLVM FPATR MC/CodeGen 受影响测试：通过；
+- `TransA=1` 编码为 raw `0x000020a3`；
+- `TransB=1` 编码为 raw `0x00002123`；
+- `CScaleEn=1` 编码为 raw `0x00002223`；
+- reserved bit 10 的 raw encoding 反汇编失败闭环测试通过；
+- TileOP `make check`：32/32 contract tests 通过；
+- TileOP PTO 汇编合同使用本次重建 LLVM 工具链执行 `compile -> objdump` 通过；
+- `git diff --check` 通过；
+- 未修改 `SuperScalarModel`。
+
+### 尚未完成的语义工作
+
+本次只完成 `B.FPATR` 属性字段和编码闭环，不应标记为完整 CScale 功能完成：
+
+- active ISA 要求 `CScaleEn` 仅允许在 FP32 `TMATMUL.ACC` 和 `TMATMULMX.ACC` 中使用；
+- `CScaleEn=1` 时还需要独立的 Local `U8 CUBE_M32 [M,1]` CScale tile source；
+- TileOP 当前仅能设置 `FixpAttr::CScaleEn` 并发出 bit 9，尚未在 ACC API 中增加 CScale tile 参数、binder、shape/layout/dtype 合同；
+- LLVM 当前也未把 CScale tile 的 operation-specific operand schema/lowering 接入完整 Matrix bundle。
+
+因此当前验收结论是：`TransA/TransB/CScaleEn` 的编码链路已完成；`CScaleEn` 的操作数绑定、合法性和数值语义属于后续独立任务。
+
+### 变更文件范围
+
+LLVM：`LinxV5InstrInfo.td`、`LinxV5AsmParser.cpp`、`LinxV5MCCodeEmitter.cpp` 及 FPATR/Matrix 回归测试。
+
+TileOP：`include/common/pto_tile.hpp`、`include/jcore/template_asm.hpp` 及 PTO 0.58.3/0.58.4 合同测试。
+
+当前按要求未提交、未推送；不得将工作区中其它 agent 的无关改动混入本任务提交。
+
+## CScale operand/binder implementation (2026-08-25)
+
+### Implemented
+
+- `fixp::Options` now carries an optional `CScaleTile` type and pointer;
+- `fixp::Options::cscale(Tile&)` sets `CScaleEn=1` and binds the tile;
+- ACC and MX ACC TileOP emitters insert the CScale source after all matrix
+  mathematical sources and before postprocess auxiliary sources;
+- the source is emitted conditionally from the immediate `CScaleEn` value, so
+  legacy ACC calls do not gain an extra binder;
+- compile-time validation requires FP32 `C`, Local `U8`, `CUBE_M32`, and
+  valid shape `M x 1`; non-ACC and basic ACC calls with `CScaleEn` but no tile
+  are rejected rather than silently dropping the source;
+- TileOP docs and `TMatmulAccCScale.cpp` cover the new API.
+
+### Verification
+
+- TileOP `make check`: 32/32 contract tests pass;
+- the new CScale call was compiled to LLVM IR with the Linx frontend;
+- generated inline asm confirms `B.IOT C`, matrix sources, conditional
+  `B.IOT CScale`, then output/postprocess order and `CScaleEn=1`;
+- full target object generation remains blocked by the local pre-existing
+  toolchain issues (`B.DATR` canonical syntax and missing Linx builtin type
+  definitions), not by CScale template diagnostics;
+- LLVM FPATR MC/CodeGen tests remain passing;
+- `SuperScalarModel` remains untouched.
+
+### API example
+
+```cpp
+using CScale = Tile<Location::Vec, uint8_t, 32, 32,
+                    BLayout::CubeM32, 32, 1>;
+TMATMUL_ACC(d, c, a, b, fixp::keep_acc().cscale(scale));
+```
+
+The LLVM operation-specific lowering/model state machine still does not own a
+separate CScale operand abstraction; the current closure is the TileOP inline
+assembly/binder path plus the ISA-level FPATR encoding. Do not claim numerical
+CScale execution validation until a rebuilt toolchain and runtime/model test
+are available.

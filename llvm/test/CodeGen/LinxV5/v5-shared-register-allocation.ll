@@ -53,7 +53,7 @@ define void @reuse(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
 ; CHECK: BSTART.TLSU TMOV.L2S.PUBLISH, FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK: BSTART.CUBE TMATMUL, FP32
-; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
+; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 ; CHECK-NEXT: B.IOS S0, mask=1111
 ; CHECK-NEXT: B.IOT {{[^,]+}}, mask=1111, last, ->t<512B>
 define void @matmul_shared(ptr %in_a, ptr %in_b, ptr %out) {

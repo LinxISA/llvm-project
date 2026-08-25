@@ -4035,7 +4035,7 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       llvm::LinxV5II::IsDisassembleOnlyMask) {
     return true;
   }
-  // P0-2: B.FPATR field/combo legality per PTO 0.58.1 B.FPATR.asl.
+  // B.FPATR field/combo legality per the active PTO 0.58.4 contract.
   if (Inst.getOpcode() == LinxV5::B_FPATR) {
     auto GetImm = [&](unsigned OpNo) -> int64_t {
       return Inst.getOperand(OpNo).getImm();
@@ -4043,6 +4043,7 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
     int64_t PreQuant = GetImm(0), Relu = GetImm(1), GroupN = GetImm(2);
     int64_t RowMaxEn = GetImm(3), GroupMaxEn = GetImm(4);
     int64_t RowMaxInit = GetImm(5), MaxAbs = GetImm(6);
+    int64_t TransA = GetImm(7), TransB = GetImm(8), CScaleEn = GetImm(9);
     const int64_t LegalPreQuant[] = {
         0, 1, 2, 3, 4, 5, 12, 13, 16, 17, 18, 19, 20,
         23, 24, 25, 26, 27, 28, 32, 33, 34, 35, 36, 37, 38, 39};
@@ -4059,6 +4060,8 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
     if (GroupMaxEn == 1 && GroupN == 0)
       return true;
     if (RowMaxEn == 0 && GroupMaxEn == 0 && MaxAbs != 0)
+      return true;
+    if (TransA > 1 || TransB > 1 || CScaleEn > 1)
       return true;
   }
   // PTO-ISA 0.58.4 ADR-0098 range modifiers. B.ASSEMBLE ties INIT to the

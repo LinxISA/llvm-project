@@ -19,7 +19,7 @@ target triple = "linx64v5"
 
 ; CHECK-LABEL: <plain>:
 ; CHECK: BSTART.CUBE TMATMUL, FP32
-; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0
+; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 ; CHECK-NOT: B.FPATR
 ; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last
 define void @plain(ptr %in_a, ptr %in_b, ptr %out) {
