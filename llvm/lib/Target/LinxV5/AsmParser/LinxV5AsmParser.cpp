@@ -63,6 +63,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
     IA_UNSAFE,
   };
   int IAVS = IA_SHUTDOWN; // Inline Asm Validate State
+  int64_t ActiveCubeTileOp = -1;
 
   SMLoc getLoc() const { return getParser().getTok().getLoc(); }
 
@@ -3992,6 +3993,20 @@ static bool isBSTOP(MCInst &Inst) {
          Inst.getOpcode() == LinxV5::SIMT_BSTOP;
 }
 
+static bool isTGEMVTileOp(int64_t TileOp) {
+  switch (TileOp) {
+  case LinxV5Op::TileOPCUBE::TGEMV:
+  case LinxV5Op::TileOPCUBE::TGEMV_BIAS:
+  case LinxV5Op::TileOPCUBE::TGEMV_ACC:
+  case LinxV5Op::TileOPCUBE::TGEMVMX:
+  case LinxV5Op::TileOPCUBE::TGEMVMX_BIAS:
+  case LinxV5Op::TileOPCUBE::TGEMVMX_ACC:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool LinxV5AsmParser::maybeValidateInlineAsm(MCInst &Inst, SMLoc IDLoc) {
   if (IAVS == IA_SHUTDOWN || IAVS == IA_UNSAFE)
     return false;
@@ -4067,6 +4082,9 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       return true;
     if (TransA > 1 || TransB > 1 || CScaleEn > 1)
       return true;
+    if (CScaleEn == 1 && isTGEMVTileOp(ActiveCubeTileOp))
+      return Error(IDLoc,
+                   "CScaleEn must be 0 for TGEMV CUBE operations");
   }
   // ADR-0101: HiF4x2 is a Matrix-MX primary input only.  It is not part of
   // ordinary TMATMUL or any GEMV type domain.  The two datatype operands are
@@ -4348,6 +4366,14 @@ bool LinxV5AsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
   Inst.setLoc(IDLoc);
   const MCInstrDesc &Desc = MII.get(Inst.getOpcode());
   uint64_t TSFlags = Desc.TSFlags;
+  if (Inst.getOpcode() == LinxV5::BSTART_CUBE) {
+    assert(Inst.getNumOperands() > 1 && Inst.getOperand(1).isImm() &&
+           "BSTART.CUBE must carry a TileOP selector");
+    ActiveCubeTileOp = Inst.getOperand(1).getImm();
+  } else if (isTileBSTART(Inst) || LinxV5II::isBSTART(TSFlags) ||
+             isBSTOP(Inst)) {
+    ActiveCubeTileOp = -1;
+  }
   if (LinxV5II::isTileOp(TSFlags)) {
     if (LinxV5II::isTileOpAtVEC(TSFlags) && !LinxV5II::isHeaderOnly(TSFlags)) {
       emitVCall(Inst, Out);

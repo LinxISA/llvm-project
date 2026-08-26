@@ -1,0 +1,16 @@
+// RUN: not llvm-mc -triple=linx64v5 %s 2>&1 | FileCheck %s
+
+BSTART.CUBE TGEMV, FP32
+B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+BSTART.CUBE TGEMV.BIAS, FP32
+B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+BSTART.CUBE TGEMV.ACC, FP32
+B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+BSTART.CUBE TGEMVMX, FP32
+B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+BSTART.CUBE TGEMVMX.BIAS, FP32
+B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+BSTART.CUBE TGEMVMX.ACC, FP32
+B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+
+// CHECK-COUNT-6: error: CScaleEn must be 0 for TGEMV CUBE operations
