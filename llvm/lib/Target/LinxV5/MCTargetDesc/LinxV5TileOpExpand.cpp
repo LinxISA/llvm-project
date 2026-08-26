@@ -318,11 +318,7 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     break;
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:
-  case LinxV5::PseudoTGEMV_BIAS_SizeI:
-  case LinxV5::PseudoTGEMV_ACC_SizeI:
-    if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI ||
-        Inst.getOpcode() == LinxV5::PseudoTGEMV_BIAS_SizeI ||
-        Inst.getOpcode() == LinxV5::PseudoTGEMV_ACC_SizeI) {
+    if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI) {
       // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
                           .addOperand(Inst.getOperand(11))  // DstTile
@@ -347,15 +343,27 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(9))            // SrcTile0
                         .addOperand(Inst.getOperand(10)));  // SrcTile1
     break;
+  case LinxV5::PseudoTGEMV_BIAS_SizeI:
+  case LinxV5::PseudoTGEMV_ACC_SizeI:
+    // TGEMV BIAS/ACC layout: Dst, dimensions/types, size, then three
+    // sources. Keep the destination on the first packet and Last on the
+    // final source packet.
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(9))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(10))
+                        .addOperand(Inst.getOperand(11)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(12)));
+    break;
   case LinxV5::PseudoMAMULBMX_SizeI:
   case LinxV5::PseudoMAMULBMXAC_SizeI:
   case LinxV5::PseudoMAMULBMXACC_SizeI:
-  case LinxV5::PseudoTGEMVMX_SizeI:
-  case LinxV5::PseudoTGEMVMX_BIAS_SizeI:
-  case LinxV5::PseudoTGEMVMX_ACC_SizeI:
-    if (Inst.getOpcode() == LinxV5::PseudoMAMULBMXAC_SizeI ||
-        Inst.getOpcode() == LinxV5::PseudoTGEMVMX_BIAS_SizeI ||
-        Inst.getOpcode() == LinxV5::PseudoTGEMVMX_ACC_SizeI) {
+    if (Inst.getOpcode() == LinxV5::PseudoMAMULBMXAC_SizeI) {
       // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last, SrcTile0, SrcTile1)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
@@ -390,6 +398,39 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(MCOperand::createImm(1))       // Last=1
                         .addOperand(Inst.getOperand(9))            // SrcTile0
                         .addOperand(Inst.getOperand(12)));  // SrcTile1
+    break;
+  case LinxV5::PseudoTGEMVMX_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(10))
+                        .addOperand(Inst.getOperand(11)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(9))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(12))
+                        .addOperand(Inst.getOperand(13)));
+    break;
+  case LinxV5::PseudoTGEMVMX_BIAS_SizeI:
+  case LinxV5::PseudoTGEMVMX_ACC_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(10))
+                        .addOperand(Inst.getOperand(11)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(12))
+                        .addOperand(Inst.getOperand(13)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(9))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(14)));
     break;
   case LinxV5::PseudoMAMULBMXB_SizeI:
   case LinxV5::PseudoMAMULBMXBAC_SizeI:

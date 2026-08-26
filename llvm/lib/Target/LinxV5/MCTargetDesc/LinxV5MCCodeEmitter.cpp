@@ -618,6 +618,7 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
              .addOperand(MCOperand::createImm(0))
              .addOperand(MCOperand::createImm(0))
              .addOperand(MCOperand::createImm(0))
+             .addOperand(MCOperand::createImm(0))
              .addOperand(MCOperand::createImm(0))},
         Dummy);
   }

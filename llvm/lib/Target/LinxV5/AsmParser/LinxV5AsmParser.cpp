@@ -4086,6 +4086,18 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
   case LinxV5::PseudoTGEMVMX_SizeI:
   case LinxV5::PseudoTGEMVMX_BIAS_SizeI:
   case LinxV5::PseudoTGEMVMX_ACC_SizeI:
+    // TGEMV is architecturally M=1. Reject dynamic or larger M at the
+    // public pseudo boundary rather than emitting an invalid CUBE bundle.
+    if ((Inst.getOpcode() == LinxV5::PseudoTGEMV_SizeI ||
+         Inst.getOpcode() == LinxV5::PseudoTGEMV_BIAS_SizeI ||
+         Inst.getOpcode() == LinxV5::PseudoTGEMV_ACC_SizeI ||
+         Inst.getOpcode() == LinxV5::PseudoTGEMVMX_SizeI ||
+         Inst.getOpcode() == LinxV5::PseudoTGEMVMX_BIAS_SizeI ||
+         Inst.getOpcode() == LinxV5::PseudoTGEMVMX_ACC_SizeI) &&
+        (!Inst.getOperand(1).isReg() ||
+         Inst.getOperand(1).getReg() != LinxV5::R0 ||
+         !Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 1))
+      return true;
     if (IsHiF4x2(6) || IsHiF4x2(7))
       return true;
     break;
@@ -4316,6 +4328,13 @@ void LinxV5AsmParser::emitCCall(MCInst &Inst, MCStreamer &Out,
   if (isActiveMatrixPseudo(Inst.getOpcode())) {
     // b.catr DR + b.datr datatype
     emitMcInstVecToStreamer(getBATTRFromInst(Inst, MII), Out);
+    // PTO 0.58.4 requires exactly one ten-field B.FPATR in every active
+    // Matrix CUBE bundle. Public pseudos currently carry the neutral
+    // attribute; explicit TileOP inline assembly supplies non-zero fields.
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_FPATR)
+                            .addImm(0).addImm(0).addImm(0).addImm(0)
+                            .addImm(0).addImm(0).addImm(0).addImm(0)
+                            .addImm(0).addImm(0));
   }
   // emit b.dim ->lb0
   emitMcInstVecToStreamer(getBDIMFromInst(Inst, MII), Out);
