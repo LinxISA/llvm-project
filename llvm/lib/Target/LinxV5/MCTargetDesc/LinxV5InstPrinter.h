@@ -95,6 +95,8 @@ public:
                                       raw_ostream &O);
   void printBAttrType(const MCInst *MI, unsigned OpNo,
                       const MCSubtargetInfo &STI, raw_ostream &O);
+  void printB_IOR(const MCInst *MI, const MCSubtargetInfo &STI,
+                  raw_ostream &O);
   void printBArgFormat(const MCInst *MI, unsigned OpNo,
                        const MCSubtargetInfo &STI, raw_ostream &O);
   void printSubviewSizeCode(const MCInst *MI, unsigned OpNo,

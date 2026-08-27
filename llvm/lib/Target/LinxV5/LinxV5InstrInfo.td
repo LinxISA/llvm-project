@@ -102,6 +102,16 @@ def GPRSrcNoR0 : RegisterOperand<MCSrc> {
   let ParserMatchClass = RegSrcNoR0AsmOperand;
 }
 
+def GPRDstWithOptionalArrowAsmOperand : AsmOperandClass {
+  let Name = "GPRDstWithOptionalArrow";
+  let ParserMethod = "parseGPRDstWithOptionalArrow";
+  let RenderMethod = "addRegOperands";
+}
+
+def GPRDstWithOptionalArrow : RegisterOperand<MCSrc> {
+  let ParserMatchClass = GPRDstWithOptionalArrowAsmOperand;
+}
+
 def RegDepSrcAsmOperand : AsmOperandClass {
   let Name = "RegDepSrc";
   let ParserMethod = "parseRegDepSrc";
@@ -1732,7 +1742,7 @@ def B_IO : BlockModifierBase {
   field bits<32> Inst;
   let Size = 4;
   let isDisassembleOnly = 0;
-  let OutOperandList = (outs GPRSrcNoR0:$RegDst);
+  let OutOperandList = (outs GPRDstWithOptionalArrow:$RegDst);
   let InOperandList = (ins GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2);
 
   bits<5> RegSrc0;
@@ -2014,6 +2024,17 @@ def : InstAlias<"BSTART IND", (BSTART_STD_WITHOUT_TARGET_32_IND), 0>;
 def : InstAlias<"BSTART ICALL", (BSTART_STD_WITHOUT_TARGET_32_ICALL), 0>;
 def : InstAlias<"BSTART RET", (BSTART_STD_WITHOUT_TARGET_32_RET), 0>;
 
+// Canonical form uses a comma-space between GPRs and an arrow for the
+// destination.  Keep the historical bracketed aliases below as input-only
+// compatibility spellings; disassembly always goes through printB_IOR.
+def : InstAlias<"B.IOR [], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, R0, R0, R0), 1>;
+def : InstAlias<"B.IOR [$RegSrc0], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, R0, R0), 1>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 1>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2), 1>;
+def : InstAlias<"B.IOR [], []", (B_IO R0, R0, R0, R0), 2>;
+def : InstAlias<"B.IOR [$RegSrc0], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, R0, R0), 2>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 2>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2), 1>;
 def : InstAlias<"B.IOR [],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, R0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, GPRSrcNoR0:$RegSrc0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0,$RegSrc1],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 1>;

@@ -55,6 +55,11 @@ void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
     printAnnotation(O, Annot);
     return;
   }
+  if (MI->getOpcode() == LinxV5::B_IO) {
+    printB_IOR(MI, STI, O);
+    printAnnotation(O, Annot);
+    return;
+  }
   if (NoAliases || !printAliasInstr(MI, Address, STI, O)) {
     printInstruction(MI, Address, STI, O);
   }
@@ -382,8 +387,15 @@ void LinxV5InstPrinter::printDepSrcReg(const MCInst *MI, unsigned OpNo,
 
 void LinxV5InstPrinter::printTileSrcReg(const MCInst *MI, unsigned OpNo,
                   const MCSubtargetInfo &STI,raw_ostream &O) {
-  unsigned Reg = MI->getOperand(OpNo).getReg();
-  O << getRegisterName(Reg);
+  const MCOperand &MO = MI->getOperand(OpNo);
+  if (MO.isReg()) {
+    O << getRegisterName(MO.getReg());
+    return;
+  }
+  // Keep the printer diagnostic rather than aborting when a pseudo expansion
+  // supplies an operand of the wrong kind. This is especially useful for
+  // generated CUBE bundles, whose source operands are assembled manually.
+  printOperand(MI, OpNo, STI, O);
 }
 void LinxV5InstPrinter::printTileDstReg(const MCInst *MI, unsigned OpNo,
                   const MCSubtargetInfo &STI,raw_ostream &O) {
@@ -449,6 +461,33 @@ void LinxV5InstPrinter::printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
   // PTO v0.58 reissue: destination Shared ID prints as "->S" + index.
   O << "->";
   printSharedTID(MI, OpNo, STI, O);
+}
+
+// PTO canonical B.IOR spelling.  B_IO has a fixed four-register encoding;
+// R0 is the sentinel for an unused source or destination slot and must not be
+// exposed in the assembly contract.
+void LinxV5InstPrinter::printB_IOR(const MCInst *MI,
+                                   const MCSubtargetInfo &STI,
+                                   raw_ostream &O) {
+  O << "\tB.IOR\t[";
+  bool Printed = false;
+  for (unsigned OpNo = 1; OpNo <= 3; ++OpNo) {
+    unsigned Reg = MI->getOperand(OpNo).getReg();
+    if (Reg == LinxV5::R0)
+      continue;
+    if (Printed)
+      O << ", ";
+    printRegName(O, Reg);
+    Printed = true;
+  }
+  O << "], ";
+  unsigned Dst = MI->getOperand(0).getReg();
+  if (Dst == LinxV5::R0)
+    O << "[]";
+  else {
+    O << "->";
+    printRegName(O, Dst);
+  }
 }
 
 // PTO v0.58 reissue: print a complete B.IOS binder. TSize=0 selects the

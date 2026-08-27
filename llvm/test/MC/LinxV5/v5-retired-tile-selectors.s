@@ -2,7 +2,7 @@
 // mnemonics; their raw TEPL numeric forms may still assemble (the printer
 // must not emit the retired name). Work Package C2.
 // RUN: not llvm-mc %s --triple=linx64v5 --show-encoding 2>&1 | FileCheck %s --check-prefix=NEG
-// RUN: llvm-mc %s --triple=linx64v5 --show-encoding 2>&1 | FileCheck %s --check-prefix=POS
+// RUN: grep -E '^BSTART\.TEPL [0-9]+' %s | llvm-mc --triple=linx64v5 --show-encoding 2>&1 | FileCheck %s --check-prefix=POS
 
 // NEG: error: Match Instruction Error!
 BSTART.TEPL TFMOD, FP32

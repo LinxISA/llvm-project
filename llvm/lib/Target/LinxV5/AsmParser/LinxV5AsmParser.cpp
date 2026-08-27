@@ -170,6 +170,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   }
   OperandMatchResultTy parseShamtImm(OperandVector &Operands);
   OperandMatchResultTy parseGPRSrc(OperandVector &Operands);
+  OperandMatchResultTy parseGPRDstWithOptionalArrow(OperandVector &Operands);
   OperandMatchResultTy parseRegDepSrc(OperandVector &Operands);
   OperandMatchResultTy parseDstRWithArrow(OperandVector &Operands);
   OperandMatchResultTy parseLoopBDstRWithArrow(OperandVector &Operands);
@@ -651,6 +652,12 @@ public:
 
   bool isGPRSrcNoR0() const {
     return LinxV5MCRegisterClasses[LinxV5::GRRegClassID].contains(getReg()) &&
+           getReg() != LinxV5::R0;
+  }
+
+  bool isGPRDstWithOptionalArrow() const {
+    return isReg() &&
+           LinxV5MCRegisterClasses[LinxV5::GRRegClassID].contains(getReg()) &&
            getReg() != LinxV5::R0;
   }
 
@@ -1939,6 +1946,18 @@ OperandMatchResultTy LinxV5AsmParser::parseRegister(OperandVector &Operands) {
   }
 
   return MatchOperand_Success;
+}
+
+OperandMatchResultTy
+LinxV5AsmParser::parseGPRDstWithOptionalArrow(OperandVector &Operands) {
+  if (getLexer().getTok().getString() == "->") {
+    getLexer().Lex();
+  } else if (getLexer().getTok().is(AsmToken::Minus) &&
+             getLexer().peekTok().is(AsmToken::Greater)) {
+    getLexer().Lex();
+    getLexer().Lex();
+  }
+  return parseRegister(Operands);
 }
 
 OperandMatchResultTy LinxV5AsmParser::tryParseToken(OperandVector &Operands) {
