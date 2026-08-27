@@ -458,7 +458,7 @@ void LinxV5InstPrinter::printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
 void LinxV5InstPrinter::printB_IOS(const MCInst *MI, const MCSubtargetInfo &STI,
                                    raw_ostream &O) {
   unsigned TSize = MI->getOperand(2).getImm();
-  O << "B.IOS\t";
+  O << "\tB.IOS\t";
   if (TSize == 0) {
     // source form
     printSharedTID(MI, 0, STI, O);
