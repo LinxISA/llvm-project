@@ -148,6 +148,38 @@ def int_linx_blkv_fabs : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>], [Intr
 def int_linx_blkv_fsqrt : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrHasSideEffects]>;
 
 def int_linx_blkv_fexp : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrHasSideEffects]>;
+
+// Experimental compiler semantic operations for aligned Tile partitions and
+// linear assembly sessions. These deliberately carry byte capacities rather
+// than PTO SizeCodes so the IR contract does not depend on the unresolved
+// Local B.IOT boundary. They are verifier-only until the architecture contract
+// is finalized and therefore have no target lowering yet.
+def int_linx_experimental_tpartition : Intrinsic<[llvm_token_ty],
+    [llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i64_ty, llvm_i64_ty,
+     llvm_i32_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate,
+     ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>,
+     ImmArg<ArgIndex<4>>, ImmArg<ArgIndex<5>>]>;
+
+def int_linx_experimental_tile_array_get : Intrinsic<[llvm_token_ty],
+    [llvm_token_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate]>;
+
+def int_linx_experimental_tile_array_empty : Intrinsic<[llvm_token_ty],
+    [llvm_i32_ty, llvm_i32_ty, llvm_i64_ty, llvm_i64_ty, llvm_i32_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate,
+     ImmArg<ArgIndex<0>>, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
+     ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
+
+def int_linx_experimental_tile_array_insert : Intrinsic<[llvm_token_ty],
+    [llvm_token_ty, llvm_anyvector_ty, llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate,
+     ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
+
+def int_linx_experimental_tassembly : Intrinsic<[llvm_anyvector_ty],
+    [llvm_token_ty, llvm_i64_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate,
+     ImmArg<ArgIndex<1>>]>;
 }
 
 class Repeat<int num, LLVMType Ty> {

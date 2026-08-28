@@ -52,6 +52,7 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -86,6 +87,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/IR/IntrinsicsARM.h"
+#include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/IntrinsicsWebAssembly.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
@@ -4878,6 +4880,143 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
   switch (ID) {
   default:
     break;
+  case Intrinsic::linx_experimental_tpartition:
+  case Intrinsic::linx_experimental_tile_array_empty: {
+    const unsigned Base = ID == Intrinsic::linx_experimental_tpartition ? 1 : 0;
+    const uint64_t Rows =
+        cast<ConstantInt>(Call.getArgOperand(Base))->getZExtValue();
+    const uint64_t Cols =
+        cast<ConstantInt>(Call.getArgOperand(Base + 1))->getZExtValue();
+    const uint64_t SubTileBytes =
+        cast<ConstantInt>(Call.getArgOperand(Base + 2))->getZExtValue();
+    const uint64_t ParentBytes =
+        cast<ConstantInt>(Call.getArgOperand(Base + 3))->getZExtValue();
+
+    Check(Rows != 0 && Cols != 0,
+          "Linx Tile array dimensions must be positive", Call);
+    Check(SubTileBytes >= 128,
+          "Linx Tile array fragments must contain at least one 128-byte CELL",
+          Call);
+    Check(Rows == 0 || Cols <= UINT64_MAX / Rows,
+          "Linx Tile array slot count overflows", Call);
+    const uint64_t Slots = Rows * Cols;
+    Check(Slots == 0 || SubTileBytes <= UINT64_MAX / Slots,
+          "Linx Tile array byte coverage overflows", Call);
+    if (Slots != 0 && SubTileBytes <= UINT64_MAX / Slots)
+      Check(ParentBytes == Slots * SubTileBytes,
+            "Linx Tile array must exactly cover its parent", Call);
+
+    if (ID == Intrinsic::linx_experimental_tile_array_empty)
+      Check(Call.hasOneUse(),
+            "Linx Tile assembly state must have exactly one successor", Call);
+    break;
+  }
+  case Intrinsic::linx_experimental_tile_array_get: {
+    auto *Partition = dyn_cast<IntrinsicInst>(Call.getArgOperand(0));
+    Check(Partition && Partition->getIntrinsicID() ==
+                           Intrinsic::linx_experimental_tpartition,
+          "Linx Tile array get requires a tpartition token", Call);
+    if (!Partition)
+      break;
+
+    const int64_t Rows =
+        cast<ConstantInt>(Partition->getArgOperand(1))->getSExtValue();
+    const int64_t Cols =
+        cast<ConstantInt>(Partition->getArgOperand(2))->getSExtValue();
+    if (auto *Row = dyn_cast<ConstantInt>(Call.getArgOperand(1)))
+      Check(Row->getSExtValue() >= 0 && Row->getSExtValue() < Rows,
+            "Linx Tile partition row is out of bounds", Call);
+    if (auto *Col = dyn_cast<ConstantInt>(Call.getArgOperand(2)))
+      Check(Col->getSExtValue() >= 0 && Col->getSExtValue() < Cols,
+            "Linx Tile partition column is out of bounds", Call);
+    break;
+  }
+  case Intrinsic::linx_experimental_tile_array_insert: {
+    auto *Previous = dyn_cast<IntrinsicInst>(Call.getArgOperand(0));
+    Check(Previous &&
+              (Previous->getIntrinsicID() ==
+                   Intrinsic::linx_experimental_tile_array_empty ||
+               Previous->getIntrinsicID() ==
+                   Intrinsic::linx_experimental_tile_array_insert),
+          "Linx Tile array insert requires the previous assembly state", Call);
+    Check(Call.hasOneUse(),
+          "Linx Tile assembly state must have exactly one successor", Call);
+    break;
+  }
+  case Intrinsic::linx_experimental_tassembly: {
+    const uint64_t ResultBytes =
+        cast<ConstantInt>(Call.getArgOperand(1))->getZExtValue();
+    SmallBitVector WrittenSlots;
+    const IntrinsicInst *State =
+        dyn_cast<IntrinsicInst>(Call.getArgOperand(0));
+
+    while (State && State->getIntrinsicID() ==
+                        Intrinsic::linx_experimental_tile_array_insert) {
+      const auto *Row = dyn_cast<ConstantInt>(State->getArgOperand(2));
+      const auto *Col = dyn_cast<ConstantInt>(State->getArgOperand(3));
+      Check(Row && Col,
+            "Linx Tile assembly indices must be compile-time constants in v1",
+            *State);
+      if (!Row || !Col) {
+        State = dyn_cast<IntrinsicInst>(State->getArgOperand(0));
+        continue;
+      }
+      const IntrinsicInst *Previous =
+          dyn_cast<IntrinsicInst>(State->getArgOperand(0));
+      const IntrinsicInst *Root = Previous;
+      while (Root && Root->getIntrinsicID() ==
+                         Intrinsic::linx_experimental_tile_array_insert)
+        Root = dyn_cast<IntrinsicInst>(Root->getArgOperand(0));
+
+      if (!Root || Root->getIntrinsicID() !=
+                       Intrinsic::linx_experimental_tile_array_empty) {
+        State = Previous;
+        continue;
+      }
+
+      const uint64_t Rows =
+          cast<ConstantInt>(Root->getArgOperand(0))->getZExtValue();
+      const uint64_t Cols =
+          cast<ConstantInt>(Root->getArgOperand(1))->getZExtValue();
+      const int64_t RowIndex = Row->getSExtValue();
+      const int64_t ColIndex = Col->getSExtValue();
+      Check(RowIndex >= 0 && static_cast<uint64_t>(RowIndex) < Rows,
+            "Linx Tile assembly row is out of bounds", *State);
+      Check(ColIndex >= 0 && static_cast<uint64_t>(ColIndex) < Cols,
+            "Linx Tile assembly column is out of bounds", *State);
+      if (RowIndex >= 0 && ColIndex >= 0 &&
+          static_cast<uint64_t>(RowIndex) < Rows &&
+          static_cast<uint64_t>(ColIndex) < Cols) {
+        const uint64_t Ordinal =
+            static_cast<uint64_t>(RowIndex) * Cols + ColIndex;
+        if (WrittenSlots.empty())
+          WrittenSlots.resize(Rows * Cols);
+        Check(!WrittenSlots.test(Ordinal),
+              "Linx Tile assembly slot is written more than once", *State);
+        WrittenSlots.set(Ordinal);
+      }
+      State = Previous;
+    }
+
+    Check(State && State->getIntrinsicID() ==
+                       Intrinsic::linx_experimental_tile_array_empty,
+          "Linx tassembly requires a complete assembly state", Call);
+    if (!State)
+      break;
+
+    const uint64_t Rows =
+        cast<ConstantInt>(State->getArgOperand(0))->getZExtValue();
+    const uint64_t Cols =
+        cast<ConstantInt>(State->getArgOperand(1))->getZExtValue();
+    const uint64_t ParentBytes =
+        cast<ConstantInt>(State->getArgOperand(3))->getZExtValue();
+    Check(ResultBytes == ParentBytes,
+          "Linx tassembly result capacity must match the parent", Call);
+    Check(WrittenSlots.size() == Rows * Cols && WrittenSlots.all(),
+          "Linx tassembly requires every slot to be written exactly once",
+          Call);
+    break;
+  }
   case Intrinsic::assume: {
     for (auto &Elem : Call.bundle_op_infos()) {
       Check(Elem.Tag->getKey() == "ignore" ||
