@@ -93,7 +93,6 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TEXTRACT, 0x062u, SFU)                                                     \
   X(TINSERT, 0x063u, SFU)                                                      \
   X(TIMG2COL, 0x064u, SFU)                                                     \
-  X(TFILLPAD, 0x065u, SFU)                                                     \
   X(TCI, 0x066u, SFU)                                                          \
   X(TTRI, 0x067u, SFU)                                                         \
   X(THISTOGRAM, 0x068u, SFU)                                                   \
@@ -101,13 +100,12 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TDEQUANT, 0x06bu, SFU)                                                     \
   X(TSORT, 0x06cu, SFU)                                                        \
   X(TMRGSORT, 0x06du, SFU)                                                     \
-  X(TTRANS, 0x06eu, SFU)                                                       \
   X(TGATHER, 0x06fu, SFU)                                                      \
   X(TSCATTER, 0x070u, SFU)                                                     \
-  X(TPARTADD, 0x071u, SFU)                                                     \
-  X(TPARTMUL, 0x072u, SFU)                                                     \
-  X(TPARTMAX, 0x073u, SFU)                                                     \
-  X(TPARTMIN, 0x074u, SFU)
+  X(TPERMUTE, 0x075u, SFU)                                                     \
+  X(TSHUF, 0x076u, SFU)                                                        \
+  X(TPACK, 0x077u, SFU)                                                        \
+  X(TUNPACK, 0x078u, SFU)
 
 inline bool isCanonicalTileOperationV058(unsigned Selector) {
   switch (Selector) {

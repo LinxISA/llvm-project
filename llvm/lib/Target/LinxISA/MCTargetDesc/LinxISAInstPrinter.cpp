@@ -1443,7 +1443,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned PEMask =
         decodePEMode(static_cast<unsigned>(findFieldImm("PEMode").value_or(0)));
     const unsigned SharedTID =
-        static_cast<unsigned>(findFieldImm("SharedTID").value_or(0)) & 0xffu;
+        static_cast<unsigned>(findFieldImm("SharedTileID").value_or(0)) & 0x3fu;
     const unsigned SizeCode =
         static_cast<unsigned>(findFieldImm("SizeCode").value_or(0)) & 0xfu;
 
@@ -1663,12 +1663,31 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
+  if (AsmFmt.starts_with("B.ASSEMBLE")) {
+    OS << "B.ASSEMBLE\t" << findFieldImm("INIT").value_or(0) << ", "
+       << findFieldImm("LAST").value_or(0) << ", "
+       << reg5Name(findFieldImm("RegSrc").value_or(0)) << ", "
+       << findFieldImm("uimm11").value_or(0) << ", "
+       << findFieldImm("ParentSizeCode").value_or(0);
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  if (AsmFmt.starts_with("B.SUBVIEW")) {
+    OS << "B.SUBVIEW\t" << findFieldImm("SrcSelect").value_or(0) << ", "
+       << reg5Name(findFieldImm("RegSrc").value_or(0)) << ", "
+       << findFieldImm("uimm11").value_or(0) << ", "
+       << findFieldImm("SubviewSizeCode").value_or(0);
+    printAnnotation(OS, Annot);
+    return;
+  }
+
   if (AsmFmt.starts_with("B.FPATR")) {
     OS << "B.FPATR\t";
     bool First = true;
     for (StringRef FieldName :
          {"PreQuantMode", "ReluMode", "GroupNCode", "RowMaxEn", "GroupMaxEn",
-          "RowMaxInit", "MaxAbsEn", "TransA", "TransB"}) {
+          "RowMaxInit", "MaxAbsEn", "TransA", "TransB", "CScaleEn"}) {
       if (!First)
         OS << ", ";
       First = false;

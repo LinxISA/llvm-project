@@ -11,7 +11,7 @@ test_v058_tepl_template_ops:
 	BSTART.SFU TREMS, FP16
 	BSTART.SFU TROWMAX, FP16
 	BSTART.TEPL 3, 16, FP16
-	BSTART.SFU TTRANS, FP16
+	BSTART.SFU TPERMUTE, FP16
 	BSTART.SFU TSORT, FP16
 	C.BSTOP
 	.size	test_v058_tepl_template_ops, .-test_v058_tepl_template_ops
@@ -24,6 +24,6 @@ test_v058_tepl_template_ops:
 # CHECK: BSTART.SFU{{[[:space:]]+}}TREMS, FP16
 # CHECK: BSTART.SFU{{[[:space:]]+}}TROWMAX, FP16
 # CHECK: BSTART.SFU{{[[:space:]]+}}TSCATTER, FP16
-# CHECK: BSTART.SFU{{[[:space:]]+}}TTRANS, FP16
+# CHECK: BSTART.SFU{{[[:space:]]+}}TPERMUTE, FP16
 # CHECK: BSTART.SFU{{[[:space:]]+}}TSORT, FP16
 # CHECK: C.BSTOP

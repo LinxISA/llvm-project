@@ -36,7 +36,7 @@ using namespace llvm;
 namespace {
 
 constexpr StringLiteral PTOISAIdentity =
-    R"({"encoding_abi":"pto-isa-0.58.3-mode-function-v1","encoding_projection_sha256":"8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172","release":"0.58.3"})";
+    R"({"encoding_abi":"pto-isa-0.58.5-mode-function-v1","encoding_projection_sha256":"c4a0188f4c9087388fe6239e4ec2da6550b81c87bb1466e6157d69a9aa45f747","release":"0.58.5"})";
 
 class LinxISAObjectTargetStreamer final : public MCTargetStreamer {
 public:
