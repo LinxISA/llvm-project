@@ -321,7 +321,7 @@ enum {
   EM_CSKY = 252,          // C-SKY 32-bit processor
   EM_LOONGARCH = 258,     // LoongArch
   EM_LinxV4 = 260,        // LinxV4
-  EM_LinxV5 = 261,        // LinxV5
+  EM_LinxV5 = 233,        // LinxV5 / current LinxISA ELF ABI
 };
 
 // Object file classes.
