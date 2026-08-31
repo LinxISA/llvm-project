@@ -62,5 +62,5 @@ v.lwi.local [to3, lc0<<2, 1024], ->vt.w
 // DIS: {{^[[:space:]]*36: 00009013[[:space:]]+B\.IOS[[:space:]]+mask=0000, ->S0<128B>$}}
 // DIS: {{^[[:space:]]*3a: 03f39813[[:space:]]+B\.IOS[[:space:]]+mask=0001, ->S63<8KB>$}}
 // DIS: {{^[[:space:]]*3e: 423c[[:space:]]+C\.B\.DIMI[[:space:]]+8,[[:space:]]+->lb1$}}
-// DIS: {{^[[:space:]]*40: f02e 8049 15a1[[:space:]]+hl\.sb\.pr[[:space:]]+a0, \[a1, t#3\.uw\],[[:space:]]+->u$}}
+// DIS: {{^[[:space:]]*40: f02e 8049 13a1[[:space:]]+hl\.sb\.pr[[:space:]]+a0, \[a1, t#3\.uw\],[[:space:]]+->u$}}
 // DIS: {{^[[:space:]]*46: 0001527f 100da019[[:space:]]+v\.lwi\.local[[:space:]]+\[to3, lc0<<2, 1024\],[[:space:]]+->vt\.w$}}

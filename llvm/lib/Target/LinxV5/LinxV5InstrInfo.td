@@ -181,11 +181,12 @@ class RegWithSrcRType<string TypeName, bits<2> type> : RegisterOperand<MCSrc> {
   let PrintMethod = "printRegWithSrcRType<LinxV5Op::"#TypeName#"Traits>";
 }
 
-def SrcRNONE : RegWithSrcRType<"NONE", 0b00>;
-def SrcRSW : RegWithSrcRType<"SW", 0b01>;
-def SrcRUW : RegWithSrcRType<"UW", 0b10>;
-def SrcRNEG : RegWithSrcRType<"NEG", 0b11>;
-def SrcRNOT : RegWithSrcRType<"NOT", 0b11>;
+// PTO SrcRType encoding: 00=.sw, 01=.uw, 10=.neg/.not, 11=none.
+def SrcRSW : RegWithSrcRType<"SW", 0b00>;
+def SrcRUW : RegWithSrcRType<"UW", 0b01>;
+def SrcRNEG : RegWithSrcRType<"NEG", 0b10>;
+def SrcRNOT : RegWithSrcRType<"NOT", 0b10>;
+def SrcRNONE : RegWithSrcRType<"NONE", 0b11>;
 
 def ShamtImmAsmOperand : AsmOperandClass {
   let Name = "ShamtImm";
