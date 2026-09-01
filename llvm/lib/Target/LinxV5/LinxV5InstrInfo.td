@@ -270,10 +270,26 @@ class ALUriZ6_Base<bits<3> Func, LinxV5InstOpcode opc, Operand Imm, string opcst
 class ALUriZ5_Base<bits<3> Func, LinxV5InstOpcode opc, Operand Imm, string opcstr, LinxV5InstType type> :
     LinxV5Inst_E_Z5<type, opc, Func,(outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, Imm:$Imm5), opcstr>;
 
+class PTOShiftRR<bits<3> Func, bits<7> OpcodeBits, string opcstr> :
+    LinxV5Inst<(outs DstRWithArrow:$DstR),
+               (ins GPRSrc:$SrcL, GPRSrc:$SrcR), opcstr, ""> {
+  bits<5> SrcR;
+  bits<5> SrcL;
+  bits<5> DstR;
+  let Inst{31-25} = 0;
+  let Inst{24-20} = SrcR;
+  let Inst{19-15} = SrcL;
+  let Inst{14-12} = Func;
+  let Inst{11-7} = DstR;
+  let Opcode = OpcodeBits{6-4};
+  let Inst{3-0} = OpcodeBits{3-0};
+  let AsmString = opcstr # "\t$SrcL, $SrcR, $DstR";
+}
+
 multiclass ALUshift<bits<3> Func, string opcstr, LinxV5InstType type> {
-  def ""  : ALUrrZ5_Base<Func, OPC_Arithmetic_Operation_64, SrcRNONE, opcstr, type>;
+  def ""  : PTOShiftRR<Func, 0b0000101, opcstr>;
   def I   : ALUriZ6_Base<Func, OPC_Arithmetic_Operation_64_I, uimm6, opcstr#"i", type>;
-  def W   : ALUrrZ5_Base<Func, OPC_Arithmetic_Operation_32, SrcRNONE, opcstr#"w", type>;
+  def W   : PTOShiftRR<Func, 0b0100101, opcstr#"w">;
   def IW  : ALUriZ5_Base<Func, OPC_Arithmetic_Operation_32_I, uimm5, opcstr#"iw", type>;
 }
 
@@ -2684,11 +2700,21 @@ multiclass fPatRR<SDPatternOperator N, string I> {
   def : PatRRVT<f16, N, !cast<Instruction>(I # _FH)>;
 }
 
+class PatRVT<ValueType VT, SDPatternOperator N, Instruction I> :
+    Pat<(N VT:$SrcL), (I VT:$SrcL)>;
+
+multiclass fPatR<SDPatternOperator N, string I> {
+  def : PatRVT<f64, N, !cast<Instruction>(I # _FD)>;
+  def : PatRVT<f32, N, !cast<Instruction>(I # _FS)>;
+  def : PatRVT<f16, N, !cast<Instruction>(I # _FH)>;
+}
+
 let Predicates = [isScalar, hasFloat, useDAGISel] in {
 defm : fPatRR<fadd, "FADD">;
 defm : fPatRR<fsub, "FSUB">;
 defm : fPatRR<fmul, "FMUL">;
 defm : fPatRR<fdiv, "FDIV">;
+defm : fPatR<fsqrt, "FSQRT">;
 }
 
 class fPatNEG<ValueType VT, Instruction I> :
