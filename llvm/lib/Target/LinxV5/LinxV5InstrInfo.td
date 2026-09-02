@@ -1523,9 +1523,37 @@ class Tile_DataType_NoMode<bits<5> Opcode, string HeadType, dag ins>
   let AsmString = "BSTART" # HeadType # "\t$TileOP, $DataType";
 }
 
+class Tile_DataType_FixedOp<bits<5> Opcode, bits<5> FixedTileOP,
+                            string HeadType, dag ins>
+        : LinxV5InstBase {
+  let Format = InstFormat_BSTART_WITHOUT_TARGET_32;
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+
+  bits<5> DataType;
+
+  let OutOperandList = (outs );
+  let InOperandList = ins;
+
+  let Inst{31-27} = DataType;
+  let Inst{26-25} = 0b00;
+  let Inst{24-20} = FixedTileOP;
+  let Inst{19-15} = Opcode;
+  let Inst{14-12} = 0b001;
+  let Inst{11-7} = 0b00011;
+  let Inst{6-4} = 0b000;
+  let Inst{3-1} = 0b000;
+  let Inst{0} = 0b1;
+
+  let AsmString = "BSTART" # HeadType # "\t$DataType";
+}
+
 def BSTART_TMA : Tile_DataType_NoMode<0b00010, ".TLSU", (ins BstartDataType:$DataType, TileOPTMA:$TileOP)>;
 def BSTART_CUBE: Tile_DataType_NoMode<0b00110, ".CUBE", (ins BstartDataType:$DataType, TileOPCUBE:$TileOP)>;
 def BSTART_TEPL_NoMode: Tile_DataType_TEPL<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP)>;
+def BSTART_GMOV : Tile_DataType_FixedOp<0b00010, 0b01101, ".GMOV",
+                                       (ins BstartDataType:$DataType)>;
 //def BSTART_TEPL: Tile_DataType<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP, TEPLMode:$Mode)>;
 
 class Tile_Mode<bits<5> Opcode, string HeadType> : LinxV5InstBase {
@@ -2032,8 +2060,8 @@ def : InstAlias<"B.IOR [$RegSrc0], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegD
 def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2), 1>;
 def : InstAlias<"B.IOR [], []", (B_IO R0, R0, R0, R0), 2>;
-def : InstAlias<"B.IOR [$RegSrc0], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, R0, R0), 2>;
-def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 2>;
+def : InstAlias<"B.IOR [$RegSrc0], []", (B_IO R0, GPRSrc:$RegSrc0, R0, R0), 2>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], []", (B_IO R0, GPRSrc:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 2>;
 def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2), 1>;
 def : InstAlias<"B.IOR [],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, R0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, GPRSrcNoR0:$RegSrc0, R0, R0), 1>;

@@ -474,9 +474,8 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
   if (MI.getOpcode() == LinxV5::PseudoV5GMOV) {
     writeBinaryCodes(
         OS, Fixups, STI,
-        {MCInstBuilder(LinxV5::BSTART_TMA)
-             .addOperand(MI.getOperand(1))
-             .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::GMOV))},
+        {MCInstBuilder(LinxV5::BSTART_GMOV)
+             .addOperand(MI.getOperand(1))},
         ByteCount);
     writeBinaryCodes(
         OS, Fixups, STI,
