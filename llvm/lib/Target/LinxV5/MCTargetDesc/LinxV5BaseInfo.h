@@ -256,11 +256,11 @@ struct TileCallEntry {
 namespace LinxV5Op {
 
 enum SrcRType {
-  SW = 0b00,
-  UW = 0b01,
-  NEG = 0b10,
-  NOT = 0b10,
-  NONE = 0b11,
+  NONE,
+  SW,
+  UW,
+  NEG,
+  NOT,
 };
 
 struct NONETraits {

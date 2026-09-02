@@ -150,13 +150,9 @@ void LinxV5InstPrinter::printLinxV5SrcRType(const MCInst *MI, unsigned OpNo,
   switch (MI->getOpcode()) {
   default:
     llvm_unreachable("Unsupport Inst for LinxV5 SrcType!");
-  case LinxV5::ADD:
-  case LinxV5::SUB:
-  case LinxV5::ADDW:
-  case LinxV5::SUBW: {
-    static constexpr const char *TypeStr[4] = {".sw", ".uw", ".neg", ""};
-    O << TypeStr[MO.getImm() & 0x3];
-    break;
+  case LinxV5::ADD: {
+    std::string TypeStr[4] = {"", ".sw", ".uw", ".neg"};
+    O << TypeStr[MO.getImm()];
   }
   }
 }
