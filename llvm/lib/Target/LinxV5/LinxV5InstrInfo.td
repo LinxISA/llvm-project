@@ -188,12 +188,6 @@ def SrcRNEG : RegWithSrcRType<"NEG", 0b10>;
 def SrcRNOT : RegWithSrcRType<"NOT", 0b10>;
 def SrcRNONE : RegWithSrcRType<"NONE", 0b11>;
 
-// CSEL has an instruction-specific SrcRType contract: raw 00 is the
-// canonical unmodified form and raw 11 selects negation.  Do not reuse the
-// generic scalar-ALU operands above.
-def SrcRCSELNONE : RegWithSrcRType<"NONE", 0b00>;
-def SrcRCSELNEG  : RegWithSrcRType<"NEG", 0b11>;
-
 def ShamtImmAsmOperand : AsmOperandClass {
   let Name = "ShamtImm";
   let ParserMethod = "parseShamtImm";
@@ -605,8 +599,8 @@ class 3SrcInt_Base<bits<3> Func, string opcstr, RegWithSrcRType SrcROp, LinxV5In
 }
 
 multiclass CSEL_3Src<bits<3> Func, string opcstr, LinxV5InstType type>  {
-    def ""   : 3SrcInt_Base<Func, opcstr, SrcRCSELNONE, type>;
-    def _NEG : 3SrcInt_Base<Func, opcstr, SrcRCSELNEG, type>;
+    def ""   : 3SrcInt_Base<Func, opcstr, SrcRNONE, type>;
+    def _NEG : 3SrcInt_Base<Func, opcstr, SrcRNEG, type>;
 }
 
 defm CSEL : CSEL_3Src<0b000, "csel", Type_011>;
