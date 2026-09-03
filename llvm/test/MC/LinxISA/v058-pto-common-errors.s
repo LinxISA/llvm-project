@@ -18,7 +18,7 @@
 	B.IOT t#1, mask=0011
 	B.IOT t#1, mask=0001, ->u<0>
 	B.IOT t#1, mask=1111, ->u<128KB>
-	B.IOS S256, mask=0001
+	B.IOS S64, mask=0001
 	B.IOS S1, mask=0001, ->S2<128B>
 	B.IOR [r24]
 
@@ -39,6 +39,6 @@
 # CHECK: error: PE mask must contain exactly four binary digits
 # CHECK: error: PE mask must be one of 0000, 1000, 0100, 0010, 0001, 1100, 1110, or 1111
 # CHECK-COUNT-2: error: tile size must be in strict range 128B..64KB
-# CHECK: error: B.IOS Shared register must be S0..S255
+# CHECK: error: B.IOS Shared register must be S0..S63
 # CHECK: error: B.IOS must be either a Shared source or a Shared destination
 # CHECK: error: B.IOR register must be one of the 24 absolute GPRs

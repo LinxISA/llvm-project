@@ -958,6 +958,24 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
           .Case("BSTART.MGATHER.MASK", 6u)
           .Case("BSTART.MSCATTER.MASK", 7u)
           .Case("BSTART.MGATHER.CAS", 8u)
+          .Case("BSTART.MGATHER.EXCH", 9u)
+          .Case("BSTART.MGATHER.MAX", 10u)
+          .Case("BSTART.MGATHER.MIN", 11u)
+          .Case("BSTART.MGATHER.ADD", 12u)
+          .Case("BSTART.MGATHER.INC", 14u)
+          .Case("BSTART.MGATHER.DEC", 15u)
+          .Case("BSTART.MGATHER.AND", 16u)
+          .Case("BSTART.MGATHER.OR", 17u)
+          .Case("BSTART.MGATHER.XOR", 18u)
+          .Case("BSTART.MSCATTER.MAX", 19u)
+          .Case("BSTART.MSCATTER.MIN", 20u)
+          .Case("BSTART.MSCATTER.ADD", 21u)
+          .Case("BSTART.MSCATTER.INC", 22u)
+          .Case("BSTART.MSCATTER.DEC", 23u)
+          .Case("BSTART.MSCATTER.AND", 24u)
+          .Case("BSTART.MSCATTER.OR", 25u)
+          .Case("BSTART.MSCATTER.XOR", 26u)
+          .Case("BSTART.MSCATTER.POPC", 27u)
           .Default(std::nullopt);
   const std::optional<unsigned> DirectCUBEFunc =
       StringSwitch<std::optional<unsigned>>(TypedTok)
@@ -1322,7 +1340,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   auto emitSrcRWithTypeAndShift = [&](std::optional<int64_t> ForcedShift) {
     emitReg("SrcR");
     if (auto V = findFieldImm("SrcRType")) {
-      if (StringRef S = srcRTypeSuffix(static_cast<unsigned>(*V)); !S.empty())
+      const StringRef FormMnemonic(Form.mnemonic ? Form.mnemonic : "");
+      const bool IsHLPrefetch =
+          FormMnemonic == "HL.PRF" || FormMnemonic == "HL.PRF.A";
+      const unsigned Type = static_cast<unsigned>(*V) & 0x3u;
+      const StringRef S = IsHLPrefetch
+                              ? (Type == 1u ? StringRef(".sw")
+                                            : Type == 2u ? StringRef(".uw")
+                                                         : StringRef())
+                              : srcRTypeSuffix(Type);
+      if (!S.empty())
         OS << S;
     }
 
@@ -1443,7 +1470,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     const unsigned PEMask =
         decodePEMode(static_cast<unsigned>(findFieldImm("PEMode").value_or(0)));
     const unsigned SharedTID =
-        static_cast<unsigned>(findFieldImm("SharedTID").value_or(0)) & 0xffu;
+        static_cast<unsigned>(findFieldImm("SharedTileID").value_or(0)) & 0x3fu;
     const unsigned SizeCode =
         static_cast<unsigned>(findFieldImm("SizeCode").value_or(0)) & 0xfu;
 
@@ -1663,12 +1690,31 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     return;
   }
 
+  if (AsmFmt.starts_with("B.ASSEMBLE")) {
+    OS << "B.ASSEMBLE\t" << findFieldImm("INIT").value_or(0) << ", "
+       << findFieldImm("LAST").value_or(0) << ", "
+       << reg5Name(findFieldImm("RegSrc").value_or(0)) << ", "
+       << findFieldImm("uimm11").value_or(0) << ", "
+       << findFieldImm("ParentSizeCode").value_or(0);
+    printAnnotation(OS, Annot);
+    return;
+  }
+
+  if (AsmFmt.starts_with("B.SUBVIEW")) {
+    OS << "B.SUBVIEW\t" << findFieldImm("SrcSelect").value_or(0) << ", "
+       << reg5Name(findFieldImm("RegSrc").value_or(0)) << ", "
+       << findFieldImm("uimm11").value_or(0) << ", "
+       << findFieldImm("SubviewSizeCode").value_or(0);
+    printAnnotation(OS, Annot);
+    return;
+  }
+
   if (AsmFmt.starts_with("B.FPATR")) {
     OS << "B.FPATR\t";
     bool First = true;
     for (StringRef FieldName :
          {"PreQuantMode", "ReluMode", "GroupNCode", "RowMaxEn", "GroupMaxEn",
-          "RowMaxInit", "MaxAbsEn", "TransA", "TransB"}) {
+          "RowMaxInit", "MaxAbsEn", "TransA", "TransB", "CScaleEn"}) {
       if (!First)
         OS << ", ";
       First = false;

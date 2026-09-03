@@ -404,7 +404,7 @@ bool LinxISAAsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
   // templates rely on that conventional modifier for selector and dimension
   // fields. %DN prints a tile dtype keyword for attribute commands. %ZN
   // prints a SizeCode as its canonical byte size. %SN
-  // prints a compiler-allocated Shared register as S0..S255. %qN
+  // prints a compiler-allocated Shared register as S0..S63. %qN
   // prints only a tile register's destination queue bank because
   // canonical B.IOT destinations are written as ->t/u/m/n<Size>, while source
   // operands name a concrete queue slot such as t#1.

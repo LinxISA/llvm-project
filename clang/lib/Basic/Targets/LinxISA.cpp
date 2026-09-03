@@ -94,7 +94,7 @@ bool LinxISATargetInfo::validateAsmConstraint(
     return true;
   }
   case 'S': {
-    // Compiler-allocated core-private Shared tile register S0..S255.
+    // Compiler-allocated core-private Shared tile register S0..S63.
     if (Name[1] == 'r')
       ++Name;
     Info.setAllowsRegister();

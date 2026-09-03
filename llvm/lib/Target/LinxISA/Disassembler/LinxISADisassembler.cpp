@@ -272,6 +272,20 @@ static bool isLegalTileAttributeFields(const linxisa_inst_form &Form,
   return true;
 }
 
+static bool isLegalHLPrefetchSrcRType(const linxisa_inst_form &Form,
+                                      ArrayRef<int64_t> FieldVals) {
+  StringRef Mnemonic(Form.mnemonic ? Form.mnemonic : "");
+  if (Mnemonic != "HL.PRF" && Mnemonic != "HL.PRF.A")
+    return true;
+
+  for (unsigned I = 0; I != FieldVals.size(); ++I) {
+    const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+    if (StringRef(Field.name ? Field.name : "") == "SrcRType")
+      return static_cast<uint64_t>(FieldVals[I]) <= 2u;
+  }
+  return false;
+}
+
 MCDisassembler::DecodeStatus
 LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
                                     ArrayRef<uint8_t> Bytes, uint64_t Address,
@@ -342,7 +356,8 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
   if (!isLegalCompressedStdBrType(*Matched, FieldVals) ||
       !isLegalFrameTemplate(*Matched, FieldVals) ||
       !isLegalBIOTDestination(*Matched, FieldVals) ||
-      !isLegalTileAttributeFields(*Matched, FieldVals)) {
+      !isLegalTileAttributeFields(*Matched, FieldVals) ||
+      !isLegalHLPrefetchSrcRType(*Matched, FieldVals)) {
     Instr.clear();
     return Fail;
   }

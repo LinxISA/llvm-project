@@ -137,7 +137,7 @@ def TILE_N : RegisterClass<"Linx", [linxtile, v1024i32], 32768,
     (sequence "TILE%i", 24, 31)>;
 
 def SHARED : RegisterClass<"Linx", [i64], 64,
-    (sequence "SHARED%i", 0, 255)>;
+    (sequence "SHARED%i", 0, 63)>;
 
 def CSR_Linx : CalleeSavedRegs<(add R10,
                                    (sequence "R%i", 11, 19))>;

@@ -19,6 +19,7 @@
 #include "lld/Common/DWARF.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/BinaryFormat/PTOISA.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/IRObjectFile.h"
 #include "llvm/Support/AArch64AttributeParser.h"
@@ -47,9 +48,6 @@ extern template void ObjFile<ELF32LE>::importCmseSymbols();
 extern template void ObjFile<ELF32BE>::importCmseSymbols();
 extern template void ObjFile<ELF64LE>::importCmseSymbols();
 extern template void ObjFile<ELF64BE>::importCmseSymbols();
-
-static constexpr StringLiteral PTOISAIdentity =
-    R"({"encoding_abi":"pto-isa-0.58.3-mode-function-v1","encoding_projection_sha256":"8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172","release":"0.58.3"})";
 
 template <class ELFT>
 static SmallVector<size_t, 1>
@@ -83,13 +81,13 @@ validatePTOISAIdentity(Ctx &ctx, ELFFileBase &file, const ELFFile<ELFT> &obj,
       wireError("section alignment must be 4");
       continue;
     }
-    const size_t expectedSize = alignTo(16 + PTOISAIdentity.size(), 4);
+    const size_t expectedSize = alignTo(16 + PTOISA::Identity.size(), 4);
     if (data.size() != expectedSize) {
       wireError("expected exactly one canonical identity record");
       continue;
     }
     if (read32<ELFT::Endianness>(data.data()) != 4 ||
-        read32<ELFT::Endianness>(data.data() + 4) != PTOISAIdentity.size() ||
+        read32<ELFT::Endianness>(data.data() + 4) != PTOISA::Identity.size() ||
         read32<ELFT::Endianness>(data.data() + 8) != 1 ||
         StringRef(reinterpret_cast<const char *>(data.data() + 12), 4) !=
             StringRef("PTO", 4)) {
@@ -97,8 +95,8 @@ validatePTOISAIdentity(Ctx &ctx, ELFFileBase &file, const ELFFile<ELFT> &obj,
       continue;
     }
     StringRef desc(reinterpret_cast<const char *>(data.data() + 16),
-                   PTOISAIdentity.size());
-    if (desc == PTOISAIdentity)
+                   PTOISA::Identity.size());
+    if (desc == PTOISA::Identity)
       continue;
 
     Expected<json::Value> parsed = json::parse(desc);
@@ -112,13 +110,13 @@ validatePTOISAIdentity(Ctx &ctx, ELFFileBase &file, const ELFFile<ELFT> &obj,
       wireError("descriptor is not a JSON object");
       continue;
     }
-    if (identity->getString("release") != "0.58.3")
-      wireError("release mismatch (expected 0.58.3)");
-    else if (identity->getString("encoding_abi") !=
-             "pto-isa-0.58.3-mode-function-v1")
+    if (identity->getString("release") != PTOISA::Release)
+      wireError(
+          (Twine("release mismatch (expected ") + PTOISA::Release + ")").str());
+    else if (identity->getString("encoding_abi") != PTOISA::EncodingABI)
       wireError("encoding ABI mismatch");
     else if (identity->getString("encoding_projection_sha256") !=
-             "8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172")
+             PTOISA::EncodingProjectionSHA256)
       wireError("encoding projection hash mismatch");
     else
       wireError("descriptor is not the canonical compact JSON encoding");

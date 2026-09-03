@@ -4,6 +4,5 @@
 	BSTART.TEPL 0, 5, FP16
 	BSTART.TEPL 0, 24, FP16
 	BSTART.TEPL 1, 5, FP16
-	BSTART.TEPL 3, 30, FP16
 
-# CHECK-COUNT-4: error: BSTART.TEPL Mode/Function is reserved in PTO ISA 0.58
+# CHECK-COUNT-3: error: BSTART.TEPL Mode/Function is reserved in PTO ISA 0.58

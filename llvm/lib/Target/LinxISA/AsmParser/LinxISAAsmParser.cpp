@@ -244,7 +244,7 @@ static std::optional<unsigned> parseSharedTileId(StringRef Name) {
   if (N.size() < 2 || (N[0] != 's' && N[0] != 'S'))
     return std::nullopt;
   unsigned Value = 0;
-  if (N.drop_front().getAsInteger(10, Value) || Value > 255u)
+  if (N.drop_front().getAsInteger(10, Value) || Value > 63u)
     return std::nullopt;
   return Value;
 }
@@ -1431,7 +1431,7 @@ bool LinxISAAsmParser::parseArrowDestOperand(ParsedReg &OutDest,
     } else if (Up == "ACC") {
       Kind = 4;
     } else {
-      return Error(D.Loc, AllowShared ? "B.IOS Shared register must be S0..S255"
+      return Error(D.Loc, AllowShared ? "B.IOS Shared register must be S0..S63"
                                       : "invalid tile kind for '-><kind><...>' "
                                         "(expected t/u/m/n/acc)");
     }
@@ -2005,7 +2005,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
           auto SharedTID = parseSharedTileId(SharedName);
           if (!SharedTID)
             return Error(getTok().getLoc(),
-                         "B.IOS Shared register must be S0..S255");
+                         "B.IOS Shared register must be S0..S63");
           SMLoc L = getTok().getLoc();
           SMLoc E = getTok().getEndLoc();
           Lex();
@@ -2781,7 +2781,20 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       if (FN == "SrcRType") {
         if (!require(M.HasIndex, "expected register offset for SrcRType"))
           return false;
-        emitFieldImm(static_cast<int64_t>(M.Index.SrcRType));
+        const bool IsHLPrefetch =
+            Form.mnemonic &&
+            (StringRef(Form.mnemonic).equals_insensitive("HL.PRF") ||
+             StringRef(Form.mnemonic).equals_insensitive("HL.PRF.A"));
+        if (IsHLPrefetch) {
+          if (!require(!M.Index.HasExplicitType || M.Index.SrcRType <= 1,
+                       "HL.PRF register offset does not allow .neg or .not"))
+            return false;
+          const unsigned HLSrcRType =
+              M.Index.HasExplicitType ? M.Index.SrcRType + 1 : 0;
+          emitFieldImm(static_cast<int64_t>(HLSrcRType));
+        } else {
+          emitFieldImm(static_cast<int64_t>(M.Index.SrcRType));
+        }
         continue;
       }
 
@@ -2988,8 +3001,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (IsSource) {
       int64_t Value = 0;
       if (!require(isConstExpr(PI.Imms[0].Expr, Value) && Value >= 0 &&
-                       Value <= 255,
-                   "B.IOS Shared register must be S0..S255"))
+                       Value <= 63,
+                   "B.IOS Shared register must be S0..S63"))
         return false;
       SharedTID = static_cast<unsigned>(Value);
     } else {
@@ -3006,7 +3019,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       StringRef FieldName(linxisa_fields[Form.field_start + I].name);
       if (FieldName == "PEMode")
         emitFieldImm(*PEMode);
-      else if (FieldName == "SharedTID")
+      else if (FieldName == "SharedTileID")
         emitFieldImm(SharedTID);
       else if (FieldName == "SizeCode")
         emitFieldImm(SizeCode);
@@ -3403,6 +3416,62 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     return true;
   }
 
+  // B.ASSEMBLE and B.SUBVIEW store fields in canonical field-name order,
+  // while their assembly operands follow the architectural descriptor order.
+  if (AsmFmt.starts_with("B.ASSEMBLE") || AsmFmt.starts_with("B.SUBVIEW")) {
+    const bool IsAssemble = AsmFmt.starts_with("B.ASSEMBLE");
+    const unsigned ExpectedImms = IsAssemble ? 4u : 3u;
+    const StringRef Kind = IsAssemble ? "B.ASSEMBLE" : "B.SUBVIEW";
+    if (!require(PI.Regs.size() == 1 && PI.Keywords.empty() && !PI.Mem &&
+                     PI.ArrowDests.empty() && !PI.SetRetTarget,
+                 (Twine("unexpected operands for ") + Kind)))
+      return false;
+    if (!require(PI.Imms.size() == ExpectedImms,
+                 (Twine("unexpected immediate operands for ") + Kind)))
+      return false;
+
+    auto sourceIndex = [&](StringRef FieldName) -> std::optional<unsigned> {
+      if (IsAssemble)
+        return StringSwitch<std::optional<unsigned>>(FieldName)
+            .Case("INIT", 0u)
+            .Case("LAST", 1u)
+            .Case("uimm11", 2u)
+            .Case("ParentSizeCode", 3u)
+            .Default(std::nullopt);
+      return StringSwitch<std::optional<unsigned>>(FieldName)
+          .Case("SrcSelect", 0u)
+          .Case("uimm11", 1u)
+          .Case("SubviewSizeCode", 2u)
+          .Default(std::nullopt);
+    };
+
+    for (unsigned I = 0; I < Form.field_count; ++I) {
+      const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+      const StringRef FieldName(Field.name);
+      if (FieldName == "RegSrc") {
+        if (!require(PI.Regs[0].Code < (1u << Field.bit_width),
+                     "register operand does not fit field width"))
+          return false;
+        emitFieldImm(static_cast<int64_t>(PI.Regs[0].Code));
+        continue;
+      }
+      const std::optional<unsigned> Source = sourceIndex(FieldName);
+      if (!require(Source.has_value(),
+                   (Twine("unsupported ") + Kind + " field: " + FieldName)))
+        return false;
+      int64_t Value = 0;
+      if (!require(isConstExpr(PI.Imms[*Source].Expr, Value),
+                   (FieldName + " must be a constant").str()))
+        return false;
+      const uint64_t Limit = uint64_t{1} << Field.bit_width;
+      if (!require(Value >= 0 && static_cast<uint64_t>(Value) < Limit,
+                   (FieldName + " does not fit its encoded field").str()))
+        return false;
+      emitFieldImm(Value);
+    }
+    return true;
+  }
+
   // B.FPATR's generated fields are stored in canonical field-name order,
   // while its assembly operands follow the architectural descriptor order.
   if (AsmFmt.starts_with("B.FPATR")) {
@@ -3410,8 +3479,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                      PI.ArrowDests.empty() && !PI.SetRetTarget,
                  "unexpected operands for B.FPATR"))
       return false;
-    if (!require(PI.Imms.size() == 9,
-                 "expected nine descriptor fields for B.FPATR"))
+    if (!require(PI.Imms.size() == 10,
+                 "expected ten descriptor fields for B.FPATR"))
       return false;
 
     auto sourceIndex = [](StringRef FieldName) -> std::optional<unsigned> {
@@ -3425,6 +3494,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
           .Case("MaxAbsEn", 6u)
           .Case("TransA", 7u)
           .Case("TransB", 8u)
+          .Case("CScaleEn", 9u)
           .Default(std::nullopt);
     };
 

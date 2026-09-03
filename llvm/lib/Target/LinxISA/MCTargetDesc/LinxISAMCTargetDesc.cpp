@@ -5,6 +5,7 @@
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/PTOISA.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
@@ -35,9 +36,6 @@ using namespace llvm;
 
 namespace {
 
-constexpr StringLiteral PTOISAIdentity =
-    R"({"encoding_abi":"pto-isa-0.58.3-mode-function-v1","encoding_projection_sha256":"8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172","release":"0.58.3"})";
-
 class LinxISAObjectTargetStreamer final : public MCTargetStreamer {
 public:
   explicit LinxISAObjectTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
@@ -58,10 +56,10 @@ public:
     Out.switchSection(Note);
     Out.emitValueToAlignment(Align(4));
     Out.emitIntValue(4, 4); // namesz: PTO\0
-    Out.emitIntValue(PTOISAIdentity.size(), 4);
+    Out.emitIntValue(PTOISA::Identity.size(), 4);
     Out.emitIntValue(1, 4); // PTO_NT_ISA_IDENTITY
     Out.emitBytes(StringRef("PTO", 4));
-    Out.emitBytes(PTOISAIdentity);
+    Out.emitBytes(PTOISA::Identity);
     Out.emitValueToAlignment(Align(4));
     Out.endSection(Note);
     Out.switchSection(Previous);
