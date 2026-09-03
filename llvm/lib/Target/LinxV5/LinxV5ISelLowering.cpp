@@ -150,7 +150,8 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
 
   if (Subtarget.isScalar() && !Subtarget.enableLegacyISel()) {
     static const MVT FPVTs[] = {MVT::f64, MVT::f32, MVT::f16};
-    setOperationAction(ISD::FREM, FPVTs, Expand);
+    setOperationAction(ISD::FREM, {MVT::f64, MVT::f32}, Expand);
+    setOperationAction(ISD::FREM, MVT::f16, Promote);
     setOperationAction(ISD::FPOW, FPVTs, Expand);
     setOperationAction(ISD::FCOPYSIGN, FPVTs, Expand);
     setOperationAction(ISD::FABS, FPVTs, Expand);
