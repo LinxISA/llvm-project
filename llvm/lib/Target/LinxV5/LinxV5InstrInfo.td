@@ -2028,6 +2028,15 @@ def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue", (BDATR BArgForm
 def : InstAlias<"B.DATR $DataLayout$canon, $PadValue, $CmpMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, 31, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 2>;
 def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue, $CmpMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 1>;
 
+// PTO-ISA must-zero B.DATR forms (TMATMUL/TGEMV/TMOV datr_contract:
+// pad_union = must-zero). The pre-existing aliases hardcode
+// PadValue = 3 (Null) whenever RMode is present, which a conforming
+// legality check (BundleTMATMULDataAttributesLegal, pad_value ==
+// Zeros{2}) rejects. These aliases expose PadValue as an operand so
+// callers can spell `B.DATR <type>, <byteid>, Zero, <rmode>, <sat>`.
+def : InstAlias<"B.DATR\t$srctype, $ByteId, $PadValue, $RMode, $sat", (BDATR 0, 0, BstartDataType:$srctype, PadValue:$PadValue, 0, RMode:$RMode, Sat:$sat, ByteID:$ByteId), 2>;
+def : InstAlias<"B.DATR\t$srctype, $PadValue, $RMode, $sat", (BDATR 0, 0, BstartDataType:$srctype, PadValue:$PadValue, 0, RMode:$RMode, Sat:$sat, 0), 2>;
+
 //def : InstAlias<"BSTART.TEPL $TileOP, $Mode", (BSTART_TEPL 31, TileOPTEPL:$TileOP, TEPLMode:$Mode), 1>;
 
 def : InstAlias<"setret\t$imm20", (ADDPC uimm21_lsb0:$imm20), 0>;
