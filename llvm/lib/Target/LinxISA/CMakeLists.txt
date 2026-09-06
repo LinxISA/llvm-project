@@ -36,6 +36,7 @@ add_llvm_target(LinxISACodeGen
   LinxISADesc
   LinxISAInfo
   MC
+  Passes
   SelectionDAG
   Support
   Target
