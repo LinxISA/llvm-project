@@ -2894,11 +2894,11 @@ def C_B_DIMI : BlockModifierBase {
   let AsmString = "C.B.DIMI" # "\t$imm8, $DstLoopReg";
 }
 
-// v5: C.B.IOS replaces v4 C.B.DIM RegSrc form. It is a 16-bit compressed
-// Shared operand binder carrying a 6-bit absolute Shared architectural ID;
-// it cannot execute alone — the next compatible B.IOT/B.IOR consumes it at
-// decode/rename. v4 C.B.DIMI (immediate) is kept; dynamic dimension uses
-// 32-bit B.DIM. (header/C.B.IOS.md)
+// Shared operand parsing/printing helpers. Historically these served the
+// v5 16-bit compressed C.B.IOS binder; per PTO v0.58.4 (ADR 0097) the
+// active form is the 32-bit B.IOS below and C.B.IOS is retired — its
+// overlapping raw words decode only as active C.B.DIMI. v4 C.B.DIMI
+// (immediate) is kept; dynamic dimension uses 32-bit B.DIM.
 def SharedTIDAsmOperand : AsmOperandClass {
   let Name = "SharedTID";
   let ParserMethod = "parseSharedTID";
@@ -3559,7 +3559,8 @@ class PseudoCUBE_MAMULBMXBACC_Base_I<string TileOp> :
 def PseudoMAMULBMXBACC_SizeI : PseudoCUBE_MAMULBMXBACC_Base_I<"TMATMULMX.ACC">;
 
 // v5 TGEMV (Function 16-18, 20-22): PE-local M=1 GEMV. Local-only operand
-// stream; no SharedTile/C.B.IOS/Core4 cooperative form. Reuses the TMATMUL
+// stream; no SharedTile/B.IOS/Core4 cooperative form (the retired 16-bit
+// C.B.IOS had one). Reuses the TMATMUL
 // B.IOT source schema (same source arity per variant). The accumulator-input
 // variants (TGEMV_ACC/TGEMVMX_ACC) read an ordinary Local C tile as a
 // TILE_Src_Reg, never a physical ACC singleton. M=1 is not enforced at MC

@@ -115,7 +115,8 @@ public:
 
   // v5: select PseudoMAMULB_SharedRight — pushes dims + DataTypeA/B + TileSize
   // + the single Local A tile + the Shared SSA register + Chain. The
-  // Shared Right (B) is not a tile operand (bound by C.B.IOS at MC expansion).
+  // Shared Right (B) is not a tile operand (bound by the 32-bit B.IOS at MC
+  // expansion).
   void selectTemplateBlockShared(SDLoc &DL, SDNode *Node, unsigned Opc);
 
   void selectTLoad(SDLoc &DL, SDNode *Node, unsigned Opc);

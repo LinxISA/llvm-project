@@ -473,7 +473,7 @@ void LinxV5DAGToDAGISel::selectTemplateBlockMX(SDLoc &DL, SDNode *Node,
 // v5: BLK_MATMUL_SHARED node operands:
 // (0)Chain; (1,2,3)Dims; (4)DataTypeA; (5)DataTypeB; (6)TileSize;
 // (7)Local A tile; (8)Shared SSA handle. The Shared Right (B) is never a tile operand
-// here; it is bound by C.B.IOS during MC expansion.
+// here; it is bound by the 32-bit B.IOS during MC expansion.
 void LinxV5DAGToDAGISel::selectTemplateBlockShared(SDLoc &DL, SDNode *Node,
                                                     unsigned Opc) {
   SmallVector<SDValue> Ops;

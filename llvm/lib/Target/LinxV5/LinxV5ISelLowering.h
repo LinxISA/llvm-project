@@ -84,7 +84,7 @@ enum NodeType : unsigned {
   BLK_MATMULMXB,
   BLK_MATMULMX_AC,
   BLK_MATMULMXB_AC,
-  // v5: TMATMUL with a Shared Right operand (C.B.IOS binder, B not in B.IOT).
+  // v5: TMATMUL with a Shared Right operand (32-bit B.IOS binder, B not in B.IOT).
   BLK_MATMUL_SHARED,
   BLK_TLOAD,
   BLK_TSTORE,
@@ -293,7 +293,7 @@ private:
                              unsigned VUseNum, SelectionDAG &DAG) const;
   // v5: lower blk_matmul_shared. Like lowerTemplateBLK but pushes only the A
   // tile use (VUseNum=1) plus the SharedTID as a target constant — the Shared
-  // Right operand is bound by C.B.IOS at MC expansion, never a B.IOT source.
+  // Right operand is bound by the 32-bit B.IOS at MC expansion, never a B.IOT source.
   SDValue lowerTemplateBLKShared(SDLoc &DL, SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerTLoad(unsigned Opcode, SDLoc &DL, SDValue Op,
                      SelectionDAG &DAG) const;

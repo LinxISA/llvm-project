@@ -1311,7 +1311,7 @@ SDValue LinxV5TargetLowering::lowerTemplateBLK(unsigned Opcode, SDLoc &DL,
 /// (0)Chain; (1)IntNo; (2,3,4): Dimensions;
 /// (5): Tile Element Type A; (6): Tile Element Type B;
 /// (7): Local Tile Input A; (8): Shared SSA handle.
-/// The Shared Right (B) is NOT a tile operand here — it is bound by C.B.IOS
+/// The Shared Right (B) is NOT a tile operand here — it is bound by the 32-bit B.IOS
 /// at MC expansion. Node result is the implicit ACC tile plus Other.
 SDValue LinxV5TargetLowering::lowerTemplateBLKShared(SDLoc &DL, SDValue Op,
                                                       SelectionDAG &DAG) const {
@@ -1340,7 +1340,7 @@ SDValue LinxV5TargetLowering::lowerTemplateBLKShared(SDLoc &DL, SDValue Op,
     Op->print(errs(), &DAG);
     report_fatal_error("\nPlease initialize tile register before use!");
   }
-  Ops.push_back(TileUseA); // Local A tile (B is Shared, bound by C.B.IOS)
+  Ops.push_back(TileUseA); // Local A tile (B is Shared, bound by B.IOS)
 
   Ops.push_back(Op.getOperand(8));
 
