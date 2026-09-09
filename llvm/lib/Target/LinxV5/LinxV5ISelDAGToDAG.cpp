@@ -16,6 +16,7 @@
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
 #include "llvm/CodeGen/FunctionLoweringInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
@@ -555,15 +556,18 @@ bool LinxV5DAGToDAGISel::calculateXDivergence(SDNode *N) {
 void LinxV5DAGToDAGISel::updateXDivergence(SDNode *N) {
   if (XDivergenceMap.count(N))
     return;
+  SmallSet<SDNode *, 16> InWorklist;
   SmallVector<SDNode *, 16> Worklist(1, N);
+  InWorklist.insert(N);
   do {
     N = Worklist.back();
     int NumNotReady = 0;
     for (auto &Op : N->ops()) {
       if (Op.getValueType() != MVT::Other &&
-          !XDivergenceMap.count(Op.getNode())) {
+          !XDivergenceMap.count(Op.getNode()) && !InWorklist.count(Op.getNode())) {
         ++NumNotReady;
         Worklist.push_back(Op.getNode());
+        InWorklist.insert(Op.getNode());
       }
     }
     if (NumNotReady == 0) {
@@ -571,6 +575,7 @@ void LinxV5DAGToDAGISel::updateXDivergence(SDNode *N) {
       LLVM_DEBUG(dbgs() << "XDivergent " << XDivergenceMap[N] << " ";
                  N->dump(CurDAG));
       Worklist.pop_back();
+      InWorklist.erase(N);
     }
   } while (!Worklist.empty());
 }

@@ -100,10 +100,19 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
     const TargetRegisterClass *RC = Subtarget.isSIMT()
                                         ? &LinxV5::SIMTCGVRegClass
                                         : &LinxV5::Tile_ABS_CGRegClass;
+    // Registering a vector type here makes it Legal, which both routes its
+    // loads/stores to the tile load/store custom lowering and lets
+    // DAGCombiner merge scalar stores into that vector. Non-SIMT tile
+    // registers require a B.IOT SizeCode, whose minimum is 128 B, so smaller
+    // vectors (e.g. v2i64/v4i64 from merged scalar stores) must stay
+    // unregistered and keep the default scalar lowering on janus. SIMT has
+    // no per-tile size encoding, so it keeps registering every vector.
     for (MVT VT : MVT::integer_fixedlen_vector_valuetypes())
-      addRegisterClass(VT, RC);
+      if (Subtarget.isSIMT() || VT.getSizeInBits() / 8 >= 128)
+        addRegisterClass(VT, RC);
     for (MVT VT : MVT::fp_fixedlen_vector_valuetypes())
-      addRegisterClass(VT, RC);
+      if (Subtarget.isSIMT() || VT.getSizeInBits() / 8 >= 128)
+        addRegisterClass(VT, RC);
   }
 
   // Compute derived properties from the register classes.
@@ -1486,6 +1495,13 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
   LoadSDNode *LD = cast<LoadSDNode>(Op);
   EVT VT = LD->getValueType(0);
 
+  // A sub-128 B memory region has no B.IOT SizeCode. Type legalization
+  // normally widens such loads away (the small vector types are not
+  // registered as tile registers), but a widened value can still feed a
+  // small memory load, so keep the default scalar lowering here.
+  if (VT.isFixedLengthVector() &&
+      VT.getStoreSize() < TypeSize::Fixed(128))
+    return scalarizeVectorLoad(LD, DAG).first;
   if (VT.isFixedLengthVector()) {
     SmallVector<SDValue> Ops;
     Ops.push_back(LD->getChain());
@@ -1524,6 +1540,10 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
 
   EVT ValueVT = ST->getValue().getValueType();
   EVT MemVT = ST->getMemoryVT();
+  // Same SizeCode guard as lowerLOAD: a widened store value with a sub-128 B
+  // memory region must not become BLK_TSTORE.
+  if (ValueVT.isFixedLengthVector() && MemVT.getStoreSize() < TypeSize::Fixed(128))
+    return scalarizeVectorStore(ST, DAG);
   if (ValueVT.isFixedLengthVector()) {
     SmallVector<SDValue> Ops;
     Ops.push_back(ST->getChain());
