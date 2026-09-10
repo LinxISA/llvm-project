@@ -2262,6 +2262,14 @@ OperandMatchResultTy LinxV5AsmParser::parsePadValue(OperandVector &Operands) {
                    .Case("max", PadValue::Max)
                    .Case("min", PadValue::Min)
                    .Case("null", PadValue::Null)
+                   // PTO-ISA #236: CCTRL spellings for the B.DATR
+                   // PadValueOrByteId union inside BSTART.CUBE Matrix
+                   // bundles. They encode identically to the matching
+                   // PadValue names and round-trip the disassembler output.
+                   .Case("cctrl.none", PadValue::Zero)
+                   .Case("cctrl.rawaccumulator", PadValue::Max)
+                   .Case("cctrl.internalacchint", PadValue::Min)
+                   .Case("cctrl.rawaccumulatorinternalacchint", PadValue::Null)
                    .Default(PadValue::EMPTY_PadValue);
 
   if (ParseValue == PadValue::EMPTY_PadValue)

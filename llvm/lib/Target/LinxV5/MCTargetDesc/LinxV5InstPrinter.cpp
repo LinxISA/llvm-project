@@ -48,6 +48,27 @@ static cl::opt<bool>
 void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                   StringRef Annot, const MCSubtargetInfo &STI,
                                   raw_ostream &O) {
+  // PTO-ISA #236 union tracking: BSTART.CUBE Matrix functions reinterpret
+  // the following B.DATR PadValueOrByteId[1:0] as CCTRL. The disassembler
+  // feeds instructions sequentially through this printer, so remember
+  // whether the current bundle head is a CUBE Matrix operation. Any other
+  // BSTART or the bundle terminator (BSTOP) leaves the CUBE context.
+  if (MI->getOpcode() == LinxV5::BSTART_CUBE) {
+    // TileOPCUBE functions 0-2/4-6 (TMATMUL family) and 16-18/20-22 (TGEMV
+    // family) are the Matrix operations whose B.DATR PadValueOrByteId is
+    // the CCTRL union; the operand order is (DataType, TileOP).
+    InCUBEHeader = false;
+    if (MI->getNumOperands() >= 2 && MI->getOperand(1).isImm()) {
+      unsigned Fn = MI->getOperand(1).getImm();
+      InCUBEHeader = (Fn <= 6 && Fn != 3) || (Fn >= 16 && Fn != 19);
+    }
+  } else if (MI->getOpcode() == LinxV5::BSTART_TMA ||
+             MI->getOpcode() == LinxV5::BSTART_TEPL_NoMode ||
+             MI->getOpcode() == LinxV5::BSTART_GMOV ||
+             MI->getOpcode() == LinxV5::BSTOP) {
+    InCUBEHeader = false;
+  }
+
   // PTO v0.58 reissue: B.IOS prints a source or destination form depending on
   // TSize (0 => "S<id>, mask=...", nonzero => "mask=..., ->S<id><size>").
   if (MI->getOpcode() == LinxV5::B_IOS) {
@@ -624,6 +645,27 @@ void LinxV5InstPrinter::printPadValue(const MCInst *MI, unsigned OpNo,
                                         const MCSubtargetInfo &STI,
                                         raw_ostream &O) {
   unsigned Imm = MI->getOperand(OpNo).getImm();
+  // PTO-ISA #236: inside a BSTART.CUBE Matrix bundle (TMATMUL*/TGEMV*
+  // functions) this 2-bit field is the CCTRL union, not padding. Print the
+  // semantic CCTRL names so the disassembly cannot be misread as a padding
+  // policy. The encoding is shared with PadValue (00 Zero / 01 Max /
+  // 10 Min / 11 Null), so re-parsing either spelling round-trips.
+  if (InCUBEHeader && MI->getOpcode() == LinxV5::BDATR) {
+    switch (Imm) {
+    case 0:
+      O << "CCTRL.None";
+      return;
+    case 1:
+      O << "CCTRL.RawAccumulator";
+      return;
+    case 2:
+      O << "CCTRL.InternalAccHint";
+      return;
+    case 3:
+      O << "CCTRL.RawAccumulatorInternalAccHint";
+      return;
+    }
+  }
   switch (Imm) {
   case LinxV5Op::PadValue::Zero:
     O << "Zero";

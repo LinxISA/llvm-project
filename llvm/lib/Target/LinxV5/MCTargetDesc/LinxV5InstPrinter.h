@@ -152,6 +152,13 @@ public:
                                const MCSubtargetInfo &STI, raw_ostream &O);
   static const char *getRegisterName(unsigned RegNo);
   static const char *getRegisterName(unsigned RegNo, unsigned AltIdx);
+
+private:
+  // PTO-ISA #236: inside a BSTART.CUBE Matrix bundle (TMATMUL*/TGEMV*
+  // functions), B.DATR PadValueOrByteId[1:0] is reinterpreted as CCTRL.
+  // The disassembler prints instructions sequentially through one printer
+  // instance, so the active bundle head is tracked here.
+  bool InCUBEHeader = false;
 };
 } // namespace llvm
 
