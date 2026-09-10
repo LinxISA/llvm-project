@@ -6,8 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LinxV5TileOpMacro.h"
 #include "LinxV5Subtarget.h"
 #include "MCTargetDesc/LinxV5BaseInfo.h"
+#include "MCTargetDesc/LinxV5TileOpSchema.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
 #include "MCTargetDesc/LinxV5InstPrinter.h"
 #include "MCTargetDesc/LinxV5MCExpr.h"
@@ -50,6 +52,15 @@ namespace {
 
 using namespace LinxV5Op;
 
+// Parsed macro operand, mirroring the parser's pending state.
+struct MacroOperand {
+  unsigned Kind; // 0=tile-src, 1=scalar-src, 2=tile-dst, 3=gpr-dst
+  MCRegister RegNo = 0;
+  unsigned SizeCode = 0; // 1..12 from <SIZE>; 0 = absent
+  bool IsShared = false;
+};
+
+
 class LinxV5AsmParser : public MCTargetAsmParser {
   enum {
     IA_SHUTDOWN,
@@ -64,6 +75,15 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   };
   int IAVS = IA_SHUTDOWN; // Inline Asm Validate State
   int64_t ActiveCubeTileOp = -1;
+
+  // PTO 0.58.6 TileOp macro (issue #90): when ParseInstruction recognizes a
+  // macro spelling, it parses the whole line into PendingMacroOperands and
+  // sets this index; MatchAndEmitInstruction expands and emits the physical
+  // bundle instead of running the generic matcher.
+  int PendingTileOpMacroForm = -1;
+  SMLoc PendingTileOpMacroLoc;
+  SmallVector<MacroOperand, 8> PendingTileOpMacroOperands;
+  SmallVector<StringRef, 8> PendingTileOpMacroConfig;
 
   SMLoc getLoc() const { return getParser().getTok().getLoc(); }
 
@@ -152,6 +172,17 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   /// by MatchAndEmitInstruction.
   bool processInstruction(MCInst &Inst, SMLoc IDLoc, OperandVector &Operands,
                           MCStreamer &Out);
+
+  // PTO 0.58.6 single-line TileOp macro (issue #90): parse the remainder of
+  // the macro line and expand to the physical bundle. Returns true on a
+  // hard error (diagnostic emitted); false with Emitted=false means the
+  // line was not consumed (caller falls back to the generic matcher).
+  bool parseTileOpMacro(StringRef Mnemonic, SMLoc MnemonicLoc,
+                        MCStreamer &Out, bool &Emitted);
+
+  // Expand the fully parsed pending TileOp macro form and emit the
+  // physical bundle. Returns true on a hard error.
+  bool emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc, MCStreamer &Out);
 
 // Auto-generated instruction matching functions
 #define GET_ASSEMBLER_HEADER
@@ -1415,6 +1446,13 @@ bool LinxV5AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                               MCStreamer &Out,
                                               uint64_t &ErrorInfo,
                                               bool MatchingInlineAsm) {
+  // PTO 0.58.6 TileOp macro (issue #90): a fully parsed macro line expands
+  // here — the only safe emission point in the MCAsmParser skeleton.
+  if (PendingTileOpMacroForm >= 0) {
+    int FormIdx = PendingTileOpMacroForm;
+    PendingTileOpMacroForm = -1; // consume before any early return
+    return emitTileOpMacroBundle(FormIdx, IDLoc, Out);
+  }
   MCInst Inst;
   FeatureBitset MissingFeatures;
 
@@ -3920,6 +3958,423 @@ bool LinxV5AsmParser::parseDirectiveOption() {
   return false;
 }
 
+namespace {
+
+// ---------------------------------------------------------------------------
+// Attribute value domains (closed enums shared with the physical layer).
+// ---------------------------------------------------------------------------
+struct AttrEntry { const char *Name; unsigned Value; };
+
+const AttrEntry DataTypeNames[] = {
+  {"FP64", 0},  {"FP32", 1},  {"TF32", 2},  {"HF32", 3},   {"FP16", 4},
+  {"BF16", 5},  {"HIF8", 6},  {"E4M3", 7},  {"E5M2", 8},   {"E3M2", 9},
+  {"E2M3", 10}, {"E2M1X2", 11}, {"E1M2X2", 12}, {"HIF4X2", 14},
+  {"S64", 16},  {"S32", 17},  {"S16", 18},  {"S8", 19},
+  {"U64", 20},  {"U32", 21},  {"U16", 22},  {"U8", 23},
+  {"S4X2", 24}, {"U4X2", 25}, {"DTYPE_NONE", 31},
+};
+const AttrEntry PadValueNames[] = {
+  {"Zero", 0}, {"Max", 1}, {"Min", 2}, {"Null", 3},
+};
+const AttrEntry CModeNames[] = {
+  {"EQ", 0}, {"NE", 1}, {"LT", 2}, {"GT", 3}, {"LE", 4}, {"GE", 5},
+};
+const AttrEntry RModeNames[] = {
+  {"RNONE", 0}, {"RNE", 1}, {"RTZ", 2}, {"RTM", 3},
+  {"RTP", 4}, {"RNA", 5}, {"RTO", 6}, {"RHB", 7},
+};
+
+bool lookupAttr(const AttrEntry *Table, size_t N, StringRef Name,
+                unsigned &Value) {
+  for (size_t I = 0; I < N; ++I)
+    if (Name.equals_insensitive(Table[I].Name)) {
+      Value = Table[I].Value;
+      return true;
+    }
+  return false;
+}
+#define LOOKUP(T, N, V) lookupAttr(T, sizeof(T) / sizeof(T[0]), N, V)
+
+// ---------------------------------------------------------------------------
+// Parsed macro line.
+// ---------------------------------------------------------------------------
+bool isEOL(LinxV5AsmParser &P) {
+  return P.getParser().getTok().getKind() == AsmToken::EndOfStatement;
+}
+
+bool tokIs(LinxV5AsmParser &P, StringRef S) {
+  return P.getParser().getTok().getString().equals_insensitive(S);
+}
+
+// Parse "<attr, attr, ...>" — the bundle-configuration group. Attributes are
+// positional bare values; the schema's field order assigns meaning.
+bool parseConfigGroup(LinxV5AsmParser &P,
+                       SmallVectorImpl<StringRef> &Config, SMLoc &ErrLoc) {
+  if (!P.getParser().getTok().getString().equals_insensitive("<"))
+    return true; // no configuration group
+  P.getParser().Lex(); // consume '<'
+  for (;;) {
+    const AsmToken &Tok = P.getParser().getTok();
+    if (Tok.getString().equals_insensitive(">")) {
+      P.getParser().Lex();
+      return true;
+    }
+    if (Tok.getKind() != AsmToken::Identifier &&
+        Tok.getKind() != AsmToken::Integer) {
+      ErrLoc = Tok.getLoc();
+      return false;
+    }
+    Config.push_back(Tok.getString());
+    P.getParser().Lex();
+    if (P.getParser().getTok().getString().equals_insensitive(","))
+      P.getParser().Lex();
+  }
+}
+
+bool parseSizeSuffix(LinxV5AsmParser &P, unsigned &SizeCode, SMLoc &ErrLoc) {
+  if (!P.getParser().getTok().getString().equals_insensitive("<"))
+    return true; // no suffix
+  P.getParser().Lex(); // consume '<'
+  const AsmToken &Tok = P.getParser().getTok();
+  // "8KB" may lex as Integer(8)+Identifier(KB) or one Identifier.
+  StringRef Text;
+  if (Tok.getKind() == AsmToken::Integer) {
+    Text = Tok.getString();
+    P.getParser().Lex();
+    const AsmToken &Unit = P.getParser().getTok();
+    if (Unit.getKind() == AsmToken::Identifier) {
+      Text = StringRef((Text + Unit.getString()).str());
+      P.getParser().Lex();
+    }
+  } else if (Tok.getKind() == AsmToken::Identifier) {
+    Text = Tok.getString();
+    P.getParser().Lex();
+  } else {
+    ErrLoc = Tok.getLoc();
+    return false;
+  }
+  SizeCode = StringSwitch<unsigned>(Text)
+                 .Case("128B", 1).Case("256B", 2).Case("512B", 3)
+                 .Case("1KB", 4).Case("2KB", 5).Case("4KB", 6)
+                 .Case("8KB", 7).Case("16KB", 8).Case("32KB", 9)
+                 .Case("64KB", 10).Case("128KB", 11).Case("256KB", 12)
+                 .Default(0);
+  const AsmToken &Close = P.getParser().getTok();
+  if (SizeCode == 0 || !Close.getString().equals_insensitive(">")) {
+    ErrLoc = Close.getLoc();
+    return false;
+  }
+  P.getParser().Lex(); // consume '>'
+  return true;
+}
+
+// Parse one operand: T#N[/S#N] source, ->T#N<SIZE> destination, ->a0 GPR
+// destination, or a0 scalar source.
+bool parseOneOperand(LinxV5AsmParser &P,
+                     SmallVectorImpl<MacroOperand> &Ops, SMLoc &ErrLoc) {
+  bool IsDest =
+      P.getParser().getTok().getString().equals_insensitive("->");
+  if (IsDest)
+    P.getParser().Lex();
+  const AsmToken &Tok = P.getParser().getTok();
+  StringRef Name = Tok.getString();
+  MacroOperand Op;
+  Op.Kind = IsDest ? 2 : 0;
+  // Tile register: T#N or S#N (shared).
+  if (Name.size() >= 3 && (Name[0] == 'T' || Name[0] == 't' ||
+                           Name[0] == 'S' || Name[0] == 's') &&
+      Name[1] == '#') {
+    MCRegister RegNo = MatchLinxV5TileRegisteName(Name);
+    if (RegNo == LinxV5::NoRegister) {
+      ErrLoc = Tok.getLoc();
+      return false;
+    }
+    Op.RegNo = RegNo;
+    Op.IsShared = (Name[0] == 'S' || Name[0] == 's');
+    P.getParser().Lex();
+    if (!parseSizeSuffix(P, Op.SizeCode, ErrLoc))
+      return false;
+    Ops.push_back(Op);
+    return true;
+  }
+  // GPR (scalar source or predicate-GPR destination).
+  MCRegister RegNo = MatchLinxV5GlobalRegisteName(Name);
+  if (RegNo == LinxV5::NoRegister)
+    RegNo = StringSwitch<MCRegister>(Name.lower())
+                .Case("zero", LinxV5::R0)
+                .Default(LinxV5::NoRegister);
+  if (RegNo == LinxV5::NoRegister) {
+    ErrLoc = Tok.getLoc();
+    return false;
+  }
+  P.getParser().Lex();
+  Op.RegNo = RegNo;
+  Op.Kind = IsDest ? 3 : 1;
+  Ops.push_back(Op);
+  return true;
+}
+
+} // namespace
+
+bool LinxV5AsmParser::parseTileOpMacro(StringRef Mnemonic, SMLoc MnemonicLoc,
+                                        MCStreamer &Out, bool &Emitted) {
+  // Parse-only: recognition plus single-line parsing into the pending
+  // state. The physical expansion runs from MatchAndEmitInstruction (the
+  // only safe emission point — the MCAsmParser skeleton always calls it
+  // after ParseInstruction returns).
+  Emitted = false;
+  int FormIdx =
+      LinxV5TileOpSchema::lookupFormBySpelling(Mnemonic.str().c_str());
+  if (FormIdx < 0)
+    return false; // not a macro after all; caller falls back
+
+  PendingTileOpMacroConfig.clear();
+  PendingTileOpMacroOperands.clear();
+  PendingTileOpMacroForm = FormIdx;
+  PendingTileOpMacroLoc = MnemonicLoc;
+  SMLoc ErrLoc = MnemonicLoc;
+
+  // Configuration group (if present): positional bare attributes.
+  if (!parseConfigGroup(*this, PendingTileOpMacroConfig, ErrLoc)) {
+    PendingTileOpMacroForm = -1;
+    Error(ErrLoc, "TileOp macro: malformed bundle configuration");
+    return true;
+  }
+  // Separator between the configuration group and the sources.
+  if (getParser().getTok().getString().equals_insensitive(","))
+    getParser().Lex();
+
+  // Operands: comma-separated until end of line; no continuations.
+  while (!isEOL(*this)) {
+    if (!parseOneOperand(*this, PendingTileOpMacroOperands, ErrLoc)) {
+      PendingTileOpMacroForm = -1;
+      Error(ErrLoc, "TileOp macro: malformed operand");
+      return true;
+    }
+    if (isEOL(*this))
+      break;
+    if (!tokIs(*this, ",")) {
+      PendingTileOpMacroForm = -1;
+      Error(getParser().getTok().getLoc(),
+            "TileOp macro: expected ',' or end of line (continuations are "
+            "not allowed)");
+      return true;
+    }
+    getParser().Lex(); // ','
+  }
+  getParser().Lex(); // consume EOL
+  return false;
+}
+
+// Expand the pending TileOp macro form: attribute assignment, form
+// validation, and physical bundle emission in canonical order.
+bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
+                                            MCStreamer &Out) {
+  using namespace LinxV5TileOpSchema;
+  const char *Header = formHeaderCommand(FormIdx);
+  if (!Header || StringRef(Header) != "BSTART.VEC") {
+    Error(IDLoc, "TileOp macro: form family not yet supported by the macro "
+                 "assembler (stage 2 covers VEC)");
+    return true;
+  }
+
+  // Split pending operands into sources/destinations.
+  SmallVector<MacroOperand, 4> SrcTiles, DstTiles;
+  SmallVector<MacroOperand, 4> SrcScalars, DstGPRs;
+  for (const auto &Op : PendingTileOpMacroOperands) {
+    switch (Op.Kind) {
+    case 0: SrcTiles.push_back(Op); break;
+    case 1: SrcScalars.push_back(Op); break;
+    case 2: DstTiles.push_back(Op); break;
+    default: DstGPRs.push_back(Op); break;
+    }
+  }
+  unsigned SchemaSrc = formSectionCount(FormIdx, FS_Source);
+  unsigned TotalSources = SrcTiles.size() + SrcScalars.size();
+  if (DstTiles.size() != 1 || !DstGPRs.empty() ||
+      TotalSources != SchemaSrc) {
+    Error(IDLoc, "TileOp macro: operand shape does not match the form "
+                 "(expected " + Twine(SchemaSrc) + " sources and one tile "
+                 "destination)");
+    return true;
+  }
+
+  // ---- Attribute assignment (domain-driven positional) ----
+  // Positional attributes assign to the first schema field whose value
+  // domain accepts the token; optional fields may be omitted without a
+  // placeholder. A token no remaining field accepts is a hard error
+  // (catalog attribute_resolution: no guesswork).
+  auto &Config = PendingTileOpMacroConfig;
+  unsigned LB[3] = {~0u, ~0u, ~0u};
+  unsigned DataType = ~0u, PadValue = ~0u, CMode = ~0u, PEMask = 15;
+  unsigned RMode = ~0u;
+  unsigned AttrIdx = 0;
+  int CfgBegin = formSectionBegin(FormIdx, FS_Config);
+  int CfgEnd = CfgBegin + (int)formSectionCount(FormIdx, FS_Config);
+  auto acceptAsDim = [](StringRef T, unsigned &V) {
+    return !T.getAsInteger(0, V) && V > 0 && V <= 65535;
+  };
+  for (int S = CfgBegin; S < CfgEnd && AttrIdx < Config.size(); ++S) {
+    const char *Field = slotField(S);
+    if (!Field)
+      continue;
+    StringRef F(Field);
+    StringRef Tok = Config[AttrIdx];
+    unsigned V;
+    if ((F == "LB0" || F == "LB1" || F == "LB2")) {
+      unsigned LBIdx = F[2] - '0';
+      if (acceptAsDim(Tok, V)) {
+        LB[LBIdx] = V;
+        ++AttrIdx;
+      }
+      // else: optional dimension omitted — leave for the next field.
+      continue;
+    }
+    if (F == "DataType" || F == "AType") {
+      if (lookupAttr(DataTypeNames, sizeof(DataTypeNames) /
+                                          sizeof(DataTypeNames[0]),
+                     Tok, DataType)) {
+        ++AttrIdx;
+        continue;
+      }
+      Error(IDLoc, "TileOp macro: unknown DataType '" + Tok + "'");
+      return true;
+    }
+    if (F == "PadValue") {
+      if (lookupAttr(PadValueNames,
+                     sizeof(PadValueNames) / sizeof(PadValueNames[0]),
+                     Tok, PadValue)) {
+        ++AttrIdx;
+        continue;
+      }
+      Error(IDLoc, "TileOp macro: expected PadValue, got '" + Tok + "'");
+      return true;
+    }
+    if (F == "CMode") {
+      if (lookupAttr(CModeNames, sizeof(CModeNames) / sizeof(CModeNames[0]),
+                     Tok, CMode)) {
+        ++AttrIdx;
+        continue;
+      }
+      Error(IDLoc, "TileOp macro: expected CMode, got '" + Tok + "'");
+      return true;
+    }
+    if (F == "PEMask") {
+      if (Tok.startswith_insensitive("0b")) {
+        if (!Tok.drop_front(2).getAsInteger(2, V)) {
+          PEMask = V & 0xF;
+          ++AttrIdx;
+          continue;
+        }
+      } else if (!Tok.getAsInteger(0, V)) {
+        PEMask = V & 0xF;
+        ++AttrIdx;
+        continue;
+      }
+      Error(IDLoc, "TileOp macro: expected PEMask, got '" + Tok + "'");
+      return true;
+    }
+    if (F == "RMode") {
+      if (lookupAttr(RModeNames, sizeof(RModeNames) / sizeof(RModeNames[0]),
+                     Tok, RMode)) {
+        ++AttrIdx;
+        continue; // consumed; carried by B.DATR in later stages (TCVT)
+      }
+      Error(IDLoc, "TileOp macro: expected RMode, got '" + Tok + "'");
+      return true;
+    }
+    // Any other field is outside stage-2 scope.
+    Error(IDLoc, "TileOp macro: unsupported attribute field '" + F +
+                     "' in stage 2");
+    return true;
+  }
+  if (AttrIdx != Config.size()) {
+    Error(IDLoc, "TileOp macro: unexpected extra attribute '" +
+                     Config[AttrIdx] + "'");
+    return true;
+  }
+  // Required-dimension check (LB0 is required by every VEC form).
+  if (LB[0] == ~0u) {
+    Error(IDLoc, "TileOp macro: missing required dimension LB0");
+    return true;
+  }
+
+  // ---- Physical expansion ----
+  unsigned Selector = 0;
+  const char *SelStr = formHeaderSelector(FormIdx);
+  if (SelStr) {
+    StringRef S(SelStr);
+    if (S.startswith("0x") || S.startswith("0X"))
+      S.drop_front(2).getAsInteger(16, Selector);
+    else
+      S.getAsInteger(0, Selector);
+  }
+  emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                         .addImm(DataType)
+                         .addImm(Selector));
+
+  if (PadValue != ~0u || CMode != ~0u) {
+    unsigned PV = PadValue == ~0u ? 3 : PadValue;
+    emitToStreamer(Out, MCInstBuilder(LinxV5::BDATR)
+                              .addImm(0).addImm(0).addImm(31)
+                              .addImm(PV)
+                              .addImm(CMode == ~0u ? 0 : CMode)
+                              .addImm(0).addImm(0).addImm(0));
+  }
+
+  auto emitDIM = [&](unsigned LBIdx, unsigned Value) {
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_DIM)
+                              .addImm(LBIdx)
+                              .addReg(LinxV5::R0)
+                              .addImm(Value));
+  };
+  if (LB[0] != ~0u) emitDIM(0, LB[0]);
+  if (LB[1] != ~0u) emitDIM(1, LB[1]);
+  if (LB[2] != ~0u) emitDIM(2, LB[2]);
+
+  const MacroOperand &Dst = DstTiles[0];
+  unsigned TSize = Dst.SizeCode ? Dst.SizeCode : 4;
+  if (!SrcScalars.empty()) {
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                              .addReg(Dst.RegNo)
+                              .addImm(PEMask)
+                              .addImm(TSize)
+                              .addImm(1)
+                              .addReg(SrcTiles[0].RegNo));
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                              .addReg(LinxV5::R0)
+                              .addReg(SrcScalars[0].RegNo)
+                              .addReg(LinxV5::R0)
+                              .addReg(LinxV5::R0));
+  } else if (SrcTiles.size() == 2) {
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                              .addReg(Dst.RegNo)
+                              .addImm(PEMask)
+                              .addImm(TSize)
+                              .addImm(1)
+                              .addReg(SrcTiles[0].RegNo)
+                              .addReg(SrcTiles[1].RegNo));
+  } else if (SrcTiles.size() == 1) {
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                              .addReg(Dst.RegNo)
+                              .addImm(PEMask)
+                              .addImm(TSize)
+                              .addImm(1)
+                              .addReg(SrcTiles[0].RegNo));
+  } else {
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                              .addReg(Dst.RegNo)
+                              .addImm(PEMask)
+                              .addImm(TSize)
+                              .addImm(1));
+  }
+
+  emitToStreamer(Out, MCInstBuilder(LinxV5::BSTOP));
+  return false;
+}
+
+
+
 bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
@@ -3959,6 +4414,20 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
       PendingLayoutDirection = CurLayoutDirection = 1;
     else if (Name.startswith_insensitive("BSTART.TSTORE"))
       PendingLayoutDirection = CurLayoutDirection = 2;
+  }
+
+  // PTO 0.58.6 single-line TileOp macro assembly (issue #90): a recognized
+  // macro spelling consumes the whole source line into the pending-macro
+  // state; MatchAndEmitInstruction expands and emits the physical bundle.
+  if (LinxV5TileOpMacro::isMacroMnemonic(Name)) {
+    bool Emitted = false;
+    if (parseTileOpMacro(Name, NameLoc, getParser().getStreamer(), Emitted))
+      return true; // hard error, diagnostic already emitted
+    // Success: the line is fully parsed into Pending* state. Leave the
+    // mnemonic token as the only operand so the skeleton reaches
+    // MatchAndEmitInstruction, which performs the expansion.
+    Operands.push_back(LinxV5Operand::createToken(Name, NameLoc));
+    return false;
   }
 
   // First operand is token for instruction
