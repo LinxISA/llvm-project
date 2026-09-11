@@ -4097,6 +4097,41 @@ bool parseOneOperand(LinxV5AsmParser &P,
     Ops.push_back(Op);
     return true;
   }
+  // Bracketed GPR list: "[BaseGPR]" or "[BaseGPR, RowStrideGPR]" (TLSU GM
+  // addressing). Each GPR becomes one scalar-source operand.
+  if (Name.equals_insensitive("[")) {
+    P.getParser().Lex(); // consume '['
+    for (;;) {
+      const AsmToken &T = P.getParser().getTok();
+      MCRegister R = MatchLinxV5GlobalRegisteName(T.getString());
+      if (R == LinxV5::NoRegister)
+        R = StringSwitch<MCRegister>(T.getString().lower())
+                .Case("zero", LinxV5::R0)
+                .Default(LinxV5::NoRegister);
+      if (R == LinxV5::NoRegister) {
+        ErrLoc = T.getLoc();
+        return false;
+      }
+      // R0 ('zero') entries are the omitted-slot encoding: the physical
+      // B.IOR prints only non-R0 registers, but the bracket group still
+      // occupies one source slot — record a Kind=5 marker for R0 entries.
+      MacroOperand BOp;
+      BOp.Kind = (R == LinxV5::R0) ? 5 : 1;
+      BOp.RegNo = R;
+      Ops.push_back(BOp);
+      P.getParser().Lex();
+      const AsmToken &Sep = P.getParser().getTok();
+      if (Sep.getString().equals_insensitive(","))
+        P.getParser().Lex();
+      else if (Sep.getString().equals_insensitive("]")) {
+        P.getParser().Lex();
+        return true;
+      } else {
+        ErrLoc = Sep.getLoc();
+        return false;
+      }
+    }
+  }
   // GPR (scalar source or predicate-GPR destination).
   MCRegister RegNo = MatchLinxV5GlobalRegisteName(Name);
   if (RegNo == LinxV5::NoRegister)
@@ -4172,9 +4207,21 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
                                             MCStreamer &Out) {
   using namespace LinxV5TileOpSchema;
   const char *Header = formHeaderCommand(FormIdx);
-  if (!Header || StringRef(Header) != "BSTART.VEC") {
+  bool IsVec = Header && StringRef(Header) == "BSTART.VEC";
+  bool IsSfu = Header && StringRef(Header) == "BSTART.SFU";
+  bool IsTma = Header && (StringRef(Header) == "BSTART.TLOAD" ||
+                          StringRef(Header) == "BSTART.TSTORE" ||
+                          StringRef(Header) == "BSTART.TMOV" ||
+                          StringRef(Header) == "BSTART.TPREFETCH" ||
+                          StringRef(Header) == "BSTART.GMOV" ||
+                          StringRef(Header).startswith("BSTART.MGATHER") ||
+                          StringRef(Header).startswith("BSTART.MSCATTER"));
+  bool IsCube =
+      Header && (StringRef(Header).startswith("BSTART.TMATMUL") ||
+                 StringRef(Header).startswith("BSTART.TGEMV"));
+  if (!IsVec && !IsSfu && !IsTma && !IsCube) {
     Error(IDLoc, "TileOp macro: form family not yet supported by the macro "
-                 "assembler (stage 2 covers VEC)");
+                 "assembler (stage 2 covers VEC, SFU, TLSU, and CUBE)");
     return true;
   }
 
@@ -4186,17 +4233,53 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
     case 0: SrcTiles.push_back(Op); break;
     case 1: SrcScalars.push_back(Op); break;
     case 2: DstTiles.push_back(Op); break;
+    case 5: break; // bracket-group R0 marker: counts as a slot, emits nothing
     default: DstGPRs.push_back(Op); break;
     }
   }
+  bool HasBracketGroup = false;
+  for (const auto &Op : PendingTileOpMacroOperands)
+    if (Op.Kind == 5) { HasBracketGroup = true; break; }
   unsigned SchemaSrc = formSectionCount(FormIdx, FS_Source);
-  unsigned TotalSources = SrcTiles.size() + SrcScalars.size();
-  if (DstTiles.size() != 1 || !DstGPRs.empty() ||
-      TotalSources != SchemaSrc) {
-    Error(IDLoc, "TileOp macro: operand shape does not match the form "
-                 "(expected " + Twine(SchemaSrc) + " sources and one tile "
-                 "destination)");
+  bool NeedsDst = formSectionCount(FormIdx, FS_Destination) > 0;
+  if (!Header) {
     return true;
+  }
+  bool TmaForm = StringRef(Header) == "BSTART.TLOAD" ||
+                 StringRef(Header) == "BSTART.TSTORE" ||
+                 StringRef(Header) == "BSTART.TMOV" ||
+                 StringRef(Header) == "BSTART.TPREFETCH" ||
+                 StringRef(Header) == "BSTART.GMOV" ||
+                 StringRef(Header).startswith("BSTART.MGATHER") ||
+                 StringRef(Header).startswith("BSTART.MSCATTER");
+  if (TmaForm) {
+    // TLSU: the bracketed GM addressing group counts as one source slot.
+    bool HasScalars = !SrcScalars.empty() || HasBracketGroup;
+    unsigned TotalSources = SrcTiles.size() + (HasScalars ? 1 : 0);
+    if (TotalSources != SchemaSrc ||
+        (NeedsDst && (DstTiles.size() != 1 || !DstGPRs.empty())) ||
+        (!NeedsDst && (!DstTiles.empty() || !DstGPRs.empty()))) {
+      Error(IDLoc, "TileOp macro: operand shape does not match the form "
+                   "(expected " + Twine(SchemaSrc) + " source slots)");
+      return true;
+    }
+  } else {
+    // VEC/CUBE: conditional source slots (schema optional=true) may be
+    // omitted; require at least the mandatory source count.
+    unsigned RequiredSrc = 0;
+    int SrcBegin = formSectionBegin(FormIdx, FS_Source);
+    for (int S = SrcBegin;
+         S < SrcBegin + (int)SchemaSrc; ++S)
+      if (!slotOptional(S))
+        ++RequiredSrc;
+    unsigned Given = SrcTiles.size() + SrcScalars.size();
+    if (DstTiles.size() != 1 || !DstGPRs.empty() || Given < RequiredSrc ||
+        Given > SchemaSrc) {
+      Error(IDLoc, "TileOp macro: operand shape does not match the form "
+                   "(expected " + Twine(RequiredSrc) + ".." +
+                   Twine(SchemaSrc) + " sources and one tile destination)");
+      return true;
+    }
   }
 
   // ---- Attribute assignment (domain-driven positional) ----
@@ -4230,7 +4313,7 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
       // else: optional dimension omitted — leave for the next field.
       continue;
     }
-    if (F == "DataType" || F == "AType") {
+    if (F == "DataType" || F == "AType" || F == "ValueDataType") {
       if (lookupAttr(DataTypeNames, sizeof(DataTypeNames) /
                                           sizeof(DataTypeNames[0]),
                      Tok, DataType)) {
@@ -4283,6 +4366,14 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
       Error(IDLoc, "TileOp macro: expected RMode, got '" + Tok + "'");
       return true;
     }
+    // CUBE-only attribute fields with fixed defaults in the plain form:
+    // consume the token without emitting (the B.FPATR above is all-zero).
+    if (IsCube && (F == "FPAttrs" || F == "Sat" || F == "BType" ||
+                   F == "Layout")) {
+      if (AttrIdx < Config.size())
+        ++AttrIdx; // token consumed; nonzero values rejected for now
+      continue;
+    }
     // Any other field is outside stage-2 scope.
     Error(IDLoc, "TileOp macro: unsupported attribute field '" + F +
                      "' in stage 2");
@@ -4293,8 +4384,17 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
                      Config[AttrIdx] + "'");
     return true;
   }
-  // Required-dimension check (LB0 is required by every VEC form).
-  if (LB[0] == ~0u) {
+  // Required-dimension check: LB0 must be present only when the schema
+  // marks it non-optional (e.g. MGATHER_ADD carries no LB0).
+  bool LB0Required = false;
+  for (int S = CfgBegin; S < CfgEnd; ++S) {
+    const char *Field = slotField(S);
+    if (Field && StringRef(Field) == "LB0" && !slotOptional(S)) {
+      LB0Required = true;
+      break;
+    }
+  }
+  if (LB0Required && LB[0] == ~0u) {
     Error(IDLoc, "TileOp macro: missing required dimension LB0");
     return true;
   }
@@ -4309,9 +4409,56 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
     else
       S.getAsInteger(0, Selector);
   }
-  emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
-                         .addImm(DataType)
-                         .addImm(Selector));
+  if (IsCube) {
+    // CUBE carrier: BSTART.CUBE <function>, DataType. The CUBE function
+    // space covers the TMATMUL and TGEMV families.
+    unsigned CubeFn = StringSwitch<unsigned>(Header)
+        .Cases("BSTART.TMATMUL", "BSTART.TMATMUL.ACC", "BSTART.TMATMUL.BIAS",
+               0u)
+        .Cases("BSTART.TMATMULMX", "BSTART.TMATMULMX.ACC",
+               "BSTART.TMATMULMX.BIAS", 1u)
+        .Cases("BSTART.TGEMV", "BSTART.TGEMV.ACC", "BSTART.TGEMV.BIAS", 2u)
+        .Cases("BSTART.TGEMVMX", "BSTART.TGEMVMX.ACC",
+               "BSTART.TGEMVMX.BIAS", 3u)
+        .Default(~0u);
+    if (CubeFn == ~0u) {
+      Error(IDLoc, "TileOp macro: unsupported CUBE carrier");
+      return true;
+    }
+    emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_CUBE)
+                           .addImm(DataType)
+                           .addImm(CubeFn));
+    // Exactly one B.FPATR is mandatory in every CUBE Matrix bundle; the
+    // plain macro form carries the all-zero default descriptor.
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_FPATR)
+                           .addImm(0)  // PreQuantMode
+                           .addImm(0)  // ReluMode
+                           .addImm(0)  // GroupNCode
+                           .addImm(0)  // RowMaxEn
+                           .addImm(0)  // GroupMaxEn
+                           .addImm(0)  // RowMaxInit
+                           .addImm(0)  // MaxAbsEn
+                           .addImm(0)  // TransA
+                           .addImm(0)  // TransB
+                           .addImm(0)); // CScaleEn
+  } else if (IsTma) {
+    if (StringRef(Header) == "BSTART.GMOV") {
+      emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_GMOV)
+                             .addImm(DataType));
+    } else {
+      // TLSU carrier: BSTART.TLSU <function>, DataType. The function code
+      // comes from the schema header (covers the RMW variants beyond the
+      // TileOPTMA name table).
+      int Function = formHeaderFunction(FormIdx);
+      emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_TMA)
+                             .addImm(DataType)
+                             .addImm(Function < 0 ? 0 : (unsigned)Function));
+    }
+  } else {
+    emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                           .addImm(DataType)
+                           .addImm(Selector));
+  }
 
   if (PadValue != ~0u || CMode != ~0u) {
     unsigned PV = PadValue == ~0u ? 3 : PadValue;
@@ -4332,9 +4479,69 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
   if (LB[1] != ~0u) emitDIM(1, LB[1]);
   if (LB[2] != ~0u) emitDIM(2, LB[2]);
 
-  const MacroOperand &Dst = DstTiles[0];
+  static const MacroOperand NoOp = MacroOperand();
+  const MacroOperand &Dst = !DstTiles.empty() ? DstTiles[0]
+                          : !SrcTiles.empty() ? SrcTiles[0]
+                          : NoOp;
   unsigned TSize = Dst.SizeCode ? Dst.SizeCode : 4;
-  if (!SrcScalars.empty()) {
+  if (IsSfu || IsCube ||
+      (IsTma && !SrcTiles.empty() && !DstTiles.empty())) {
+    // SFU family and RMW gather/scatter: one non-terminating source record
+    // per tile source, then a terminating destination-only record.
+    for (const MacroOperand &Src : SrcTiles)
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                                .addImm(PEMask)
+                                .addImm(0)
+                                .addReg(Src.RegNo));
+    if (!SrcScalars.empty())
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                                .addReg(LinxV5::R0)
+                                .addReg(SrcScalars[0].RegNo)
+                                .addReg(LinxV5::R0)
+                                .addReg(LinxV5::R0));
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                              .addReg(Dst.RegNo)
+                              .addImm(PEMask)
+                              .addImm(TSize)
+                              .addImm(1));
+  } else if (IsTma && !DstTiles.empty()) {
+    // TLOAD/TMOV: destination-only B.IOT, then the GM base B.IOR.
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                              .addReg(DstTiles[0].RegNo)
+                              .addImm(PEMask)
+                              .addImm(DstTiles[0].SizeCode
+                                          ? DstTiles[0].SizeCode
+                                          : 4)
+                              .addImm(1));
+    if (!SrcScalars.empty())
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                                .addReg(LinxV5::R0)
+                                .addReg(SrcScalars[0].RegNo)
+                                .addReg(LinxV5::R0)
+                                .addReg(LinxV5::R0));
+  } else if (IsTma && !SrcTiles.empty()) {
+    // TSTORE / TPREFETCH: source records only; the last carries <last>.
+    for (unsigned I = 0; I < SrcTiles.size(); ++I)
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                                .addImm(PEMask)
+                                .addImm(I + 1 == SrcTiles.size() ? 1 : 0)
+                                .addReg(SrcTiles[I].RegNo));
+    if (!SrcScalars.empty())
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                                .addReg(LinxV5::R0)
+                                .addReg(SrcScalars[0].RegNo)
+                                .addReg(LinxV5::R0)
+                                .addReg(LinxV5::R0));
+  } else if (IsTma) {
+    // TPREFETCH-style: no tile sources, no destination; only the GM base
+    // B.IOR remains.
+    if (!SrcScalars.empty())
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                                .addReg(LinxV5::R0)
+                                .addReg(SrcScalars[0].RegNo)
+                                .addReg(LinxV5::R0)
+                                .addReg(LinxV5::R0));
+  } else if (!SrcScalars.empty()) {
     emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
                               .addReg(Dst.RegNo)
                               .addImm(PEMask)

@@ -10,7 +10,7 @@ struct FieldSlot {
   int16_t Default, Condition, Constraint;
 };
 struct FormRecord {
-  int16_t Mnemonic, Spelling, HeaderCommand, HeaderSelector;
+  int16_t Mnemonic, Spelling, HeaderCommand, HeaderSelector, HeaderFunction;
   uint16_t CfgOff, CfgN, SrcOff, SrcN, DstOff, DstN;
   uint8_t FoldUnique;
 };
@@ -42,6 +42,10 @@ const char *formHeaderCommand(int F) {
 const char *formHeaderSelector(int F) {
   return F < 0 || rec(F).HeaderSelector < 0 ? nullptr
                                             : Strings[rec(F).HeaderSelector];
+}
+
+int formHeaderFunction(int F) {
+  return F < 0 ? -1 : rec(F).HeaderFunction;
 }
 bool formFoldsUniquely(int F) {
   return F >= 0 && rec(F).FoldUnique != 0;

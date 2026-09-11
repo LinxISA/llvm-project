@@ -51,6 +51,7 @@ const char *formMnemonic(int FormIdx);
 const char *formSpelling(int FormIdx);
 const char *formHeaderCommand(int FormIdx);
 const char *formHeaderSelector(int FormIdx);
+int formHeaderFunction(int FormIdx);
 bool formFoldsUniquely(int FormIdx);
 
 // Field-slot iteration: section ranges for a form.
