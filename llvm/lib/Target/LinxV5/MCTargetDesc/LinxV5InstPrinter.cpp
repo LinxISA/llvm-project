@@ -35,7 +35,7 @@ using namespace llvm;
 #define PRINT_ALIAS_INSTR
 #include "LinxV5GenAsmWriter.inc"
 
-static cl::opt<bool> &NoAliases = LinxV5TileOpFold::NoAliases;
+#define NoAliases LinxV5TileOpFold::NoAliases
 
 bool LinxV5InstPrinter::applyTargetSpecificCLOption(StringRef Opt) {
   if (Opt == "linxv5-no-aliases") {

@@ -5,14 +5,14 @@
 
 namespace llvm {
 namespace LinxV5TileOpFold {
-cl::opt<bool> &NoAliases = NoAliasesImpl;
+
+cl::opt<bool>
+    NoAliases("linxv5-no-aliases",
+              cl::desc("Disable the emission of assembler pseudo "
+                       "instructions"),
+              cl::init(false), cl::Hidden);
 
 namespace {
-cl::opt<bool>
-    NoAliasesImpl("linxv5-no-aliases",
-                  cl::desc("Disable the emission of assembler pseudo "
-                           "instructions"),
-                  cl::init(false), cl::Hidden);
 std::mutex FoldMutex;
 std::unordered_map<uint64_t, FoldDesc> Folds;
 } // namespace

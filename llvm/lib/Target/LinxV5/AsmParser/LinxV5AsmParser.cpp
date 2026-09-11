@@ -4085,9 +4085,9 @@ bool parseOneOperand(LinxV5AsmParser &P,
   StringRef Name = Tok.getString();
   MacroOperand Op;
   Op.Kind = IsDest ? 2 : 0;
-  // Tile register: T#N or S#N (shared).
-  if (Name.size() >= 3 && (Name[0] == 'T' || Name[0] == 't' ||
-                           Name[0] == 'S' || Name[0] == 's') &&
+  // Tile register: T#N (Local). Shared spelling is bare S<digits>
+  // ("S0".."S63", no '#': PTO v0.58.4 ABIRegAltName).
+  if (Name.size() >= 3 && (Name[0] == 'T' || Name[0] == 't') &&
       Name[1] == '#') {
     MCRegister RegNo = MatchLinxV5TileRegisteName(Name);
     if (RegNo == LinxV5::NoRegister) {
@@ -4095,12 +4095,26 @@ bool parseOneOperand(LinxV5AsmParser &P,
       return false;
     }
     Op.RegNo = RegNo;
-    Op.IsShared = (Name[0] == 'S' || Name[0] == 's');
     P.getParser().Lex();
     if (!parseSizeSuffix(P, Op.SizeCode, ErrLoc))
       return false;
     Ops.push_back(Op);
     return true;
+  }
+  if (Name.size() >= 2 && (Name[0] == 'S' || Name[0] == 's') &&
+      Name[1] != '#') {
+    unsigned TID;
+    if (!Name.substr(1).getAsInteger(10, TID) && TID <= 63) {
+      // Shared tile handle: bare "S0".."S63" (PTO v0.58.4 ABIRegAltName).
+      // B.IOS binds the architectural TID, so carry it in RegNo.
+      Op.RegNo = TID;
+      Op.IsShared = true;
+      P.getParser().Lex();
+      if (!parseSizeSuffix(P, Op.SizeCode, ErrLoc))
+        return false;
+      Ops.push_back(Op);
+      return true;
+    }
   }
   // Bracketed GPR list: "[BaseGPR]" or "[BaseGPR, RowStrideGPR]" (TLSU GM
   // addressing). Each GPR becomes one scalar-source operand.
@@ -4279,6 +4293,34 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
       PendingTileOpMacroOperands, [](const MacroOperand &O) {
         return O.Kind == 5;
       });
+
+  // Carrier re-resolution: spellings with multiple forms (TCMP/TCMPS/TSEL/
+  // TSELS predicate carriers, TMATMUL Shared variants, TLOAD/TSTORE
+  // transport variants) disambiguate by the parsed operand shapes.
+  {
+    int Cands[4];
+    unsigned NCand = formsWithSpelling(
+        formSpelling(FormIdx), Cands, 4);
+    if (NCand > 1) {
+      for (unsigned I = 0; I < NCand; ++I) {
+        int Cand = Cands[I];
+        // Predicate-GPR destination form: parsed one GPR destination and
+        // no tile destination.
+        if (!DstGPRs.empty() && DstTiles.empty()) {
+          unsigned DstN = formSectionCount(Cand, FS_Destination);
+          int DB = formSectionBegin(Cand, FS_Destination);
+          bool AllGPR = DstN > 0;
+          for (int S = DB; S < DB + (int)DstN; ++S)
+            if (slotBindingKind(S) != BK_PredicateGPRDestination)
+              AllGPR = false;
+          if (AllGPR) {
+            FormIdx = Cand;
+            break;
+          }
+        }
+      }
+    }
+  }
   unsigned SchemaSrc = formSectionCount(FormIdx, FS_Source);
   bool NeedsDst = formSectionCount(FormIdx, FS_Destination) > 0;
   if (!Header) {
@@ -4321,12 +4363,25 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
     unsigned Given = SrcTiles.size() + SrcScalars.size();
     unsigned SchemaDst = formSectionCount(FormIdx, FS_Destination);
     unsigned RequiredDst = 0;
+    bool DstIsGPR = false;
     int DstBegin = formSectionBegin(FormIdx, FS_Destination);
-    for (int S = DstBegin; S < DstBegin + (int)SchemaDst; ++S)
+    for (int S = DstBegin; S < DstBegin + (int)SchemaDst; ++S) {
       if (!slotOptional(S))
         ++RequiredDst;
-    if (DstTiles.size() < RequiredDst || DstTiles.size() > SchemaDst ||
-        !DstGPRs.empty() || Given < RequiredSrc || Given > SchemaSrc) {
+      // Predicate-GPR destinations bind a GPR (->a0) instead of a tile.
+      if (slotBindingKind(S) == BK_PredicateGPRDestination)
+        DstIsGPR = true;
+    }
+    if (DstIsGPR) {
+      if (DstTiles.size() != 0 || DstGPRs.size() != RequiredDst ||
+          Given < RequiredSrc || Given > SchemaSrc) {
+        Error(IDLoc, "TileOp macro: operand shape does not match the form "
+                     "(predicate-GPR destination requires ->GPR)");
+        return true;
+      }
+    } else if (DstTiles.size() < RequiredDst ||
+               DstTiles.size() > SchemaDst || !DstGPRs.empty() ||
+               Given < RequiredSrc || Given > SchemaSrc) {
       Error(IDLoc, "TileOp macro: operand shape does not match the form "
                    "(expected " + Twine(RequiredSrc) + ".." +
                    Twine(SchemaSrc) + " sources and one tile destination)");
@@ -4556,16 +4611,44 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
                           : !SrcTiles.empty() ? SrcTiles[0]
                           : NoOp;
   unsigned TSize = Dst.SizeCode ? Dst.SizeCode : 4;
-  if (IsSfu || IsCube ||
-      (IsTma && !SrcTiles.empty() && !DstTiles.empty())) {
-    // SFU family, CUBE family, and RMW gather/scatter: one
-    // non-terminating source record per tile source, then one record per
-    // tile destination with the last carrying <last>.
+  if (!DstGPRs.empty() && DstTiles.empty()) {
+    // Predicate-GPR carrier (TCMP/TCMPS third form): source records, then
+    // the destination-only B.IOR carrying the GPR.
     for (const MacroOperand &Src : SrcTiles)
       emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
                                 .addImm(PEMask)
                                 .addImm(0)
                                 .addReg(Src.RegNo));
+    for (const MacroOperand &Sc : SrcScalars)
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                                .addReg(LinxV5::R0)
+                                .addReg(Sc.RegNo)
+                                .addReg(LinxV5::R0)
+                                .addReg(LinxV5::R0));
+    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
+                              .addReg(DstGPRs[0].RegNo)
+                              .addReg(LinxV5::R0)
+                              .addReg(LinxV5::R0)
+                              .addReg(LinxV5::R0));
+  } else if (IsSfu || IsCube ||
+      (IsTma && !SrcTiles.empty() && !DstTiles.empty())) {
+    // SFU family, CUBE family, and RMW gather/scatter: one
+    // non-terminating source record per tile source (B.IOS for Shared
+    // group operands), then one record per tile destination with the last
+    // carrying <last>.
+    for (const MacroOperand &Src : SrcTiles) {
+      if (Src.IsShared) {
+        emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOS)
+                                  .addImm(Src.RegNo) // Shared TID
+                                  .addImm(PEMask)
+                                  .addImm(0)); // source form: TSize 0
+      } else {
+        emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                                  .addImm(PEMask)
+                                  .addImm(0)
+                                  .addReg(Src.RegNo));
+      }
+    }
     if (HasBracketGroup || !SrcScalars.empty())
       emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
                                 .addReg(LinxV5::R0)
@@ -4587,14 +4670,24 @@ bool LinxV5AsmParser::emitTileOpMacroBundle(int FormIdx, SMLoc IDLoc,
                                             : 4)
                                 .addImm(I + 1 == DstTiles.size() ? 1 : 0));
   } else if (IsTma && !DstTiles.empty()) {
-    // TLOAD/TMOV: destination-only B.IOT, then the GM base B.IOR.
-    emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
-                              .addReg(DstTiles[0].RegNo)
-                              .addImm(PEMask)
-                              .addImm(DstTiles[0].SizeCode
-                                          ? DstTiles[0].SizeCode
-                                          : 4)
-                              .addImm(1));
+    // TLOAD/TMOV: destination-only record (B.IOS for a Shared
+    // destination), then the GM base B.IOR.
+    if (DstTiles[0].IsShared) {
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOS)
+                                .addImm(DstTiles[0].RegNo) // Shared TID
+                                .addImm(PEMask)
+                                .addImm(DstTiles[0].SizeCode
+                                            ? DstTiles[0].SizeCode
+                                            : 4)); // destination form
+    } else {
+      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                                .addReg(DstTiles[0].RegNo)
+                                .addImm(PEMask)
+                                .addImm(DstTiles[0].SizeCode
+                                            ? DstTiles[0].SizeCode
+                                            : 4)
+                                .addImm(1));
+    }
     if (HasBracketGroup || !SrcScalars.empty())
       emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
                                 .addReg(LinxV5::R0)

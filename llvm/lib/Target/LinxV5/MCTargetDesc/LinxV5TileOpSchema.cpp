@@ -47,6 +47,16 @@ const char *formHeaderSelector(int F) {
 int formHeaderFunction(int F) {
   return F < 0 ? -1 : rec(F).HeaderFunction;
 }
+
+unsigned formsWithSpelling(const char *Spelling, int *Out, unsigned Cap) {
+  StringRef S(Spelling);
+  unsigned N = 0;
+  for (unsigned I = 0; I < FormCount && N < Cap; ++I)
+    if (S.equals_insensitive(Strings[rec(I).Spelling]))
+      Out[N++] = static_cast<int>(I);
+  return N;
+}
+
 bool formFoldsUniquely(int F) {
   return F >= 0 && rec(F).FoldUnique != 0;
 }

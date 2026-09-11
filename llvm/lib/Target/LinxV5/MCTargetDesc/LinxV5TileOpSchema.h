@@ -45,6 +45,11 @@ enum FieldSection { FS_Config = 0, FS_Source = 1, FS_Destination = 2 };
 // Find a form record by its full spelling (e.g. "TADD", "TMATMUL.SHARED_BOTH").
 // Returns the form index or -1 when the mnemonic is not a TileOp macro.
 int lookupFormBySpelling(const char *Spelling);
+/// Iterate all form indices whose spelling matches (dotted forms share a
+/// mnemonic across carrier variants). Returns count; indices are written
+/// to Out (capacity >= 4).
+unsigned formsWithSpelling(const char *Spelling, int *Out, unsigned Cap);
+
 
 // Accessors into the generated tables (index -1 yields nullptr/0).
 const char *formMnemonic(int FormIdx);

@@ -48,10 +48,9 @@ void resetFolds();
 } // namespace llvm
 
 
+#include "llvm/Support/CommandLine.h"
+
 namespace llvm {
-namespace cl {
-class opt<bool>;
-}
 namespace LinxV5TileOpFold {
 /// The -linxv5-no-aliases physical-assembly escape hatch (issue #90).
 /// Declared here so both the disassembler (folding decision) and the
