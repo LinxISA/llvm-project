@@ -20,6 +20,9 @@ namespace llvm {
 
 class LinxV5InstPrinter : public MCInstPrinter {
 public:
+  // PTO 0.58.6 TileOp macro folding (issue #90): the physical-assembly
+  // escape hatch -M linxv5-no-aliases reaches the printer here.
+  bool applyTargetSpecificCLOption(StringRef Opt) override;
   LinxV5InstPrinter(const MCAsmInfo &MAI, const MCInstrInfo &MII,
                     const MCRegisterInfo &MRI)
       : MCInstPrinter(MAI, MII, MRI) {}

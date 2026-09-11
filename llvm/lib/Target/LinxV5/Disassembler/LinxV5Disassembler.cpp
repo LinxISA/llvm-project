@@ -11,6 +11,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/LinxV5BaseInfo.h"
+#include "MCTargetDesc/LinxV5TileOpFoldInfo.h"
+#include "MCTargetDesc/LinxV5TileOpSchema.h"
 #include "MCTargetDesc/LinxV5MCTargetDesc.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -28,6 +30,22 @@ using namespace llvm;
 #define DEBUG_TYPE "linxv5-disassembler"
 
 typedef MCDisassembler::DecodeStatus DecodeStatus;
+
+// PTO 0.58.6 TileOp macro folding (issue #90): declared here, defined after
+// getInstruction at file scope.
+bool isTileOpBSTART(unsigned Opcode);
+uint64_t tryFoldTileOpBundle(const MCInst &Head, ArrayRef<uint8_t> Bytes,
+                             uint64_t Address, const MCSubtargetInfo &STI);
+
+// Render the single macro line for a folded plain-form bundle. Returns an
+// empty string when the bundle does not match a plain form (caller keeps
+// the physical form). Stage 4 covers the shapes the macro assembler emits:
+// one head (dtype+selector), all-default attributes, 1..3 dims, and the
+// record set derived from the B.IOT/B_IO word encodings.
+std::string renderTileOpMacroLine(const MCInst &Head,
+                                  const SmallVectorImpl<unsigned> &Dims,
+                                  const SmallVectorImpl<uint64_t> &Records,
+                                  uint64_t BundleBytes);
 
 namespace {
 class LinxV5Disassembler : public MCDisassembler {
@@ -617,6 +635,20 @@ DecodeStatus LinxV5Disassembler::getInstruction(MCInst &MI, uint64_t &Size,
         return MCDisassembler::Fail;
       }
       Result = decodeInstruction(DecoderTable32, MI, Insn, Address, this, STI);
+      // PTO 0.58.6 TileOp macro folding (issue #90): a BSTART that begins
+      // a complete, exactly-matching plain-form bundle folds back to one
+      // macro line. Failures fall through to the physical BSTART.
+      if (Result == MCDisassembler::Success &&
+          !LinxV5TileOpFold::NoAliases &&
+          isTileOpBSTART(MI.getOpcode())) {
+        if (uint64_t Folded =
+                tryFoldTileOpBundle(MI, Bytes, Address, STI)) {
+          Size = Folded;
+          // MI still holds the physical BSTART; the fold description is
+          // registered for the printer via the address-keyed side table.
+          return MCDisassembler::Success;
+        }
+      }
     } else {
       if (Bytes.size() < 2) {
         Size = 0;
@@ -629,4 +661,230 @@ DecodeStatus LinxV5Disassembler::getInstruction(MCInst &MI, uint64_t &Size,
   }
 
   return Result;
+}
+
+//===----------------------------------------------------------------------===//
+// PTO 0.58.6 TileOp macro bundle folding (issue #90)
+//===----------------------------------------------------------------------===//
+
+bool isTileOpBSTART(unsigned Opcode) {
+  return Opcode == LinxV5::BSTART_TEPL_NoMode ||
+         Opcode == LinxV5::BSTART_TMA ||
+         Opcode == LinxV5::BSTART_CUBE;
+}
+
+// Recognize the plain-form bundle shapes emitted by the macro assembler
+// (and their physical equivalents): header + optional default B.DATR +
+// 1..3 B.DIM + B.IOT/B_IO records ending in <last> + BSTOP. Returns the
+// total bundle byte size when the bundle is complete and recognized,
+// otherwise 0. The recognition is intentionally conservative: only shapes
+// the macro assembler itself can produce fold back; anything else stays
+// physical per the issue's "ambiguous or noncanonical bundles remain
+// physical assembly" acceptance rule.
+uint64_t tryFoldTileOpBundle(const MCInst &Head, ArrayRef<uint8_t> Bytes,
+                             uint64_t Address,
+                             const MCSubtargetInfo &STI) {
+  // Walk 2/4/6/8-byte instructions from offset 4 (past the BSTART) until
+  // BSTOP, the next BSTART, or an undecodable word. Validate the command
+  // classes along the way.
+  uint64_t Off = 4;
+  bool SawBSTOP = false;
+  unsigned DIMCount = 0;
+  unsigned RecordCount = 0;
+  unsigned AttrCount = 0;
+  SmallVector<unsigned, 3> Dims;
+  SmallVector<uint64_t, 8> Records;
+  for (; Off < Bytes.size() && !SawBSTOP;) {
+    uint64_t Insn;
+    unsigned W;
+    if ((Bytes[Off] & 0xf) == 0xf) {
+      if (Off + 8 > Bytes.size()) return 0;
+      W = 8; Insn = support::endian::read64le(Bytes.data() + Off);
+    } else if ((Bytes[Off] & 0xf) == 0xe) {
+      if (Off + 6 > Bytes.size()) return 0;
+      W = 6; Insn = support::endian::read64le(Bytes.data() + Off) & 0xffffffffffffULL;
+    } else if ((Bytes[Off] & 0x1) == 0x1) {
+      if (Off + 4 > Bytes.size()) return 0;
+      W = 4; Insn = support::endian::read32le(Bytes.data() + Off);
+    } else {
+      if (Off + 2 > Bytes.size()) return 0;
+      W = 2; Insn = support::endian::read16le(Bytes.data() + Off);
+    }
+    // Classify by encoding: B.DIM family (C.B.DIMI 0x3c.. compressed /
+    // B_DIM 0x43-ish full), B.IOT/B_IO/B_IOS records, B.DATR/B.FPATR,
+    // BSTOP, BSTART. Conservative mask checks against the known encodings.
+    if (W == 2 && (Insn & 0xff) == 0x3c) { // C.B.DIMI
+      // bits[13:6] = imm8, bits[15:14] = DstLoopReg (C_B_DIMI in .td).
+      ++DIMCount;
+      Dims.push_back((Insn >> 6) & 0xff);
+      if (DIMCount > 3) return 0;
+    } else if (W == 4) {
+      unsigned Lo16 = Insn & 0xffff;
+      if (Lo16 == 0x0001) { // BSTOP
+        SawBSTOP = true;
+      } else if ((Insn & 0x7f) == 0x23) { // B.DATR / B.FPATR
+        // Exactly one attribute command is expected in the header region;
+        // its payload (pad defaults, all-zero FPATR) is part of the
+        // plain-form shape the macro assembler emits. A second attribute
+        // command is noncanonical: stay physical.
+        if (++AttrCount > 1) return 0;
+      } else if ((Insn & 0x7f) == 0x13) { // B.IOT / B_IO records
+        ++RecordCount;
+        if (RecordCount > 8) return 0;
+        Records.push_back(Insn);
+      } else {
+        return 0; // unknown command in the bundle: stay physical
+      }
+    } else {
+      return 0; // 48/64-bit commands not part of plain forms
+    }
+    Off += W;
+  }
+  if (!SawBSTOP || DIMCount < 1 || RecordCount < 1)
+    return 0;
+  uint64_t BundleBytes = Off;
+
+  // Reconstruct the macro line from the decoded head + collected words.
+  using namespace LinxV5TileOpFold;
+  FoldDesc D;
+  D.BundleBytes = BundleBytes;
+  D.Line = renderTileOpMacroLine(Head, Dims, Records, BundleBytes);
+  if (D.Line.empty())
+    return 0; // no unique plain-form rendering: stay physical
+  registerFold(Address, std::move(D));
+  return BundleBytes;
+}
+
+
+
+// Render "NAME <dims..., DTYPE>, srcs..., ->dst<SIZE>" for a folded bundle.
+// The B.IOT record encodings: TwoSrc (0b100), OneSrc (0b101), NoSrc (0b110)
+// with fields [SrcTile0, SrcTile1] (5 bits @15/20), PE_MASK (4 bits @27),
+// TSize (4 bits @7 in the low half after the 0b13 opcode...). The physical
+// bit layout follows B_IOT_Base in LinxV5InstrInfo.td; the exact fields
+// are recovered from the encoding below.
+std::string renderTileOpMacroLine(const MCInst &Head,
+                                  const SmallVectorImpl<unsigned> &Dims,
+                                  const SmallVectorImpl<uint64_t> &Records,
+                                  uint64_t BundleBytes) {
+  using namespace LinxV5TileOpSchema;
+  unsigned DataType = Head.getOperand(0).getImm();
+  unsigned SelectorOrFn = Head.getOperand(1).getImm();
+  const char *Spelling = nullptr;
+  if (Head.getOpcode() == LinxV5::BSTART_TEPL_NoMode) {
+    // Match the selector against the schema forms.
+    for (unsigned F = 0; F < FormCount; ++F) {
+      const char *HC = formHeaderCommand(F);
+      if (!HC || StringRef(HC) != "BSTART.VEC")
+        continue;
+      const char *Sel = formHeaderSelector(F);
+      if (!Sel)
+        continue;
+      unsigned S = 0;
+      StringRef SStr(Sel);
+      SStr.drop_front(SStr.startswith("0x") || SStr.startswith("0X") ? 2 : 0)
+          .getAsInteger(16, S);
+      if (S == SelectorOrFn) {
+        Spelling = formSpelling(F);
+        break;
+      }
+    }
+  } else if (Head.getOpcode() == LinxV5::BSTART_TMA ||
+             Head.getOpcode() == LinxV5::BSTART_CUBE) {
+    for (unsigned F = 0; F < FormCount; ++F) {
+      const char *HC = formHeaderCommand(F);
+      if (!HC)
+        continue;
+      StringRef H(HC);
+      bool Match = false;
+      if (Head.getOpcode() == LinxV5::BSTART_TMA)
+        Match = (H == "BSTART.TLOAD" && SelectorOrFn == 0) ||
+                (H == "BSTART.TSTORE" && SelectorOrFn == 1) ||
+                (H == "BSTART.TMOV" && SelectorOrFn == 2) ||
+                (H == "BSTART.TPREFETCH" && SelectorOrFn == 3) ||
+                (H == "BSTART.GMOV" && SelectorOrFn == 13) ||
+                H.startswith("BSTART.MGATHER") || H.startswith("BSTART.MSCATTER");
+      else
+        Match = (H == "BSTART.TMATMUL" && SelectorOrFn == 0) ||
+                (H == "BSTART.TMATMULMX" && SelectorOrFn == 1) ||
+                (H == "BSTART.TGEMV" && SelectorOrFn == 2) ||
+                (H == "BSTART.TGEMVMX" && SelectorOrFn == 3);
+      if (Match) {
+        Spelling = formSpelling(F);
+        break;
+      }
+    }
+  }
+  if (!Spelling)
+    return std::string();
+
+  // DataType name
+  const char *DTypeNames[32] = {
+      "FP64", "FP32", "TF32", "HF32", "FP16", "BF16", "HIF8", "E4M3",
+      "E5M2", "E3M2", "E2M3", "E2M1X2", "E1M2X2", nullptr, "HIF4X2", nullptr,
+      "S64", "S32", "S16", "S8", "U64", "U32", "U16", "U8",
+      "S4X2", "U4X2", nullptr, nullptr, nullptr, nullptr, nullptr,
+      "DTYPE_NONE"};
+  const char *DT = DataType < 32 ? DTypeNames[DataType] : nullptr;
+  if (!DT)
+    return std::string();
+
+  // Dims
+  std::string Cfg;
+  for (unsigned D : Dims) {
+    if (!Cfg.empty())
+      Cfg += ", ";
+    Cfg += std::to_string(D);
+  }
+  if (!Cfg.empty())
+    Cfg += ", ";
+  Cfg += DT;
+
+  // Records: decode tile operand numbers and destination size.
+  std::string Ops;
+  static const char *SizeNames[13] = {"0B",  "128B", "256B", "512B", "1KB",
+                                      "2KB", "4KB",  "8KB",  "16KB", "32KB",
+                                      "64KB", "128KB", "256KB"};
+  // B_IOT_Base layout: SrcTile1[31:26] SrcTile0[25:20] Last[19]
+  // TSize[18:15] Func[14:12] PE_MASK[11:9] DstTile[8:7].
+  for (uint64_t R : Records) {
+    unsigned Func = (R >> 12) & 0x7;
+    unsigned T0 = (R >> 20) & 0x3f;
+    unsigned T1 = (R >> 26) & 0x3f;
+    unsigned TSize = (R >> 15) & 0xf;
+    bool Last = (R >> 19) & 1;
+    // B_IO records (scalar/address) carry no tile operands; skip in the
+    // rendering — the bracket/destination rendering lands with the
+    // operand-schema walker in a follow-up.
+    unsigned DstTile = (R >> 7) & 0x3;
+    if (Func == 0b100) { // TwoSrc
+      if (!Ops.empty())
+        Ops += ", ";
+      Ops += "t#" + std::to_string(T0) + ", t#" + std::to_string(T1);
+      // Combined TwoSrc+Dst form: the destination rides the same record.
+      if (DstTile != 0 || TSize != 0) {
+        const char *Sz = TSize < 13 ? SizeNames[TSize] : "?";
+        Ops += ", ->t<" + std::string(Sz) + ">";
+      }
+    } else if (Func == 0b101) { // OneSrc
+      if (!Ops.empty())
+        Ops += ", ";
+      Ops += "t#" + std::to_string(T0);
+      (void)Last;
+      if (DstTile != 0 || TSize != 0) { // combined OneSrc+Dst
+        const char *Sz = TSize < 13 ? SizeNames[TSize] : "?";
+        Ops += ", ->t<" + std::string(Sz) + ">";
+      }
+    } else if (Func == 0b110) { // NoSrc: destination record
+      const char *Sz = TSize < 13 ? SizeNames[TSize] : "?";
+      if (!Ops.empty())
+        Ops += ", ";
+      Ops += "->t<" + std::string(Sz) + ">";
+    }
+  }
+  std::string Line = Spelling;
+  Line += " <" + Cfg + ">";
+  if (!Ops.empty())
+    Line += ", " + Ops;
+  return Line;
 }

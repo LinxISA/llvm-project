@@ -15,6 +15,7 @@ add_llvm_component_library(LLVMLinxV5Desc
   LinxV5TileOpReader.cpp
   LinxV5TileOpExpand.cpp
   LinxV5TileOpSchema.cpp
+  LinxV5TileOpFoldInfo.cpp
   LINK_COMPONENTS
   MC
   LinxV5Info

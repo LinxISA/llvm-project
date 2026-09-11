@@ -13,6 +13,7 @@
 #include "LinxV5InstPrinter.h"
 #include "LinxV5BaseInfo.h"
 #include "LinxV5MCExpr.h"
+#include "MCTargetDesc/LinxV5TileOpFoldInfo.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
@@ -34,10 +35,15 @@ using namespace llvm;
 #define PRINT_ALIAS_INSTR
 #include "LinxV5GenAsmWriter.inc"
 
-static cl::opt<bool>
-    NoAliases("linxv5-no-aliases",
-              cl::desc("Disable the emission of assembler pseudo instructions"),
-              cl::init(false), cl::Hidden);
+static cl::opt<bool> &NoAliases = LinxV5TileOpFold::NoAliases;
+
+bool LinxV5InstPrinter::applyTargetSpecificCLOption(StringRef Opt) {
+  if (Opt == "linxv5-no-aliases") {
+    NoAliases = true;
+    return true;
+  }
+  return false;
+}
 
 static cl::opt<bool>
     ArchRegNames("linxv5-arch-reg-names",
@@ -48,6 +54,19 @@ static cl::opt<bool>
 void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                   StringRef Annot, const MCSubtargetInfo &STI,
                                   raw_ostream &O) {
+  // PTO 0.58.6 TileOp macro folding (issue #90): when the disassembler
+  // recognized a complete plain-form bundle starting at this address, the
+  // fold side table carries the rendered macro line; print it instead of
+  // the physical BSTART. -linxv5-no-aliases keeps physical assembly.
+  if (!NoAliases && (MI->getOpcode() == LinxV5::BSTART_TEPL_NoMode ||
+                     MI->getOpcode() == LinxV5::BSTART_TMA ||
+                     MI->getOpcode() == LinxV5::BSTART_CUBE)) {
+    if (const auto *Fold = LinxV5TileOpFold::takeFold(Address)) {
+      O << "\t" << Fold->Line;
+      printAnnotation(O, Annot);
+      return;
+    }
+  }
   // PTO-ISA #236 union tracking: BSTART.CUBE Matrix functions reinterpret
   // the following B.DATR PadValueOrByteId[1:0] as CCTRL. The disassembler
   // feeds instructions sequentially through this printer, so remember
