@@ -432,7 +432,10 @@ namespace {
 /// Get the column at which we want to start printing the instruction
 /// disassembly, taking into account anything which appears to the left of it.
 unsigned getInstStartColumn(const MCSubtargetInfo &STI) {
-  return !ShowRawInsn ? 16 : STI.getTargetTriple().isX86() ? 40 : 24;
+  return !ShowRawInsn                       ? 16
+         : STI.getTargetTriple().isX86()    ? 40
+         : STI.getTargetTriple().isLinxV5() ? 32
+                                            : 24;
 }
 
 static bool isAArch64Elf(const ObjectFile &Obj) {
@@ -816,9 +819,21 @@ public:
     size_t Start = OS.tell();
     if (LeadingAddr)
       OS << format("%8" PRIx64 ":", Address.Address);
+    bool WrapMacroBytes =
+        ShowRawInsn && MI &&
+        IP.getOpcodeName(MI->getOpcode()) == "PseudoTileMacroDisasm";
+    size_t WrappedPos = Bytes.size();
     if (ShowRawInsn) {
       size_t Pos = 0, End = Bytes.size();
-      if (End % 4 == 0) {
+      if (WrapMacroBytes) {
+        for (; Pos + 4 <= End && Pos != 8; Pos += 4)
+          OS << ' '
+             << format_hex_no_prefix(
+                    llvm::support::endian::read<uint32_t>(
+                        Bytes.data() + Pos, llvm::support::little),
+                    8);
+        WrappedPos = Pos;
+      } else if (End % 4 == 0) {
         // 32-bit and 64-bit instructions.
         for (; Pos + 4 <= End; Pos += 4)
           OS << ' '
@@ -835,7 +850,7 @@ public:
                         Bytes.data() + Pos, llvm::support::little),
                     4);
       }
-      if (Pos < End) {
+      if (!WrapMacroBytes && Pos < End) {
         OS << ' ';
         dumpBytes(Bytes.slice(Pos), OS);
       }
@@ -847,6 +862,39 @@ public:
       IP.printInst(MI, Address.Address, "", STI, OS);
     } else
       OS << "\t<unknown>";
+
+    while (WrappedPos < Bytes.size()) {
+      OS << '\n';
+      if (LeadingAddr)
+        OS.indent(9);
+      OS << ' ';
+      unsigned Words = 0;
+      while (Bytes.size() - WrappedPos >= 4 && Words != 2) {
+        if (Words)
+          OS << ' ';
+        OS << format_hex_no_prefix(
+            llvm::support::endian::read<uint32_t>(Bytes.data() + WrappedPos,
+                                                  llvm::support::little),
+            8);
+        WrappedPos += 4;
+        ++Words;
+      }
+      size_t Remaining = Bytes.size() - WrappedPos;
+      if (Remaining >= 2 && Words != 2) {
+        if (Words)
+          OS << ' ';
+        OS << format_hex_no_prefix(
+            llvm::support::endian::read<uint16_t>(Bytes.data() + WrappedPos,
+                                                  llvm::support::little),
+            4);
+        WrappedPos += 2;
+      } else if (Remaining && Words != 2) {
+        if (Words)
+          OS << ' ';
+        dumpBytes(Bytes.slice(WrappedPos), OS);
+        WrappedPos = Bytes.size();
+      }
+    }
   }
 };
 LINX64V4PrettyPrinter LINX64V4PrettyPrinterInst;

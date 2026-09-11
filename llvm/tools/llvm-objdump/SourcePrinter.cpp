@@ -27,7 +27,10 @@ namespace llvm {
 namespace objdump {
 
 unsigned getInstStartColumn(const MCSubtargetInfo &STI) {
-  return !ShowRawInsn ? 16 : STI.getTargetTriple().isX86() ? 40 : 24;
+  return !ShowRawInsn                       ? 16
+         : STI.getTargetTriple().isX86()    ? 40
+         : STI.getTargetTriple().isLinxV5() ? 32
+                                            : 24;
 }
 
 bool LiveVariable::liveAtAddress(object::SectionedAddress Addr) {

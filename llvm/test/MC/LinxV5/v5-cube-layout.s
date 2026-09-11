@@ -1,5 +1,5 @@
 # RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s --check-prefix=ENC
-# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s --check-prefix=DIS
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros - | FileCheck %s --check-prefix=DIS
 
 # PTO-ISA ADR-0070 (pto-spec 23ca883): B.DATR.Layout codes 21..26 select the
 # GM<->Local CUBE cell transport. 21..23 (ND2M32/ND2M16/ND2N8) are legal

@@ -3323,6 +3323,11 @@ class PseudoTEPLImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
   let isHeaderOnly = 1;
 }
 
+// Synthetic MCInst returned by the disassembler after an exact physical
+// bundle match. Its variable operands are printed by LinxV5InstPrinter.
+let isCodeGenOnly = 1 in
+def PseudoTileMacroDisasm : Pseudo<(outs), (ins), []>;
+
 include "LinxV5TileCall.td"
 
 let isHeaderOnly = 1 in
