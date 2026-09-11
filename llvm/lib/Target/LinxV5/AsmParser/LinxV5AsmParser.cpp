@@ -14,6 +14,7 @@
 #include "MCTargetDesc/LinxV5MCTargetDesc.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
 #include "MCTargetDesc/LinxV5TargetStreamer.h"
+#include "MCTargetDesc/LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5TileOpExpand.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
 #include "llvm/ADT/STLExtras.h"
@@ -40,7 +41,11 @@
 #include "llvm/Support/LinxV5ISAInfo.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <cctype>
 #include <limits>
+#include <memory>
+#include <string>
+#include <vector>
 
 using namespace llvm;
 
@@ -49,6 +54,18 @@ using namespace llvm;
 namespace {
 
 using namespace LinxV5Op;
+
+struct TileMacroLexeme {
+  AsmToken::TokenKind Kind;
+  std::string Text;
+  int64_t Integer = 0;
+};
+
+struct ParsedTileMacroLine {
+  const TileMacroOperationDesc *Operation = nullptr;
+  std::string Spelling;
+  std::vector<TileMacroLexeme> Lexemes;
+};
 
 class LinxV5AsmParser : public MCTargetAsmParser {
   enum {
@@ -64,6 +81,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   };
   int IAVS = IA_SHUTDOWN; // Inline Asm Validate State
   int64_t ActiveCubeTileOp = -1;
+  std::unique_ptr<ParsedTileMacroLine> PendingTileMacro;
 
   SMLoc getLoc() const { return getParser().getTok().getLoc(); }
 
@@ -117,6 +135,8 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   // Helper to emit CUBE pseudo instruction
   // "MAMULB/MAMULBT/MAMULB.ACC/MAMULBT.ACC".
   void emitCCall(MCInst &Inst, MCStreamer &Out, unsigned CUBEOpc);
+
+  bool emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out);
 
   // Helper to transform instruction "BSTART.STD/AUX/FP, DIRECT/COND/CALL" ->
   // "L.BSTART.STD/AUX/FP, DIRECT/COND/CALL".
@@ -1415,6 +1435,9 @@ bool LinxV5AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                               MCStreamer &Out,
                                               uint64_t &ErrorInfo,
                                               bool MatchingInlineAsm) {
+  if (PendingTileMacro)
+    return emitTileMacroLine(IDLoc, Out);
+
   MCInst Inst;
   FeatureBitset MissingFeatures;
 
@@ -2125,8 +2148,14 @@ OperandMatchResultTy LinxV5AsmParser::tryParseToken(OperandVector &Operands) {
     getLexer().Lex();
     StringRef maybeM = getLexer().getTok().getString();
     if (getLexer().isNot(AsmToken::EndOfStatement) &&
-        getLexer().peekTok().getKind() == AsmToken::Colon &&
-        !maybeM.str().compare("M")) {
+        getLexer().peekTok().getKind() == AsmToken::Equal &&
+        maybeM.equals_insensitive("Row")) {
+      Operands.push_back(LinxV5Operand::createToken("<Row=", S));
+      getLexer().Lex(); // eat Row
+      getLexer().Lex(); // eat =
+    } else if (getLexer().isNot(AsmToken::EndOfStatement) &&
+               getLexer().peekTok().getKind() == AsmToken::Colon &&
+               !maybeM.str().compare("M")) {
       Operands.push_back(LinxV5Operand::createToken("<M:", S));
       getLexer().Lex(); // eat M
       getLexer().Lex(); // eat :
@@ -2146,6 +2175,14 @@ OperandMatchResultTy LinxV5AsmParser::tryParseToken(OperandVector &Operands) {
     return MatchOperand_Success;
   }
   StringRef maybeNK = getLexer().getTok().getString();
+  if (getLexer().isNot(AsmToken::EndOfStatement) &&
+      getLexer().peekTok().getKind() == AsmToken::Equal &&
+      maybeNK.equals_insensitive("Col")) {
+    Operands.push_back(LinxV5Operand::createToken("Col=", S));
+    getLexer().Lex(); // eat Col
+    getLexer().Lex(); // eat =
+    return MatchOperand_Success;
+  }
   if (getLexer().isNot(AsmToken::EndOfStatement) &&
       getLexer().peekTok().getKind() == AsmToken::Colon) {
     if (!maybeNK.str().compare("N")) {
@@ -3461,6 +3498,10 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
       return MatchOperand_ParseFail;
     }
   }
+  if (LinxV5Op::isWeightLayout(Format) && CurLayoutDirection != 1) {
+    getParser().Error(S, "weight layout selectors are legal only on TLOAD");
+    return MatchOperand_ParseFail;
+  }
 
   const MCExpr *Res = MCConstantExpr::create(Format, getContext());
   Operands.push_back(LinxV5Operand::createImm(Res, S, E));
@@ -3923,6 +3964,37 @@ bool LinxV5AsmParser::parseDirectiveOption() {
 bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
+  PendingTileMacro.reset();
+  bool IsLegacyColonSyntax = false;
+  if (getLexer().is(AsmToken::Less)) {
+    AsmToken Less = getLexer().getTok();
+    getLexer().Lex();
+    IsLegacyColonSyntax = getLexer().is(AsmToken::Identifier) &&
+                          getLexer().peekTok().is(AsmToken::Colon);
+    getLexer().UnLex(Less);
+  }
+  if (!IsLegacyColonSyntax) {
+    if (const TileMacroOperationDesc *Operation =
+            findTileMacroOperationForSpelling(Name)) {
+      auto Parsed = std::make_unique<ParsedTileMacroLine>();
+      Parsed->Operation = Operation;
+      Parsed->Spelling = Name.str();
+      while (getLexer().isNot(AsmToken::EndOfStatement)) {
+        const AsmToken &Token = getLexer().getTok();
+        TileMacroLexeme Lexeme;
+        Lexeme.Kind = Token.getKind();
+        Lexeme.Text = Token.getString().str();
+        if (Token.is(AsmToken::Integer))
+          Lexeme.Integer = Token.getIntVal();
+        Parsed->Lexemes.push_back(std::move(Lexeme));
+        getLexer().Lex();
+      }
+      if (Parsed->Lexemes.empty())
+        return Error(NameLoc, "TileOp macro requires one complete source line");
+      PendingTileMacro = std::move(Parsed);
+      return false;
+    }
+  }
   CurLayoutDirection = PendingLayoutDirection;
   if (!Name.startswith_insensitive("BSTART.TLSU") &&
       !Name.startswith_insensitive("BSTART.TLOAD") &&
@@ -4385,6 +4457,47 @@ void LinxV5AsmParser::emitCCall(MCInst &Inst, MCStreamer &Out,
   emitMcInstVecToStreamer(getBDIMFromInst(Inst, MII), Out);
   // emit b.iot
   emitMcInstVecToStreamer(getBIOTFromInst(Inst, MII), Out);
+}
+
+static unsigned getTileMacroDataTypeBits(unsigned DataType);
+
+#include "LinxV5TileMacroAsm.inc"
+
+static unsigned getTileMacroDataTypeBits(unsigned DataType) {
+  switch (DataType) {
+  case LinxV5Op::DataType::FP64:
+  case LinxV5Op::DataType::S64:
+  case LinxV5Op::DataType::U64:
+    return 64;
+  case LinxV5Op::DataType::FP32:
+  case LinxV5Op::DataType::TF32:
+  case LinxV5Op::DataType::HF32:
+  case LinxV5Op::DataType::S32:
+  case LinxV5Op::DataType::U32:
+    return 32;
+  case LinxV5Op::DataType::FP16:
+  case LinxV5Op::DataType::BF16:
+  case LinxV5Op::DataType::S16:
+  case LinxV5Op::DataType::U16:
+    return 16;
+  case LinxV5Op::DataType::HiF8:
+  case LinxV5Op::DataType::e4m3:
+  case LinxV5Op::DataType::e5m2:
+  case LinxV5Op::DataType::e3m2:
+  case LinxV5Op::DataType::e2m3:
+  case LinxV5Op::DataType::e8m0:
+  case LinxV5Op::DataType::S8:
+  case LinxV5Op::DataType::U8:
+    return 8;
+  case LinxV5Op::DataType::e2m1x2:
+  case LinxV5Op::DataType::e1m2x2:
+  case LinxV5Op::DataType::HiF4x2:
+  case LinxV5Op::DataType::S4x2:
+  case LinxV5Op::DataType::U4x2:
+    return 4;
+  default:
+    return 0;
+  }
 }
 
 bool LinxV5AsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,

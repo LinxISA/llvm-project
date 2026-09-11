@@ -561,10 +561,10 @@ bool isZeroRegAndOneImm(const MCInst &Inst, unsigned i) {
   // Determine reg zero.
   bool isZeroReg = RegOp.isReg() && RegOp.getReg() == LinxV5::R0;
 
-  // Determine imm 0.
-  bool isZeroImm = ImmOp.isImm() && ImmOp.getImm() == 0;
+  // A new Tile block initializes every dimension register to 1.
+  bool isOneImm = ImmOp.isImm() && ImmOp.getImm() == 1;
 
-  return (isZeroReg && isZeroImm);
+  return isZeroReg && isOneImm;
 }
 
 llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
