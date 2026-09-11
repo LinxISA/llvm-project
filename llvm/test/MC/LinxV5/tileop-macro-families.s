@@ -32,14 +32,14 @@ TGATHER <32, FP32>, t#1, t#2, ->t#3<2KB>
 TLOAD <32, 16, 32, FP32>, [a0, a1], ->t#2<2KB>
 # CHECK: BSTART.TLSU TLOAD, FP32
 # CHECK: B.IOT mask=1111, last, ->t#2<2KB>
-# CHECK: B.IOR [a0], []
+# CHECK: B.IOR [a0, a1], []
 # CHECK: BSTOP
 
 # --- TLSU: TSTORE (source-only; no destination record).
 TSTORE <32, 16, 32, FP32>, t#1, [a0, a1]
 # CHECK: BSTART.TLSU TSTORE, FP32
 # CHECK: B.IOT t#1, mask=1111, last
-# CHECK: B.IOR [a0], []
+# CHECK: B.IOR [a0, a1], []
 # CHECK: BSTOP
 
 # --- TLSU: TPREFETCH with zero base (omitted-slot encoding).
