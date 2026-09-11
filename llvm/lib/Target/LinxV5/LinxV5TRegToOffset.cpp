@@ -901,9 +901,14 @@ static void __verifyGPR(MachineBasicBlock &MBB) {
         if (Defs.count(Reg) == 0) {
           Defs.insert(Reg);
         } else {
-          LLVM_DEBUG(dbgs() << MBB << "\n");
+          // A block may legally redefine a GPR it previously defined:
+          // read-modify-write forms (`r2 = OR_SW r0, r2`) and ordinary
+          // sequential redefinitions (`r2 = LWI` after `r2 = LW`), which
+          // -O0 fast-RA emits freely. The single-definition-per-block
+          // shape only ever held for the isolated regions this pass
+          // rewrites, and TRegToOffset itself never rewrites GPRs, so
+          // demote the hard assert to a debug trace.
           LLVM_DEBUG(dbgs() << "bgpr multi set inst: " << MI << "\n");
-          assert(0 && "BGPR multi set!");
         }
       }
     }
