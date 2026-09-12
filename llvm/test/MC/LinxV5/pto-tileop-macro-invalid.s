@@ -13,6 +13,7 @@ TSTORE.CUBE <Row=32, Col=1, FP32, M322ND>, T#1, [base=a0, stride=a1]
 TMATMUL <M=1, N=1, K=1, FP32, PE0>, S0, S1, ->T<128B>
 TMATMUL <FP32, FPAttrs(TransposeB=1)>, T#1, T#2, ->T<128B>
 TMATMUL <FP32, TransposeB=1>, T#1, T#2, ->T<128B>
+TGEMV <M=2, N=8, K=16, FP32>, T#1, T#2, ->T<128B>
 TADD <Row=8, Col=64, FP32>, T#1[base=r24, offset=0], T#2, ->T<2KB>
 TADD <Row=8, Col=64, FP32>, T#1[base=a0, offset=2048], T#2, ->T<2KB>
 TADDS <Row=8, Col=64, FP32>, T#1, a0[base=a1, offset=0], ->T<2KB>
@@ -21,4 +22,4 @@ TADD <Row=8, Col=64, FP32>, T#1[base=a0, offset=0, size=<128B>], T#2, ->T<2KB>
 TEXPANDS <Row=16, Col=8, ValidRow=8, U8, CUBE_M16>, a2, ->T<2KB>
 TADD <Row=8, Col=64, FP32>, T#1, T#2, ->T#1<2KB>
 
-# CHECK-COUNT-20: error: {{(unknown operand|TileOp operands/configuration do not match any exact PTO 0.58.6 form)}}
+# CHECK-COUNT-21: error: {{(unknown operand|TileOp operands/configuration do not match any exact PTO 0.58.6 form)}}
