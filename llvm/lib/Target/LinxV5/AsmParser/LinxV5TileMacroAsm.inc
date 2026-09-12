@@ -746,6 +746,13 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
         RowExpression.startswith("Layout=RowMajor?");
     if ((RowExpression == "ValidRow" ||
          (LayoutDependentRow && DirectCubeLayout)) &&
+        ValidRow && !ValidRow->HasValue) {
+      // The encoded LB1 carrier is absent, so its architectural value is one.
+      ValidRow->HasValue = ValidRow->Dim.HasValue = true;
+      ValidRow->Dim.Imm = 1;
+    }
+    if ((RowExpression == "ValidRow" ||
+         (LayoutDependentRow && DirectCubeLayout)) &&
         ValidRow && ValidRow->HasValue) {
       DerivedRow = ValidRow->Dim;
     } else if ((!LayoutDependentRow || !DirectCubeLayout) &&
@@ -917,9 +924,9 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                               (StringRef(Desc.Default).contains("Source") ||
                                StringRef(Desc.Default) == "DestinationLayout" ||
                                StringRef(Desc.Default) == "CubeLayout");
-        bool PhysicalOneDefault =
-            !Value.Explicit && Desc.Default && StringRef(Desc.Default) == "1";
-        if (!RuntimeDefault && !PhysicalOneDefault)
+        bool PhysicalOne = Value.Dim.Reg == LinxV5::R0 &&
+                           Value.Dim.Imm == 1;
+        if (!RuntimeDefault && !PhysicalOne)
           Dims[Slot] = Value.Dim;
       }
     }
