@@ -737,9 +737,6 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       break;
     }
   }
-  if (Commands.empty())
-    return false;
-
   ArrayRef<MCInst> Body = Commands;
   if (!Body.empty() && (Body.back().getOpcode() == LinxV5::BSTOP ||
                         Body.back().getOpcode() == LinxV5::BSTOP_C))
@@ -864,7 +861,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
   };
 
   auto matchesForm = [&](const TileMacroFormDesc &Form) {
-    if (!Form.UniqueWithoutRuntimeState)
+    if (!Form.CanonicalWithoutRuntimeState)
       return false;
     const TileMacroConfigDesc *HeaderConfig = targetConfig(
         Form, TileMacroTargetKind::Header, TileMacroTargetSlot::DataType);

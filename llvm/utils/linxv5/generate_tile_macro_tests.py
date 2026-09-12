@@ -14,6 +14,7 @@ out = [
     "# RUN: %python %S/../../../utils/linxv5/verify_tile_macro_forms.py %s %t.diss",
     "# RUN: %python %S/../../../utils/linxv5/roundtrip_tile_macro_forms.py llvm-mc llvm-objdump %s",
     "# RUN: %python %S/../../../utils/linxv5/verify_tile_macro_required_operands.py llvm-mc %s",
+    "# RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t.o | FileCheck %s --check-prefix=PHYSICAL",
     ".text",
 ]
 tile_index = gpr_index = shared_index = 0
@@ -90,11 +91,14 @@ for operation in catalog["operations"]:
         line = f"{form['spelling']} <{', '.join(config)}>"
         if operands:
             line += ", " + ", ".join(operands)
-        fold = form["expansion"]["fold"]["unique_without_runtime_state"]
+        canonical = form["expansion"]["fold"]["canonical_without_runtime_state"]
         out.append(
-            f"# FORM: fold={int(fold)} spelling={form['spelling']} operation={operation['mnemonic']}"
+            f"# FORM: fold=1 canonical={int(canonical)} spelling={form['spelling']} operation={operation['mnemonic']}"
         )
-        if fold:
-            out.append(f"# CHECK: {form['spelling']}{{{{ +}}}}<")
+        out.append(f"# CHECK: {form['spelling']}{{{{ +}}}}<")
         out.append(line)
+out.extend([
+    "# PHYSICAL: BSTART",
+    "# PHYSICAL-NOT: C.B.DIMI 1,",
+])
 open(sys.argv[2], "w").write("\n".join(out) + "\n")

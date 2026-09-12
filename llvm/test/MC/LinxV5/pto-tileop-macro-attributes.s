@@ -2,21 +2,18 @@
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros - | FileCheck %s --check-prefix=PHYS
 
 TCVT <Row=64, Col=1, FP32, FP16, RNE, sat, canon, ND2DN, Zero, PE0_1>, T#1, ->T<128B>
-# CHECK: BSTART.TEPL{{.*}}TCVT, FP32
-# CHECK-NEXT: B.DATR{{.*}}ND2DN.canon{{.*}}FP16{{.*}}Zero{{.*}}RNE{{.*}}sat
+# CHECK: TCVT{{ +}}<Col=1, ValidRow=64, FP32, FP16, RNE, sat, .canon, ND2DN, Zero, PE0_1>
 
 TCMP <Row=32, Col=1, FP32, NE, Zero, sat, PE0>, T#1, T#2, ->a0
-# CHECK: BSTART.TEPL{{.*}}TCMP, FP32
-# CHECK-NEXT: B.DATR{{.*}}Zero{{.*}}NE{{.*}}#sat
-# CHECK: B.IOR{{.*}}->a0
+# CHECK: TCMP{{ +}}<Col=1, FP32, NE, Zero, sat, PE0>, T#1, T#2, ->a0
 
 TLOAD <Row=1, FP32, ND2M32, DTYPE_NONE, Zero>, [base=a0, stride=a1], ->T<2KB>
 # CHECK: TLOAD{{ +}}<
-# CHECK-SAME: Row=1
 # CHECK-SAME: FP32
 # CHECK-SAME: ND2M32
 # CHECK-SAME: Zero
 # CHECK-SAME: ->T<2KB>
+# CHECK-NOT: Row=1
 
 TLOAD <ValidK=16, ValidN=8, TotalK=32, FP16, OHWI2NK>, [a0, a1, a2], ->S0<128B>
 # CHECK: TLOAD{{ +}}<
@@ -57,7 +54,7 @@ TMATMUL <FP32, TransposeB>, T#1, T#2, ->T<128B>
 # CHECK: TMATMUL{{ +}}<FP32, TransposeB>
 
 TSEL <Row=128, Col=1, U8>, a0, a1, T#1, T#2, ->T<128B>
-# CHECK: BSTART.TEPL{{.*}}TSEL, U8
+# CHECK: TSEL{{ +}}<Col=1, U8>, a0, a1, T#1, T#2, ->T<128B>
 
 GMOV <FP32, ND2DN, PE0>, T#1, a0, ->T<128B>
 addi zero, 0, ->zero

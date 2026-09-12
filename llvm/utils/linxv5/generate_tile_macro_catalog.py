@@ -266,7 +266,7 @@ def generate(catalog_path: Path) -> str:
                 f"  {{{cxx_string(form['spelling'])}, {cxx_string(form['macro_format'])}, "
                 f"{cxx_string(form['expansion']['form_id'])}, {operation_index}, "
                 f"TileMacroShapeKind::{shape_kind(form)}, "
-                f"{str(bool(fold['unique_without_runtime_state'])).lower()}, "
+                f"{str(bool(fold['canonical_without_runtime_state'])).lower()}, "
                 f"{first_config}, {len(configs)}, {first_binding}, "
                 f"{len(form['expansion']['operand_bindings'])}, {first_command}, "
                 f"{len(form['expansion']['operand_commands'])}}},"
@@ -311,7 +311,7 @@ struct TileMacroFormDesc {{
   const char *FormID;
   uint16_t Operation;
   TileMacroShapeKind ShapeKind;
-  bool UniqueWithoutRuntimeState;
+  bool CanonicalWithoutRuntimeState;
   uint16_t FirstConfig;
   uint8_t NumConfigs;
   uint16_t FirstBinding;

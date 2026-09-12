@@ -27,4 +27,6 @@ TSTORE <Row=32, Col=1, FP32>, S0[base=a2, offset=8], [base=a3]
 # MACRO-SAME: ->T<2KB>[base=a2, offset=16]
 # MACRO: TLOAD{{ +}}<
 # MACRO-SAME: ->S0<128B>[base=a1, offset=4]
-# MACRO: BSTART.TLSU{{.*}}TSTORE, FP32
+# MACRO: TSTORE{{ +}}<FP32>
+# MACRO-SAME: S0[base=a2, offset=8]
+# MACRO-SAME: [base=a3]

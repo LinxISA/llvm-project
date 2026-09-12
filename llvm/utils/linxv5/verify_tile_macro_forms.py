@@ -16,14 +16,15 @@ disassembly = Path(sys.argv[2]).read_text().splitlines()
 forms = []
 for line in source:
     match = re.match(
-        r"# FORM: fold=([01]) spelling=(\S+) operation=(\S+)$", line
+        r"# FORM: fold=([01]) canonical=([01]) spelling=(\S+) operation=(\S+)$", line
     )
     if match:
         forms.append(
             {
                 "fold": match.group(1) == "1",
-                "spelling": match.group(2),
-                "operation": match.group(3),
+                "canonical": match.group(2) == "1",
+                "spelling": match.group(3),
+                "operation": match.group(4),
             }
         )
 
@@ -52,16 +53,19 @@ if len(results) != len(forms):
 
 for index, (form, result) in enumerate(zip(forms, results, strict=True)):
     expected = ("macro", form["spelling"])
-    matches = result == expected if form["fold"] else result[0] == "physical"
+    matches = result == expected
     if not matches:
         raise SystemExit(
             f"form {index} {form['spelling']}: expected {expected}, found {result}"
         )
 
 folds = sum(form["fold"] for form in forms)
-if folds != 124:
-    raise SystemExit(f"expected 124 exact-foldable forms, found {folds}")
+if folds != 142:
+    raise SystemExit(f"expected 142 macro-foldable source forms, found {folds}")
+canonical = sum(form["canonical"] for form in forms)
+if canonical != 138:
+    raise SystemExit(f"expected 138 canonical physical schemas, found {canonical}")
 print(
-    f"verified 142 PTO TileOp forms: {folds} exact macro folds, "
-    f"{len(forms) - folds} fail-closed physical forms"
+    f"verified 142 PTO TileOp forms: {folds} macro folds, "
+    f"{canonical} canonical physical schemas, 0 physical fallbacks"
 )
