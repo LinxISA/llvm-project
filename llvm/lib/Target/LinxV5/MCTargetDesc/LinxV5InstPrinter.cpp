@@ -13,7 +13,9 @@
 #include "LinxV5InstPrinter.h"
 #include "LinxV5BaseInfo.h"
 #include "LinxV5MCExpr.h"
+#include "LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -24,6 +26,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cctype>
 #include <unordered_map>
 
 using namespace llvm;
@@ -38,6 +41,20 @@ static cl::opt<bool>
     NoAliases("linxv5-no-aliases",
               cl::desc("Disable the emission of assembler pseudo instructions"),
               cl::init(false), cl::Hidden);
+
+static bool DisableTileMacros = false;
+
+bool llvm::useLinxV5TileMacroAliases() {
+  return !NoAliases && !DisableTileMacros;
+}
+
+bool LinxV5InstPrinter::applyTargetSpecificCLOption(StringRef Opt) {
+  if (Opt == "no-tile-macros") {
+    DisableTileMacros = true;
+    return true;
+  }
+  return false;
+}
 
 static cl::opt<bool>
     ArchRegNames("linxv5-arch-reg-names",
@@ -69,6 +86,15 @@ void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
     InCUBEHeader = false;
   }
 
+  if (MI->getOpcode() == LinxV5::PseudoTileMacroDisasm) {
+    // A folded macro represents a complete bundle, so it cannot leave CUBE
+    // header state active for the next physical instruction.
+    InCUBEHeader = false;
+    O << '\t';
+    printTileMacroDisasm(MI, STI, O);
+    printAnnotation(O, Annot);
+    return;
+  }
   // PTO v0.58 reissue: B.IOS prints a source or destination form depending on
   // TSize (0 => "S<id>, mask=...", nonzero => "mask=..., ->S<id><size>").
   if (MI->getOpcode() == LinxV5::B_IOS) {
@@ -1126,6 +1152,68 @@ static const std::unordered_map<unsigned, const char *> TileOpMap = {
     {0b1110011, "TPARTMAX"},
     {0b1110100, "TPARTMIN"},
 };
+
+static StringRef getCanonicalPEMaskName(unsigned Mask) {
+  switch (Mask) {
+  case 0x0:
+    return "NoPE";
+  case 0x8:
+    return "PE0";
+  case 0x4:
+    return "PE1";
+  case 0x2:
+    return "PE2";
+  case 0x1:
+    return "PE3";
+  case 0xc:
+    return "PE0_1";
+  case 0xe:
+    return "PE0_1_2";
+  case 0xf:
+    return "AllPE";
+  default:
+    return "";
+  }
+}
+
+static unsigned getTileMacroTypeBits(unsigned DataType) {
+  switch (DataType) {
+  case LinxV5Op::DataType::FP64:
+  case LinxV5Op::DataType::S64:
+  case LinxV5Op::DataType::U64:
+    return 64;
+  case LinxV5Op::DataType::FP32:
+  case LinxV5Op::DataType::TF32:
+  case LinxV5Op::DataType::HF32:
+  case LinxV5Op::DataType::S32:
+  case LinxV5Op::DataType::U32:
+    return 32;
+  case LinxV5Op::DataType::FP16:
+  case LinxV5Op::DataType::BF16:
+  case LinxV5Op::DataType::S16:
+  case LinxV5Op::DataType::U16:
+    return 16;
+  case LinxV5Op::DataType::HiF8:
+  case LinxV5Op::DataType::e4m3:
+  case LinxV5Op::DataType::e5m2:
+  case LinxV5Op::DataType::e3m2:
+  case LinxV5Op::DataType::e2m3:
+  case LinxV5Op::DataType::e8m0:
+  case LinxV5Op::DataType::S8:
+  case LinxV5Op::DataType::U8:
+    return 8;
+  case LinxV5Op::DataType::e2m1x2:
+  case LinxV5Op::DataType::e1m2x2:
+  case LinxV5Op::DataType::HiF4x2:
+  case LinxV5Op::DataType::S4x2:
+  case LinxV5Op::DataType::U4x2:
+    return 4;
+  default:
+    return 0;
+  }
+}
+
+#include "LinxV5TileMacroPrinter.inc"
 
 void LinxV5InstPrinter::printTileOPTEPL(const MCInst *MI, unsigned OpNo,
                                         const MCSubtargetInfo &STI,

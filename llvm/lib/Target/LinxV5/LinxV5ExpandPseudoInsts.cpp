@@ -17,9 +17,11 @@
 #include "LinxV5InstrInfo.h"
 #include "LinxV5TargetMachine.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
@@ -56,6 +58,7 @@ private:
   bool expandLAhi(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI);
   bool expandMI(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
                 MachineBasicBlock::iterator &NextMBBI);
+  bool foldInlineAsmDimConstants(MachineFunction &MF);
   bool expandBRCond(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI);
   bool expandSETCTGT(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
                      unsigned Opc);
@@ -91,6 +94,142 @@ static MachineInstr *hasOnlyOneUse(Register Reg, MachineBasicBlock &MBB,
       return count == 1 ? &*Def : nullptr;
   }
   return count == 1 ? &*Def : nullptr;
+}
+
+struct InlineAsmDimUse {
+  MachineInstr *MI;
+  unsigned FlagOperand;
+  unsigned ValueOperand;
+  unsigned AsmOperand;
+  bool KillsRegister;
+};
+
+static bool findInlineAsmDimPlaceholder(StringRef Asm, unsigned AsmOperand,
+                                        unsigned &LoopReg) {
+  std::string Prefix = "B.DIM $" + utostr(AsmOperand) + ", 0, ->lb";
+  size_t Pos = Asm.find(Prefix);
+  if (Pos == StringRef::npos || Pos + Prefix.size() >= Asm.size())
+    return false;
+  char Slot = Asm[Pos + Prefix.size()];
+  if (Slot < '0' || Slot > '2')
+    return false;
+  LoopReg = Slot - '0';
+  return true;
+}
+
+static bool collectInlineAsmDimUses(MachineInstr &MI, Register Reg,
+                                    SmallVectorImpl<InlineAsmDimUse> &Uses) {
+  if (!MI.isInlineAsm())
+    return false;
+
+  StringRef Asm = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  unsigned MatchingRegisterUses = 0;
+  unsigned AsmOperand = 0;
+  for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+       I < E; ++AsmOperand) {
+    MachineOperand &Flag = MI.getOperand(I);
+    if (!Flag.isImm())
+      break;
+    unsigned FlagValue = Flag.getImm();
+    unsigned NumOperands = InlineAsm::getNumOperandRegisters(FlagValue);
+    for (unsigned J = 0; J != NumOperands; ++J) {
+      MachineOperand &Value = MI.getOperand(I + 1 + J);
+      if (!Value.isReg() || !Value.isUse() || Value.getReg() != Reg)
+        continue;
+      ++MatchingRegisterUses;
+      unsigned LoopReg = 0;
+      if (InlineAsm::getKind(FlagValue) != InlineAsm::Kind_RegUse ||
+          NumOperands != 1 ||
+          !findInlineAsmDimPlaceholder(Asm, AsmOperand, LoopReg))
+        return false;
+      Uses.push_back({&MI, I, I + 1 + J, AsmOperand, Value.isKill()});
+    }
+    I += 1 + NumOperands;
+  }
+
+  unsigned ExplicitRegisterUses = 0;
+  for (const MachineOperand &Operand : MI.explicit_operands())
+    ExplicitRegisterUses +=
+        Operand.isReg() && Operand.isUse() && Operand.getReg() == Reg;
+  return MatchingRegisterUses != 0 &&
+         MatchingRegisterUses == ExplicitRegisterUses;
+}
+
+static bool rewriteInlineAsmDim(StringRef Input, unsigned AsmOperand,
+                                int64_t Value, std::string &Output) {
+  std::string Prefix = "B.DIM $" + utostr(AsmOperand) + ", 0, ->lb";
+  size_t Pos = Input.find(Prefix);
+  if (Pos == StringRef::npos || Pos + Prefix.size() >= Input.size())
+    return false;
+  char Slot = Input[Pos + Prefix.size()];
+  if (Slot < '0' || Slot > '2')
+    return false;
+
+  Output = Input.str();
+  size_t Length = Prefix.size() + 1;
+  if (Value == 1) {
+    size_t End = Output.find('\n', Pos + Length);
+    Output.erase(Pos,
+                 End == std::string::npos ? std::string::npos : End - Pos + 1);
+  } else {
+    std::string Replacement =
+        "B.DIM zero, ${" + utostr(AsmOperand) + ":c}, ->lb" + Slot;
+    Output.replace(Pos, Length, Replacement);
+  }
+  return true;
+}
+
+static bool omitDefaultInlineAsmDims(MachineInstr &MI, MachineFunction &MF) {
+  if (!MI.isInlineAsm())
+    return false;
+
+  std::string Asm = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  bool Changed = false;
+  unsigned AsmOperand = 0;
+  for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+       I < E; ++AsmOperand) {
+    const MachineOperand &Flag = MI.getOperand(I);
+    if (!Flag.isImm())
+      break;
+    unsigned FlagValue = Flag.getImm();
+    unsigned NumOperands = InlineAsm::getNumOperandRegisters(FlagValue);
+    if (InlineAsm::getKind(FlagValue) == InlineAsm::Kind_Imm &&
+        NumOperands == 1 && MI.getOperand(I + 1).isImm() &&
+        MI.getOperand(I + 1).getImm() == 1) {
+      for (unsigned LoopReg = 0; LoopReg != 3; ++LoopReg) {
+        std::string Line = "B.DIM zero, ${" + utostr(AsmOperand) + ":c}, ->lb" +
+                           utostr(LoopReg);
+        size_t Pos = Asm.find(Line);
+        if (Pos == std::string::npos)
+          continue;
+        size_t End = Asm.find('\n', Pos + Line.size());
+        Asm.erase(Pos,
+                  End == std::string::npos ? std::string::npos : End - Pos + 1);
+        Changed = true;
+      }
+    }
+    I += 1 + NumOperands;
+  }
+  if (Changed)
+    MI.getOperand(InlineAsm::MIOp_AsmString)
+        .ChangeToES(MF.createExternalSymbolName(Asm));
+  return Changed;
+}
+
+static MachineBasicBlock *getLinearSuccessor(MachineBasicBlock &MBB) {
+  MachineBasicBlock *Successor = nullptr;
+  for (MachineBasicBlock *Candidate : MBB.successors()) {
+    if (!Successor)
+      Successor = Candidate;
+    else if (Successor != Candidate)
+      return nullptr;
+  }
+  if (!Successor)
+    return nullptr;
+  for (MachineBasicBlock *Predecessor : Successor->predecessors())
+    if (Predecessor != &MBB)
+      return nullptr;
+  return Successor;
 }
 
 static MachineInstr *matchOpc(unsigned Opc, Register Reg, Register Clobber,
@@ -307,7 +446,7 @@ bool LinxV5ExpandPseudo::mergeCompareArith(MachineFunction &MF) {
 bool LinxV5ExpandPseudo::runOnMachineFunction(MachineFunction &MF) {
   TII = static_cast<const LinxV5InstrInfo *>(MF.getSubtarget().getInstrInfo());
 
-  bool Modified = false;
+  bool Modified = foldInlineAsmDimConstants(MF);
 
   MachineFunction::iterator MFI = MF.begin(), E = MF.end();
   while (MFI != E) {
@@ -320,6 +459,93 @@ bool LinxV5ExpandPseudo::runOnMachineFunction(MachineFunction &MF) {
     mergeCompareArith(MF);
 
   return Modified;
+}
+
+bool LinxV5ExpandPseudo::foldInlineAsmDimConstants(MachineFunction &MF) {
+  bool Changed = false;
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &Def : make_early_inc_range(MBB)) {
+      if (Def.getOpcode() != LinxV5::ADDI || Def.getNumOperands() < 3 ||
+          !Def.getOperand(0).isReg() || !Def.getOperand(0).isDef() ||
+          !Def.getOperand(1).isReg() ||
+          Def.getOperand(1).getReg() != LinxV5::R0 ||
+          !Def.getOperand(2).isImm())
+        continue;
+
+      Register Reg = Def.getOperand(0).getReg();
+      int64_t Value = Def.getOperand(2).getImm();
+      if (Value < 1 || !isUInt<8>(Value))
+        continue;
+
+      SmallVector<InlineAsmDimUse, 4> Uses;
+      SmallVector<MachineBasicBlock *, 8> PropagatedBlocks;
+      bool Safe = true;
+      bool ReachedEnd = false;
+      MachineBasicBlock *Block = &MBB;
+      MachineBasicBlock::instr_iterator I = std::next(Def.getIterator());
+      while (Safe && !ReachedEnd) {
+        for (MachineBasicBlock::instr_iterator E = Block->instr_end(); I != E;
+             ++I) {
+          if (I->definesRegister(Reg)) {
+            ReachedEnd = true;
+            break;
+          }
+          if (!I->readsRegister(Reg))
+            continue;
+          SmallVector<InlineAsmDimUse, 2> CurrentUses;
+          if (!collectInlineAsmDimUses(*I, Reg, CurrentUses)) {
+            Safe = false;
+            break;
+          }
+          for (const InlineAsmDimUse &Use : CurrentUses) {
+            Uses.push_back(Use);
+            ReachedEnd |= Use.KillsRegister;
+          }
+          if (ReachedEnd)
+            break;
+        }
+        if (!Safe || ReachedEnd)
+          break;
+        MachineBasicBlock *Successor = getLinearSuccessor(*Block);
+        if (!Successor || !Successor->isLiveIn(Reg) ||
+            is_contained(PropagatedBlocks, Successor)) {
+          Safe = false;
+          break;
+        }
+        Block = Successor;
+        PropagatedBlocks.push_back(Block);
+        I = Block->instr_begin();
+      }
+      if (!Safe || !ReachedEnd || Uses.empty())
+        continue;
+
+      for (const InlineAsmDimUse &Use : Uses) {
+        MachineInstr &InlineAsmMI = *Use.MI;
+        StringRef Asm =
+            InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+        std::string Rewritten;
+        if (!rewriteInlineAsmDim(Asm, Use.AsmOperand, Value, Rewritten)) {
+          Safe = false;
+          break;
+        }
+        InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString)
+            .ChangeToES(MF.createExternalSymbolName(Rewritten));
+        InlineAsmMI.getOperand(Use.FlagOperand)
+            .setImm(InlineAsm::getFlagWord(InlineAsm::Kind_Imm, 1));
+        InlineAsmMI.getOperand(Use.ValueOperand).ChangeToImmediate(Value);
+      }
+      if (!Safe)
+        report_fatal_error("failed to rewrite validated inline-asm B.DIM");
+      for (MachineBasicBlock *Propagated : PropagatedBlocks)
+        Propagated->removeLiveIn(Reg);
+      Def.eraseFromParent();
+      Changed = true;
+    }
+
+    for (MachineInstr &MI : MBB)
+      Changed |= omitDefaultInlineAsmDims(MI, MF);
+  }
+  return Changed;
 }
 
 bool LinxV5ExpandPseudo::expandMBB(MachineBasicBlock &MBB) {

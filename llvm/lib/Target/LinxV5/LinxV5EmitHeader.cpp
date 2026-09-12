@@ -10,10 +10,12 @@
 #include "LinxV5.h"
 #include "LinxV5InstrInfo.h"
 #include "LinxV5TargetMachine.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -93,6 +95,7 @@ public:
   bool isBlockWithoutHeader(const MachineBasicBlock *MBB);
   bool isBlockWithoutHeader(MachineBasicBlock *MBB);
   bool splitMultiBranchBlock(MachineBasicBlock &MBB);
+  bool omitRedundantFallthroughHeaders(MachineFunction &MF);
 
   void verify(MachineFunction &MF);
 
@@ -291,6 +294,111 @@ bool LinxV5EmitHeader::isBlockWithoutHeader(MachineBasicBlock *MBB) {
   }
   assert(TargetInstNum <= 1);
   return TargetInstNum == 1;
+}
+
+static bool isMetaInstruction(const MachineInstr &MI) {
+  return MI.isDebugInstr() || MI.isCFIInstruction() || MI.isLabel() ||
+         MI.getOpcode() == LinxV5::PseudoLABEL;
+}
+
+static bool isTileBlockInstruction(const MachineInstr &MI) {
+  uint64_t TSFlags = MI.getDesc().TSFlags;
+  if (LinxV5II::isTileOp(TSFlags))
+    return true;
+  if (!MI.isInlineAsm())
+    return false;
+
+  StringRef Asm =
+      StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+          .ltrim();
+  return Asm.startswith("BSTART.TEPL") || Asm.startswith("BSTART.VEC") ||
+         Asm.startswith("BSTART.SFU") || Asm.startswith("BSTART.TLSU") ||
+         Asm.startswith("BSTART.CUBE") || Asm.startswith("BSTART.GMOV");
+}
+
+static bool startsBlock(const MachineInstr &MI) {
+  uint64_t TSFlags = MI.getDesc().TSFlags;
+  return LinxV5II::isBSTART(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
+         isTileBlockInstruction(MI);
+}
+
+static MachineBasicBlock *getLinearLayoutPredecessor(MachineBasicBlock &MBB) {
+  if (MBB.pred_size() != 1)
+    return nullptr;
+  MachineBasicBlock *Pred = *MBB.pred_begin();
+  if (Pred->succ_size() != 1 || !Pred->isLayoutSuccessor(&MBB))
+    return nullptr;
+  return Pred;
+}
+
+static MachineBasicBlock *getLayoutSuccessor(MachineBasicBlock &MBB) {
+  if (MBB.succ_size() != 1)
+    return nullptr;
+  MachineBasicBlock *Succ = *MBB.succ_begin();
+  return MBB.isLayoutSuccessor(Succ) ? Succ : nullptr;
+}
+
+static MachineInstr *nextExecutableInstruction(MachineInstr &MI) {
+  MachineBasicBlock *MBB = MI.getParent();
+  MachineBasicBlock::instr_iterator I = std::next(MI.getIterator());
+  SmallPtrSet<MachineBasicBlock *, 8> Visited;
+  while (Visited.insert(MBB).second) {
+    for (auto E = MBB->instr_end(); I != E; ++I)
+      if (!isMetaInstruction(*I))
+        return &*I;
+    MBB = getLayoutSuccessor(*MBB);
+    if (!MBB)
+      return nullptr;
+    I = MBB->instr_begin();
+  }
+  return nullptr;
+}
+
+static bool previousBlockAcceptsStandardBody(MachineInstr &Header) {
+  MachineBasicBlock *MBB = Header.getParent();
+  MachineBasicBlock::instr_iterator I = Header.getIterator();
+  SmallPtrSet<MachineBasicBlock *, 8> Visited;
+  while (Visited.insert(MBB).second) {
+    while (I != MBB->instr_begin()) {
+      --I;
+      if (isMetaInstruction(*I))
+        continue;
+      if (isTileBlockInstruction(*I))
+        return true;
+      if (I->isInlineAsm())
+        return false;
+      if (I->getOpcode() == LinxV5::BSTART_STD_WITHOUT_TARGET_32_FALL)
+        return true;
+      uint64_t TSFlags = I->getDesc().TSFlags;
+      if (LinxV5II::isBSTART(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
+          I->getOpcode() == LinxV5::BSTOP || I->getOpcode() == LinxV5::BSTOP_C)
+        return false;
+    }
+    MBB = getLinearLayoutPredecessor(*MBB);
+    if (!MBB)
+      return false;
+    I = MBB->instr_end();
+  }
+  return false;
+}
+
+bool LinxV5EmitHeader::omitRedundantFallthroughHeaders(MachineFunction &MF) {
+  bool Changed = false;
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : make_early_inc_range(MBB)) {
+      if (MI.getOpcode() != LinxV5::BSTART_STD_WITHOUT_TARGET_32_FALL)
+        continue;
+
+      MachineInstr *Next = nextExecutableInstruction(MI);
+      if (!Next)
+        continue;
+      if (startsBlock(*Next) || previousBlockAcceptsStandardBody(MI)) {
+        MI.eraseFromParent();
+        Changed = true;
+      }
+    }
+  }
+  return Changed;
 }
 
 void LinxV5EmitHeader::emitBranchHint(MachineBasicBlock *MBB) {
@@ -590,8 +698,11 @@ static bool isBSTOP(unsigned Op) {
   }
 
 void LinxV5EmitHeader::verify(MachineFunction &MF) {
+  unsigned State = S_BSTOP;
+  MachineBasicBlock *Previous = nullptr;
   for (auto &MBB : MF) {
-    unsigned State = S_BSTOP;
+    if (!Previous || getLinearLayoutPredecessor(MBB) != Previous)
+      State = S_BSTOP;
     for (auto &MI : MBB) {
       if (MI.isDebugInstr() || MI.isCFIInstruction() ||
           MI.getOpcode() == LinxV5::PseudoLABEL || MI.isLabel())
@@ -633,7 +744,8 @@ void LinxV5EmitHeader::verify(MachineFunction &MF) {
         State = Next;
         continue;
       case S_TMPL:
-        CHECK_STATE(Next == S_BSTART || Next == S_BMOD || Next == S_TMPL);
+        CHECK_STATE(Next == S_BSTART || Next == S_BMOD || Next == S_INST ||
+                    Next == S_TMPL);
         State = Next;
         continue;
       default:
@@ -641,6 +753,7 @@ void LinxV5EmitHeader::verify(MachineFunction &MF) {
         break;
       }
     }
+    Previous = &MBB;
   }
 }
 
@@ -663,6 +776,7 @@ bool LinxV5EmitHeader::runOnMachineFunction(MachineFunction &MF) {
     emitBranchHint(&MBB);
   }
   appendBstopToFunction(MF);
+  omitRedundantFallthroughHeaders(MF);
 
   verify(MF);
 

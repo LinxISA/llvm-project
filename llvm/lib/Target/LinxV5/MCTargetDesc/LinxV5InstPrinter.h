@@ -18,6 +18,8 @@
 
 namespace llvm {
 
+bool useLinxV5TileMacroAliases();
+
 class LinxV5InstPrinter : public MCInstPrinter {
 public:
   LinxV5InstPrinter(const MCAsmInfo &MAI, const MCInstrInfo &MII,
@@ -26,6 +28,9 @@ public:
 
   void printInst(const MCInst *MI, uint64_t Address, StringRef Annot,
                  const MCSubtargetInfo &STI, raw_ostream &O) override;
+  bool applyTargetSpecificCLOption(StringRef Opt) override;
+  void printTileMacroDisasm(const MCInst *MI, const MCSubtargetInfo &STI,
+                            raw_ostream &O);
   void printRegName(raw_ostream &O, unsigned RegNo) const override;
 
   void printOperand(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,

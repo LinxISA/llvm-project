@@ -1,5 +1,5 @@
 // RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s
-// RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d - | FileCheck %s --check-prefix=DIS
+// RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --disassembler-options=no-tile-macros - | FileCheck %s --check-prefix=DIS
 // Reserved Function (8, 9-14) negative cases are in v5-matmul-reserved.s.
 
 // v5 contract: B.FPATR is mandatory for every active Matrix CUBE operation
