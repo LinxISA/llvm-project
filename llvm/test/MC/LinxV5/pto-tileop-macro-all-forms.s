@@ -14,70 +14,70 @@ GMOV <FP32>, T#1, a0, ->T<128B>
 MGATHER <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_ADD operation=MGATHER_ADD
 # CHECK: MGATHER_ADD{{ +}}<
-MGATHER_ADD <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_AND operation=MGATHER_AND
 # CHECK: MGATHER_AND{{ +}}<
-MGATHER_AND <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_AND <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_CAS operation=MGATHER_CAS
 # CHECK: MGATHER_CAS{{ +}}<
-MGATHER_CAS <FP32>, [base=a0], stride=a2, T#1, T#1, T#1, ->T<128B>
+MGATHER_CAS <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a2, T#1, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_DEC operation=MGATHER_DEC
 # CHECK: MGATHER_DEC{{ +}}<
-MGATHER_DEC <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_DEC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_EXCH operation=MGATHER_EXCH
 # CHECK: MGATHER_EXCH{{ +}}<
-MGATHER_EXCH <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_EXCH <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_INC operation=MGATHER_INC
 # CHECK: MGATHER_INC{{ +}}<
-MGATHER_INC <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_INC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_MASK operation=MGATHER_MASK
 # CHECK: MGATHER_MASK{{ +}}<
 MGATHER_MASK <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a3, T#1, U#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_MAX operation=MGATHER_MAX
 # CHECK: MGATHER_MAX{{ +}}<
-MGATHER_MAX <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_MAX <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_MIN operation=MGATHER_MIN
 # CHECK: MGATHER_MIN{{ +}}<
-MGATHER_MIN <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_MIN <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_OR operation=MGATHER_OR
 # CHECK: MGATHER_OR{{ +}}<
-MGATHER_OR <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_OR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_XOR operation=MGATHER_XOR
 # CHECK: MGATHER_XOR{{ +}}<
-MGATHER_XOR <FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_XOR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MSCATTER operation=MSCATTER
 # CHECK: MSCATTER{{ +}}<
 MSCATTER <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a4, T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_ADD operation=MSCATTER_ADD
 # CHECK: MSCATTER_ADD{{ +}}<
-MSCATTER_ADD <FP32>, [base=a0], T#1, T#1
+MSCATTER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_AND operation=MSCATTER_AND
 # CHECK: MSCATTER_AND{{ +}}<
-MSCATTER_AND <FP32>, [base=a0], T#1, T#1
+MSCATTER_AND <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_DEC operation=MSCATTER_DEC
 # CHECK: MSCATTER_DEC{{ +}}<
-MSCATTER_DEC <FP32>, [base=a0], T#1, T#1
+MSCATTER_DEC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_INC operation=MSCATTER_INC
 # CHECK: MSCATTER_INC{{ +}}<
-MSCATTER_INC <FP32>, [base=a0], T#1, T#1
+MSCATTER_INC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_MASK operation=MSCATTER_MASK
 # CHECK: MSCATTER_MASK{{ +}}<
 MSCATTER_MASK <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a5, T#1, T#1, U#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_MAX operation=MSCATTER_MAX
 # CHECK: MSCATTER_MAX{{ +}}<
-MSCATTER_MAX <FP32>, [base=a0], T#1, T#1
+MSCATTER_MAX <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_MIN operation=MSCATTER_MIN
 # CHECK: MSCATTER_MIN{{ +}}<
-MSCATTER_MIN <FP32>, [base=a0], T#1, T#1
+MSCATTER_MIN <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_OR operation=MSCATTER_OR
 # CHECK: MSCATTER_OR{{ +}}<
-MSCATTER_OR <FP32>, [base=a0], T#1, T#1
+MSCATTER_OR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_POPC operation=MSCATTER_POPC
 # CHECK: MSCATTER_POPC{{ +}}<
-MSCATTER_POPC <ValidCol=1, FP32>, [base=a0], T#1
+MSCATTER_POPC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_XOR operation=MSCATTER_XOR
 # CHECK: MSCATTER_XOR{{ +}}<
-MSCATTER_XOR <FP32>, [base=a0], T#1, T#1
+MSCATTER_XOR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=TABS operation=TABS
 # CHECK: TABS{{ +}}<
 TABS <Row=32, Col=1, FP32>, T#1, ->T<128B>
@@ -95,7 +95,7 @@ TAND <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 TANDS <Row=32, Col=1, FP32>, T#1, a7, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TCI operation=TCI
 # CHECK: TCI{{ +}}<
-TCI <Row=32, Col=1, FP32>, a0, a1, ->T<128B>
+TCI <Row=32, Col=1, U32>, a0, a1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TCMP operation=TCMP
 # CHECK: TCMP{{ +}}<
 TCMP <Row=32, Col=1, FP32>, T#1, T#1, ->U<128B>

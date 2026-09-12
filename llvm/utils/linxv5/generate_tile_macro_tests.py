@@ -37,6 +37,8 @@ def gpr_list_label(member):
     return None
 
 def attribute(field, spelling):
+    if field == "DataType" and spelling == "TCI":
+        return "U32"
     return {
         "DataType": "FP32", "SrcDataType": "FP32", "DstDataType": "FP16",
         "ValueDataType": "FP32", "AType": "FP32", "BType": "FP32",
