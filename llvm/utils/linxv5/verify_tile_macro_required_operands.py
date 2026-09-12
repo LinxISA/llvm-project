@@ -52,18 +52,32 @@ def split_top_level(text: str) -> list[str]:
 
 
 mutations = []
-for line in macro_lines:
+mutation_forms = []
+for form_index, line in enumerate(macro_lines):
     parts = split_top_level(line)
     if len(parts) >= 2:
-        mutations.append(", ".join(parts[:-1]))
-        continue
+        for operand_index in range(1, len(parts)):
+            mutations.append(
+                ", ".join(
+                    part for index, part in enumerate(parts)
+                    if index != operand_index
+                )
+            )
+            mutation_forms.append(form_index)
     begin = line.find("<")
     end = line.find(">", begin + 1)
     config = line[begin + 1 : end]
     fields = [field.strip() for field in config.split(",")]
-    if len(fields) < 2:
-        raise SystemExit(f"form has no removable required field: {line}")
-    mutations.append(line[: begin + 1] + ", ".join(fields[:-1]) + line[end:])
+    for field_index in range(len(fields)):
+        mutations.append(
+            line[: begin + 1]
+            + ", ".join(
+                field for index, field in enumerate(fields)
+                if index != field_index
+            )
+            + line[end:]
+        )
+        mutation_forms.append(form_index)
 
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / "missing-required.s"
@@ -79,11 +93,21 @@ with tempfile.TemporaryDirectory() as directory:
 message = (
     "error: TileOp operands/configuration do not match any exact PTO 0.58.6 form"
 )
-rejections = result.stderr.count(message)
-if result.returncode == 0 or rejections != len(mutations):
+rejected_forms = set()
+for match in re.finditer(
+    r"missing-required\.s:(\d+):\d+: " + re.escape(message), result.stderr
+):
+    line_number = int(match.group(1))
+    mutation_index = line_number - 2
+    if 0 <= mutation_index < len(mutation_forms):
+        rejected_forms.add(mutation_forms[mutation_index])
+if result.returncode == 0 or len(rejected_forms) != len(macro_lines):
     raise SystemExit(
-        f"expected {len(mutations)} missing-binding rejections, "
-        f"found {rejections}\n{result.stderr}"
+        f"expected a missing-required-binding rejection for all "
+        f"{len(macro_lines)} forms, found {len(rejected_forms)}\n{result.stderr}"
     )
 
-print(f"verified required-binding rejection for {len(mutations)} TileOp forms")
+print(
+    f"verified required-binding rejection for {len(macro_lines)} TileOp forms "
+    f"across {len(mutations)} single-field mutations"
+)

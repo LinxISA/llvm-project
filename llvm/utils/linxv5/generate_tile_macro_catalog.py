@@ -51,6 +51,7 @@ def shape_kind(form: dict) -> str:
     )
     shapes = {
         ("Row", "Col", "ValidRow", "ValidCol"): "Rectangular",
+        ("ValidRow", "ValidCol"): "Rectangular",
         ("M", "N", "K"): "Matrix",
         ("ValidCol",): "ValidCol",
         ("ValidK", "ValidN", "TotalK"): "Weight",

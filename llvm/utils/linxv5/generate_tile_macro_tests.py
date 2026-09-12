@@ -19,6 +19,23 @@ out = [
 ]
 tile_index = gpr_index = shared_index = 0
 
+def gpr_label(field):
+    return {
+        "RowStrideGPR": "stride",
+    }.get(field)
+
+def gpr_list_label(member):
+    syntax = member["syntax"]
+    if "BaseGPR" in syntax or "GMBaseGPR" in syntax:
+        return "base"
+    if "RowStrideGPR" in syntax:
+        return "stride"
+    if "ShapeGPR" in syntax:
+        return "shape"
+    if "StartGPR" in syntax:
+        return "start"
+    return None
+
 def attribute(field, spelling):
     return {
         "DataType": "FP32", "SrcDataType": "FP32", "DstDataType": "FP16",
@@ -41,8 +58,13 @@ for operation in catalog["operations"]:
             else:
                 row = "128" if any(c["field"] == "U8" for c in form["configuration"]) else "32"
                 config.extend([f"Row={row}", "Col=1"])
+        elif dims == ["ValidRow", "ValidCol"]:
+            config.extend(["ValidRow=32", "ValidCol=8"])
         elif dims == ["M", "N", "K"]:
-            pass
+            if form["spelling"].startswith("TGEMV"):
+                config.extend(["M=1", "N=8", "K=16"])
+            else:
+                config.extend(["M=2", "N=3", "K=4"])
         elif dims == ["ValidCol"]:
             config.append("ValidCol=1")
         elif dims == ["ValidK", "ValidN", "TotalK"]:
@@ -60,16 +82,24 @@ for operation in catalog["operations"]:
             if all(member.get("condition") for member in members):
                 continue
             required = [m for m in members if not m.get("optional") and m.get("default") is None]
-            if not required and all(m.get("optional") or m.get("default") is not None for m in members):
+            show_optional_gpr = (
+                binding["binding_kind"] == "scalar-binding"
+                and any(not member.get("condition") for member in members)
+            )
+            if (not show_optional_gpr and not required
+                    and all(m.get("optional") or m.get("default") is not None
+                            for m in members)):
                 continue
             kind = binding["binding_kind"]
             destination = binding["role_kind"] == "destination"
             if binding["syntax"].startswith("["):
                 regs = []
                 for member in members:
-                    if member.get("optional") or member.get("default") is not None:
+                    if member.get("condition"):
                         continue
-                    regs.append(f"a{len(regs)}")
+                    label = gpr_list_label(member)
+                    reg = f"a{len(regs)}"
+                    regs.append(f"{label}={reg}" if label else reg)
                 operands.append("[" + ", ".join(regs) + "]")
                 continue
             if kind == "shared-tile-binding":
@@ -87,6 +117,12 @@ for operation in catalog["operations"]:
                 value = "->" + value
                 if kind != "predicate-gpr-destination":
                     value += "<128B>"
+            label = gpr_label(binding["field"])
+            if label and kind in {
+                "scalar-binding", "predicate-gpr-source",
+                "predicate-gpr-destination",
+            }:
+                value = value.replace("->", f"->{label}=", 1) if destination else f"{label}={value}"
             operands.append(value)
         line = f"{form['spelling']} <{', '.join(config)}>"
         if operands:

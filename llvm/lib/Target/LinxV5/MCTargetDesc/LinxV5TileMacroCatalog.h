@@ -38,6 +38,28 @@ findTileMacroOperationForSpelling(StringRef Spelling) {
   return nullptr;
 }
 
+inline StringRef getTileMacroGPRLabel(const TileMacroBindingDesc &Binding) {
+  StringRef Field(Binding.Field);
+  if (Field == "RowStrideGPR")
+    return "stride";
+  return {};
+}
+
+inline StringRef getTileMacroGPRListLabel(const TileMacroBindingDesc &Binding,
+                                          unsigned Member) {
+  StringRef Syntax(Binding.Syntax);
+  if (Member == 0 &&
+      (Syntax.contains("BaseGPR") || Syntax.contains("GMBaseGPR")))
+    return "base";
+  if (Member == 1 && Syntax.contains("RowStrideGPR"))
+    return "stride";
+  if (Member == 1 && Syntax.contains("ShapeGPR"))
+    return "shape";
+  if (Member == 2 && Syntax.contains("StartGPR"))
+    return "start";
+  return {};
+}
+
 } // namespace llvm
 
 #endif

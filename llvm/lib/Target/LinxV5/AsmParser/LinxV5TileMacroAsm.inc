@@ -379,6 +379,12 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       return false;
     if (Destination)
       ++Pos;
+    if ((Binding.Kind == TileMacroBindingKind::GPRSource ||
+         Binding.Kind == TileMacroBindingKind::GPRDestination)) {
+      StringRef Label = getTileMacroGPRLabel(Binding);
+      if (!Label.empty() && tokenIs(Pos, Label) && tokenIs(Pos + 1, "="))
+        Pos += 2;
+    }
     if (Pos >= Tokens.size())
       return false;
     StringRef Name = Tokens[Pos].Text;
@@ -534,6 +540,13 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       if (Desc.Constraint && StringRef(Desc.Constraint) == "AllPE" &&
           Value.HasValue && Value.Imm != 0xf)
         return false;
+      if (Desc.Constraint && Desc.IsDimension) {
+        int64_t Required = 0;
+        if (!StringRef(Desc.Constraint).getAsInteger(10, Required) &&
+            (!Value.HasValue || Value.Dim.Reg != LinxV5::R0 ||
+             Value.Dim.Imm != Required))
+          return false;
+      }
     }
     if (tokenIs(Pos, ","))
       ++Pos;
@@ -566,8 +579,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
           return false;
         }
         ++Pos;
-        if (StringRef(Binding.Syntax).startswith("[base=")) {
-          bool Seen[2] = {};
+        StringRef FirstLabel = getTileMacroGPRListLabel(Binding, 0);
+        bool Named = !FirstLabel.empty() && tokenIs(Pos, FirstLabel) &&
+                     tokenIs(Pos + 1, "=");
+        if (Named) {
+          SmallVector<bool, 4> Seen(Binding.NumMembers, false);
           bool First = true;
           while (!tokenIs(Pos, "]")) {
             if (!First) {
@@ -575,11 +591,14 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                 return false;
               ++Pos;
             }
-            unsigned MemberIndex = tokenIs(Pos, "base")     ? 0
-                                   : tokenIs(Pos, "stride") ? 1
-                                                            : 2;
-            if (MemberIndex >= Binding.NumMembers || MemberIndex >= 2 ||
-                Seen[MemberIndex] || !tokenIs(Pos + 1, "="))
+            unsigned MemberIndex = Binding.NumMembers;
+            for (unsigned M = 0; M != Binding.NumMembers; ++M)
+              if (tokenIs(Pos, getTileMacroGPRListLabel(Binding, M))) {
+                MemberIndex = M;
+                break;
+              }
+            if (MemberIndex >= Binding.NumMembers || Seen[MemberIndex] ||
+                !tokenIs(Pos + 1, "="))
               return false;
             Pos += 2;
             if (Pos >= Tokens.size())

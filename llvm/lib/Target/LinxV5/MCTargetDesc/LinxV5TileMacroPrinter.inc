@@ -675,7 +675,6 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         continue;
       O << ", [";
       bool First = true;
-      bool NamedAddress = StringRef(Binding.Syntax).startswith("[base=");
       for (unsigned M = 0; M != Binding.NumMembers; ++M) {
         const auto &Value = Members[Binding.FirstMember + M];
         if (!Value.Present)
@@ -683,8 +682,9 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         if (!First)
           O << ", ";
         First = false;
-        if (NamedAddress)
-          O << (M == 0 ? "base=" : "stride=");
+        StringRef Label = getTileMacroGPRListLabel(Binding, M);
+        if (!Label.empty())
+          O << Label << "=";
         O << getRegisterName(Value.Reg);
       }
       O << "]";
@@ -720,12 +720,21 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       O << "->S" << Value.SharedID;
       printSize(Value.SizeCode);
       break;
-    case TileMacroBindingKind::GPRSource:
+    case TileMacroBindingKind::GPRSource: {
+      StringRef Label = getTileMacroGPRLabel(Binding);
+      if (!Label.empty())
+        O << Label << "=";
       O << getRegisterName(Value.Reg);
       break;
-    case TileMacroBindingKind::GPRDestination:
-      O << "->" << getRegisterName(Value.Reg);
+    }
+    case TileMacroBindingKind::GPRDestination: {
+      O << "->";
+      StringRef Label = getTileMacroGPRLabel(Binding);
+      if (!Label.empty())
+        O << Label << "=";
+      O << getRegisterName(Value.Reg);
       break;
+    }
     case TileMacroBindingKind::GPRListSource:
       break;
     }
