@@ -2035,6 +2035,13 @@ def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue, $CmpMode", (BDAT
 // Zeros{2}) rejects. These aliases expose PadValue as an operand so
 // callers can spell `B.DATR <type>, <byteid>, Zero, <rmode>, <sat>`.
 def : InstAlias<"B.DATR\t$srctype, $ByteId, $PadValue, $RMode, $sat", (BDATR 0, 0, BstartDataType:$srctype, PadValue:$PadValue, 0, RMode:$RMode, Sat:$sat, ByteID:$ByteId), 2>;
+// PTO-ISA #291 direct-Local CUBE layouts: elementwise B.DATR selects the
+// operand layout with codes 29 (CUBE_M32) / 31 (CUBE_M16). Inline asm cannot
+// use the $DataLayout$canon-leading spellings (the Canon .normal suffix does
+// not lex in the inline-asm parse context), so provide hard-coded aliases
+// without the suffix for the two CUBE codes; the disassembler still prints
+// the canonical CUBE_M32.normal/CUBE_M16.normal forms.
+def : InstAlias<"B.DATR $DataLayout, $PadValue", (BDATR BArgFormat:$DataLayout, 0, 31, PadValue:$PadValue, 0, 0, 0, 0), 2>;
 def : InstAlias<"B.DATR\t$srctype, $PadValue, $RMode, $sat", (BDATR 0, 0, BstartDataType:$srctype, PadValue:$PadValue, 0, RMode:$RMode, Sat:$sat, 0), 2>;
 
 //def : InstAlias<"BSTART.TEPL $TileOP, $Mode", (BSTART_TEPL 31, TileOPTEPL:$TileOP, TEPLMode:$Mode), 1>;
