@@ -448,6 +448,10 @@ static DecodeStatus decodeBArgFormat(MCInst &Inst, const InsnType &insn,
   case LinxV5Op::ArgFormat::NZ2ND:
   case LinxV5Op::ArgFormat::NZ2DN:
   case LinxV5Op::ArgFormat::NZ2ZN:
+  // Direct-Local CUBE layout codes (pto-spec B.DATR.asl: for direct Local
+  // tile operations, Layout 29 selects CUBE_M32 and Layout 31 CUBE_M16).
+  case LinxV5Op::ArgFormat::CUBE_M32:
+  case LinxV5Op::ArgFormat::CUBE_M16:
     Inst.addOperand(MCOperand::createImm(Code));
     return MCDisassembler::Success;
   default:

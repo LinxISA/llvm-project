@@ -8,7 +8,9 @@
 // (see asl/block/model/state/control-state.asl TileDataLayoutOfCode).
 //
 // Codes 21..23 select GM->Local CUBE transport (legal only for TLOAD) and
-// codes 24..26 select Local->GM CUBE transport (legal only for TSTORE):
+// codes 24..26 select Local->GM CUBE transport (legal only for TSTORE).
+// Codes 29/31 are the direct-Local CUBE_M32/CUBE_M16 layout codes (legal
+// on Local operand selection, not direction-restricted):
 //   21 ND2M32: GM ordinary -> Local CUBE_M32
 //   22 ND2M16: GM ordinary -> Local CUBE_M16
 //   23 ND2N8 : GM ordinary -> Local CUBE_N8
@@ -48,6 +50,11 @@ TRANS(M162ND, 25)
 TRANS(N82ND, 26)
 TRANS(NZ2ND, 27)
 TRANS(NZ2DN, 28)
-TRANS(RESERVE_29, 29)
+// PTO-ISA direct-Local layout codes (pto-spec B.DATR.asl / control-state):
+// for direct Local tile operations, Layout 29 selects CUBE_M32 and Layout 31
+// selects CUBE_M16. Unlike the transport selectors (21..26), these name the
+// operand layout itself and are legal wherever a Local operand layout is
+// selected (elementwise B.DATR per pto-spec #291).
+TRANS(CUBE_M32, 29)
 TRANS(NZ2ZN, 30)
-TRANS(RESERVE_31, 31)
+TRANS(CUBE_M16, 31)
