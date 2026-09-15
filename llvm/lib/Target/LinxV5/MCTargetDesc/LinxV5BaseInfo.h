@@ -373,6 +373,10 @@ inline bool isCubeConversion(unsigned Code) {
   return tileDataLayoutCubeLayout(Code) != CubeLayoutClass::None;
 }
 
+inline bool isWeightLayout(unsigned Code) {
+  return Code == ArgFormat::OHWI2NK || Code == ArgFormat::OIHW2NK;
+}
+
 /// True if Code is a GM->Local CUBE transport selector (21..23), legal only
 /// for TLOAD.
 inline bool isCubeLoadConversion(unsigned Code) {

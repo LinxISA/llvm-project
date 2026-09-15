@@ -1,5 +1,5 @@
 # RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s
-# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d - | FileCheck %s --check-prefix=DIS
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --disassembler-options=no-tile-macros - | FileCheck %s --check-prefix=DIS
 
 # v5 shared/tlsu encoding round-trip. The deleted TMATMUL*_FIXP mnemonics
 # (Function 9-14) are no longer parsed; active CUBE functions (TMATMUL 0,
@@ -44,5 +44,5 @@ BSTART.TLSU TSTORE.SPART, FP32
 # DIS: BSTART.TLSU{{.*}}TMOV.L2S.PUBLISH
 # DIS: BSTART.TLSU{{.*}}TMOV.S2L.BROADCAST
 # DIS: BSTART.TLSU{{.*}}TMOV.S2L.EXTRACT
-# DIS: BSTART.TLSU{{.*}}GMOV
+# DIS: BSTART.GMOV
 # DIS: BSTART.TLSU{{.*}}TSTORE.SPART
