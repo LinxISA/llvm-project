@@ -30,3 +30,18 @@ B.IOT m#2, u#7, mask=1111, last, ->u<32KB>
 
 // CHECK: B.IOT n#4, n#1, mask=1111, ->n<32KB>
 B.IOT n#4, n#1, mask=1111, ->n<32KB>
+
+// Absolute physical Tile register spellings are emitted when a long-lived
+// inline-asm Tile operand remains in Tile_ABS after register allocation. They
+// carry the same six-bit source encoding as their output-stack counterparts.
+// CHECK: B.IOT t#1, mask=1111
+B.IOT tile_t1, mask=1111
+
+// CHECK: B.IOT u#1, mask=1111, last
+B.IOT tile_u1, mask=1111, last
+
+// CHECK: B.IOT m#2, mask=1111, last, ->u<32KB>
+B.IOT tile_m2, mask=1111, last, ->u<32KB>
+
+// CHECK: B.IOT n#4, n#1, mask=1111, ->n<32KB>
+B.IOT tile_n4, tile_n1, mask=1111, ->n<32KB>
