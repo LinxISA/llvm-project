@@ -507,11 +507,12 @@ static DecodeStatus decodeSUBVIEWSizeCode(MCInst &Inst, const InsnType &insn,
   return MCDisassembler::Success;
 }
 
-// B.ASSEMBLE ParentSizeCode operand decoder (ADR-0098): 0..12 decode;
-// 13..15 reserved. (The INIT<->non-INIT size-0 association is checked by
-// the assembler predicate; the decoder only enforces the raw range.)
+// B.ASSEMBLE WriterSizeCode operand decoder (PTO-ISA #265): 0..12 decode;
+// 13..15 reserved. Zero is reserved for discarded groups; whether a writer
+// participates is a bundle-level property, so the decoder only enforces the
+// raw range.
 template <typename InsnType>
-static DecodeStatus decodeParentSizeCode(MCInst &Inst, const InsnType &insn,
+static DecodeStatus decodeWriterSizeCode(MCInst &Inst, const InsnType &insn,
                                          int64_t Address,
                                          const MCDisassembler *Decoder) {
   uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
@@ -553,8 +554,7 @@ static bool isShareSpace(ArrayRef<uint8_t> Bytes) {
 // enforce raw ranges, but the following cross-field contracts can only be
 // checked against the full word:
 //   B.SUBVIEW: SubviewSizeCode must be 1..12; RegSrc 0..23
-//   B.ASSEMBLE: INIT=1 requires ParentSizeCode 1..12; INIT=0 requires 0;
-//               RegSrc 0..23
+//   B.ASSEMBLE: WriterSizeCode 0..12 raw (13..15 reserved); RegSrc 0..23
 // Any violation makes the word fail to decode (<unknown>) instead of
 // printing a semantically-illegal instruction.
 static bool subviewWordIllegal(uint64_t Insn) {
@@ -568,14 +568,13 @@ static bool subviewWordIllegal(uint64_t Insn) {
 }
 
 static bool assembleWordIllegal(uint64_t Insn) {
-  uint64_t Init = (Insn >> 31) & 0x1;
-  uint64_t ParentSizeCode = (Insn >> 7) & 0xf;
-  if (ParentSizeCode > 12)
+  // PTO-ISA #265: field 5 is WriterSizeCode, the current writer extent.
+  // Raw values 0..12 decode in every phase (zero is reserved for discarded
+  // groups); INIT parent capacity comes from the allocating destination
+  // B.IOT, so no INIT<->zero cross-field rule applies to the bare word.
+  uint64_t WriterSizeCode = (Insn >> 7) & 0xf;
+  if (WriterSizeCode > 12)
     return true; // reserved 13..15
-  if (Init == 1 && ParentSizeCode == 0)
-    return true; // INIT requires ParentSizeCode 1..12
-  if (Init == 0 && ParentSizeCode != 0)
-    return true; // non-INIT requires ParentSizeCode 0
   uint64_t RegSrc = (Insn >> 15) & 0x1f;
   if (RegSrc > 23)
     return true;

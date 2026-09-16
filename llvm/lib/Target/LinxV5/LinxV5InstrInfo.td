@@ -998,17 +998,17 @@ def SubviewSizeCode : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm 
   let DecoderMethod = "decodeSUBVIEWSizeCode";
 }
 
-// B.ASSEMBLE ParentSizeCode: 4-bit, legal 0..12; 13..15 reserved. Size
-// code 0 is only legal on a non-INIT (MIDDLE/LAST) modifier and never on
-// INIT (checked by the assembler predicate and the decoder).
-def ParentSizeCodeAsmOperand : AsmOperandClass {
-  let Name = "ParentSizeCode";
+// B.ASSEMBLE WriterSizeCode (PTO-ISA #265): 4-bit, raw legal 0..12;
+// 13..15 reserved. Zero is reserved for discarded groups; participating
+// writers carry nonzero in every phase (bundle-level contract).
+def WriterSizeCodeAsmOperand : AsmOperandClass {
+  let Name = "WriterSizeCode";
   let RenderMethod = "addImmOperands";
 }
-def ParentSizeCode : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm <= 12;}]> {
-  let ParserMatchClass = ParentSizeCodeAsmOperand;
-  let PrintMethod = "printParentSizeCode";
-  let DecoderMethod = "decodeParentSizeCode";
+def WriterSizeCode : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm <= 12;}]> {
+  let ParserMatchClass = WriterSizeCodeAsmOperand;
+  let PrintMethod = "printWriterSizeCode";
+  let DecoderMethod = "decodeWriterSizeCode";
 }
 
 def RModeAsmOperand : AsmOperandClass {
@@ -1665,7 +1665,7 @@ def BDATR : BlockModifierBase {
 //   B.ASSEMBLE match=0x00001053 mask=0x0000707f
 // Derived offset = GPR[RegSrc] + ZeroExtend(uimm11) modulo XLEN.
 //   SubviewSizeCode 1..12  (0 and 13..15 reserved)
-//   ParentSizeCode  0..12  (13..15 reserved; 0 legal only on non-INIT)
+//   WriterSizeCode  0..12  (13..15 reserved; 0 = discarded group)
 def B_SUBVIEW : BlockModifierBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;
@@ -1697,23 +1697,23 @@ def B_ASSEMBLE : BlockModifierBase {
 
   let OutOperandList = (outs );
   let InOperandList = (ins uimm1:$INIT, uimm1:$LAST, GPRSrc:$RegSrc,
-                           uimm11:$uimm11, ParentSizeCode:$ParentSizeCode);
+                           uimm11:$uimm11, WriterSizeCode:$WriterSizeCode);
 
   bits<1> INIT;
   bits<1> LAST;
   bits<11> uimm11;
   bits<5> RegSrc;
-  bits<4> ParentSizeCode;
+  bits<4> WriterSizeCode;
   let Inst{31} = INIT;
   let Inst{30-20} = uimm11;
   let Inst{19-15} = RegSrc;
   let Inst{14-12} = 0b001;
   let Inst{11} = LAST;
-  let Inst{10-7} = ParentSizeCode;
+  let Inst{10-7} = WriterSizeCode;
   let Inst{6-4} = 0b101;
   let Inst{3-1} = 0b001;
   let Inst{0} = 0b1;
-  let AsmString = "B.ASSEMBLE\t$INIT, $LAST, $RegSrc, $uimm11, $ParentSizeCode";
+  let AsmString = "B.ASSEMBLE\t$INIT, $LAST, $RegSrc, $uimm11, $WriterSizeCode";
 }
 
 // DavinciOO v5 FIXPIPE attributes. Required exactly once by every supported

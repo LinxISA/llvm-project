@@ -28,7 +28,7 @@ B.SUBVIEW 0, r24, 0, 1
 # CHECK: B.SUBVIEW{{.*}}0, t#1, 0, 1
 B.SUBVIEW 0, t#1, 0, 1
 
-# --- B.ASSEMBLE reserved ParentSizeCode 13..15 ---
+# --- B.ASSEMBLE reserved WriterSizeCode 13..15 (PTO-ISA #265) ---
 # CHECK: B.ASSEMBLE{{.*}}1, 0, r0, 0, 13
 B.ASSEMBLE 1, 0, r0, 0, 13
 # CHECK: B.ASSEMBLE{{.*}}1, 0, r0, 0, 15
@@ -36,19 +36,9 @@ B.ASSEMBLE 1, 0, r0, 0, 15
 # CHECK: B.ASSEMBLE{{.*}}0, 1, r0, 0, 14
 B.ASSEMBLE 0, 1, r0, 0, 14
 
-# --- B.ASSEMBLE INIT/ParentSizeCode contradictory combinations ---
-# CHECK: B.ASSEMBLE{{.*}}1, 0, r0, 0, 0
-B.ASSEMBLE 1, 0, r0, 0, 0
-# CHECK: B.ASSEMBLE{{.*}}0, 0, r0, 0, 1
-B.ASSEMBLE 0, 0, r0, 0, 1
-# CHECK: B.ASSEMBLE{{.*}}0, 1, r0, 0, 12
-B.ASSEMBLE 0, 1, r0, 0, 12
-# CHECK: B.ASSEMBLE{{.*}}1, 1, r0, 0, 0
-B.ASSEMBLE 1, 1, r0, 0, 0
-
 # --- B.ASSEMBLE uimm11 > 2047 ---
-# CHECK: B.ASSEMBLE{{.*}}0, 1, r0, 2048, 0
-B.ASSEMBLE 0, 1, r0, 2048, 0
+# CHECK: B.ASSEMBLE{{.*}}0, 1, r0, 2048, 5
+B.ASSEMBLE 0, 1, r0, 2048, 5
 # CHECK: B.ASSEMBLE{{.*}}1, 0, r0, 2048, 12
 B.ASSEMBLE 1, 0, r0, 2048, 12
 

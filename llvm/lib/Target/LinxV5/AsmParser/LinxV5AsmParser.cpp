@@ -585,8 +585,9 @@ public:
     return Imm >= 1 && Imm <= 12;
   }
 
-  // B.ASSEMBLE ParentSizeCode: raw legal range 0..12.
-  bool isParentSizeCode() const {
+  // B.ASSEMBLE WriterSizeCode: raw legal range 0..12 (PTO-ISA #265);
+  // participating writers must carry nonzero, enforced at bundle level.
+  bool isWriterSizeCode() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
     int64_t Imm;
     if (!isImm())
@@ -4326,22 +4327,21 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
   default:
     break;
   }
-  // PTO-ISA 0.58.4 ADR-0098 range modifiers. B.ASSEMBLE ties INIT to the
-  // ParentSizeCode contract:
-  //   INIT=1 -> ParentSizeCode must be 1..12 (INIT/INIT_LAST forms)
-  //   INIT=0 -> ParentSizeCode must be 0     (MIDDLE/LAST forms)
+  // PTO-ISA #265 range modifiers. B.ASSEMBLE field 5 is WriterSizeCode:
+  // the current writer extent, legal raw values 0..12 in every phase
+  // (nonzero for participating writers; 0 is reserved for discarded
+  // groups). INIT parent capacity comes from the allocating destination
+  // B.IOT, not from this field, so no INIT<->zero cross-field rule exists
+  // at the single-instruction level.
   // RegSrc is an absolute GPR selector 0..23; VBXTR/TOS/UOS (encodings
   // 24..31, all members of the MCSrc class that backs GPRSrc) are rejected.
   if (Inst.getOpcode() == LinxV5::B_ASSEMBLE) {
     auto GetImm = [&](unsigned OpNo) -> int64_t {
       return Inst.getOperand(OpNo).getImm();
     };
-    int64_t Init = GetImm(0);
-    int64_t ParentSize = GetImm(4);
-    if (Init == 1 && ParentSize == 0)
-      return true; // INIT with ParentSizeCode=0 is illegal
-    if (Init == 0 && ParentSize != 0)
-      return true; // non-INIT with ParentSizeCode!=0 is illegal
+    int64_t WriterSize = GetImm(4);
+    if (WriterSize < 0 || WriterSize > 12)
+      return true; // reserved 13..15 (imm operand class already gates)
   }
   if (Inst.getOpcode() == LinxV5::B_SUBVIEW ||
       Inst.getOpcode() == LinxV5::B_ASSEMBLE) {

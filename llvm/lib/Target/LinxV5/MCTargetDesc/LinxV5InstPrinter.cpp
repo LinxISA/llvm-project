@@ -643,10 +643,11 @@ void LinxV5InstPrinter::printSubviewSizeCode(const MCInst *MI, unsigned OpNo,
     O << MI->getOperand(OpNo).getImm();
 }
 
-void LinxV5InstPrinter::printParentSizeCode(const MCInst *MI, unsigned OpNo,
+void LinxV5InstPrinter::printWriterSizeCode(const MCInst *MI, unsigned OpNo,
                                             const MCSubtargetInfo &STI,
                                             raw_ostream &O) {
-  // B.ASSEMBLE parent size code 0..12; prints the decimal code.
+  // B.ASSEMBLE writer size code (PTO-ISA #265) 0..12; prints the decimal
+  // code.
   if (MI->getOperand(OpNo).isImm())
     O << MI->getOperand(OpNo).getImm();
 }

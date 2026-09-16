@@ -11,15 +11,16 @@
 #   B.SUBVIEW 0, r23, 100, 5      -> 0x064b82d3  [0xd3,0x82,0x4b,0x06]
 #   B.ASSEMBLE 1,0, zero, 0, 1    -> 0x800010d3  [0xd3,0x10,0x00,0x80]
 #   B.ASSEMBLE 1,1, a0, 2047, 12  -> 0xfff11e53  [0x53,0x1e,0xf1,0xff]
-#   B.ASSEMBLE 0,0, r23, 1, 0     -> 0x001b9053  [0x53,0x90,0x1b,0x00]
+#   B.ASSEMBLE 0,0, r23, 1, 5     -> 0x001b92d3  [0xd3,0x92,0x1b,0x00]
 # Illegal (must be <unknown>):
 #   B.SUBVIEW size=13             -> 0x000006d3
 #   B.SUBVIEW size=0              -> 0x00000053
 #   B.SUBVIEW RegSrc=24           -> 0x000c00d3
-#   B.ASSEMBLE INIT=1,size=0      -> 0x80001053
-#   B.ASSEMBLE INIT=0,size=12     -> 0x00011e53
 #   B.ASSEMBLE size=13            -> 0x800016d3
 #   B.ASSEMBLE RegSrc=24          -> 0x800c10d3
+# Legal under PTO-ISA #265 (WriterSizeCode replaces ParentSizeCode):
+#   B.ASSEMBLE INIT=1,size=0      -> 0x80001053 (writer code 0 = discarded)
+#   B.ASSEMBLE INIT=0,size=12     -> 0x00011e53 (participating writer extent)
 
 .text
 # --- legal B.SUBVIEW words ---
@@ -33,10 +34,11 @@
 # --- legal B.ASSEMBLE words ---
 .byte 0xd3, 0x10, 0x00, 0x80
 .byte 0x53, 0x1e, 0xf1, 0xff
-.byte 0x53, 0x90, 0x1b, 0x00
-# --- illegal B.ASSEMBLE words ---
+.byte 0xd3, 0x92, 0x1b, 0x00
+# --- formerly-illegal, now legal under #265 ---
 .byte 0x53, 0x10, 0x00, 0x80
 .byte 0x53, 0x1e, 0x01, 0x00
+# --- illegal B.ASSEMBLE words ---
 .byte 0xd3, 0x16, 0x00, 0x80
 .byte 0xd3, 0x10, 0x0c, 0x80
 
@@ -48,8 +50,8 @@
 # CHECK: <unknown>
 # CHECK: B.ASSEMBLE{{.*}}1, 0, zero, 0, 1
 # CHECK: B.ASSEMBLE{{.*}}1, 1, a0, 2047, 12
-# CHECK: B.ASSEMBLE{{.*}}0, 0, x3, 1, 0
-# CHECK: <unknown>
-# CHECK: <unknown>
+# CHECK: B.ASSEMBLE{{.*}}0, 0, x3, 1, 5
+# CHECK: B.ASSEMBLE{{.*}}1, 0, zero, 0, 0
+# CHECK: B.ASSEMBLE{{.*}}0, 1, a0, 0, 12
 # CHECK: <unknown>
 # CHECK: <unknown>

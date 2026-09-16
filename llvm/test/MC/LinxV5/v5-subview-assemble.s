@@ -3,10 +3,11 @@
 
 # PTO-ISA 0.58.4 range modifiers (ADR-0098, pto-spec 564ac2d):
 #   B.SUBVIEW  SrcSelect, RegSrc, uimm11, SubviewSizeCode    (match 0x53)
-#   B.ASSEMBLE INIT, LAST, RegSrc, uimm11, ParentSizeCode    (match 0x1053)
-# Legal contracts covered here:
+#   B.ASSEMBLE INIT, LAST, RegSrc, uimm11, WriterSizeCode     (match 0x1053)
+# Legal contracts covered here (PTO-ISA #265):
 #   SubviewSizeCode 1..12
-#   ParentSizeCode  0..12, with INIT=1 -> 1..12 and INIT=0 -> 0
+#   WriterSizeCode  0..12 in every phase; participating writers carry
+#   nonzero (zero is reserved for discarded groups)
 #   RegSrc is an absolute GPR selector 0..23 (zero/R0, a0/R2, ..., r23/R23;
 #   the disassembler prints the first alias, e.g. r23 -> x3)
 #   uimm11 0..2047
@@ -34,10 +35,10 @@ B.ASSEMBLE 1, 0, zero, 0, 1
 B.ASSEMBLE 1, 1, a0, 2047, 12
 B.ASSEMBLE 1, 0, a1, 1, 1
 
-# --- B.ASSEMBLE: MIDDLE/LAST forms (INIT=0, ParentSizeCode=0) ---
+# --- B.ASSEMBLE: MIDDLE/LAST forms carry nonzero WriterSizeCode (#265) ---
 B.IOT mask=1111, last, ->t<1KB>
-B.ASSEMBLE 0, 0, r23, 1, 0
-B.ASSEMBLE 0, 1, a1, 100, 0
+B.ASSEMBLE 0, 0, r23, 1, 5
+B.ASSEMBLE 0, 1, a1, 100, 5
 
 # ENC: B.IOT{{.*}}mask=1111,{{.*}}->t<1KB>
 # ENC: B.SUBVIEW{{.*}}0, zero, 0, 1
@@ -50,8 +51,8 @@ B.ASSEMBLE 0, 1, a1, 100, 0
 # ENC: B.ASSEMBLE{{.*}}1, 1, a0, 2047, 12
 # ENC: B.ASSEMBLE{{.*}}1, 0, a1, 1, 1
 # ENC: B.IOT{{.*}}mask=1111, last,{{.*}}->t<1KB>
-# ENC: B.ASSEMBLE{{.*}}0, 0, x3, 1, 0
-# ENC: B.ASSEMBLE{{.*}}0, 1, a1, 100, 0
+# ENC: B.ASSEMBLE{{.*}}0, 0, x3, 1, 5
+# ENC: B.ASSEMBLE{{.*}}0, 1, a1, 100, 5
 
 # DIS: B.IOT{{.*}}mask=1111,{{.*}}->t<1KB>
 # DIS: B.SUBVIEW{{.*}}0, zero, 0, 1
@@ -64,5 +65,5 @@ B.ASSEMBLE 0, 1, a1, 100, 0
 # DIS: B.ASSEMBLE{{.*}}1, 1, a0, 2047, 12
 # DIS: B.ASSEMBLE{{.*}}1, 0, a1, 1, 1
 # DIS: B.IOT{{.*}}mask=1111, last,{{.*}}->t<1KB>
-# DIS: B.ASSEMBLE{{.*}}0, 0, x3, 1, 0
-# DIS: B.ASSEMBLE{{.*}}0, 1, a1, 100, 0
+# DIS: B.ASSEMBLE{{.*}}0, 0, x3, 1, 5
+# DIS: B.ASSEMBLE{{.*}}0, 1, a1, 100, 5
