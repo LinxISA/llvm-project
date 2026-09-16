@@ -3552,6 +3552,12 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
   // N82ND (24..26) only for TSTORE. A TLOAD/TSTORE layout must match its
   // direction; a CUBE code used from a non-TLOAD/TSTORE context is also
   // rejected (the CUBE selectors are only legal on GM<->Local transport).
+  //
+  // The pseudo-expansion path (e.g. TLOAD.M322ND) feeds this parser through
+  // UnLex'd tokens whose SMLoc has no source buffer, so never emit a
+  // diagnostic from the direction-mismatch branches (the original code
+  // silently fails to match there). Report only for the no-header case,
+  // which a pseudo expansion cannot reach.
   if (LinxV5Op::isCubeConversion(Format)) {
     bool InTLoad = CurLayoutDirection == 1;
     bool InTStore = CurLayoutDirection == 2;
@@ -3560,15 +3566,22 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
                            "TLOAD/TSTORE");
       return MatchOperand_ParseFail;
     }
-    if (InTLoad && !LinxV5Op::isCubeLoadConversion(Format)) {
+    if (InTLoad && !LinxV5Op::isCubeLoadConversion(Format))
       return MatchOperand_ParseFail;
-    }
-    if (InTStore && !LinxV5Op::isCubeStoreConversion(Format)) {
+    if (InTStore && !LinxV5Op::isCubeStoreConversion(Format))
       return MatchOperand_ParseFail;
-    }
   }
   if (LinxV5Op::isWeightLayout(Format) && CurLayoutDirection != 1) {
     getParser().Error(S, "weight layout selectors are legal only on TLOAD");
+    return MatchOperand_ParseFail;
+  }
+  // Unassigned layout codes reject before effects. The assigned set is
+  // {0,1,3,4,6,8,9,10,11,17,18,20,21..29,30,31} (PTO-FIELD-BLOCK-DATR
+  // legality); 2,5,7,12..16,19 are reserved. A pseudo expansion never
+  // reaches an unassigned code, so the diagnostic is safe here.
+  if (Format == 2 || Format == 5 || Format == 7 ||
+      (Format >= 12 && Format <= 16) || Format == 19) {
+    getParser().Error(S, "unassigned layout code");
     return MatchOperand_ParseFail;
   }
 
@@ -3577,10 +3590,9 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
   getLexer().Lex(); // Eat identifier token.
   if (!UnLexStr.empty())
     getLexer().UnLex(AsmToken(AsmToken::Identifier, UnLexStr));
-  if (LinxV5Op::isCubeConversion(Format)) {
-    CurLayoutDirection = 0;
-    PendingLayoutDirection = 0;
-  }
+  // Keep CurLayoutDirection: validateInstruction re-checks the resolved
+  // layout for both spellings after matching, and any following non-TLSU
+  // statement resets the direction in ParseInstruction anyway.
   return MatchOperand_Success;
 }
 
@@ -4221,6 +4233,30 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
   if (MII.get(Inst.getOpcode()).TSFlags &
       llvm::LinxV5II::IsDisassembleOnlyMask) {
     return true;
+  }
+  // B.DATR numeric-Layout legality (PTO-FIELD-BLOCK-DATR): the named
+  // spelling path gates the layout in parseBArgFormat, but a numeric first
+  // operand reaches here through the generic immediate parser with no
+  // spelling to check. Validate the resolved value instead: unassigned
+  // codes reject, the weight layouts 10/11 are TLOAD-only, and the CUBE
+  // transport selectors follow the recorded BSTART direction.
+  if (Inst.getOpcode() == LinxV5::BDATR) {
+    unsigned Layout = Inst.getOperand(0).getImm();
+    if (Layout == 2 || Layout == 5 || Layout == 7 ||
+        (Layout >= 12 && Layout <= 16) || Layout == 19)
+      return true; // unassigned layout code
+    if (LinxV5Op::isWeightLayout(Layout) && CurLayoutDirection != 1)
+      return true; // weight layout outside TLOAD
+    if (LinxV5Op::isCubeConversion(Layout)) {
+      bool InTLoad = CurLayoutDirection == 1;
+      bool InTStore = CurLayoutDirection == 2;
+      if (!InTLoad && !InTStore)
+        return true;
+      if (InTLoad && !LinxV5Op::isCubeLoadConversion(Layout))
+        return true;
+      if (InTStore && !LinxV5Op::isCubeStoreConversion(Layout))
+        return true;
+    }
   }
   // B.FPATR field/combo legality per the active PTO 0.58.4 contract.
   if (Inst.getOpcode() == LinxV5::B_FPATR) {
