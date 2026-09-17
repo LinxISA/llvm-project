@@ -323,6 +323,22 @@ public:
   // DEFINE_SPECIAL_CAST(__fp8_e6m2, __fp8_e5m2)  // no scalar encoding; use tile-level conversion
 };
 
+struct __fp8_rcpe6m2 : public __fp8_base {
+public:
+  __fp8_rcpe6m2() = default;
+
+#define __fp8_rcpe6m2_TYPE "rcpe6m2"
+#define __fp8_rcpe6m2_MAJOR_TYPE "fb"
+#define __fp8_rcpe6m2_WIDTH "b"
+#define __fp8_rcpe6m2_STORAGE(d) ((d).data)
+
+  // RCPE6M2 (PTO-ISA type code 21) is a source-only derived type that reuses
+  // the E6M2 code space: a tile-level convert reading it yields the reciprocal
+  // of the E6M2-encoded value. It has no destination encoding and no scalar
+  // FCVT form. Use the TileOP tile-level conversion (RCPE6M2 -> FP16/BF16).
+  // DEFINE_SIMPLE_CASTS(__fp8_rcpe6m2)
+};
+
 struct __fp4_e2m1x2 : public __fp8_base {
 public:
   __fp4_e2m1x2() = default;
