@@ -37,6 +37,80 @@
 #include "llvm/DebugInfo/Symbolize/SymbolizableModule.h"
 #include "llvm/DebugInfo/Symbolize/Symbolize.h"
 #include "llvm/Demangle/Demangle.h"
+
+namespace {
+// Shorten a demangled C++ template signature for disassembly comments.
+//
+// TileOP-style kernels carry every tile shape/dtype/layout as template
+// arguments, so a demangled name like
+//   void gn_grad_static::dx_nc<_Float16, pto::global_tensor<...>,
+//       pto::Tile<(pto::Location)0, _Float16, 1, 8192, ...>, ...>(...)
+// spans hundreds of columns.  Keep the function name and replace each
+// top-level template argument with its leading identifier (first 24 chars),
+// and drop the trailing function parameter list.  Full names remain
+// available via --demangle without this option or via c++filt.
+std::string shortenTemplateSignature(const std::string &Name) {
+  // Only touch names that actually contain a template argument list.
+  size_t Angle = Name.find('<');
+  if (Angle == std::string::npos)
+    return Name;
+  // Find the matching '>' for the outermost template list, then require the
+  // trailing parameter list "(...)" so plain template types are untouched.
+  if (!Name.empty() && Name.back() != ')')
+    return Name;
+  unsigned Depth = 0;
+  size_t End = std::string::npos;
+  for (size_t I = Angle; I < Name.size(); ++I) {
+    char C = Name[I];
+    if (C == '<') ++Depth;
+    else if (C == '>') { --Depth; if (Depth == 0) { End = I; break; } }
+  }
+  if (End == std::string::npos || End + 1 >= Name.size() ||
+      Name[End + 1] != '(')
+    return Name;
+
+  std::string Head = Name.substr(0, Angle);       // return type + fn name
+  std::string Args = Name.substr(Angle + 1, End - Angle - 1);
+
+  // Split top-level comma-separated template arguments.
+  std::string Summary = "<";
+  Depth = 0;
+  size_t Start = 0;
+  bool First = true;
+  size_t ArgIdx = 0;
+  for (size_t I = 0; I <= Args.size(); ++I) {
+    bool Split = I == Args.size();
+    if (!Split && I < Args.size()) {
+      char C = Args[I];
+      if (C == '<' || C == '(') ++Depth;
+      else if (C == '>' || C == ')') { if (Depth) --Depth; }
+      else if (C == ',' && Depth == 0) Split = true;
+    }
+    if (Split) {
+      std::string Arg = Args.substr(Start, I - Start);
+      Start = I + 1;
+      while (!Arg.empty() && Arg.front() == ' ') Arg.erase(Arg.begin());
+      while (!Arg.empty() && Arg.back() == ' ') Arg.pop_back();
+      if (Arg.empty()) continue;
+      // Leading identifier of the argument: skip qualifiers/namespace prefixes
+      // and keep the last identifier component plus the first 24 chars.
+      std::string Lead = Arg.substr(0, 24);
+      // Drop anything after an opening angle/paren in the leading chunk.
+      size_t Cut = Lead.find_first_of("<(");
+      if (Cut != std::string::npos) Lead = Lead.substr(0, Cut);
+      while (!Lead.empty() &&
+             (Lead.back() == ' ' || Lead.back() == ':'))
+        Lead.pop_back();
+      if (!First) Summary += ", ";
+      First = false;
+      Summary += Lead;
+      ++ArgIdx;
+    }
+  }
+  Summary += "> (" + std::to_string(ArgIdx) + " args)";
+  return Head + Summary;
+}
+} // namespace
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -182,6 +256,7 @@ static bool AllHeaders;
 static std::string ArchName;
 bool objdump::ArchiveHeaders;
 bool objdump::Demangle;
+bool objdump::ShortenTemplates;
 bool objdump::Disassemble;
 bool objdump::DisassembleAll;
 bool objdump::SymbolDescription;
@@ -1896,8 +1971,11 @@ static void disassembleObject(const Target *TheTarget, ObjectFile &Obj,
                 uint64_t TargetAddress = TargetSym->Addr;
                 uint64_t Disp = Target - TargetAddress;
                 std::string TargetName = TargetSym->Name.str();
-                if (Demangle)
+                if (Demangle) {
                   TargetName = demangle(TargetName);
+                  if (ShortenTemplates)
+                    TargetName = shortenTemplateSignature(TargetName);
+                }
 
                 *TargetOS << " <";
                 if (!Disp) {
@@ -2930,6 +3008,7 @@ static void parseObjdumpOptions(const llvm::opt::InputArgList &InputArgs) {
   ArchName = InputArgs.getLastArgValue(OBJDUMP_arch_name_EQ).str();
   ArchiveHeaders = InputArgs.hasArg(OBJDUMP_archive_headers);
   Demangle = InputArgs.hasArg(OBJDUMP_demangle);
+  ShortenTemplates = InputArgs.hasArg(OBJDUMP_shorten_templates);
   Disassemble = InputArgs.hasArg(OBJDUMP_disassemble);
   DisassembleAll = InputArgs.hasArg(OBJDUMP_disassemble_all);
   SymbolDescription = InputArgs.hasArg(OBJDUMP_symbol_description);

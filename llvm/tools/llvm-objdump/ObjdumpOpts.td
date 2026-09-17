@@ -38,6 +38,9 @@ def : Flag<["-"], "a">, Alias<archive_headers>,
 
 def demangle : Flag<["--"], "demangle">, HelpText<"Demangle symbol names">;
 def : Flag<["-"], "C">, Alias<demangle>, HelpText<"Alias for --demangle">;
+def shorten_templates : Flag<["--"], "shorten-templates">,
+  HelpText<"Shorten long C++ template signatures in symbolized operands "
+           "(requires --demangle)">;
 
 def disassemble : Flag<["--"], "disassemble">,
   HelpText<"Disassemble all executable sections found in the input files">;
