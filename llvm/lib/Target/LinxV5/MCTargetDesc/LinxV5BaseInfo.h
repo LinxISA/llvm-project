@@ -417,6 +417,8 @@ enum DataType {
   e1m2x2 = 12,
   e8m0 = 13,
   HiF4x2 = 14,
+  e6m2 = 15,
+  rcpe6m2 = 21,
   S64 = 16,
   S32 = 17,
   S16 = 18,

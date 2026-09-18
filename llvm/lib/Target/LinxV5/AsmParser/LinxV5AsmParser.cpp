@@ -2875,6 +2875,8 @@ LinxV5AsmParser::parseBstartDataType(OperandVector &Operands) {
                  .Case("e1m2x2", DataType::e1m2x2)
                  .Case("e8m0", DataType::e8m0)
                  .Case("hif4x2", DataType::HiF4x2)
+                 .Case("e6m2", DataType::e6m2)
+                 .Case("rcpe6m2", DataType::rcpe6m2)
                  .Case("s64", DataType::S64)
                  .Case("s32", DataType::S32)
                  .Case("s16", DataType::S16)
@@ -4591,6 +4593,8 @@ static unsigned getTileMacroDataTypeBits(unsigned DataType) {
   case LinxV5Op::DataType::e3m2:
   case LinxV5Op::DataType::e2m3:
   case LinxV5Op::DataType::e8m0:
+  case LinxV5Op::DataType::e6m2:
+  case LinxV5Op::DataType::rcpe6m2:
   case LinxV5Op::DataType::S8:
   case LinxV5Op::DataType::U8:
     return 8;

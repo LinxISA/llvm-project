@@ -914,6 +914,12 @@ void LinxV5InstPrinter::printBstartDataType(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::DataType::HiF4x2:
     O << "HiF4x2";
     break;
+  case LinxV5Op::DataType::e6m2:
+    O << "e6m2";
+    break;
+  case LinxV5Op::DataType::rcpe6m2:
+    O << "rcpe6m2";
+    break;
   case LinxV5Op::DataType::S64:
     O << "S64";
     break;
@@ -1200,6 +1206,8 @@ static unsigned getTileMacroTypeBits(unsigned DataType) {
   case LinxV5Op::DataType::e3m2:
   case LinxV5Op::DataType::e2m3:
   case LinxV5Op::DataType::e8m0:
+  case LinxV5Op::DataType::e6m2:
+  case LinxV5Op::DataType::rcpe6m2:
   case LinxV5Op::DataType::S8:
   case LinxV5Op::DataType::U8:
     return 8;

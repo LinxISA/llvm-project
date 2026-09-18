@@ -209,6 +209,8 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
     case LinxV5Op::DataType::e1m2x2: OS << "e1m2x2"; break;
     case LinxV5Op::DataType::e8m0: OS << "e8m0"; break;
     case LinxV5Op::DataType::HiF4x2: OS << "HiF4x2"; break;
+    case LinxV5Op::DataType::e6m2: OS << "e6m2"; break;
+    case LinxV5Op::DataType::rcpe6m2: OS << "rcpe6m2"; break;
     case LinxV5Op::DataType::S64: OS << "S64"; break;
     case LinxV5Op::DataType::S32: OS << "S32"; break;
     case LinxV5Op::DataType::S16: OS << "S16"; break;
