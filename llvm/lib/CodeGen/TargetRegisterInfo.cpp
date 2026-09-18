@@ -279,9 +279,20 @@ static inline
 const TargetRegisterClass *firstCommonClass(const uint32_t *A,
                                             const uint32_t *B,
                                             const TargetRegisterInfo *TRI) {
-  for (unsigned I = 0, E = TRI->getNumRegClasses(); I < E; I += 32)
-    if (unsigned Common = *A++ & *B++)
-      return TRI->getRegClass(I + countTrailingZeros(Common));
+  for (unsigned I = 0, E = TRI->getNumRegClasses(); I < E; I += 32) {
+    unsigned Common = *A++ & *B++;
+    while (Common) {
+      const TargetRegisterClass *RC =
+          TRI->getRegClass(I + countTrailingZeros(Common));
+      // A class with no registers is trivially a subset of every class, but
+      // it is never a usable register class. Skip it so disjoint classes
+      // (e.g. a target's special-purpose file vs the GPR file) correctly
+      // report no common sub-class instead of an empty one.
+      if (RC->getNumRegs() != 0)
+        return RC;
+      Common &= Common - 1;
+    }
+  }
   return nullptr;
 }
 

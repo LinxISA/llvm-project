@@ -180,13 +180,6 @@ def SIMT_OSVR : RegisterClass<"LinxV5", [i64], 64, (add
 }
 
 let isAllocatable = 0 in
-def SIMT_OSVKR : RegisterClass<"LinxV5", [i64], 64, (add
-
-)> {
-  let isAllocatable = 0;
-}
-
-let isAllocatable = 0 in
 def SIMT_RIO : RegisterClass<"LinxV5", [i64, i32, i16, i8, bf16, f16, f32, f64], 64, (add
   (sequence "SIMT_RI%u", 0, 11),
   (sequence "SIMT_RO%u", 0, 3)
@@ -257,7 +250,6 @@ def SIMT_SRC_Vec_MC : RegisterClass<"LinxV5", [i64, i32, i16, i8, bf16, f16, f32
   (sequence "SIMT_OST%u", 1, 4),
   (sequence "SIMT_OSU%u", 1, 4),
   SIMT_OSVR,
-  SIMT_OSVKR,
   LoopReg,
   SIMT_TileBase
 )>;
