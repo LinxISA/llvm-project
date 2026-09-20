@@ -1010,6 +1010,9 @@ void LinxV5InstPrinter::printTileOPTMA(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPTMA::GMOV:
     O << "GMOV";
     break;
+  case LinxV5Op::TileOPTMA::TIMG2COL:
+    O << "TIMG2COL";
+    break;
   default:
     O << Imm;
     break;

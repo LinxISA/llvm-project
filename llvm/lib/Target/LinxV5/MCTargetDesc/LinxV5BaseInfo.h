@@ -488,6 +488,8 @@ enum TileOPTMA {
   TMOV_S2L_EXTRACT = 12,
   GMOV = 13,
   TSTORE_SPART = 14,
+  // PTO 0.58.6 TLSU Function 28: standalone BSTART.TIMG2COL carrier.
+  TIMG2COL = 28,
   EMPTY_TileOPTMA
 };
 

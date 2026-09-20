@@ -2952,6 +2952,8 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
                .Case("tmov.s2l.extract", TileOPTMA::TMOV_S2L_EXTRACT)
                .Case("tstore.spart", TileOPTMA::TSTORE_SPART)
                .Case("gmov", TileOPTMA::GMOV)
+               // PTO 0.58.6 TLSU Function 28: standalone IMG2COL carrier.
+               .Case("timg2col", TileOPTMA::TIMG2COL)
                .Default(TileOPTMA::EMPTY_TileOPTMA);
 
   if (TileOP == TileOPTMA::EMPTY_TileOPTMA) {
@@ -4101,9 +4103,14 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
   // blocks; their B.DATR carries the canonical CUBE transport selector, so
   // record the transport direction (from the TileOP word after TLSU) for the
   // CUBE-layout direction check, which also covers "BSTART.TLOAD" spellings.
-  if (Name.startswith_insensitive("BSTART.TLSU") ||
-      Name.startswith_insensitive("BSTART.TLOAD") ||
-      Name.startswith_insensitive("BSTART.TSTORE")) {
+  // BSTART.TIMG2COL (TLSU Function 28) materializes GM feature maps into
+  // Local CUBE destinations and likewise accepts ND/DN -> M16/M32 selectors
+  // (BSTART.TIMG2COL.asl legality), so it reads as a GM->Local transport.
+  if (Name.startswith_insensitive("BSTART.TIMG2COL")) {
+    PendingLayoutDirection = CurLayoutDirection = 1;
+  } else if (Name.startswith_insensitive("BSTART.TLSU") ||
+             Name.startswith_insensitive("BSTART.TLOAD") ||
+             Name.startswith_insensitive("BSTART.TSTORE")) {
     StringRef Op = getLexer().getTok().getString();
     if (Op.empty())
       Op = getLexer().getTok().getIdentifier();

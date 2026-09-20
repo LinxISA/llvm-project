@@ -1550,6 +1550,11 @@ class Tile_DataType_FixedOp<bits<5> Opcode, bits<5> FixedTileOP,
 }
 
 def BSTART_TMA : Tile_DataType_NoMode<0b00010, ".TLSU", (ins BstartDataType:$DataType, TileOPTMA:$TileOP)>;
+// PTO 0.58.6 (BSTART.TIMG2COL.asl): TIMG2COL is a standalone TLSU Function
+// 28 carrier whose canonical spelling is "BSTART.TIMG2COL DataType". The
+// generic .TLSU form "BSTART.TLSU TIMG2COL, DataType" encodes identically.
+def BSTART_TIMG2COL : Tile_DataType_FixedOp<0b00010, 28, ".TIMG2COL",
+                                             (ins BstartDataType:$DataType)>;
 def BSTART_CUBE: Tile_DataType_NoMode<0b00110, ".CUBE", (ins BstartDataType:$DataType, TileOPCUBE:$TileOP)>;
 def BSTART_TEPL_NoMode: Tile_DataType_TEPL<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP)>;
 def BSTART_GMOV : Tile_DataType_FixedOp<0b00010, 0b01101, ".GMOV",
@@ -1770,8 +1775,14 @@ def B_IO : BlockModifierBase {
   field bits<32> Inst;
   let Size = 4;
   let isDisassembleOnly = 0;
+  // The ISA explicitly allows an encoded zero selector in every B.IOR
+  // source slot ("an explicitly encoded zero selector reads the zero GPR
+  // value"): TLOAD weight mode binds StartGPR, which the compiler may
+  // materialize in R0, and TIMG2COL binds GMBase, zero, zero. GPRSrc keeps
+  // R0 acceptable; the alias table below still prints the empty slot form
+  // for R0 operands.
   let OutOperandList = (outs GPRDstWithOptionalArrow:$RegDst);
-  let InOperandList = (ins GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2);
+  let InOperandList = (ins GPRSrc:$RegSrc0, GPRSrc:$RegSrc1, GPRSrc:$RegSrc2);
 
   bits<5> RegSrc0;
   bits<5> RegSrc1;
@@ -2084,11 +2095,11 @@ def : InstAlias<"BSTART RET", (BSTART_STD_WITHOUT_TARGET_32_RET), 0>;
 def : InstAlias<"B.IOR [], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, R0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 1>;
-def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2), 1>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], $RegDst", (B_IO GPRDstWithOptionalArrow:$RegDst, GPRSrc:$RegSrc0, GPRSrc:$RegSrc1, GPRSrc:$RegSrc2), 1>;
 def : InstAlias<"B.IOR [], []", (B_IO R0, R0, R0, R0), 2>;
 def : InstAlias<"B.IOR [$RegSrc0], []", (B_IO R0, GPRSrc:$RegSrc0, R0, R0), 2>;
 def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1], []", (B_IO R0, GPRSrc:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 2>;
-def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], []", (B_IO R0, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, GPRSrcNoR0:$RegSrc2), 1>;
+def : InstAlias<"B.IOR [$RegSrc0, $RegSrc1, $RegSrc2], []", (B_IO R0, GPRSrc:$RegSrc0, GPRSrc:$RegSrc1, GPRSrc:$RegSrc2), 1>;
 def : InstAlias<"B.IOR [],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, R0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, GPRSrcNoR0:$RegSrc0, R0, R0), 1>;
 def : InstAlias<"B.IOR [$RegSrc0,$RegSrc1],[$RegDst]", (B_IO GPRSrcNoR0:$RegDst, GPRSrcNoR0:$RegSrc0, GPRSrcNoR0:$RegSrc1, R0), 1>;
