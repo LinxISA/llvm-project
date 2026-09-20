@@ -10350,3 +10350,150 @@ pass（STD 头永不省略），故 09-14 前后行为分界。issue 报在 tool
   TileOP include 同步（改头后 cp -a）；
 - M=256 配置在当前 LLVM 有既有 ISel 断言崩溃（InstrEmitter.cpp:997，与本次
   无关，M=2048 正常）。
+
+## 2026-09-20 TileOP #187 修复：reduction-prefix 动态 ValidRow 寄存器 B.DIM
+
+Issue：`Linx-TileOP-API#187`，CUBE_M16/M32 + 动态 shape（ValidRow=-1）kernel
+在 reduction-prefix 发射路径（`pto_tile_region_inline_asm.hpp` 的
+`pto_region_binary_reduction_prefix` 两个重载）发出
+`B.DIM zero, -1, ->lb1`，被 uimm17 无符号校验拒绝（Match Instruction
+Error）。
+
+### 修复（PR [#189](https://github.com/LinxISA/Linx-TileOP-API/pull/189)）
+
+两个重载各补 `ValidRow < 0` 分支：lb1 改寄存器形式
+`B.DIM %[reg], 0, ->lb1`（ASL：`zero-extend((GPR[RegSrc]+uimm17))[15:0]`，
+RegSrc 0..23），运行期值走 tile 的条件 `GetValidRow()`（静态 constexpr /
+动态读 mask），与 template_asm.hpp 的 TCVT 动态分支同款。
+
+**关键实现细节**：删除 ValidRow 输入槽会使后续 %-编号整体错位（%Z7 指到
+prefix_base 寄存器 → ClockHands parseSingleAsm imm 断言崩溃），dynamic
+分支的引用必须同步重编号（lb2 %c5、TSize %Z6、prefix %7、Opcode %c8、
+SubTile TSize %c9）；static 分支逐字节不变。
+
+### 验证
+
+- 动态复现两个源位置：修复后 `B.DIM aN, 0, ->lb1` 全链通过；
+- 静态路径输出逐字节不变；`make check` 绿（新增注册测试
+  `Issue187DynamicPrefix.cpp`）；engine contract 52/52；
+- 已回复 issue
+  [#issuecomment-5749616838](https://github.com/LinxISA/Linx-TileOP-API/issues/187#issuecomment-5749616838)。
+
+### 流程备注
+
+TileOP 主工作区被并行会话占用（fix/local-b-matrix-contract + WIP），本修复
+全程在 `/tmp/issue99/prefix-wt` worktree（分支
+fix/reduction-prefix-dynamic-validrow）完成。此前一轮编辑曾被并行会话
+stash（stash@{0}），内容一致，可清理。
+
+## 2026-09-20 Issue #184 处理记录：local Right B 被套用 Shared-B [N,K] 物理存储约定（已修复，PR #190 合入 `0b69377`，issue 已回复关闭）
+
+Issue：`LinxISA/Linx-TileOP-API#184`，local Right B（CUBE_N8）非方阵 CUBE matmul
+（K≠N，如 qli 的 `CubeTileN8<e4m3, 128, 32>`）在编译期被
+`validate_matrix_contract` 的 K-match/D-shape static_assert 误拒。
+
+### 根因核实（独立验证，报告属实）
+
+- 引入史：0.58.3 对齐（`2e4d695`）时 `BValidRows` 对所有 B 取
+  非转置分支 `ValidRow`（local 正确）；PR #104（pto-spec #257，
+  `01d62c4`）为修 Shared 非转置 B 的物理存储序把分支对调，但条件
+  没 gate 在 `is_shared_tile_v<B>` 上，local B 被一并改坏。
+- ASL：local Right B 恒逻辑 `[K,N]`
+  （`TileMatrixMixedInfosMatchDimensions`/`TileMatrixCubeInfosMatchDimensions`，
+  CUBE_N8 无特殊化）；Shared 非转置 B 才是 `[N,K]`
+  （`BundleMatrixSharedBPrimarySchemaLegal`，位于 Shared binding 路径内）。
+  二者分处 tile-model 层与 block-dispatch 层。
+- 方阵（tN==tK）下两种序字节等价，故 compile.all 既有方阵 fixture
+  一直未暴露；仓内既有非方阵 fixture `TMatmulAccFullOptions`
+  （B=[64,32]）在 pristine 上就已编译失败。
+
+### 修复（PR #190，2 提交：`396f5b3` 头文件 + `78612df` 文档）
+
+1. 新增 `matrix_b_effective_k/n` helper（Shared B 保留 #257 物理序、
+   Local B 恒 [K,N]），切换 **9 处**同一错误模式的 B 侧推导：
+   `validate_matrix_contract`（BValidRows/Cols）、Bias 合同 N、
+   MX scale 合同 N（local ScaleB 形状）、PostProcess 合同 N、
+   `resolve_matmul_shape` 的 N（喂运行期 B.DIM 的 N 操作数——不修
+   会编译期放行后发射错误形状）、4 处 fixp::Options emitter 的
+   `EffectiveN`。helper 定义在 `pto_matmul_detail` 内，全局命名空间
+   4 处使用点带限定。
+2. 文档同步：TMATMUL_ACC/TMATMUL_BIAS/TMATMUL_MX_ACC/TMATMUL_MX_BIAS/
+   options.md 示例在 #104 后按错误合同书写（从未编译验证），翻转
+   local B 为 [K,N]、local MX ScaleB 为 [ceil(K/32), N]；改后逐个
+   提取编译通过。TGEMV 各页为方阵/正确形状，未动。
+
+### 验证
+
+- issue 形态复现（16x128 × 128x32 → 16x32，e4m3）：修复前双 assert
+  失败，修复后通过且发射 lb0=16/lb1=32/lb2=128；Shared 非转置 [N,K]
+  与 TransB [K,N] 双方向回归正常。
+- object gate（compile.all objects）：pristine `83bfb85` 54/35 →
+  本分支 59/30；转绿 5 个（CubeCellTransport、MatrixIntegerDtypes、
+  TGEMVOperandOrder、TMatmulAccCScale、TMatmulAccFullOptions），
+  失败集逐项 diff **零新增**（其余 30 失败为 TCVT slot capacity、
+  retired 接口、`LINX_RNONE`/`NoScaleOperand` namespace 查找等预存项；
+  本机 gate 有偶发 clang "Permission denied" 沙箱噪音，去沙箱复跑排除）。
+- python 套件：`test_v058_engine_contract` 52/52（skill 文中 40/40
+  口径已过时）、`test_static_valid_shape_lowering`、
+  `test_pto0585_layout_interfaces` 绿；`test_weight_tload_contract`
+  1 例失败为 **PR #188 预存过时断言**（仍期待旧 `layout%c[WeightLayout]`
+  拼写，#188 已改 ISA 名拼写，pristine 同样失败），待单独跟进。
+- CI：`Auto-merge after green gate` 绿，PR 已 auto-merge（`0b69377`）。
+
+### 工作区备忘（TileOP 仓）
+
+- 处理过程中发现 `include/common/pto_tile_region_inline_asm.hpp` 有
+  他人（或此前会话）未提交的 issue #187 WIP（dynamic ValidRow 走
+  GPR B.DIM RegSrc），已 stash 保存为
+  `someone-else WIP issue #187 ... (preserved 2026-09-20)`，
+  未混入本 PR。
+- 本地分支 `fix/weight-tload-layout-spelling`（`82dc2ba`）现落后
+  origin/linx 2 提交（#188 已以更完整形式覆盖其目标），该分支可弃。
+- 安装树 `template_asm.hpp` 已同步当前 checkout（weight-TLOAD ISA
+  名拼写版本）。
+
+### 待办（新增）
+
+- `test_weight_tload_contract.py` 断言与 PR #188 拼写过时，需更新测试；
+- TileOP 仓 baseline 的 30 个预存 object-gate 失败（TCVT slot
+  capacity、retired fixtures、region inline-asm namespace 等）值得
+  一次专项 triage。
+
+## 2026-09-20 Issue #101 处理记录：PseudoEmptyTile 生成非法 Func=6+SizeCode=0（已修复并推送 `f7c18ecf`，issue 已回复关闭）
+
+Issue：`LinxISA/llvm-project#101`，fa_gmma_dynamic（Sq/Skv/MaxSq/MaxSkv=128，
+Tm/Tk=128，FP32_VECFP32）normal 路径 ELF 含机器字 `0x00086e13`（B.IOT 无源
+目标形式 Func=6 + SizeCode=0），ASL B.IOT 约束要求该形式 SizeCode ∈ 1..10，
+SizeCode=0 是 source-only 编码；新模型报 reserved/deleted tile selector。
+
+### 根因（报告分析属实，独立核实）
+
+- `LinxV5TRegToOffset.cpp` `SlotCalc::BuildCopy`：输出栈 hand 同步（liveout
+  bubble 对齐）需要 tile 占位而槽位无寄存器（NoRegister）时插入
+  `PseudoEmptyTile` + `addImm(16)`（16 为历史遗留，展开时被忽略）；
+- `LinxV5TileOpExpand.cpp` 展开为 `B_IOT_NoSrc_Dst` 时 TSize 硬编码 0；
+- `asl/block/operands/B.IOT.asl` no-src-dst form constraints：SizeCode
+  one-of 1..10。旧模型无粘性 bIsIllegal 检查故静默。
+
+### 修复（commit `f7c18ecf`）
+
+- `TileOpExpand`：`PseudoEmptyTile/PseudoEmptyTileASM` 的 TileSize 操作数
+  （operand 1）直通 `B_IOT_NoSrc_Dst`（不再硬编码 0）；
+- `TRegToOffset`：占位容量改 `addImm(1)`（最小合法 128B，SizeCode=1）。
+
+### 验证
+
+- 端到端：fa_gmma_dynamic 同配置编译（本机无 model 环境，验证至 .o 层），
+  VPAR 对为 `BSTART.VPAR VS16 + B.IOT mask=1111, last, ->t<128B>`
+  = `0x02021181 + 0x0008ee13`（SizeCode=1 合法），无 SizeCode=0 无源 B.IOT；
+- 新 MC 测试 `vpar-empty-tile.s` round-trip PASS；
+- CodeGen LinxV5 失败集与基线逐项一致（21 既有，零新增；stash 对照）。
+
+### 环境备注
+
+- 本机新旧工具链组件不可混链：dev-llvm15_56 在 08-31 后 e_machine=0xE9
+  （`0f878a87`），本机旧 ld.lld 只认 EM_LinxV5=261(0x105)，链接报
+  "incompatible with elf64llinxv5"——与 issue 无关，报告者环境为自洽构建；
+- fa build（one-level-arch fa kernel）默认靠工具链 wrapper 的默认 triple，
+  用 dev clang 需自建 wrapper（--target + --sysroot + -resource-dir 指向
+  旧工具链资源目录，且旧资源目录需同步最新 TileOP 头 + linx_blkc.h）。
