@@ -1,12 +1,14 @@
 # Codex 工作交接记录
 
-> 最新状态日期：2026-08-20
+> 最新状态日期：2026-09-19
 > LLVM 仓库：`/home/zhuwei/linx-llvm`
 > TileOP API 当前仓库：`/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`
-> PTO-SPEC 最新审计快照：`/tmp/pto-spec-current`（`origin/main@0b8ce516ffe998b24c4bae4c1a9dbca2e0d76510`，v0.58.2 后续主线）
-> **重启后必须先阅读紧接本段的“2026-08-18 PTO 0.58.1 剩余实现工作包”，再按其中顺序实施。后续 TSORT 专章和较早章节是补充/历史记录；发生冲突时，以当前 PTO-SPEC normative ASL 为准。**
+> PTO-SPEC 最新审计快照：`/tmp/pto-spec-current`（`origin/main@425e75260702`，2026-09-18，#330 后主线）
+> **项目开发约定（长期有效，2026-09-19 确认）：本项目开发不涉及任何 SIMT 板块的使用——包括所有向量指令（`v.`/`l.` 开头）、所有 SIMT 向量寄存器（`ri*`/`vt#`/`vu#`/`vm#`/`vn#` 等），以及任何可能走到 `__mtc__`/`__vec__` 板块的函数。生成代码或测试中出现任何 SIMT 相关内容均属预期以外，要么是实现 bug，要么是测例写得有问题。janus（Block/PTO 路径默认 `-mcpu`）的 feature 集不含 `FeatureSIMT`，SIMT 指令全部由 `isSIMT` 谓词门控，正常路径不会选中。**
+> **重启后必须先阅读文末的“2026-09-18 状态快照”章节获取当前进度与各仓 HEAD。8-25 之前的章节均为历史记录；发生冲突时，以 2026-09-18 章节和各仓 HEAD 为准，规范语义仍以当前 PTO-SPEC normative ASL 为准。**
 
 ## 2026-08-20 最新 PTO-ISA 未实现项复核
+
 
 ### 2026-08-20 对 TileOP commit `21525a5` 的验收意见
 
@@ -9908,3 +9910,443 @@ AsmParser 对 Matrix CUBE pseudo 增加了类型域检查：
 - physical ACC/ACCCVT 清理（按当前工作安排暂不处理）。
 
 这些部分需要 TileOP API、runtime 或 SuperScalarModel 的配套定义；LLVM 当前只能继续补充明确的 operand/encoding/lowering 合同，不能把 Model 生命周期语义编码成不存在的 LLVM 指令。禁止修改 `SuperScalarModel` 仓库。
+
+## 2026-09-18 状态快照：0.58.4 收尾 → PTO 0.58.6 TileOp 宏汇编（8-26 ~ 9-17 提交梳理）
+
+本节补记 2026-08-25 之后 LLVM 侧的实际进展（共 33 个提交）。此前章节（含
+"0.58.4 ISA 对齐实施记录（2026-08-25）"）保持为历史记录，不再逐一回写。
+
+### 各仓当前状态
+
+```text
+LLVM dev-llvm15_56:
+  本地 HEAD:  54c837fac8d4 (2026-09-17, --shorten-templates)
+  远端:       落后 linxisa/dev-llvm15_56 2 个提交
+              c9d40c888976 merge PR #97
+              3231c0cd3db8 [clang] Declare __fp8_rcpe6m2 scalar type (pto-spec#322)
+  未推送:     本地无领先提交
+
+TileOP API (linx 分支):
+  linx HEAD:  6d0c35d480d7 (经 origin/linx fast-forward)
+  工作区当前 checkout: docs/issue170-assemble-example
+  近期工作:   #159 Shared subview-parent 收敛为 CUBE-only 合同；
+              TLOAD/TSTORE 文档统一入口；issue170 assemble 示例文档
+
+PTO-SPEC 快照:
+  /tmp/pto-spec-current @ 577e7b06422d (2026-09-15, #312 后主线)
+```
+
+### 0.58.4 收尾（8-26 ~ 9-02）
+
+- ✅ `e0762147` complete TGEMV MC expansion support：TGEMV pseudo 展开 MC 层闭环。
+- ✅ `3434ea3a` reject CScale for TGEMV operations：TGEMV family 拒绝 CScale（此前
+  CScale 只允许 FP32 ACC family 合同的 MC 侧落实）。
+- ✅ `9ea74798` Align B.IOS objdump output。
+- ✅ `adcb8794` Align Issue #72 tile operation syntax。
+- ✅ `82faea4c` experimental Tile region verifier（实验性，默认路径不变）。
+- ✅ `0f878a87` emit ELF machine 0xE9。
+- ⚠️ SrcRType 编码两轮尝试后回退：`490847a8` Align SrcRType encoding with PTO ISA
+  被 `183f534a` revert；`393c2af6` CSEL-specific SrcRType encoding 被 `ba65582a`
+  revert。最终状态维持回退态，SrcRType 编码未改，待后续重新设计。
+
+### CodeGen / 前端修复（9-02 ~ 9-11）
+
+- ✅ `25677bb1` Match current MASK and GMOV block contracts。
+- ✅ `1ae4ee39` Promote scalar f16 remainder before libcall（f16 余数在进 libcall
+  前先提升，避免错误结果/非法 libcall）。
+- ✅ `67d3ac98` B.DATR aliases exposing PadValue with RMode：新增
+  `B.DATR <type>, [byteid,] Zero, <rmode>, <sat>` 别名，满足 must-zero
+  TMATMUL*/TGEMV*/TMOV 的 `pad_union=must-zero` 合同（旧别名在 RMode 拼写下硬编码
+  PadValue=Null 会被 `BundleTMATMULDataAttributesLegal` 拒绝）。配套 TileOP issue #82。
+- ✅ `553b0804` Fix tile spill size code conversion。
+- ✅ `3682dca9` Keep sub-128B vector stores scalar under vectorAsTilereg
+  (issue #77)：非 SIMT (janus) 只把 ≥128 B 的向量注册进 tile register class；
+  修复 merged store 误走 BLK_TSTORE 的 "Cannot select" 崩溃；顺带修复
+  updateXDivergence worklist 重复入栈导致的死循环。新增
+  `issue-77-merged-scalar-stores.ll`。
+- ✅ `6348c779` Replace stale C.B.IOS comments (issue #38)：16-bit C.B.IOS 已按
+  0.58.4 (ADR-0097) 退役，源码注释统一指向 active 32-bit B.IOS。
+- ✅ `10abd6e6` Replace v.cvt.* scalar casts in linx_blkc.h (issue #89)：标量
+  C++ 转换改走 FSU 标量 fcvt/scvtf/ucvtf；bf16 走 FP32 位模式软件转换；
+  janus 域不再发射 v.cvt.*。消除标量 bf16/fp8 cast 在 -O1/-O2 的
+  UNREACHABLE（SuperNPUBench tmatmul_bf16 守卫通过）。
+- ✅ `0a141cbd` Disambiguate the B.DATR CCTRL union in CUBE Matrix bundles
+  (PTO-ISA #236)：InstPrinter 跟踪 CUBE Matrix bundle 头，PadValue 位段在 CUBE
+  上下文打印 CCTRL.* 拼写（None/RawAccumulator/InternalAccHint 组合）；parser 接受
+  CCTRL.* 别名。编码不变，纯 printer/parser 标注。新增 `cctrl-bdatr-union.s`。
+- ✅ `4a3e0bdb` [ADT] Include `<cstdint>` in SmallVector.h (issue #91)：对齐
+  upstream main 的 include 修复，15.x 分支缺它导致新工具链编译失败。
+
+### PTO-ISA #291：B.DATR Layout（9-14）
+
+- ✅ `ede6a818` Name and decode the direct-Local CUBE_M32/CUBE_M16 layout codes：
+  Layout 29 = CUBE_M32、31 = CUBE_M16（direct-Local 元素级操作直接选 layout），
+  此前按 reserved 处理；decoder 白名单加入两码，reserved golden 更新为 31 可解码。
+  新增 `bdatr-direct-cube-layout.s`。
+- ✅ `7c1388d7` B.DATR `<layout>, <padvalue>` 别名：`B.DATR CUBE_M32, Zero` 在
+  文件级与 inline-asm 两个 parse context 均可用（此前 `$canon` 拼写不能在
+  inline-asm 词法域使用，TileOP wrapper 发不出 direct-Local CUBE layout）。
+- ✅ `ae74a24a` 修正 `LinxV5TileTrans.def` 头注释的 assigned decode-set（10/11 为
+  ISA 已分配但保留 RESERVE_ 占位名）。No functional change。
+
+### PTO 0.58.6 TileOp 宏汇编（9-11 ~ 9-16，PR #92 已合并 `73cbdf34`）
+
+核心交付：基于生成 PTO 0.58.6 catalog 的 **117 TileOp / 142 exact form** 单行宏汇编
+解析与确定性物理 bundle 反折叠。
+
+- ✅ `c0160cb0` 首版：单行解析 + 确定性物理展开；B.DATR/B.FPATR 字段直接在单个
+  尖括号列表打印、省略默认值、拒绝 retired FPAttrs wrapper；Shared/CUBE-layout/
+  weight form 按 configuration 与 typed operand 选择；124 个可恢复 form 折叠、
+  18 个 ambiguous/descriptor-dependent form fail-closed；B.DIM 常量寄存器操作数
+  折回立即数并删除死 ADDI；FALL-STD 头在可证唯一顺序 CFG 边上省略。
+- ✅ `43b9fb61` 全 form canonical 化；`830f7ae0` 保留 scalar/shape operands；
+  `b8e675ea` 恢复 GM shape operands。
+- ✅ `c78a6611` 文档化反汇编双视图：默认 `llvm-objdump -d` 折叠为 TileOp 宏；
+  `--disassembler-options=no-tile-macros`（`-M no-tile-macros` 等价）逐条打印
+  BSTART/B.DATR/B.DIM/B.IOT/B.IOS/B.IOR 物理微指令。共享寄存器分配等需要看物理
+  寄存器的测试已加该开关（`v5-shared-register-allocation.ll`）。
+- ✅ `73cbdf34` merge PR #92（含 `disassembler-options.s`、
+  `pto-tileop-macro-*.s` 等新测试；`v5-cube-layout*`、`v5-matmul-fpatr.s`、
+  `v5-shared-cube-encoding.s` 更新为宏形式期望）。
+- ⚠️ `.zcode/plans/plan-sess_16e88407*.md`（2026-09-14 size-aware tile hand
+  affinity 实验设计，`-linxv5-enable-size-aware-tile-hand`）**已规划未实现**，
+  无对应提交。
+
+### MC 合同修复（9-16 ~ 9-17）
+
+- ✅ `ae8cd75a` Accept absolute physical Tile register spellings (issue #94, PR #95)：
+  RA 在寄存器压力下会把长生命 inline-asm Tile 操作数留在 Tile_ABS，printer 输出
+  `tile_t1/tile_u1/tile_m1/tile_n1` 物理拼写，而 B.IOT source matcher 只认
+  输出栈拼写 `t#1/u#1/m#1/n#1`，导致合法 reduction `_ASS` 会话集成汇编失败。
+  现在 64 个绝对物理 Tile 名全部映射到对应 Tile_T*/U*/M*/N*（HWEncoding 相同，
+  纯 parser round-trip 修复，无 copy 注入）；反汇编仍打印 canonical 输出栈别名。
+- ✅ `46601e70` Gate numeric B.DATR layout codes（fail-open 修复）：数值 B.DATR
+  首操作数走通用 immediate parser，绕过了 parseBArgFormat 的 named-spelling 门，
+  `IsUImm<5>` 放行任意 5-bit 值——weight layout 10/11 能在 TSTORE/TEPL 头下汇编、
+  未分配码 2/5/7/12..16/19 能汇编、CUBE transport 方向不校验。修复为在
+  validateInstruction（有完整 MCInst 与记录的 BSTART 方向）统一校验，覆盖两种
+  拼写。新增 `bdatr-numeric-layout-gate.s`。当前 MC/LinxV5 仅剩 6 个既有失败
+  （缺 ld.lld x2 + 4 个历史项）。
+- ✅ `65ba71da` Implement B.ASSEMBLE WriterSizeCode contract (PTO-ISA #265, issue #96)：
+  B.ASSEMBLE field 5 是 WriterSizeCode（当前 writer extent，参与 INIT/MIDDLE/LAST
+  取合法非零 Local 1..10；0 保留给被丢弃的 group），不是 ParentSizeCode；INIT 父
+  容量来自分配目的 B.IOT。删除旧 INIT<->zero 跨字段规则；operand/printer/decoder
+  更名 WriterSizeCode。
+- ✅ `54c837fa` [llvm-objdump] `--shorten-templates`（上游可复用）：demangle 后
+  TileOp 符号注释可达数百列（C.BSTART.STD DIRECT + 模板实参），新 flag 把每个
+  顶层模板参数截为首标识符（≤24 字符）并追加 `(N args)`，如 710 → 111 列。
+  默认关闭；需配合 --demangle。
+
+### 8-25 遗留项状态确认（截至 9-17 无变化）
+
+以下 2026-08-25 章节列出的未完成项，9 月提交均未涉及（已按提交信息 grep 核实），
+仍为未完成工作包：
+
+1. Cooperative Group-M / inactive PE 新语义（ADR-0100）——TileOP/LLVM 侧未动；
+2. HiF4 raw U32 scale word 逐 lane 解码、MX Local CUBE_M32 scale tile 的
+   Cell descriptor/shape carrier；
+3. Shared scale pair、Shared movement 完整 source-group 合同；
+4. RecordEvent/WaitEvents SSA dependency / B.IOD / convergence 语义；
+5. physical ACC/ACCCVT legacy 清理（`Tile_ACC1` 仍被
+   `ExpandPseudoInsts.cpp:544-564` / `InstrInfo.cpp:547` 引用，专门工作包）；
+6. `make TESTCASE=...` 测试基建 `--target=linx64` 过时问题（TileOP 侧，未修）。
+
+### 工作区杂项
+
+- 未跟踪 `llvm/test/MC/LinxV5/relax.s.o`：疑似误留的汇编产物，可删；
+- 未跟踪 `S=GroupOp?`：2026-07-28 的零散笔记（B.DIM/B.IOT operand 顺序对比：
+  v4 `GroupOp, TileSize, DstTile` vs v5 `PE_MASK, TSize, Last`），无引用价值；
+- 其余未跟踪项（`.claude/`、`.gitlab/`、`.zcode/`、`tmp/`、`tmp_jcore_compare/`、
+  `LLVM_ISSUE_79_SIMT_PROGRAMMING_MODEL_DESIGN.html`）为本地工具/历史探针，
+  不影响构建。
+
+## 2026-09-19 Issue #99 处理记录：跨块 Shared handle 触发 RegisterCoalescer 崩溃（已修复）
+
+Issue：`LinxISA/llvm-project#99`，SharedTile Q 在运行时 KV 循环外 TLOAD 一次、
+循环内 TMATMUL 复用，clang 在 `Simple Register Coalescing` 崩溃
+（`MachineRegisterInfo.cpp:57` `setRegClass` 断言）。Q TLOAD 移入循环内则正常。
+
+### 根因（非 SIMT 路径问题）
+
+跨块的 `Sr` inline-asm handle 经 i64 SSA 载体产生
+`%49:shared_abs = COPY %8:mixedgpr`。`getCommonSubClass(Shared_ABS, MixedGPR)`
+本应返回 nullptr（Shared 与 GPR 寄存器组不相交），却返回了
+`SIMT_OSVKR`——一个历史遗留的**空寄存器类**（0 个寄存器，无任何指令/解析器/
+测试引用）。空类是所有类的子集（80/80 个 SubClassMask 都含它的 bit），在
+smallest-ID 搜索中胜出；coalescer 据此合并并 `setRegClass(vreg, SIMT_OSVKR)`
+撞上 `isAllocatable()` 断言。SIMT 板块从头到尾没有参与；只是空类恰巧定义在
+SIMT td 文件里。
+
+### 修复（commit `abeccf49`，本地 dev-llvm15_56）
+
+1. 删除死代码空类 `SIMT_OSVKR`（`LinxV5RegisterInfoSIMT.td`，两处）；
+2. 通用防御：`TargetRegisterInfo.cpp` 的 `firstCommonClass` 跳过零寄存器类，
+   任何目标将来出现空类也不会被误报为公共子类。
+
+### 验证
+
+- 20 行 IR 最小复现（跨块 `Sr` handle + 循环）：修复前崩溃，修复后 S0 定义/
+  复用正确；issue 原始 `fa_gmma_dynamic_min.cpp` 编译通过，Q 外层 TLOAD 到
+  `S0`、内层 `B.IOS S0, mask=1111` 跨回边复用（asm + objdump 双确认）；
+  control 变体（TLOAD 在循环内）行为不变。
+- 新回归测试 `llvm/test/CodeGen/LinxV5/v5-shared-crossblock.ll` PASS。
+- CodeGen/MC LinxV5 失败集与基线逐项一致（20+6 个既有失败，零新增）。
+
+### SIMT 隔离审计（2026-09-19，用户要求确认）
+
+- 生成代码扫描（issue 复现 asm + objdump + 新测试）：0 条 `v.*`/`l.*` 向量
+  指令，0 个 SIMT 寄存器（`ri*`/`vt#`/`vu#`/`vm#`/`vn#`），无 `__mtc__`/
+  `__vec__` 痕迹。实际使用的寄存器全部是 STD 标量（`a*`/`t`/`u`/`x*`）、
+  Local tile 输出栈（`t#n`）与 Shared（`S0`/`S1`）。
+- 指令选择层面：janus CPU feature 集为 `[FeatureGeneric]`（不含
+  `FeatureSIMT`），SIMT 指令全部由 `isSIMT` 谓词门控，`linx64v5-...-musl`
+  默认路径不会选中任何 SIMT 指令定义。
+- 无多余指令：issue-case 与 control-case 的最终汇编写入完全相同条数的
+  `B.IOS`（各 4 条）；issue-case 内层循环体只有 K 的 TLOAD + TMATMUL +
+  TSTORE，Q 的 shared COPY 链在 coalescer 阶段全部消解，无补偿性
+  `ORI`/`c.movr`/`TMOV`/`PseudoTCOPY`。
+- 修复本身不含 hack：一处是删死代码（td），一处是 target-neutral 的
+  `firstCommonClass` 空类跳过（语义上是把"空集是所有类的子集"这一格论
+  副作用从可用类搜索中排除，不改变任何非空类结果）。
+
+### 附带发现（与 #99 无关，待处理）
+
+远端 PR #97（`3231c0cd`，pto-spec#322）给 `linx_blkc.h` 新增了
+`struct __fp8_rcpe6m2`，与 TileOP #165 在
+`include/jcore/linx_compat_types.hpp` 的无守卫定义冲突，当前任何
+`-mlxbc` 的 TileOP C++ 编译都会 redefinition 报错。本机验证时已在安装树
+头文件加 `#ifndef __LINX_BLKC` 守卫绕过；**TileOP 仓需要正式修复合入**。
+
+### 待办
+
+- ~~回复 issue #99 + push `abeccf49`~~（2026-09-19 已完成：回复已发
+  [#issuecomment-5732957884](https://github.com/LinxISA/llvm-project/issues/99#issuecomment-5732957884)，
+  commit 已推到 `linxisa/dev-llvm15_56`，issue 已关闭）；
+- ~~TileOP 侧 `__fp8_rcpe6m2` 头冲突正式修复~~（2026-09-19 已完成，见下节）。
+
+## 2026-09-19 `__fp8_rcpe6m2` 头冲突修复（TileOP PR #176 + LLVM `1f3f6a3`）
+
+### ISA 依据确认（ptp-spec #322）
+
+RCPE6M2 是正式 assigned Tile DataType（5-bit code 21，`tile-data-types.asl`），
+语义为 E6M2 码空间的 source-only 倒数派生类型（`formats/rcpe6m2.asl`）：
+TCVT 仅接受它作 source、destination 仅 FP16/BF16、无 destination 编码、
+无标量 FCVT。接口确实必要存在。
+
+### 双侧缺口与修复
+
+问题跨两仓，两侧独立修：
+
+1. **TileOP**（PR
+   [#176](https://github.com/LinxISA/Linx-TileOP-API/pull/176)，合入
+   `dd824c9`）：#165 只在非 Linx 的 `#else` 分支接了线；`__linx` 分支下
+   旧工具链缺定义、新工具链（LLVM PR #97 blkc.h 声明了 struct）redefinition。
+   修复：`__linx` 分支补 fallback struct，受 `__LINX_BLKC`（blkc.h include
+   guard）与 `PTO_LINX_HOST_CXX`（host shim，成员名是 `value`）双守卫，
+   任意 include 顺序下 traits 都可解析且无重复定义。
+2. **LLVM**（`1f3f6a3`，已推 `linxisa/dev-llvm15_56`）：DataType
+   enum/parser 名字表/AsmPrinter `%D`/InstPrinter 反汇编表缺 code 15
+   (e6m2)/21 (rcpe6m2)，TileOP TCVT inline asm 以 `<invalid-dtype>` 失败。
+   补 4 处表 + bits 表；TCVT pair 合法性仍归 TileOP static_assert（MC 层
+   只拼写/解码）。新 MC 测试 `bstart-datatype-e6m2-rcpe6m2.s`。
+
+### 验证
+
+- 位级：`BSTART.TEPL TCVT, rcpe6m2` 编码 `0x8191b1a9`，DataType=21 在
+  Inst{31:27}、TileOP=27 在 Inst{26:20}；asm→obj→objdump 双视图 round-trip；
+- 端到端：`TCVT_T(Tile<__half>, Tile<__fp8_rcpe6m2>)` `-mlxbc` 全链路发射
+  `BSTART.TEPL TCVT, rcpe6m2` + `B.DATR FP16` + `B.IOT`；
+- 回归：LLVM CodeGen/MC 失败集与基线零差异；TileOP `make check` 全绿
+  （rebase 到 #174 后复跑）；PR 走绿门禁 auto-merge。
+
+### TileOP 工作区备忘
+
+`docs/issue170-assemble-example` 分支上仍有三个文件的本地 WIP
+（b-subview 文档、pto_tile_region TCVT RMode 参数化、linx_compat rcpe6m2
+struct——最后一个已被 PR #176 以更完整形式取代，恢复该分支时注意丢弃
+重复部分）。
+
+## 2026-09-20 SuperScalarModel #740 修复：TEPL 族 B.DIM LB0 被常量折叠误删
+
+Issue：`SuperScalarModel#740`，合法 TCOLEXPAND [1,1]→[32,1]（动态 RMS
+Norm）被 gfrun `ValidateReduceAndExpandTepl` 以 hasValidCol=false 拒绝。
+评论（jiale-wangOwO）已正确解码：ELF bundle 无 `B.DIM ->LB0`，
+bdimMask=0b010 是真实编码状态。
+
+### 根因（LLVM 生成侧，TileOP/Model 均无问题）
+
+PTO 0.58.6 宏汇编（PR #92）引入的两处 B.DIM 常量一折叠
+（`LinxV5ExpandPseudoInsts.cpp` 的 `rewriteInlineAsmDim` Value==1 分支与
+`omitDefaultInlineAsmDims`）对**任何**值为 1 的 B.DIM 占位符删行，未区分
+LB0/LB1/LB2。TileOP 宏在 IR 层发射完整三条 B.DIM（lb0=1/lb1=32/lb2=1），
+后端把必需的 LB0（以及合法可省的 LB2）一并删掉。
+
+### ASL 普查（修复依据）
+
+- LB0 必需非零（"LB0 is required and supplies nonzero ValidCol"）：71 个
+  指令文件（全部 reduce-and-expand/elementwise/irregular 等）；
+- LB0 省略默认 1（"Omitted LB0 defaults ... to one"）：仅 TLOAD/TSTORE/
+  TPREFETCH/TMATMUL\*/TGEMV\*（TLSU transport + CUBE 族）。
+
+### 修复（llvm-project `3a9b70d`，已推 dev-llvm15_56）
+
+`bundleHeadMayOmitLB0(Asm)` 按 bundle head 判定：TLSU/CUBE（含
+TPREFETCH/TLOAD/TSTORE 拼写）可省 LB0；TEPL/SFU/VEC head 一律保留；未识别
+head 保留（宁可下游合法性报错）。两处折叠点均接入；常量传播路径在仅
+LB0 拒省时保留 B.DIM 行与 ADDI，不再中止整个折叠。
+
+### 验证
+
+- TCOLEXPAND [32,1]v32x1←[1,1] 端到端：`C.B.DIMI 1, ->lb0` 恢复，
+  bdimMask 0b011；
+- TROWEXPAND 三条 B.DIM 保持；CUBE TMATMUL bundle 逐字节不变（LB0 仍可省）；
+- 新 MC 测试 `tepl-expand-lb0.s`；CodeGen/MC 失败集与基线零差异；
+- 已回复 issue
+  [#issuecomment-5747055288](https://github.com/LinxISA/SuperScalarModel/issues/740#issuecomment-5747055288)；
+- TileOP 侧无需改动（宏发射正确），安装树 jcore 头已同步。
+
+## 2026-09-20 Issue #100 处理记录：B.DATR 缺少 Layout+DstDataType+PadValue+RMode 组合 alias（已修复并推送 `f81c7f52`，issue 已回复关闭）
+
+Issue：`LinxISA/llvm-project#100`，TileOP CUBE TCVT（BF16↔E8M0，`fa_lowp_recip`
+MX scale 路径）发射 `B.DATR CUBE_M32, e8m0, Null, RTM`，clang 集成汇编器
+`Match Instruction Error!`，无评论、无人处理。
+
+### 根因核实（独立验证，报告属实）
+
+- ISA 依据：TCVT `datr_contract.allowed_nonzero_fields` 含 Layout、DataType、
+  RMode（`asl/tile/elementwise-tile-tile/format-conversion/TCVT.asl`）；CUBE_M16/M32
+  源的 destination 必须保留 CUBE layout 且 B.DATR 每 block 至多一条、不合并，
+  四字段组合是 ISA 语义必需（`asl/block/attributes/B.DATR.asl`）。
+- TableGen alias 表（`LinxV5InstrInfo.td`）BDATR 全形 7 字段，现有 alias 组合
+  缺：bare 3 字段 `{Layout, Type, Pad}`、suffixed/bare 4 字段
+  `{Layout, Type, Pad, RMode}`（suffixed 3 字段已有）。
+- 复现（llvm-mc + clang 双路径）：4 字段 bare 全失败；`e8m0` 拼写、2 字段
+  形式正常。
+
+### 修复（commit `f81c7f52`，基于 `3a9b70d0`）
+
+- `LinxV5InstrInfo.td` 新增 3 个 InstAlias（bare 3 字段、suffixed 4 字段、
+  bare 4 字段），CmpMode/Sat/ByteId 固定零默认；数值 layout（`29, e8m0,
+  Null, RTM`；weight-TLOAD 的 `10, DTYPE_NONE, Zero`）经同一 alias 放行，
+  `validateInstruction` 既有 gate（46601e70）继续拦截非法码。
+- 新 MC 测试 `bdatr-layout-dtype-pad-rmode.s`：CUBE_M32/M16 × e8m0/BF16 ×
+  RNONE/RTM/RNE + 3 字段形式 + 数值拼写 + weight-TLOAD 形式，
+  `-show-encoding` 位段核对（Layout{11:7}/DataType{24:20}/PadValue{28:27}/
+  RMode{17:15}）+ obj→objdump round-trip。
+
+### 验证
+
+- issue 原始最小复现 `.s` 经 `clang --target=linx64v5-unknown-linux-musl -c`
+  通过；端到端：TileOP `TCVT<LINX_RDN>(M32E8M0, M32Bf16)` + `TCVT(M32Bf16,
+  M32E8M0)` `-mlxbc` 全链路出 ELF，objdump 宏视图 `TCVT <..., BF16, e8m0,
+  RTM, CUBE_M32>` 正确。
+- 回归：MC LinxV5 失败集 6 个与基线一致（stash 复核 3 个抽样全为既有）；
+  CodeGen LinxV5 20 失败与基线一致，零新增。
+- TileOP 侧无需改动（宏发射正确）。
+
+### 附带发现（待处理）
+
+- TileOP weight-TLOAD wrapper（`template_asm.hpp:2918`）发射
+  `B.DATR layout%c[WeightLayout], DTYPE_NONE, Zero`，即 `layout10` 拼写——
+  parser 无 `layout<N>` 前缀语法（2026-08-24 决议禁止扩展该语法），该拼写
+  永远无法解析，属 TileOP 死发射；修复出路：改发数值 `10`（本修复后数值
+  3 字段形式可解析，等价编码）。wrapper 三个 TLOAD2/TSTORE2 旧 wrapper
+  零调用者。
+- `B.DATR NORM, %D[DstType], Null`（TSTORE2_DN2DN 等零调用者 wrapper）同属
+  bare 3 字段形式，本次修复后亦可解析。
+
+### 待办
+
+- ~~push `f81c7f52` 到 `linxisa/dev-llvm15_56` + 回复 issue #100 并关闭~~
+  （2026-09-20 已完成：推送 `3a9b70d0..f81c7f52`；回复
+  [#issuecomment-5747371005](https://github.com/LinxISA/llvm-project/issues/100#issuecomment-5747371005)，
+  issue 已关闭）；
+- TileOP 后续项：weight-TLOAD `layout10` 死拼写改数值 `10`（可并入
+  Linx-TileOP-API#177 或独立 PR）。
+
+## 2026-09-20 TileOP #186 修复：TIMG2COL Function 28 + weight TLOAD 拼写/零选择器
+
+Issue：`Linx-TileOP-API#186`，卷积的 TIMG2COL 与 weight TLOAD 两个入口集成
+汇编失败（TIMG2COL 三处 Match Instruction Error；weight TLOAD 在 issue 环境
+表现为 coalescer RC 断言 exit 134）。
+
+### 双侧根因与修复
+
+1. **LLVM `69d6e6d8`（已推 dev-llvm15_56）**：
+   - `TileOPTMA::TIMG2COL = 28`（enum/parser 名字表/printTileOPTMA）+
+     canonical head 定义 `BSTART.TIMG2COL DataType`（Tile_DataType_FixedOp
+     28，与 `BSTART.TLSU TIMG2COL, DataType` 同编码；InstAlias 形式会触发
+     `hasSideEffects unknown` 的 TableGen 作用域问题，勿回退）；
+   - parser CUBE transport 方向门把 BSTART.TIMG2COL 视为 GM→Local（ASL
+     legality：ND2M16/ND2M32/DN2M16/DN2M32 合法）；
+   - B_IO 及三源 alias 源槽 `GPRSrcNoR0` → `GPRSrc`：ISA 允许 B.IOR 源槽
+     显式零选择器（TIMG2COL `[GMBase, zero, zero]`；weight TLOAD 的
+     StartGPR=0 会被优化器物化到 R0，此即 issue 环境 RC 断言来源）。
+2. **TileOP PR #188（已合入 `83bfb85`）**：weight TLOAD 的 B.DATR 从被废弃
+   的 `layout10` 数字拼写改为按 `WeightLayout` 模板参数选择 ISA 名
+   OHWI2NK/OIHW2NK（上一节"附带发现"的正式修复，替代"改发数值 10"方案）。
+
+### 验证
+
+- 两个文档原例端到端编译通过（TIMG2COL 完整 bundle、weight TLOAD 完整
+  bundle，含 `B.DATR OHWI2NK.normal, Zero` 与 `B.IOR [Base,Shape]`）；
+- LLVM CodeGen/MC 失败集与基线一致（bdatr-layout-dtype-pad-rmode 的失败
+  是并行会话未提交工作引入的基线既有失败，与本次无关）；
+- TileOP `make check` 绿，PR 走绿门禁 auto-merge；安装树已同步
+  origin/linx `83bfb85`；
+- 已回复 issue
+  [#issuecomment-5749314789](https://github.com/LinxISA/Linx-TileOP-API/issues/186#issuecomment-5749314789)。
+
+### 工作区注意
+
+TileOP 主工作区被另一会话切到 `fix/local-b-matrix-contract`（有未提交
+WIP），本次 weight 修复经 `fix/weight-tload-layout-spelling` 分支 + worktree
+完成，未触碰该工作区；stash@{0}（WIP weight spelling）已被本修复消费，
+可清理。
+
+## 2026-09-20 Issue 处理记录：TLSU A3 标量混编（linx-toolchain-build#17，已修复并推送 `28e88c90`，issue 已回复关闭）
+
+Issue：`LinxISA/linx-toolchain-build#17`，SuperNPUBench matmul_shared 编译产物中
+标量访存（`ldi [sp,2472]` 栈重载）被排进 TLOAD（BSTART.TLSU）块，违反 TLSU
+规范 A3（tile 访问独占 block）；gfsim 报数百次 a3_tile_violation，gfrun 断言
+崩溃。09-14 基线二进制相同内核无违规，差异仅为三个 `0800` 边界半字。
+
+### 根因
+
+`c0160cb0`（09-11 PTO 0.58.6 宏汇编）在 `LinxV5EmitHeader.cpp` 新增
+`omitRedundantFallthroughHeaders`，其 `previousBlockAcceptsStandardBody` 把
+inline-asm Tile bundle（isTileBlockInstruction）当作可吸收 Standard 体
+的 predecessor 而返回 true——TLOAD 块结束后的标量代码（含下一条 tile 的
+base 栈重载）因 FALL-STD 头被省略而留在仍开启的 TLSU 块内。旧编译器无此
+pass（STD 头永不省略），故 09-14 前后行为分界。issue 报在 toolchain-build
+仓，修复点在 LLVM。
+
+### 修复（commit `28e88c90`，含测试对齐 `cd43aa01`）
+
+- `previousBlockAcceptsStandardBody`：上一活跃块是 Tile bundle 时返回
+  false——只有 Standard 前块可吸收标量体；Tile→Tile 的省略与 Standard 前块
+  下的省略不变。
+- 附带：`bdatr-layout-dtype-pad-rmode.s` 的 DIS 期望改为 bare 宏规范拼写
+  （69d6e6d8 后默认 objdump 视图经 alias 表打印 bare 形式；物理 7 字段形
+  仅在 -M no-tile-macros 下出现）。编码 CHECK 不变。
+
+### 验证（kernel 7665af56 worktree /tmp/itb17，M2048/N256/K2048 tM128/tN64/tK64）
+
+- 静态扫描：TLSU 块内标量 ldi/sdi 2734 → **0**；
+- `C.BSTART.STD` 边界在 09-14 基线相同位置恢复（TLOAD bundle 后 + 下一
+  TLOAD 前，0x6e / 0x9a）；
+- 回归：CodeGen LinxV5 20 失败 / MC LinxV5 6 失败，与基线逐项一致，零新增。
+- gfsim/gfrun 全量重跑未做（本机无模型环境）；tN=128/tK=64 的模型侧控制流
+  分歧不在本 issue 范围。
+
+### 环境注意（复现方法）
+
+- SuperNPUBench 内核源码在 `benchmark/one-level-arch/kernels/multi_thread/
+  matmul/matmul_shared.hpp`（驱动在 test/kernel/multi_thread/matmul/src/），
+  7665af56 需 `git worktree add`；
+- TileOP 头依赖 `-mlxbc` 的 resource-dir 注入（LinxV5Linux toolchain），无
+  `--target=linx64v5-...` 时不注入 tileop-api include；安装树
+  `/home/zhuwei/linx-llvm/build/lib/clang/15.0.4/include/tileop-api/` 需与
+  TileOP include 同步（改头后 cp -a）；
+- M=256 配置在当前 LLVM 有既有 ISel 断言崩溃（InstrEmitter.cpp:997，与本次
+  无关，M=2048 正常）。
