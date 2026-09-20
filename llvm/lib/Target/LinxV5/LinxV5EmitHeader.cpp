@@ -363,8 +363,13 @@ static bool previousBlockAcceptsStandardBody(MachineInstr &Header) {
       --I;
       if (isMetaInstruction(*I))
         continue;
+      // A Tile block (BSTART.TEPL/TLSU/CUBE/... bundle) must never absorb a
+      // Standard body: TLSU spec A3 requires every Tile access to own its
+      // block, and scalar loads/stores interleaved into a TLOAD/TSTORE bundle
+      // are an architectural violation (gfsim/gfrun CheckTileA3). Only a
+      // Standard predecessor may absorb this header's scalar body.
       if (isTileBlockInstruction(*I))
-        return true;
+        return false;
       if (I->isInlineAsm())
         return false;
       if (I->getOpcode() == LinxV5::BSTART_STD_WITHOUT_TARGET_32_FALL)
