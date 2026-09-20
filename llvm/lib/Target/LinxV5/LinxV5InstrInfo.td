@@ -2043,6 +2043,16 @@ def : InstAlias<"B.DATR\t$srctype, $ByteId, $PadValue, $RMode, $sat", (BDATR 0, 
 // the canonical CUBE_M32.normal/CUBE_M16.normal forms.
 def : InstAlias<"B.DATR $DataLayout, $PadValue", (BDATR BArgFormat:$DataLayout, 0, 31, PadValue:$PadValue, 0, 0, 0, 0), 2>;
 def : InstAlias<"B.DATR\t$srctype, $PadValue, $RMode, $sat", (BDATR 0, 0, BstartDataType:$srctype, PadValue:$PadValue, 0, RMode:$RMode, Sat:$sat, 0), 2>;
+// Issue #100 (CUBE-layout TCVT): TCVT's datr_contract allows Layout next to
+// DataType and RMode, and a CUBE_M16/M32 source must keep its layout while
+// the same B.DATR selects the destination dtype and rounding mode —
+// consecutive B.DATRs do not merge attributes. Expose the missing
+// {Layout, SrcType, PadValue} and {Layout, SrcType, PadValue, RMode} combos
+// in both the canonical .normal-suffixed and bare spellings; CmpMode, Sat
+// and ByteId stay at their zero defaults.
+def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue", (BDATR BArgFormat:$DataLayout, 0, BstartDataType:$SrcType, PadValue:$PadValue, 0, 0, 0, 0), 2>;
+def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue, $RMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, 0, RMode:$RMode, 0, 0), 1>;
+def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue, $RMode", (BDATR BArgFormat:$DataLayout, 0, BstartDataType:$SrcType, PadValue:$PadValue, 0, RMode:$RMode, 0, 0), 2>;
 
 //def : InstAlias<"BSTART.TEPL $TileOP, $Mode", (BSTART_TEPL 31, TileOPTEPL:$TileOP, TEPLMode:$Mode), 1>;
 
