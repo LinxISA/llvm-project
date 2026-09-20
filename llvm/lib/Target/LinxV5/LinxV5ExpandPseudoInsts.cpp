@@ -117,6 +117,28 @@ static bool findInlineAsmDimPlaceholder(StringRef Asm, unsigned AsmOperand,
   return true;
 }
 
+/// Whether an omitted LB0 has the architectural default of one for the
+/// operation carried by this bundle. Per the active PTO ASL, most Tile
+/// operations require an explicit nonzero LB0/ValidCol ("LB0 is required and
+/// supplies nonzero ValidCol"); only the transport and CUBE families default
+/// an omitted LB0 to one (TLOAD, TSTORE, TPREFETCH, TMATMUL*, TGEMV*). The
+/// bundle head mnemonic distinguishes the families: TLSU covers the
+/// transport ops, CUBE covers the Matrix ops, while TEPL/SFU/VEC heads are
+/// always in the required-LB0 set. A head we cannot recognize keeps LB0 so
+/// the bundle fails legality rather than silently losing a required
+/// dimension.
+static bool bundleHeadMayOmitLB0(StringRef Asm) {
+  size_t BStart = Asm.find("BSTART.");
+  if (BStart == StringRef::npos)
+    return false;
+  StringRef Head = Asm.substr(BStart + strlen("BSTART."));
+  if (Head.startswith("TLSU") || Head.startswith("CUBE") ||
+      Head.startswith("TPREFETCH") || Head.startswith("TLOAD") ||
+      Head.startswith("TSTORE"))
+    return true;
+  return false;
+}
+
 static bool collectInlineAsmDimUses(MachineInstr &MI, Register Reg,
                                     SmallVectorImpl<InlineAsmDimUse> &Uses) {
   if (!MI.isInlineAsm())
@@ -168,6 +190,12 @@ static bool rewriteInlineAsmDim(StringRef Input, unsigned AsmOperand,
   Output = Input.str();
   size_t Length = Prefix.size() + 1;
   if (Value == 1) {
+    // LB0/ValidCol is architecturally required for non-transport operations
+    // (issue SuperScalarModel#740): folding it away makes the bundle illegal
+    // at ValidateReduceAndExpandTepl. Only the TLSU/CUBE families accept an
+    // omitted LB0.
+    if (Slot == '0' && !bundleHeadMayOmitLB0(Input))
+      return false;
     size_t End = Output.find('\n', Pos + Length);
     Output.erase(Pos,
                  End == std::string::npos ? std::string::npos : End - Pos + 1);
@@ -196,7 +224,13 @@ static bool omitDefaultInlineAsmDims(MachineInstr &MI, MachineFunction &MF) {
     if (InlineAsm::getKind(FlagValue) == InlineAsm::Kind_Imm &&
         NumOperands == 1 && MI.getOperand(I + 1).isImm() &&
         MI.getOperand(I + 1).getImm() == 1) {
+      bool MayOmitLB0 = bundleHeadMayOmitLB0(Asm);
       for (unsigned LoopReg = 0; LoopReg != 3; ++LoopReg) {
+        // LB0/ValidCol is architecturally required for non-transport
+        // operations (issue SuperScalarModel#740): an encoded dimension of
+        // one is not an omittable default there.
+        if (LoopReg == 0 && !MayOmitLB0)
+          continue;
         std::string Line = "B.DIM zero, ${" + utostr(AsmOperand) + ":c}, ->lb" +
                            utostr(LoopReg);
         size_t Pos = Asm.find(Line);
@@ -525,7 +559,14 @@ bool LinxV5ExpandPseudo::foldInlineAsmDimConstants(MachineFunction &MF) {
             InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
         std::string Rewritten;
         if (!rewriteInlineAsmDim(Asm, Use.AsmOperand, Value, Rewritten)) {
-          Safe = false;
+          // A required-LB0 bundle with a constant 1 dimension simply keeps
+          // its B.DIM line and the defining ADDI; that is a valid program.
+          // Only give up when the rewrite could not find the placeholder
+          // shape at all.
+          unsigned UnusedSlot = 0;
+          if (Value != 1 ||
+              findInlineAsmDimPlaceholder(Asm, Use.AsmOperand, UnusedSlot))
+            Safe = false;
           break;
         }
         InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString)
