@@ -13,29 +13,29 @@
 # Layout{11:7}, DataType{24:20}, PadValue{28:27}, RMode{17:15}.
 
 # CHECK: B.DATR CUBE_M32, e8m0, Null, RTM // encoding: [0xa3,0x9e,0xd1,0x18]
-# DIS: B.DATR CUBE_M32.normal, e8m0, Null, byte0, Eq, RTM, #sat
+# DIS: B.DATR CUBE_M32, e8m0, Null, RTM
 B.DATR CUBE_M32, e8m0, Null, RTM
 
 # CHECK: B.DATR CUBE_M32, BF16, Null // encoding: [0xa3,0x1e,0x50,0x18]
-# DIS: B.DATR CUBE_M32.normal, BF16, Null
+# DIS: B.DATR CUBE_M32, BF16, Null
 B.DATR CUBE_M32, BF16, Null, RNONE
 
 # CHECK: B.DATR CUBE_M16, e8m0, Null, RTM // encoding: [0xa3,0x9f,0xd1,0x18]
-# DIS: B.DATR CUBE_M16.normal, e8m0, Null, byte0, Eq, RTM, #sat
+# DIS: B.DATR CUBE_M16, e8m0, Null, RTM
 B.DATR CUBE_M16, e8m0, Null, RTM
 
 # CHECK: B.DATR CUBE_M32, e8m0, Null // encoding: [0xa3,0x1e,0xd0,0x18]
-# DIS: B.DATR CUBE_M32.normal, e8m0, Null
+# DIS: B.DATR CUBE_M32, e8m0, Null
 B.DATR CUBE_M32, e8m0, Null
 
 # The .normal-suffixed 4-field spelling round-trips too; the bare and
 # suffixed spellings share the CmpMode=0/Sat=0/ByteId=0 defaults.
 # CHECK: B.DATR CUBE_M32, e8m0, Null, RNE // encoding: [0xa3,0x9e,0xd0,0x18]
-# DIS: B.DATR CUBE_M32.normal, e8m0, Null, byte0, Eq, RNE, #sat
+# DIS: B.DATR CUBE_M32, e8m0, Null, RNE
 B.DATR CUBE_M32.normal, e8m0, Null, RNE
 
 # CHECK: B.DATR CUBE_M16, BF16, Null, RNE // encoding: [0xa3,0x9f,0x50,0x18]
-# DIS: B.DATR CUBE_M16.normal, BF16, Null, byte0, Eq, RNE, #sat
+# DIS: B.DATR CUBE_M16, BF16, Null, RNE
 B.DATR CUBE_M16.normal, BF16, Null, RNE
 
 # The numeric spellings resolve to the same encodings (parse-level aliases
