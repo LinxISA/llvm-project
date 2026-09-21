@@ -561,15 +561,16 @@ void LinxV5MCCodeEmitter::expandPseudoEmptyTile(
   writeBinaryCodes(
       OS, Fixups, STI,
       {MCInstBuilder(LinxV5::BSTART_TMA)
-           .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::TLOAD))
-           .addOperand(MCOperand::createImm(LinxV5Op::DataType::U8))},
+           .addOperand(MCOperand::createImm(LinxV5Op::DataType::U8))
+           .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::TLOAD))},
       ByteCount);
   // LB0 (ValidCol) is required nonzero by the TLOAD schema.
   writeBinaryCodes(
       OS, Fixups, STI,
       {MCInstBuilder(LinxV5::C_B_DIMI)
-           .addOperand(MCOperand::createImm(1))
-           .addOperand(MCOperand::createImm(0))},
+           .addOperand(MCOperand::createImm(0))  // ->lb0
+           .addOperand(MCOperand::createImm(1))} // ValidCol = 1
+      ,
       ByteCount);
   // b.iot
   writeBinaryCodes(OS, Fixups, STI, getBIOTFromInst(MI, MCII), ByteCount);

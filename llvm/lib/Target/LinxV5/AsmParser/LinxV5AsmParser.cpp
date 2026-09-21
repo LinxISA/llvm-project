@@ -4509,13 +4509,13 @@ void LinxV5AsmParser::emitEmptyTile(MCInst &Inst, MCStreamer &Out) {
   // B.DIM LB0 (ValidCol=1) and one terminating no-source destination
   // B.IOT; the omitted B.IOR supplies GM base zero.
   emitToStreamer(Out, MCInstBuilder(LinxV5::BSTART_TMA)
-                          .addOperand(MCOperand::createImm(TileOPTMA::TLOAD))
-                          .addOperand(MCOperand::createImm(DataType::U8)));
+                          .addOperand(MCOperand::createImm(DataType::U8))
+                          .addOperand(MCOperand::createImm(TileOPTMA::TLOAD)));
 
   // b.dim ->lb0
   emitToStreamer(Out, MCInstBuilder(LinxV5::C_B_DIMI)
-                          .addOperand(MCOperand::createImm(1))  // ValidCol
-                          .addOperand(MCOperand::createImm(0)));// ->lb0
+                          .addOperand(MCOperand::createImm(0))  // ->lb0
+                          .addOperand(MCOperand::createImm(1)));// ValidCol = 1
 
   // emit b.iot
   emitMcInstVecToStreamer(getBIOTFromInst(Inst, MII), Out);
