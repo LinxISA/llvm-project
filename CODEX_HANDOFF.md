@@ -10941,3 +10941,16 @@ clang -j2` 成功，`git diff --check` 成功。
 - 尚未建立独立 lit 回归：当前构建树的 `llvm-objdump` 不支持既有测试使用的
   `no-tile-macros` 选项；提交前可补充不依赖该选项的 compile-only 回归，或在
   工具链测试环境中执行完整 LinxV5 CodeGen 套件。
+
+## 2026-09-22 Issue #103 闭环完成
+
+- 本地修复经 rebase 到远端 issue #105 修复后，最终提交为
+  `a9a703102dd8`，已推送到 `linxisa/dev-llvm15_56`。
+- rebase 后使用原始最小复现重新验证：`-O2` 和 `-O0` 均通过，未生成 SIMT
+  指令或寄存器；`ninja -C build-current clang -j2` 成功。
+- 已在 issue #103 发布修复说明：
+  `https://github.com/LinxISA/llvm-project/issues/103#issuecomment-5764531614`。
+- issue #103 已于 2026-09-22（北京时间；GitHub API 时间为
+  2026-09-21T17:14:52Z）关闭，关闭原因为 `completed`。
+- #103 处理闭环完成；后续若出现新回归，应新开 issue 或追加独立修复，不能
+  回退本次标量路径不改、tile spill 使用 S64/NORM 的边界。
