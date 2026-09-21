@@ -552,11 +552,24 @@ void LinxV5MCCodeEmitter::expandPseudoEmptyTile(
     const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
   unsigned ByteCount = 0;
-  // bstart.par
+  // Issue #102: BSTART.VPAR is a PTO reserved encoding
+  // (encoding-ownership.asl, owner "PTO reserved two-level vector extension
+  // space", formal review RESERVED). Lower the output-stack hand placeholder
+  // as a legal TLOAD transport instead: its schema needs only one required
+  // B.DIM LB0 and one terminating no-source destination B.IOT, and the
+  // omitted B.IOR supplies GM base zero.
   writeBinaryCodes(
       OS, Fixups, STI,
-      {MCInstBuilder(LinxV5::BSTART_VPAR)
-           .addOperand(MCOperand::createImm(LinxV5Op::TileOPMode::VS16))},
+      {MCInstBuilder(LinxV5::BSTART_TMA)
+           .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::TLOAD))
+           .addOperand(MCOperand::createImm(LinxV5Op::DataType::U8))},
+      ByteCount);
+  // LB0 (ValidCol) is required nonzero by the TLOAD schema.
+  writeBinaryCodes(
+      OS, Fixups, STI,
+      {MCInstBuilder(LinxV5::C_B_DIMI)
+           .addOperand(MCOperand::createImm(1))
+           .addOperand(MCOperand::createImm(0))},
       ByteCount);
   // b.iot
   writeBinaryCodes(OS, Fixups, STI, getBIOTFromInst(MI, MCII), ByteCount);
