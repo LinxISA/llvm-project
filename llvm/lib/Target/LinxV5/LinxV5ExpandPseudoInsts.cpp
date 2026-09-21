@@ -559,13 +559,17 @@ bool LinxV5ExpandPseudo::foldInlineAsmDimConstants(MachineFunction &MF) {
             InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
         std::string Rewritten;
         if (!rewriteInlineAsmDim(Asm, Use.AsmOperand, Value, Rewritten)) {
-          // A required-LB0 bundle with a constant 1 dimension simply keeps
-          // its B.DIM line and the defining ADDI; that is a valid program.
-          // Only give up when the rewrite could not find the placeholder
-          // shape at all.
-          unsigned UnusedSlot = 0;
-          if (Value != 1 ||
-              findInlineAsmDimPlaceholder(Asm, Use.AsmOperand, UnusedSlot))
+          // rewriteInlineAsmDim refuses exactly one legal case: a required
+          // LB0 whose folded value is the constant 1 on a non-transport
+          // head (issue SuperScalarModel#740). The B.DIM line and its
+          // defining ADDI simply stay — that is a valid program. Anything
+          // else (placeholder shape not found) is a real failure.
+          char Slot = 0;
+          std::string Prefix = "B.DIM $" + utostr(Use.AsmOperand) + ", 0, ->lb";
+          size_t Pos = Asm.find(Prefix);
+          if (Pos != StringRef::npos && Pos + Prefix.size() < Asm.size())
+            Slot = Asm[Pos + Prefix.size()];
+          if (Value != 1 || Slot != '0' || bundleHeadMayOmitLB0(Asm))
             Safe = false;
           break;
         }

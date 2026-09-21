@@ -617,7 +617,7 @@ void LinxV5InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     DL = I->getDebugLoc();
 
   MachineFunction *MF = MBB.getParent();
-  const MachineFrameInfo &MFI = MF->getFrameInfo();
+  MachineFrameInfo &MFI = MF->getFrameInfo();
   MachineMemOperand *MMO = MF->getMachineMemOperand(
       MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOStore,
       MFI.getObjectSize(FI), MFI.getObjectAlign(FI));
@@ -636,6 +636,15 @@ void LinxV5InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
 
   if (LinxV5::Tile_ABSRegClass.hasSubClassEq(RC)) {
     ++NumTileSpill;
+    // Tile_ABS is a 64-bit handle register class, while the smallest legal
+    // tile spill fragment is 128 B. FastRA creates the stack object from the
+    // register class width, so establish the tile ABI minimum here before
+    // frame layout. The spill payload is always encoded as S64/NORM; its
+    // source tile datatype is intentionally irrelevant.
+    if (MFI.getObjectSize(FI) < 128) {
+      MFI.setObjectSize(FI, 128);
+      MFI.setObjectAlignment(FI, Align(256));
+    }
     BuildMI(MBB, I, DL, get(LinxV5::PseudoTSpill))
         .addReg(SrcReg, getKillRegState(IsKill))
         .addFrameIndex(FI)

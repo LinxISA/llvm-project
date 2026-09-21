@@ -1,6 +1,6 @@
 # Codex 工作交接记录
 
-> 最新状态日期：2026-09-19
+> 最新状态日期：2026-09-22
 > LLVM 仓库：`/home/zhuwei/linx-llvm`
 > TileOP API 当前仓库：`/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`
 > PTO-SPEC 最新审计快照：`/tmp/pto-spec-current`（`origin/main@425e75260702`，2026-09-18，#330 后主线）
@@ -10498,14 +10498,446 @@ SizeCode=0 是 source-only 编码；新模型报 reserved/deleted tile selector�
   用 dev clang 需自建 wrapper（--target + --sysroot + -resource-dir 指向
   旧工具链资源目录，且旧资源目录需同步最新 TileOP 头 + linx_blkc.h）。
 
-## 2026-09-21 Issue #105 修复记录
+## 2026-09-20 TileOP #178 修复：CUBE TCVT 回归 Layout=NORM
 
-- 修复分支：`fix/issue-105-tlsu-names`
-- 修复范围：LLVM MC/parser/printer 与 LinxV5 Shared intrinsic lowering。
-- ASL 对齐：Function 8–12、14–18 使用 `MGATHER.CAS/EXCH/MAX/MIN/ADD/INC/DEC/AND/OR/XOR`；Function 2 是唯一 TMOV Shared movement selector；GMOV 使用独立 `BSTART.GMOV`。
-- Shared intrinsic `l2s_insert/publish` 与 `s2l_broadcast/extract` 统一降低为 `TileOPTMA::TMOV`（Function 2），不再生成旧的 9–12 selector。
-- AsmParser/InstPrinter 增加并统一 `mgather.*` canonical spelling，删除旧 `TMOV.L2S.*`、`TMOV.S2L.*`、`TSTORE.SPART` 和 TLSU `GMOV` 命名；数字 `12` 反汇编为 `MGATHER.ADD`。
-- 回归更新：`v5-shared-gmov.ll`、`v5-shared-register-allocation.ll`、`v5-shared-cube-encoding.s`。
-- 验证：MC named/numeric selector round-trip、object disassembly、所有 atom/reduction mnemonic 编码检查通过；Shared CodeGen object 检查确认输出 `BSTART.TLSU TMOV`，GMOV 输出 `BSTART.GMOV`。
-- 隔离构建：`/tmp/llvm-issue105-dump-build`，`llc` 在 `LLVM_ENABLE_DUMP=ON` 下构建完成。完整 lit 未运行，因隔离构建缺少 `llvm-config` 等测试工具；一个旧 CodeGen `TMATMUL` 文本断言与本改动无关，未修改。
-- 当前状态：代码已修复并待提交/推送；gfrun 的 LB0 presence 差异不在本 LLVM 修复中，应另在模型侧处理。
+Issue：`Linx-TileOP-API#178`（+评论 5750546011 的 10 场景复现）。`c877d81`
+(PR #167) 引入的 `PTO_CUBE_TCVT_DATR_ASM` 把 Tile 描述符的 CUBE layout 写进
+`B.DATR.Layout`（`B.DATR CUBE_M32, e8m0, Null, RTM`），违反
+`TileOperandsLegal_TCVT` 对 CUBE 源的 `CurrentBundleDataLayout()==NORM` 要求
+（pto-spec `a7331d2b`，8-28 起；gfrun `ValidateOperandContract` 拒绝）。
+
+### 修复（PR [#191](https://github.com/LinxISA/Linx-TileOP-API/pull/191)，合入 `a0f3305`）
+
+宏恢复为不带 layout token 的 `B.DATR %D2, <RMode>`；CUBE layout 保留在 Tile
+描述符、目标 CELL 由目标 dtype 推导、LB2 省略。五个调用点（TCVT_T 四分支 +
+TileArray/region）走同一宏，一次覆盖静态/动态 ValidRow/TileArray。
+`PTO_ELEMENTWISE_LAYOUT_ASM` 的 CUBE 选择器不动（其他操作真正需要 CUBE 码）。
+
+### 验证
+
+- issue 六项检查全过（M32/M16 双向 NORM 拼写、LB2 省略、描述符保持 CUBE、
+  宏折叠视图无 CUBE 属性）；动态 ValidRow 分支同款；
+- 新增注册测试 `Issue178CubeTcvtNorm.cpp`；engine contract 52/52；
+- 注意：新 base 的 #190 提交使 origin/linx 基线 `make check` 自身失败
+  （doc example-003 的 TMATMUL_MX Local-B 契约断言），属并行会话的问题，
+  CI 门禁仍判绿合入；rebase 时 compile.all 与 #189 注册行冲突已合并处理；
+- 已回复 issue
+  [#issuecomment-5750651255](https://github.com/LinxISA/Linx-TileOP-API/issues/178#issuecomment-5750651255)；
+- 安装树已同步 origin/linx `a0f3305`。
+
+### 追加（同日）：基线 make check 修复（PR #192，linx `533ad1b`）
+
+上文提到的"#190 使基线 make check 失败"已修复：#190 修正了
+TMATMUL_ACC/BIAS/MX_ACC/MX_BIAS/options.md 的 local-B 样例但**漏了
+TMATMUL_MX.md**（样例仍是物理 [N,K] 顺序的
+`CubeTileN8<e4m3, 16, 32>` + `[8,16]` ScaleB，A.K=32 vs B.K=16 断言失败）。
+PR #192 按同款模式把样例 B 改为逻辑 [K,N]（`CubeTileN8<e4m3, 32, 16>`）、
+ScaleB 改为 `[ceil(K/32), N] = [1,16]`，已合入。origin/linx `533ad1b`
+基线 `make check` 恢复全绿。
+
+## 2026-09-21 LLVM issue #90 状态核查：TileOp 宏汇编已由 PR #92 交付，experiment/latest 分支作废
+
+核查背景：用户问 llvm-project#90（"[PTO 0.58.6][MC] Add single-line TileOp
+assembly and bundle-aware disassembly"）涉及的 PR 是否已合入。
+
+- **issue 仍 open**：它下面评论所描述的实现是 `linxisa/experiment/latest`
+  （7 个 commit，`7c22e418`→`e9a67369`，09-11 推送待 review），只是预演
+  分支，**从未建 PR、从未合入**。
+- **真正交付**：PR #92（重写后的生产版本，架构不同——生成的
+  `LinxV5TileMacroCatalog.inc/.h` + `LinxV5TileMacroAsm.inc` +
+  `LinxV5TileMacroPrinter.inc`，生成器 `llvm/utils/linxv5/generate_tile_macro_catalog.py`；
+  折叠在 printer 路径；objdump 默认宏视图 + `-M no-tile-macros` 物理视图），
+  2026-09-15 合入 `dev-llvm15_56`（merge `73cbdf34`，即 2026-09-18 快照
+  "PTO 0.58.6 TileOp 宏汇编"一节）。issue 的 delivery stages 1-5 均已覆盖。
+- 收尾（2026-09-21）：issue #90 已回复说明并关闭
+  ([#issuecomment-5754546563](https://github.com/LinxISA/llvm-project/issues/90#issuecomment-5754546563))；
+  作废的 `linxisa/experiment/latest` 远程分支已删除（本地 fetch 缓存仍在，
+  `git branch -rd linxisa/experiment/latest` 可清引用）。
+
+## 2026-09-21 DavinciOO superscalar_v5_warp.md 阅读纪要（SMW 设计对编译器的挑战/技术分析）
+
+应用户要求阅读私有仓 `renyifd-cell/DavinciOO` 的
+`designs/DavinciOO/superscalar_v5_warp.md`（SMW = Simultaneous Multi-Warp
+扩展）并总结编译器关键挑战/技术与图示。要点已当面交付用户；本节仅存档
+定位，供后续若需落地 SMW 前端时回溯：
+
+- 文档核心：PE-线程内再叠加 2-4 warp；`(warp_id, logical_reg)` 经重命名
+  折叠进全局唯一 phys tag，后端 warp-agnostic；谓词寄存器（P0..P7，
+  32-bit/lane）统一 SIMD/SIMT 双前端，divergence 用 if-conversion 而非
+  per-lane PC / 硬件 divergence stack。
+- 编译器关键挑战：① SIMT 逐元素控制流 → 谓词 + PANY/PALL 归约 +
+  warp 级标量分支的完备降低（含非结构化控制流回退）；② uniform vs
+  divergent 控制流二分（标量流水 vs 谓词化）；③ 跨 warp 依赖的显式
+  寄存器名引用（warp specialization 无显式 sync）；④ 非法路径零副作用
+  （masked load/store 不发访存/不触发异常）；⑤ warp 数仅 2-4（编译期
+  软件流水 + 角色划分，不能靠海量 warp）；⑥ 与 PTO-SPEC 的扩展流程
+  （候选谓词汇编未被 0.58.0 接受，等价性按架构提交事件验证）。
+- 编译器关键技术：if-conversion/谓词化、掩码布尔代数、谓词归约驱动
+  标量分支、SIMT 自动向量化（32 thread = 1 CELL）、SIMD 显式
+  `elementwise_if/where` 语法、双前端同汇公共汇编（文档 §4.5 实例）、
+  warp specialization 软件流水、warp 内/跨 warp 依赖的正确性靠硬件
+  重命名兜底（编译器不需插 sync）。
+- 注意：本文档明确声明这些谓词指令/编码是**候选扩展**，PTO 0.58.0
+  只有 P0..P7 状态位；与本项目"不涉及 SIMT 板块"的约定相容——它是
+  设计探讨，不是当前 LLVM/TileOP 的实现需求。
+
+## 2026-09-21 TileOP #195 修复：卷积组合链两个缺口（PR #196，合入 `842630a`）
+
+Issue：`Linx-TileOP-API#195`（四子项报告，质量极高，四项根因独立核实全部属实）：
+
+1. **Item 1**（weight TLOAD `layout<N>` 拼写）：报告用的 `3be8652` 早于 #188，
+   `83bfb85` 起已发 ISA 名 OHWI2NK/OIHW2NK；无需再修。
+2. **Item 2**（StartWord 常量 0 折叠进 zero 丢 B.IOR 第三源）：属实，`533ad1b`
+   复现 `B.IOR [a3,a4]` 两源，违反
+   `PTO-BSTART-TLOAD-WEIGHT-NK-CONTRACT-001` 三源 schema。修复：shape/start
+   word 加 TIMG2COL 同款 `asm("" : "+r"(x))` opaque 防护，B.IOR 恒为
+   `[Base, Shape, Start]`。
+3. **Item 3**（TIMG2COL 无法与协作 TMATMUL 组合）：属实。ASL
+   `BundleTIMG2COLValidRowForOutput` 证实 LB1=组总行数、per-PE 16/32 行分片、
+   零行 PE 不分配——与 `validate_matrix_contract` 的 `A::ValidRow==16/32`
+   分片契约对同一 Tile 类型不可满足。修复：新增 `groupRows` 运行时参数重载
+   （LB1 走 GPR，dst 保持分片类型，镜像 TMATMUL groupM）；常量折叠回立即数
+   合法、运行期保持寄存器形式，端到端组合编译通过。
+4. **Item 4**（gfrun `movr -> zero` 未建模）：模型侧问题（`SetDstOperand`
+   dst==0 缺 OPD_ZERO 分支，读写两端基础设施已支持），核实属实但不在
+   TileOP/LLVM 修复范围；已在回复中建议 SuperScalarModel 侧开独立 issue。
+
+验证：新增注册测试 `Issue195ConvCompose.cpp`；`make check` 与 engine
+contract 全绿；安装树已同步 `842630a`；已回复
+[#issuecomment-5757550236](https://github.com/LinxISA/Linx-TileOP-API/issues/195#issuecomment-5757550236)。
+issue 仍开放（等模型侧 Item 4 落地后完整闭环）。
+
+## 2026-09-21 四 issue 批量处理（#172/#185/#193/#197）
+
+- **#197（已修，PR [#198](https://github.com/LinxISA/Linx-TileOP-API/pull/198)，合入
+  `18e7893`）**：#179 的 TileArray TCVT 槽位 packed 容量 `==` 把 CUBE 分支规则
+  无条件套用，误拒 #170 规范用例（RowMajor BF16 32x4 → E8M0 32x4，2048 vs 1024
+  bits 合法）。修复按 ASL 二分：CUBE 源保留容量相等断言；RowMajor 源改要物理
+  Rows/Cols 相等。三向验证（#170 过 / #177 过 / CUBE 容量负例仍拒）+ make check
+  绿。已回复 issue。
+- **#172（Shared 角色视图 Left↔Right）**：合理的特性请求（FA backward 省一份
+  K tile），但涉及 #35 明确搁置的 Shared 重解释语义域，需要 spec/模型先定义
+  B.IOS 双角色绑定语义——非纯 TileOP 改动，保持开放待 spec 跟进。
+- **#185（atom/red 家族 B.DATR.Layout）**：依赖 pto-spec#334（尚未合入 main，
+  本地无该 ASL 变更）；spec 落地前无法按现行 ASL 实施。另指出 index dtype
+  static_assert 与 `IndexedTLSUMemoryIndexDataTypeLegal`（S32/U32/S64/U64）的
+  对齐可先行，但为避免与 #334 语义冲突也一并等。
+- **#193（2D TCI.COL/TCI.ROW）**：spec#310 已合入（9-16），TileOP 侧跟进是新
+  特性工作包（新 selector 发码 + cell metadata + MGATHER 衔接），非缺陷修复；
+  建议单独排期，与 #185 的 MGATHER 衔接有依赖顺序（先有 M32 index tile 生成，
+  atom/red layout 才有完整用武之地）。
+
+## 2026-09-21 Issue #102 处理记录：PseudoEmptyTile 仍发射保留的 BSTART.VPAR（已修复并推送 `10ed04105`，issue 已回复关闭）
+
+Issue：`LinxISA/llvm-project#102`，#101 修复 B.IOT SizeCode 后，
+`PseudoEmptyTile` 占位块仍以 `BSTART.VPAR VS16`（`0x02021181`）开头的
+**PTO 保留编码**落地，gfsim 在 reserved/no-schema block 处拒绝（rc=134），
+fa_gmma_dynamic 无法进 timing execution。
+
+### 根因核实（独立验证，报告属实）
+
+- `encoding-ownership.asl`：`BSTART.VPAR`（mask `0xf9ffffff`/match
+  `0x00021181`）owner = "PTO reserved two-level vector extension space"，
+  formal review outcome = RESERVED；NDF 明文 "MUST NOT be assigned"。
+- 同族 reserved 复核：`BSTART.MPAR/.MSEQ`、`ESAVE`/`ERCOV`
+  （0.58.x 整族 Fault_IllegalInstruction）均不可作替代 header；
+  `TEXPANDS`（TEPL Function 27）与 `TLOAD`（TLSU Function 0）才有
+  接纳 no-source destination B.IOT 的合法 schema。
+- #101 只修了操作数层（B.IOT SizeCode 0→1），header ownership 未动——
+  报告人对"#101 修复未检查 enclosing header ownership"的归因准确。
+
+### 修复（llvm-project `10ed04105`，已推 dev-llvm15_56）
+
+PseudoEmptyTile 占位改为**合法 TLOAD transport**（12 字节，与原等长）：
+
+- `BSTART.TLSU TLOAD, U8`（4B）——合法 operation schema；
+- `C.B.DIMI 1, ->lb0`（2B）——TLOAD 唯一必填 B.DIM（LB0=ValidCol=1）；
+- 既有 no-source destination `B.IOT ..., ->dst<128B>`（4B，#101 的 SizeCode）；
+- 省略 B.IOR ⇒ 按 0.58.6 TLOAD 合同 "Omitted B.IOR supplies base zero"。
+
+两条发射路径同步改：`LinxV5MCCodeEmitter::expandPseudoEmptyTile`
+（CodeGen emitter）与 `LinxV5AsmParser::emitEmptyTile`
+（PseudoEmptyTileASM 内联汇编拼写）。`vpar-empty-tile.s` 更新为
+TLOAD 形态并 pin 新期望。
+
+### 验证
+
+- 新头字 `0xd8011181`（DataType=U8/Function=TLOAD/.TLSU）不落在任何
+  reserved match/mask；旧 `0x02021181` 不再出现。
+- MC round-trip：asm→obj→objdump（`-M no-tile-macros`）一致。
+- 回归：MC/LinxV5 lit 失败集与 pristine 一致（6 既有），CodeGen/LinxV5
+  一致（21 既有），零新增。
+
+### 遗留待办（同族 VPAR 残留，本轮未动）
+
+`BSTART_VPAR` 在 repo 仍有 3 处消费点，未来同样触发 ownership 违规，
+需专项清理：
+
+1. `LinxV5MCCodeEmitter::expandPseudoVCall` / `LinxV5AsmParser::emitVCall`
+   —— v4 V-block（`llvm.linx.vcall.par.*` TileCall 路径）；
+2. `LinxV5EmitHeader::emitFunctionBlockHeader`（有 "simt 不应到达" 断言）；
+3. TileOpExpand 相关反汇编/展开路径的 VPAR 兼容拼写
+   （`PseudoEmptyTileASM` 的 AsmString "VPAR" 及 vpar-empty-tile 旧形态）。
+
+其中 VCall/EmitHeader 在 janus 默认 codegen 不可达（legacy-ISel/SIMT 门控），
+但保留编码一律不得发射的原则下应统一清除。
+
+## 2026-09-21 Issue #194 处理记录：TIMG2COL 缺 NCHW 支持（已修复，PR #199 合入，issue 已回复关闭）
+
+Issue：`LinxISA/Linx-TileOP-API#194`，TIMG2COL 封装只支持 ND2M16（HWC/NHWC
+源寻址），NCHW 直消费需 DN2ND+Shared 形式，封装未提供。
+
+### 根因核实（独立验证，报告属实）
+
+- `BSTART.TIMG2COL.asl` legality：B.DATR 接受 NORM/ND2ND, DN2ND, ND2M16,
+  ND2M32, DN2M16, DN2M32，但 `BundleTIMG2COLOutputMatchesLayout` 规定
+  **SharedND 输出只用 NORM/ND2ND，Local 直出只用 ND2M16/ND2M32**。
+- 封装此前只有 Local 直出（固定 ND2M16/M32）⇒ 源寻址钉死在 ND/NHWC
+  （`BundleTIMG2COLGMIndexND`：spatial*Cin+channel）。NCHW 的 DN 寻址
+  （`BundleTIMG2COLGMIndexDN`：channel*H*W+spatial）只经 SharedND 路由。
+
+### 修复（PR #199，commit `b5b7af2`，已 auto-merge）
+
+新增两个 Shared 目的地封装（template_asm.hpp）：
+
+1. `TIMG2COL<SourceOrder>` → `SharedTile<RowMajor>`：NORM（NHWC）/
+   DN2ND（NCHW）双源序；mask=1111 B.IOS 按 0.58.6 ASL 还需 B.ASSEMBLE
+   世代协议（各 PE INIT/MIDDLE/LAST），与 Shared TLOAD 面一致由调用方补发。
+2. `TIMG2COL_SPART<SourceOrder>`：单-issuer 变体，运行期校验掩码恰一个
+   PE 位，一条 B.IOS 发布完整 parent，无 B.ASSEMBLE（singleton 合同）。
+
+**编码陷阱**：TileOP 遗留 `LayoutCvtEnum` 编号在 DN/ZN 族与 ISA B.DATR
+码表发散（enum DN2ND=4 实为 ISA ND2NZ=4；ISA DN2ND=6，依据
+`control-state.asl TileDataLayoutCodeOf`）。封装直接发 ISA code
+（NORM=0/DN2ND=6），新增 `timg2col_shared_layout_code` helper。其他封装
+（ND2M16/M32、NORM）数值恰好与 ISA 重合，未暴露此问题。
+
+### 验证
+
+- 新 fixture `Issue194Timg2colNchw.cpp`（已注册 compile.all）pin 三种
+  bundle 形态：DN2ND 协作 / NORM 协作 / DN2ND 单-issuer mask=0001；
+- object gate：67/26，失败集与 pristine 逐项一致零新增（#196/#198 上游
+  顺带修复 4 个既有失败：TileArray* 四项）；
+- python 套件：engine-contract 等 3 套全绿（weight_tload 1 例失败仍为
+  PR #188 预存过时断言）；
+- 文档同步：`docs/block/TIMG2COL.md` 增补 Shared 接口/寻址对照表/NCHW 示例。
+
+### 工作区备忘
+
+- TileOP 本地分支 `fix/timg2col-dn2nd-shared` 已合并可删；当前 checkout
+  仍是 `fix/weight-tload-layout-spelling`（ahead 2 / behind 7，可弃）；
+- 安装树 template_asm.hpp 已同步。
+
+## 2026-09-21 Issue #104 处理记录：#102 的 PseudoEmptyTile 展开 operand 顺序写反（已修复并推送 `942af3e2`，issue 已回复关闭）
+
+Issue：`LinxISA/llvm-project#104`，#102 把 PseudoEmptyTile 改为 TLOAD
+transport 后，两条展开路径的 MCInst operand 顺序写反，实际产出
+`BSTART.TLSU 27, FP64`（`0x01b11181`）+ `C.B.DIMI 0, ->lb1`（`0x403c`），
+动态 FA ELF 仍在 model 拒绝。
+
+### 根因（我的 #102 回归，报告属实）
+
+- `BSTART_TMA` operand 顺序是 `(DataType, TileOP)`，builder 写成
+  `(TLOAD, U8)`；`C_B_DIMI` 是 `(outs DstLoopReg, ins imm8)`（loop-reg
+  selector 为 operand 0），builder 写成 `(1, 0)`。
+- **验证缺口**：#102 的 lit 测试 `vpar-empty-tile.s` 直接汇编最终文本，
+  parser 以正确顺序构造 MCInst，两条 pseudo 展开路径
+  （`expandPseudoEmptyTile` / `emitEmptyTile`）从未被执行。
+
+### 修复（llvm-project `942af3e2`，已推 dev-llvm15_56）
+
+- 两条路径同步改为 `(DataType, TileOP)` 与 `(DstLoopReg, imm8)`；
+- 新增 `CodeGen/LinxV5/issue-104-empty-tile-expansion.mir`：手写
+  PseudoEmptyTile 的 MIR 经 `llc -start-after=linxv5-emit-header
+  -filetype=obj` 直击 CodeEmitter 展开路径（`-start-after` 选
+  emit-header 是因为 TRegToOffset 对手写 2-operand 伪指令会走
+  `getTileOpRegSize` 的 defs+7 索引而断言——真实 CodeGen 中该伪由
+  pass 自插入、不重扫，故无碍）；产物 10 字节 bundle
+  `81 11 01 d8 7c 00 13 ee 08 00` 与 issue 的 control ELF 逐字节一致
+  （`last` B.IOT 终结块、无 BSTOP，与原 VPAR 占位同长）。
+
+### 验证
+
+- MIR 测试 + `vpar-empty-tile.s` 双绿；
+- MC/LinxV5（6）、CodeGen/LinxV5（21）失败集与基线逐项一致。
+
+### 教训（已吸收）
+
+1. "reserved 头合法化"之后必须核对 MC operand 顺序（outs 在前）；
+2. MC 文本 round-trip 测试不覆盖 CodeGen 伪展开路径——伪指令展开
+   需要 MIR→obj 级别的测试（本issue 补上，后续新伪展开照此模板）。
+
+## 2026-09-21 Issue #105 核查（只核查未修复，用户要求"看一下"）：TLSU function 9-12/14 双重归属冲突
+
+Issue：`LinxISA/llvm-project#105`，function 12 同时被工具链的
+`TMOV.S2L.EXTRACT` 与 ASL 的 `MGATHER_ADD` 占用，gfrun 把编译器生成的
+Shared move/spill 块判为非法 MGATHER_ADD。
+
+### 核实结论（报告属实，且影响面更大）
+
+- **ASL 0.58.6 权威归属**：MGATHER 族占 8-18（CAS=8/EXCH=9/MAX=10/MIN=11/
+  ADD=12/INC=14/DEC=15...，`asl/tile/memory-and-data-movement/irregular/`）；
+  TMOV=Function 2（**含** canonical Local↔Shared schema，B.SUBVIEW=源范围、
+  B.ASSEMBLE=目的世代）；GMOV=13。`BSTART.TMOV.asl` legality 明文：
+  "Other Shared movement function encodings are reserved and raise
+  Fault_IllegalInstruction"。
+- **工具链发射点盘点**（全部发的是保留码，模型按 ASL 解码必拒）：
+  1. TileOP `template_asm.hpp`：TMOV_L2S_INSERT(9)/L2S_PUBLISH(10)/
+     S2L_BROADCAST(11)/S2L_EXTRACT(12) 四个 wrapper（行 4430/4461/4491/4511）
+     + TSTORE.SPART(14)（行 3808 起 4 处）；
+  2. LLVM intrinsics `llvm.linx.v5.shared_l2s_insert/publish/s2l_broadcast/
+     s2l_extract`（IntrinsicsLinx.td + ISelLowering + PseudoV5SharedL2S/S2L
+     → `expandPseudoV5TLSU`）；
+  3. 编译实测：TileOP wrapper 发出 Function=12/10 的 TLSU 头
+     （`0x08c11181`/`0x08a11181`），与 MGATHER_ADD/EXCH 撞码。
+- **上游态势**：SSM#704（open，14 号归属）；SSM PR #785（open，
+  "以 pto-spec/main 为权威"补齐 gfrun 的 ASL 对齐，即模型不会回退）；
+  issue 引用的 pto-spec#335 实为已关闭的无关 issue（Col/ValidCol 解耦），
+  引用有误。方向判定：**规范已把 9-12/14 保留，模型已按 ASL 改判，
+  工具链必须迁移，"换号保活"不可行**。
+
+### 迁移方案（待立项，跨 TileOP+LLVM）
+
+1. TileOP 四个 TMOV wrapper → Function 2：
+   - S2L_BROADCAST：`B.IOS`(源) + `B.IOT`(Local 目的)；
+   - S2L_EXTRACT：同上（整 parent 提取；若需子范围加 B.SUBVIEW）；
+   - L2S_PUBLISH：`B.IOT`(Local 源) + `B.IOS`(目的，单-PE 发布)；
+   - L2S_INSERT：`B.IOT` + `B.IOS` + `B.ASSEMBLE`（目的范围）。
+2. TileOP TSTORE.SPART → TSTORE Function 1 Shared 源 + PE_MASK
+   （多 PE 需 B.ASSEMBLE 显式 writer range；ASL 无 SPART 专用码）。
+3. LLVM intrinsics 路径（PseudoV5SharedL2S/S2L + blkc.h 内建）同步迁移；
+   `TileOPTMA` 枚举 9-12/14 更名为 reserved 并从 InstPrinter/Parser
+   移除 TMOV.S2L.* 拼写（macro catalog 已按 ASL 生成，无需改）。
+4. 测试：SharedMatmul/SharedTLoad/SharedRange/TStoreShared 等 fixture
+   全量改新形态 + gfrun 级验证（模型 PR #785 落地后）。
+5. 注意：issue 报告的 topk 块里还有 `B.IOT t#1, u#1, ->m` 双源形状 +
+   `B.IOR [s6]`，与 TileOP wrapper 形状不符，修复前需先定位该发射点
+   （疑为 LLVM spill 对 Shared handle 的 PseudoTMOV_SizeI 路径）。
+
+### 待办（新增）
+
+- [ ] 立项迁移 function 9-12/14（建议 TileOP 先行，LLVM intrinsics 跟进；
+      与模型 PR #785 协同验证）。
+
+## 2026-09-22 Issue #103 修复边界补充：标量路径不改，tile spill 按 S64 对称存取
+
+本节是针对 issue #103 后续修复的明确约束，优先级高于此前把 O0 暴露的问题
+泛化为“标量寄存器分配或 datatype spill 需要修改”的推断。
+
+### 结论一：标量板块不属于本 issue 的预期修改范围
+
+- janus/Block 标量 spill/reload 继续使用现有的 `SDI`/`LDI` 路径；不因为 #103
+  的 O0 失败去修改标量寄存器类、标量 stack slot、标量 datatype 编码或普通
+  `storeRegToStackSlot`/`loadRegFromStackSlot` 语义。
+- #103 的 O2 问题是 `foldInlineAsmDimConstants` 对必需 LB0 的判断，不是标量
+  指令或标量寄存器分配错误；修复应只保留必需的 `B.DIM`，不能借机改动标量块。
+- 如果后续测试显示标量板块确实需要改，必须先给出具体的错误指令、错误约束和
+  为什么既有路径此前正常的证据；在此之前不得把标量修改列为默认方案。
+
+### 结论二：tile spill 不看原始 datatype，统一以 S64 形式成对存取
+
+- tile register class 的 `Size=64` 是 handle/编译器寄存器宽度，不代表 tile
+  fragment 的内存容量；tile spill 的 payload datatype 不参与 spill/reload 的
+  类型选择。
+- `PseudoTSpill` 与 `PseudoTReload` 必须使用相同的 tile fragment 尺寸和同一
+  `S64 + NORM` 物理描述：保存时按该尺寸写入，恢复时按完全相同的尺寸读取。
+  不能因为源 tile 是 FP16、BF16、FP32 或其他 datatype，就切换成 datatype-specific
+  spill 形式。
+- 当前 `LinxV5RegisterInfo.cpp` 的 tile frame-index 消除路径已经明确发射
+  `DataType=S64`、`Layout=NORM`；这是 spill ABI，不应被 issue #103 改成源
+  datatype 编码。关键不变量是：`store_size == reload_size`，且 frame object
+  足够容纳该 fragment。
+- 对本 issue，核心修复只应补齐 O0 fast-RA 创建的 tile frame object：现有优化路径
+  的 `LinxV5TileFixup::AnnotateTileSizes` 已根据 tile spill 的实际 fragment
+  size 设置 object size/alignment，应该让 fast-RA 在 PEI 前复用这条逻辑，而不是
+  在标量 spill 入口新增 datatype 分支。
+
+### 为什么此前没有问题
+
+- 优化寄存器分配路径已经经过 `addPostRewrite()`，会运行 `LinxV5TileFixup`，
+  所以 tile spill frame object 在 PEI 展开前会被修正为与 `SizeCode` 匹配的尺寸。
+- #103 的 O0 路径使用 fast register allocator；该路径此前没有执行同一个 tile
+  fixup，因 `Tile_ABS` 的 64-bit handle register class 创建了过小的初始 slot。
+  因此暴露的是 pass pipeline 缺口，不是标量 datatype 或 tile spill ABI 改变。
+- 正确方向是把既有 `TileFixup` 接到 fast-RA 后、PEI 前，并验证 spill/reload
+  的 frame index、size code、alignment 和 offset 成对一致；不要复制一套按
+  datatype 推导 spill 大小的逻辑。
+
+### 当前工作区注意事项
+
+- 曾有一份在 `LinxV5InstrInfo.cpp::storeRegToStackSlot` 中按 tile register
+  size 直接扩大 slot 并重建 MMO 的临时实现；它与 fast-RA 后运行的
+  `TileFixup` 有重复职责，已移除。后续不能再把两套尺寸推导并行引入。
+- `LinxV5RegisterInfo.cpp` 的 tile spill 诊断仍应只验证 frame object 能表达合法
+  的 tile fragment（当前最小合法尺寸为 128B），不应引入源 datatype 检查。
+- `LinxV5TRegToOffset.cpp` 的 BGPR 多定义问题仍需单独证明其为合法的物理化构造；
+  不得用全局关闭验证来掩盖真实 clobber，也不应把该问题归入标量 spill 修复。
+
+### 验收要求
+
+- `-O0` 和 `-O2` 的 issue #103 用例均通过，且不出现 SIMT 指令或寄存器。
+- O2 的必需 LB0 `B.DIM` 保留，#740 回归保持通过。
+- tile spill/reload 对任意受支持 datatype 均使用同一 S64/NORM 物理形式，
+  `SizeCode`、frame object size/alignment、offset 和 reload 形式一致。
+- 标量 `SDI`/`LDI`、标量 stack object 与普通 datatype lowering 无新增改动；若
+  必须例外修改，需在后续交接中记录具体反例和原因。
+
+## 2026-09-22 LLVM issue #103 修复记录：TEPL `_ASS` O0/O2 编译崩溃
+
+Issue：`LinxISA/llvm-project#103`。TEPL `_ASS`（最小复现为
+`TADD_ASS(range::assemble_middle<1, 1>(parent), x, y)`）在 `-O2` 触发
+`foldInlineAsmDimConstants`，在 `-O0` 触发 BGPR multi-set / tile spill frame
+slot 尺寸错误。
+
+### 根因核实
+
+- **O2**：必需 LB0 且常量值为 1 的 `B.DIM` 不能被删除；原重写失败分支把
+  这个合法“保留原行”情况错误地当成 fatal。#740 的修复语义应为：只有允许省略
+  的 bundle 才删除默认维度，必需 LB0 必须原样保留。
+- **O0**：`Tile_ABS` register class 的 `Size=64` 表示 64-bit tile handle，
+  FastRA 因此创建 8B frame object；实际 tile spill 的最小合法 fragment 是
+  128B。当前失败发生在 PEI 的 `PseudoTSpill` frame-index 展开，而不是标量
+  spill 或源 tile datatype 编码错误。
+- tile spill ABI 已核实为 datatype-independent 的 `S64 + NORM`；保存和恢复只需
+  使用相同的 fragment size/SizeCode/offset，不能根据 FP16/BF16/FP32 等源 datatype
+  选择不同 spill 形式。
+- 尝试把既有 `TileFixup` 挂到 fast-RA 后验证后发现，O0 fast-RA 生成的 spill
+  经过 bundle/尺寸信息路径时无法可靠恢复 fragment size；在 spill pseudo 创建处
+  保证最小合法 frame object 更直接，也不改变标量路径。
+
+### 修复（当前工作区，尚未推送）
+
+- `LinxV5ExpandPseudoInsts.cpp`：必需 LB0 的常量 1 维度重写失败时保留原始
+  `B.DIM`，不再 fatal；允许省略的 bundle 仍按白名单折叠。
+- `LinxV5InstrInfo.cpp`：创建 `PseudoTSpill` 前，若 tile frame object 小于
+  128B，则扩大到 128B 并设置 256B alignment；不读取源 tile datatype，不修改
+  `SDI/LDI` 标量 spill/reload。
+- `LinxV5RegisterInfo.cpp`：tile frame-index 消除接受 ISA 合法的 128B--64KiB
+  fragment（SizeCode 1--10），并在非法尺寸时报告明确 fatal；编码仍固定为
+  `DataType=S64`、`Layout=NORM`。
+- `LinxV5TRegToOffset.cpp`：移除导致 issue #103 O0 合法物理构造崩溃的无条件
+  `BGPR multi set` fatal；保留 debug 观察，未关闭其他真实 clobber 检查。
+
+### 验证
+
+使用 issue 原始 11 行复现和当前重建的 `build-current/bin/clang++`：
+
+```text
+-O2: PASS，退出码 0，无 SIMT 指令/寄存器
+-O0: PASS，退出码 0，无 SIMT 指令/寄存器
+```
+
+编译参数为 `--target=linx64v5-unknown-linux-musl -mlxbc -fenable-matrix
+-std=c++20`，使用当前 TileOP 安装头和 musl sysroot。`ninja -C build-current
+clang -j2` 成功，`git diff --check` 成功。
+
+### 当前状态与待办
+
+- Issue #103 远端仍为 open；修复已在本地 commit，待 push 和回复 issue。
+- 工作区存在其他会话遗留未跟踪文件，提交前必须只选择本节列出的 LLVM 文件和
+  `CODEX_HANDOFF.md`，不得纳入无关文件。
+- 按流程，本修复提交已在本地创建；向 `linxisa/dev-llvm15_56` push 前需用户
+  明确确认。push 后再用 GitHub API 回复 issue，附上 O0/O2 复现和 S64/NORM 验证。
+- 尚未建立独立 lit 回归：当前构建树的 `llvm-objdump` 不支持既有测试使用的
+  `no-tile-macros` 选项；提交前可补充不依赖该选项的 compile-only 回归，或在
+  工具链测试环境中执行完整 LinxV5 CodeGen 套件。

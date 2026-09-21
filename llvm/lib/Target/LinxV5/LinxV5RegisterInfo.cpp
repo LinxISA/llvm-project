@@ -400,7 +400,12 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     Register TileReg = MI.getOperand(0).getReg();
     int FI = MI.getOperand(1).getIndex();
     unsigned RegSize = MF.getFrameInfo().getObjectSize(FI);
-    assert(RegSize >= 512 && RegSize <= 64 * 1024);
+    // B.IOT SizeCode 1..10 encodes 128 B..64 KiB at PE granularity
+    // (issue #77); a [32,1] i32 fragment is a legal 128 B spill (code 1).
+    if (RegSize < 128 || RegSize > 64 * 1024) {
+      errs() << "TSPILL-DIAG: size=" << RegSize << " MI=" << MI << "\n";
+      llvm::report_fatal_error("tile spill size " + Twine(RegSize));
+    }
     unsigned RegSizeCode = llvm::Log2_32(RegSize) - 6;
 
     Register AddrReg = MRI.createVirtualRegister(&LinxV5::GRRegClass);
