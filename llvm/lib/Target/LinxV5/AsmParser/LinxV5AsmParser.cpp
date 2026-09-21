@@ -2944,14 +2944,17 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
                .Case("mscatter", TileOPTMA::MSCATTER)
                .Case("mgather.mask", TileOPTMA::MGATHER_MASK)
                .Case("mscatter.mask", TileOPTMA::MSCATTER_MASK)
-               // PTO v0.58 TLSU Function 8-14.
+               // PTO v0.58 TLSU GM atom/reduction functions.
                .Case("mgather.cas", TileOPTMA::MGATHER_CAS)
-               .Case("tmov.l2s.insert", TileOPTMA::TMOV_L2S_INSERT)
-               .Case("tmov.l2s.publish", TileOPTMA::TMOV_L2S_PUBLISH)
-               .Case("tmov.s2l.broadcast", TileOPTMA::TMOV_S2L_BROADCAST)
-               .Case("tmov.s2l.extract", TileOPTMA::TMOV_S2L_EXTRACT)
-               .Case("tstore.spart", TileOPTMA::TSTORE_SPART)
-               .Case("gmov", TileOPTMA::GMOV)
+               .Case("mgather.exch", TileOPTMA::MGATHER_EXCH)
+               .Case("mgather.max", TileOPTMA::MGATHER_MAX)
+               .Case("mgather.min", TileOPTMA::MGATHER_MIN)
+               .Case("mgather.add", TileOPTMA::MGATHER_ADD)
+               .Case("mgather.inc", TileOPTMA::MGATHER_INC)
+               .Case("mgather.dec", TileOPTMA::MGATHER_DEC)
+               .Case("mgather.and", TileOPTMA::MGATHER_AND)
+               .Case("mgather.or", TileOPTMA::MGATHER_OR)
+               .Case("mgather.xor", TileOPTMA::MGATHER_XOR)
                // PTO 0.58.6 TLSU Function 28: standalone IMG2COL carrier.
                .Case("timg2col", TileOPTMA::TIMG2COL)
                .Default(TileOPTMA::EMPTY_TileOPTMA);

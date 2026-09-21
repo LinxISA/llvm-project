@@ -988,27 +988,36 @@ void LinxV5InstPrinter::printTileOPTMA(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPTMA::MSCATTER_MASK:
     O << "MSCATTER.MASK";
     break;
-  // PTO v0.58 TLSU Function 8-14.
+  // PTO v0.58 TLSU GM atom/reduction functions.
   case LinxV5Op::TileOPTMA::MGATHER_CAS:
     O << "MGATHER.CAS";
     break;
-  case LinxV5Op::TileOPTMA::TMOV_L2S_INSERT:
-    O << "TMOV.L2S.INSERT";
+  case LinxV5Op::TileOPTMA::MGATHER_EXCH:
+    O << "MGATHER.EXCH";
     break;
-  case LinxV5Op::TileOPTMA::TMOV_L2S_PUBLISH:
-    O << "TMOV.L2S.PUBLISH";
+  case LinxV5Op::TileOPTMA::MGATHER_MAX:
+    O << "MGATHER.MAX";
     break;
-  case LinxV5Op::TileOPTMA::TMOV_S2L_BROADCAST:
-    O << "TMOV.S2L.BROADCAST";
+  case LinxV5Op::TileOPTMA::MGATHER_MIN:
+    O << "MGATHER.MIN";
     break;
-  case LinxV5Op::TileOPTMA::TMOV_S2L_EXTRACT:
-    O << "TMOV.S2L.EXTRACT";
+  case LinxV5Op::TileOPTMA::MGATHER_ADD:
+    O << "MGATHER.ADD";
     break;
-  case LinxV5Op::TileOPTMA::TSTORE_SPART:
-    O << "TSTORE.SPART";
+  case LinxV5Op::TileOPTMA::MGATHER_INC:
+    O << "MGATHER.INC";
     break;
-  case LinxV5Op::TileOPTMA::GMOV:
-    O << "GMOV";
+  case LinxV5Op::TileOPTMA::MGATHER_DEC:
+    O << "MGATHER.DEC";
+    break;
+  case LinxV5Op::TileOPTMA::MGATHER_AND:
+    O << "MGATHER.AND";
+    break;
+  case LinxV5Op::TileOPTMA::MGATHER_OR:
+    O << "MGATHER.OR";
+    break;
+  case LinxV5Op::TileOPTMA::MGATHER_XOR:
+    O << "MGATHER.XOR";
     break;
   case LinxV5Op::TileOPTMA::TIMG2COL:
     O << "TIMG2COL";

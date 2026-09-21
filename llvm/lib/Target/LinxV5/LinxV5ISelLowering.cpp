@@ -889,16 +889,14 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerV5GMOV(Op, DAG);
     case Intrinsic::linx_v5_shared_l2s_insert:
       return lowerV5SharedL2S(Op, DAG,
-                              LinxV5Op::TileOPTMA::TMOV_L2S_INSERT);
+                              LinxV5Op::TileOPTMA::TMOV);
     case Intrinsic::linx_v5_shared_l2s_publish:
       return lowerV5SharedL2S(Op, DAG,
-                              LinxV5Op::TileOPTMA::TMOV_L2S_PUBLISH);
+                              LinxV5Op::TileOPTMA::TMOV);
     case Intrinsic::linx_v5_shared_s2l_broadcast:
-      return lowerV5SharedS2L(
-          Op, DAG, LinxV5Op::TileOPTMA::TMOV_S2L_BROADCAST);
+      return lowerV5SharedS2L(Op, DAG, LinxV5Op::TileOPTMA::TMOV);
     case Intrinsic::linx_v5_shared_s2l_extract:
-      return lowerV5SharedS2L(Op, DAG,
-                              LinxV5Op::TileOPTMA::TMOV_S2L_EXTRACT);
+      return lowerV5SharedS2L(Op, DAG, LinxV5Op::TileOPTMA::TMOV);
     case Intrinsic::linx_get_simt_ret:
       return lowerGetSIMTRet(Op, DAG);
     case Intrinsic::linx_get_sysreg: {

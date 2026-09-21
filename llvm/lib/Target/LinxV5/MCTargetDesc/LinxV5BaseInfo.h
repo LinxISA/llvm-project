@@ -480,14 +480,19 @@ enum TileOPTMA {
   MSCATTER = 5,
   MGATHER_MASK = 6,
   MSCATTER_MASK = 7,
-  // PTO v0.58 TLSU Function 8-14.
+  // PTO v0.58 TLSU Function assignments. Shared movement uses TMOV=2;
+  // Function 13 is reserved in the TLSU selector space. GMOV has its own
+  // BSTART.GMOV encoding and is not a TileOPTMA selector.
   MGATHER_CAS = 8,
-  TMOV_L2S_INSERT = 9,
-  TMOV_L2S_PUBLISH = 10,
-  TMOV_S2L_BROADCAST = 11,
-  TMOV_S2L_EXTRACT = 12,
-  GMOV = 13,
-  TSTORE_SPART = 14,
+  MGATHER_EXCH = 9,
+  MGATHER_MAX = 10,
+  MGATHER_MIN = 11,
+  MGATHER_ADD = 12,
+  MGATHER_INC = 14,
+  MGATHER_DEC = 15,
+  MGATHER_AND = 16,
+  MGATHER_OR = 17,
+  MGATHER_XOR = 18,
   // PTO 0.58.6 TLSU Function 28: standalone BSTART.TIMG2COL carrier.
   TIMG2COL = 28,
   EMPTY_TileOPTMA

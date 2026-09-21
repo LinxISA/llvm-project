@@ -10497,3 +10497,15 @@ SizeCode=0 是 source-only 编码；新模型报 reserved/deleted tile selector�
 - fa build（one-level-arch fa kernel）默认靠工具链 wrapper 的默认 triple，
   用 dev clang 需自建 wrapper（--target + --sysroot + -resource-dir 指向
   旧工具链资源目录，且旧资源目录需同步最新 TileOP 头 + linx_blkc.h）。
+
+## 2026-09-21 Issue #105 修复记录
+
+- 修复分支：`fix/issue-105-tlsu-names`
+- 修复范围：LLVM MC/parser/printer 与 LinxV5 Shared intrinsic lowering。
+- ASL 对齐：Function 8–12、14–18 使用 `MGATHER.CAS/EXCH/MAX/MIN/ADD/INC/DEC/AND/OR/XOR`；Function 2 是唯一 TMOV Shared movement selector；GMOV 使用独立 `BSTART.GMOV`。
+- Shared intrinsic `l2s_insert/publish` 与 `s2l_broadcast/extract` 统一降低为 `TileOPTMA::TMOV`（Function 2），不再生成旧的 9–12 selector。
+- AsmParser/InstPrinter 增加并统一 `mgather.*` canonical spelling，删除旧 `TMOV.L2S.*`、`TMOV.S2L.*`、`TSTORE.SPART` 和 TLSU `GMOV` 命名；数字 `12` 反汇编为 `MGATHER.ADD`。
+- 回归更新：`v5-shared-gmov.ll`、`v5-shared-register-allocation.ll`、`v5-shared-cube-encoding.s`。
+- 验证：MC named/numeric selector round-trip、object disassembly、所有 atom/reduction mnemonic 编码检查通过；Shared CodeGen object 检查确认输出 `BSTART.TLSU TMOV`，GMOV 输出 `BSTART.GMOV`。
+- 隔离构建：`/tmp/llvm-issue105-dump-build`，`llc` 在 `LLVM_ENABLE_DUMP=ON` 下构建完成。完整 lit 未运行，因隔离构建缺少 `llvm-config` 等测试工具；一个旧 CodeGen `TMATMUL` 文本断言与本改动无关，未修改。
+- 当前状态：代码已修复并待提交/推送；gfrun 的 LB0 presence 差异不在本 LLVM 修复中，应另在模型侧处理。
