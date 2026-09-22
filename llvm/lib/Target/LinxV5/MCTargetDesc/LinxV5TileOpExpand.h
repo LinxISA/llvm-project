@@ -28,6 +28,10 @@ llvm::SmallVector<MCInst> getBIORFromInst(MCInst Inst, llvm::SmallVector<unsigne
 
 llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII);
 
+/// Select the concrete B.IOT lifetime encoding from its source .reuse markers.
+/// Bare source registers mean last-use; .reuse registers retain the vtag value.
+void normalizeBIOTLifetimeOpcode(MCInst &Inst);
+
 llvm::SmallVector<MCInst> getBATTRFromInst(MCInst Inst, const MCInstrInfo &MII);
 
 llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII);

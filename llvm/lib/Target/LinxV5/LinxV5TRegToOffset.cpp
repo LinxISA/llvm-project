@@ -235,6 +235,7 @@ private:
   void insertCopy(MachineBasicBlock &MBB);
 
   void legalityCheck(MachineFunction &MF);
+  void markTileLastUses(MachineFunction &MF);
   void solveAssembleParentDataflow(MachineFunction &MF,
                                    bool CollectClosedTailProofs = false);
 
@@ -448,6 +449,26 @@ static bool isScalarReg(const TargetRegisterClass *RC) {
       RC == &LinxV5::TILE_ABS_ACCRegClass)
     return false;
   assert(0 && "Reg Class is not offset register!");
+}
+
+static Register getTileReuseReg(Register Reg) {
+  if (Reg >= LinxV5::Tile_T1 && Reg <= LinxV5::Tile_T16)
+    return LinxV5::Tile_T1_RU + Reg - LinxV5::Tile_T1;
+  if (Reg >= LinxV5::Tile_U1 && Reg <= LinxV5::Tile_U16)
+    return LinxV5::Tile_U1_RU + Reg - LinxV5::Tile_U1;
+  if (Reg >= LinxV5::Tile_M1 && Reg <= LinxV5::Tile_M16)
+    return LinxV5::Tile_M1_RU + Reg - LinxV5::Tile_M1;
+  if (Reg >= LinxV5::Tile_N1 && Reg <= LinxV5::Tile_N16)
+    return LinxV5::Tile_N1_RU + Reg - LinxV5::Tile_N1;
+  if (Reg >= LinxV5::Tile_TOS1 && Reg <= LinxV5::Tile_TOS16)
+    return LinxV5::Tile_TOS1_RU + Reg - LinxV5::Tile_TOS1;
+  if (Reg >= LinxV5::Tile_UOS1 && Reg <= LinxV5::Tile_UOS16)
+    return LinxV5::Tile_UOS1_RU + Reg - LinxV5::Tile_UOS1;
+  if (Reg >= LinxV5::Tile_MOS1 && Reg <= LinxV5::Tile_MOS16)
+    return LinxV5::Tile_MOS1_RU + Reg - LinxV5::Tile_MOS1;
+  if (Reg >= LinxV5::Tile_NOS1 && Reg <= LinxV5::Tile_NOS16)
+    return LinxV5::Tile_NOS1_RU + Reg - LinxV5::Tile_NOS1;
+  return Reg;
 }
 
 static bool isRC(Register Reg, const TargetRegisterClass *RC,
@@ -4053,8 +4074,16 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   if (EnableGenericElement)
     legalityCheck(MF);
 
+  markTileLastUses(MF);
+
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
   if (!EnableReg2Offset) {
+    for (MachineBasicBlock &MBB : MF)
+      for (MachineInstr &MI : MBB)
+        for (MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
+              !MO.isKill())
+            MO.setReg(getTileReuseReg(MO.getReg()));
     eraseLocalTileABISeeds(MF);
     return true;
   }
@@ -4166,6 +4195,52 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   eraseLocalTileABISeeds(MF);
 
   return true;
+}
+
+void LinxV5TRegToOffsetOpt::markTileLastUses(MachineFunction &MF) {
+  for (auto &RCInfo : RCsInfo) {
+    const TargetRegisterClass *RC = RCInfo.first;
+    if (!isTileReg(RC) || RC == &LinxV5::TILE_ABS_ACCRegClass)
+      continue;
+
+    for (MachineBasicBlock &MBB : MF) {
+      DenseSet<Register> Live;
+      DenseSet<Register> SeenUse;
+      for (const auto &LiveOut : MBB.liveouts())
+        if (isRC(LiveOut.PhysReg, RC, MRI))
+          Live.insert(LiveOut.PhysReg);
+
+      for (MachineInstr &MI : MBB)
+        for (MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.isUse() && isRC(MO.getReg(), RC, MRI))
+            MO.setIsKill(false);
+
+      for (auto MII = MBB.rbegin(), MIE = MBB.rend(); MII != MIE; ++MII) {
+        MachineInstr &MI = *MII;
+        if (canSkipMI(MI))
+          continue;
+
+        for (MachineOperand &MO : MI.defs()) {
+          if (!MO.isReg() || !isRC(MO.getReg(), RC, MRI))
+            continue;
+          Live.erase(MO.getReg());
+          SeenUse.erase(MO.getReg());
+        }
+
+        DenseMap<Register, SmallVector<MachineOperand *, 2>> Uses;
+        for (MachineOperand &MO : MI.uses())
+          if (MO.isReg() && isRC(MO.getReg(), RC, MRI))
+            Uses[MO.getReg()].push_back(&MO);
+        for (auto &Use : Uses) {
+          Register Reg = Use.first;
+          if (!Live.count(Reg) && !SeenUse.count(Reg))
+            for (MachineOperand *MO : Use.second)
+              MO->setIsKill(true);
+          SeenUse.insert(Reg);
+        }
+      }
+    }
+  }
 }
 
 bool hasImplicitDef(const TRegIndexState &TRegIdx) {
@@ -4536,6 +4611,9 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
                      << CurIdx << " LastIdx " << Reaching->second << "\n");
           assert(Index <= RC->getNumRegs());
           Register NewReg = OffsetBase + (Index - 1);
+          if (isTileReg(RC) && RC != &LinxV5::TILE_ABS_ACCRegClass &&
+              !MO.isKill())
+            NewReg = getTileReuseReg(NewReg);
           MO.setReg(NewReg);
         }
       } else if (MO.isDef() && isRC(MO.getReg(), RC, MRI)) {
