@@ -215,13 +215,16 @@ def MCDstNoRA : RegisterClass<"LinxV5", [i64, f64, f32, f16], 64, (add
 )>;
 
 let Namespace = "LinxV5" in {
-class LinxV5TileRegBase<bits<6> Enc, string n, list<string> alt = []> : Register<n> {
-  // v5: source reuse (KillFlag) removed. HWEncoding is 6-bit only.
+class LinxV5TileRegBase<bits<6> Enc, bit Reuse, string n, list<string> alt = []> : Register<n> {
+  // Bit 6 is an internal MC marker. B.IOT encodes it in Func/bit 26 rather
+  // than in the six-bit source selector.
+  let HWEncoding{6} = Reuse;
   let HWEncoding{5-0} = Enc;
   let AltNames = alt;
 }
 
-class LinxV5TileReg<bits<6> Enc, string n, list<string> alt = []> : LinxV5TileRegBase<Enc, n, alt>;
+class LinxV5TileReg<bits<6> Enc, string n, list<string> alt = []> : LinxV5TileRegBase<Enc, 0, n, alt>;
+class LinxV5TileReuseReg<bits<6> Enc, string n, list<string> alt = []> : LinxV5TileRegBase<Enc, 1, n, alt>;
 
 class LinxV5TileDstReg<bits<3> Enc, string n, list<string> alt = []> : Register<n> {
   let HWEncoding{2-0} = Enc;
@@ -376,6 +379,23 @@ let RegAltNameIndices = [ABIRegAltName] in {
   def Tile_NOS15  :  LinxV5TileReg<62, "n#15",  ["n#15"]>,     DwarfRegNum<[100]>;
   def Tile_NOS16  :  LinxV5TileReg<63, "n#16",  ["n#16"]>,     DwarfRegNum<[100]>;
 
+  foreach i = 1-16 in {
+    def Tile_TOS#i#_RU : LinxV5TileReuseReg<!add(i, -1),
+        "t#"#i#".reuse", ["t#"#i#".reuse"]>, DwarfRegNum<[100]>;
+  }
+  foreach i = 1-16 in {
+    def Tile_UOS#i#_RU : LinxV5TileReuseReg<!add(i, 15),
+        "u#"#i#".reuse", ["u#"#i#".reuse"]>, DwarfRegNum<[100]>;
+  }
+  foreach i = 1-16 in {
+    def Tile_MOS#i#_RU : LinxV5TileReuseReg<!add(i, 31),
+        "m#"#i#".reuse", ["m#"#i#".reuse"]>, DwarfRegNum<[100]>;
+  }
+  foreach i = 1-16 in {
+    def Tile_NOS#i#_RU : LinxV5TileReuseReg<!add(i, 47),
+        "n#"#i#".reuse", ["n#"#i#".reuse"]>, DwarfRegNum<[100]>;
+  }
+
   def Tile_ACCOS1   :  LinxV5TileReg<31,  "acc#1",  ["acc#1"]>,      DwarfRegNum<[100]>;
 
   def Tile_T   :  LinxV5TileDstReg<0, "t",  ["t"]>, DwarfRegNum<[100]>;
@@ -490,7 +510,11 @@ def TILE_SRC : RegisterClass<"LinxV5", [vAny], 64, (add
   (sequence "Tile_TOS%u", 1, 16),
   (sequence "Tile_UOS%u", 1, 16),
   (sequence "Tile_MOS%u", 1, 16),
-  (sequence "Tile_NOS%u", 1, 16)
+  (sequence "Tile_NOS%u", 1, 16),
+  (sequence "Tile_TOS%u_RU", 1, 16),
+  (sequence "Tile_UOS%u_RU", 1, 16),
+  (sequence "Tile_MOS%u_RU", 1, 16),
+  (sequence "Tile_NOS%u_RU", 1, 16)
 )> {
   let Size = 64;
   let isAllocatable = 0;
@@ -503,7 +527,11 @@ def TILE_SRC_MMA : RegisterClass<"LinxV5", [vAny], 64, (add
   (sequence "Tile_TOS%u", 1, 16),
   (sequence "Tile_UOS%u", 1, 16),
   (sequence "Tile_MOS%u", 1, 16),
-  (sequence "Tile_NOS%u", 1, 16)
+  (sequence "Tile_NOS%u", 1, 16),
+  (sequence "Tile_TOS%u_RU", 1, 16),
+  (sequence "Tile_UOS%u_RU", 1, 16),
+  (sequence "Tile_MOS%u_RU", 1, 16),
+  (sequence "Tile_NOS%u_RU", 1, 16)
 )> {
   let Size = 64;
   let isAllocatable = 0;

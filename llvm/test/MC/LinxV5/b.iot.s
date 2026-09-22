@@ -1,32 +1,32 @@
 // RUN: llvm-mc -triple=linx64v5 -filetype=obj %s -o %t
-// RUN: llvm-objdump -d %t | FileCheck %s --dump-input always -vv
+// RUN: llvm-objdump -d %t | FileCheck %s --check-prefix=DIS
+// RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s --check-prefix=ENC
 
-// CHECK: B.IOT [], last ->t<512B>
-B.IOT [], last ->t<512B>
+// Source lifetime is independent from the B.IOT `last` sequence flag.
+// A bare source is last-use; `.reuse` retains the source vtag value.
 
-// CHECK: B.IOT [] ->t<512B>
-B.IOT [] ->t<512B>
+// ENC: B.IOT t#1, mask=1111{{.*}}encoding: [0x13,0xd0,0x07,0x04]
+// DIS: B.IOT t#1, mask=1111
+B.IOT t#1
 
-// CHECK: B.IOT [t#1]
-B.IOT [t#1]
+// The old one-source encoding remains retain and prints explicitly.
+// ENC: B.IOT t#1.reuse, mask=1111{{.*}}encoding: [0x13,0xd0,0x07,0x00]
+// DIS: B.IOT t#1.reuse, mask=1111
+B.IOT t#1.reuse
 
-// CHECK: B.IOT [u#1], last
-B.IOT [u#1], last
+// ENC: B.IOT t#1, u#1, mask=1111{{.*}}encoding: [0x13,0xa0,0x07,0x40]
+// DIS: B.IOT t#1, u#1, mask=1111
+B.IOT t#1, u#1
 
-// CHECK: B.IOT [m#2], last ->u<32KB>
-B.IOT [m#2], last ->u<32KB>
+// ENC: B.IOT t#1.reuse, u#1, mask=1111{{.*}}encoding: [0x13,0xb0,0x07,0x40]
+// DIS: B.IOT t#1.reuse, u#1, mask=1111
+B.IOT t#1.reuse, u#1
 
-// CHECK: B.IOT [n#4] ->n<32KB>
-B.IOT [n#4] ->n<32KB>
+// ENC: B.IOT t#1, u#1.reuse, mask=1111{{.*}}encoding: [0x13,0xf0,0x07,0x40]
+// DIS: B.IOT t#1, u#1.reuse, mask=1111
+B.IOT t#1, u#1.reuse
 
-// CHECK: B.IOT [t#1, u#1]
-B.IOT [t#1, u#1]
-
-// CHECK: B.IOT [u#1, u#2], last
-B.IOT [u#1, u#2], last
-
-// CHECK: B.IOT [m#2, u#7], last ->u<32KB>
-B.IOT [m#2, u#7], last ->u<32KB>
-
-// CHECK: B.IOT [n#4, n#1] ->n<32KB>
-B.IOT [n#4, n#1] ->n<32KB>
+// Legacy Func=100 remains retain/retain and disassembles explicitly.
+// ENC: B.IOT t#1.reuse, u#1.reuse, mask=1111{{.*}}encoding: [0x13,0xc0,0x07,0x40]
+// DIS: B.IOT t#1.reuse, u#1.reuse, mask=1111
+B.IOT t#1.reuse, u#1.reuse

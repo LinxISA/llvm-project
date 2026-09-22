@@ -2729,12 +2729,14 @@ let Format = InstFormatBlockModifier;
 
   let Size = 4;
   let isDisassembleOnly = 0;
-  // v5 encoding (replaces v4):
+  // v5 encoding with source lifetime markers:
   //   [31:26] SrcTile1 (6b), [25:20] SrcTile0 (6b), [19] last,
   //   [18:15] PE_MASK (4b), [14:12] Func (3b), [11:9] TSize (3b),
   //   [8:7] DstTile (2b: T/U/M/N), [6:4]/[3:1] fixed, [0] fixed 1.
-  // v5 replaces v4 Group bit[19] with last, size imm4[18:15] with PE_MASK,
-  // and deletes source reuse (S0R/S1R bit{6}). acc is not encoded in B.IOT.
+  // Two-source Func encodes {Src0Reuse, Src1Reuse} as
+  // 010=last/last, 011=reuse/last, 111=last/reuse, 100=reuse/reuse.
+  // One-source Func=101 uses bit 26 (SrcTile1[0]): 0=reuse, 1=last.
+  // acc is not encoded in B.IOT.
   // The GroupOp operand is reused for the last flag (its semantics: ", last").
   bits<4> PE_MASK;
   bits<3> TSize;
@@ -2889,33 +2891,53 @@ def B_IOT_NoSrc_Dst: B_IOT_Base<0b110, (outs TILE_DstWithArrow:$DstTile),
 }
 def : InstAlias<"B.IOT\t$DstTile", (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0), 0>;
 
-def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
+class B_IOT_OneSrc_Dst_Base<bits<1> LastUse>: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
-  let SrcTile1 = 0;
+  let SrcTile1{5-1} = 0;
+  let SrcTile1{0} = LastUse;
   let Format = InstFormat_STACK_SIZE;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
+def B_IOT_OneSrc_Dst: B_IOT_OneSrc_Dst_Base<1>;
+let isCodeGenOnly = 1 in
+def B_IOT_OneSrc_Dst_Reuse: B_IOT_OneSrc_Dst_Base<0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $DstTile", (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
-def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
+class B_IOT_TwoSrc_Dst_Base<bits<3> Func>: B_IOT_Base<Func, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let Format = InstFormat_STACK_SIZE;
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}, ${TSize}${Last}, $DstTile";
 }
+def B_IOT_TwoSrc_Dst: B_IOT_TwoSrc_Dst_Base<0b010>;
+let isCodeGenOnly = 1 in {
+def B_IOT_TwoSrc_Dst_Reuse0: B_IOT_TwoSrc_Dst_Base<0b011>;
+def B_IOT_TwoSrc_Dst_Reuse1: B_IOT_TwoSrc_Dst_Base<0b111>;
+def B_IOT_TwoSrc_Dst_ReuseBoth: B_IOT_TwoSrc_Dst_Base<0b100>;
+}
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $DstTile", (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, 0b1111, 0, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 
-def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
-  let SrcTile1 = 0;
+class B_IOT_OneSrc_NoDst_Base<bits<1> LastUse>: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
+  let SrcTile1{5-1} = 0;
+  let SrcTile1{0} = LastUse;
   let DstTile = 0b00;
   let TSize = 0;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
 }
+def B_IOT_OneSrc_NoDst: B_IOT_OneSrc_NoDst_Base<1>;
+let isCodeGenOnly = 1 in
+def B_IOT_OneSrc_NoDst_Reuse: B_IOT_OneSrc_NoDst_Base<0>;
 def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
 
-def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+class B_IOT_TwoSrc_NoDst_Base<bits<3> Func>: B_IOT_Base<Func, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let DstTile = 0b00;
   let TSize = 0;
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
+}
+def B_IOT_TwoSrc_NoDst: B_IOT_TwoSrc_NoDst_Base<0b010>;
+let isCodeGenOnly = 1 in {
+def B_IOT_TwoSrc_NoDst_Reuse0: B_IOT_TwoSrc_NoDst_Base<0b011>;
+def B_IOT_TwoSrc_NoDst_Reuse1: B_IOT_TwoSrc_NoDst_Base<0b111>;
+def B_IOT_TwoSrc_NoDst_ReuseBoth: B_IOT_TwoSrc_NoDst_Base<0b100>;
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1", (B_IOT_TwoSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 
