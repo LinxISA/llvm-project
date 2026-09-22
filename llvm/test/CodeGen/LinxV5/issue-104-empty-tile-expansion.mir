@@ -27,4 +27,4 @@ body:             |
     ;   81 11 01 d8 7c 00 13 ee 08 00
     ; CHECK: BSTART.TLSU TLOAD, U8
     ; CHECK-NEXT: C.B.DIMI 1, ->lb0
-    ; CHECK-NEXT: B.IOT mask=1111, last, ->t<128B>
+    ; CHECK-NEXT: B.IOT mask=0000, last, ->t<128B>

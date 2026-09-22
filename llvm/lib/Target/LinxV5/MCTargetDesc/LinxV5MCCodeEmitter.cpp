@@ -552,12 +552,10 @@ void LinxV5MCCodeEmitter::expandPseudoEmptyTile(
     const MCInst &MI, raw_ostream &OS, SmallVectorImpl<MCFixup> &Fixups,
     const MCSubtargetInfo &STI) const {
   unsigned ByteCount = 0;
-  // Issue #102: BSTART.VPAR is a PTO reserved encoding
-  // (encoding-ownership.asl, owner "PTO reserved two-level vector extension
-  // space", formal review RESERVED). Lower the output-stack hand placeholder
-  // as a legal TLOAD transport instead: its schema needs only one required
-  // B.DIM LB0 and one terminating no-source destination B.IOT, and the
-  // omitted B.IOR supplies GM base zero.
+  // Issue #102: BSTART.VPAR is a PTO reserved encoding. Lower the output-stack
+  // hand placeholder as a zero-mask TLOAD-shaped bundle: PTO defines a zero
+  // PE mask as a strict no-op, so it keeps a legal bundle shape without
+  // allocating a tile or reading the default GM address.
   writeBinaryCodes(
       OS, Fixups, STI,
       {MCInstBuilder(LinxV5::BSTART_TMA)

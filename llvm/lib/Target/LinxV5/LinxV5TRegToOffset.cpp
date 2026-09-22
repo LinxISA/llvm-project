@@ -356,9 +356,10 @@ void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
 
   if (TR == LinxV5::NoRegister) {
     if (IsTileRC) {
-      // The placeholder allocates a minimal 128B (SizeCode=1) tile so the
-      // emitted no-source B.IOT keeps a legal destination SizeCode (1..10;
-      // 0 is the source-only encoding and rejects at decode).
+      // The placeholder uses a zero-mask no-op B.IOT with the minimum legal
+      // destination SizeCode (1..10; 0 is the source-only encoding). The
+      // encoded capacity preserves the bundle shape without allocating or
+      // reading a tile.
       BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoEmptyTile))
           .addReg(ReserveReg, RegState::Define | RegState::Dead)
           .addImm(1);

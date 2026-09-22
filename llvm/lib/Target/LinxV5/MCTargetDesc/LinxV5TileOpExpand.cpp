@@ -488,13 +488,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     break;
   case LinxV5::PseudoEmptyTile:
   case LinxV5::PseudoEmptyTileASM:
-    // The B.IOT no-source destination form requires SizeCode 1..10 (ASL
-    // B.IOT no-src-dst constraint); SizeCode=0 is the source-only encoding
-    // and rejects at decode (issue #101). Operand 1 carries the placeholder
-    // TileSize (a 4-bit SizeCode), previously ignored here.
+    // PTO defines a zero PE mask as a strict no-op. Keep a legal destination
+    // SizeCode for the bundle shape, but do not allocate a tile or perform a
+    // memory access for this clock-hand placeholder.
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
                         .addOperand(Inst.getOperand(0))            // DstTile
-                        .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
+                        .addOperand(MCOperand::createImm(0))       // PE_MASK
                         .addOperand(Inst.getOperand(1))            // TSize
                         .addOperand(MCOperand::createImm(1)));     // Last
     break;
