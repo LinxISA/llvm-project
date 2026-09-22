@@ -2025,6 +2025,7 @@ def ADDPC : LinxV5InstBase {
 
 def : InstAlias<"B.DATR $PadValue", (BDATR 0, 0, 31, PadValue:$PadValue, 0, 0, 0, 0), 1>;
 def : InstAlias<"B.DATR $PadValue, $CmpMode", (BDATR 0, 0, 31, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 1>;
+def : InstAlias<"B.DATR $PadValue, $CmpMode, $RMode, $sat", (BDATR 0, 0, 31, PadValue:$PadValue, CmpMode:$CmpMode, RMode:$RMode, Sat:$sat, 0), 1>;
 def : InstAlias<"B.DATR\t$srctype, $ByteId, $PadValue", (BDATR 0, 0, BstartDataType:$srctype, PadValue:$PadValue, 0, 0, 0, ByteID:$ByteId), 1>;
 def : InstAlias<"B.CATR $DRImm", (BCATR 0, DRImm:$DRImm), 2>;
 def : InstAlias<"B.CATR $Type", (BCATR BAttrType:$Type, 0), 1>;
