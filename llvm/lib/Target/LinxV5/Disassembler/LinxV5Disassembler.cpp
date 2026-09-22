@@ -265,26 +265,49 @@ DecodeSIMT_DST_CMP_ScalarRegisterClass(MCInst &Inst, uint64_t RegNo,
 static DecodeStatus DecodeTILE_SRCRegisterClass(MCInst &Inst, uint64_t RegNo,
                                                 uint64_t Address,
                                                 const MCDisassembler *Decoder) {
-  if (RegNo >= 128)
+  if (RegNo >= 64)
     return MCDisassembler::Fail;
-  // v5: source reuse bit{6} removed. Ignore the former reuse bit.
-  bool isKill = RegNo >= 0b1000000;
-  if (isKill) {
-    RegNo -= 0b1000000;
+
+  unsigned SourceIndex = 0;
+  for (const MCOperand &Op : Inst) {
+    if (Op.isReg() &&
+        LinxV5MCRegisterClasses[LinxV5::TILE_SRCRegClassID].contains(
+            Op.getReg()))
+      ++SourceIndex;
   }
+
+  bool Reuse = false;
+  switch (Inst.getOpcode()) {
+  default:
+    break;
+  case LinxV5::B_IOT_OneSrc_Dst_Reuse:
+  case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
+  case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
+  case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
+    Reuse = true;
+    break;
+  case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+  case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+    Reuse = SourceIndex == 0;
+    break;
+  case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+  case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+    Reuse = SourceIndex == 1;
+    break;
+  }
+
   MCRegister Reg;
   if (RegNo <= 15) {
-    // t#{1-16} start from 0
-    Reg = RegNo + LinxV5::Tile_TOS1;
+    Reg = RegNo + (Reuse ? LinxV5::Tile_TOS1_RU : LinxV5::Tile_TOS1);
   } else if (RegNo <= 31) {
-    // u#{1-16} start from 0b010000
-    Reg = RegNo - 16 + LinxV5::Tile_UOS1;
+    Reg = RegNo - 16 +
+          (Reuse ? LinxV5::Tile_UOS1_RU : LinxV5::Tile_UOS1);
   } else if (RegNo <= 47) {
-    // m#{1-16} start from 0b100000
-    Reg = RegNo - 32 + LinxV5::Tile_MOS1;
+    Reg = RegNo - 32 +
+          (Reuse ? LinxV5::Tile_MOS1_RU : LinxV5::Tile_MOS1);
   } else {
-    // n#{1-16} start from 0b110000
-    Reg = RegNo - 48 + LinxV5::Tile_NOS1;
+    Reg = RegNo - 48 +
+          (Reuse ? LinxV5::Tile_NOS1_RU : LinxV5::Tile_NOS1);
   }
   Inst.addOperand(MCOperand::createReg(Reg));
   return MCDisassembler::Success;
@@ -549,6 +572,71 @@ static bool isShareSpace(ArrayRef<uint8_t> Bytes) {
   return false;
 }
 
+static DecodeStatus decodeBIOTLifetimeEncoding(MCInst &MI, uint32_t Insn,
+                                               uint64_t Address,
+                                               const MCDisassembler *Decoder) {
+  if ((Insn & 0x7f) != 0x13)
+    return MCDisassembler::Fail;
+
+  unsigned Func = fieldFromInstruction(Insn, 12, 3);
+  bool TwoSources = Func == 0b010 || Func == 0b011 || Func == 0b100 ||
+                    Func == 0b111;
+  bool OneSourceReuse = Func == 0b101 && !fieldFromInstruction(Insn, 26, 1);
+  if (!TwoSources && !OneSourceReuse)
+    return MCDisassembler::Fail;
+  if (Func == 0b101 && fieldFromInstruction(Insn, 27, 5) != 0)
+    return MCDisassembler::Fail;
+
+  // [18:15] is the destination SizeCode and [11:9] is the encoded PEMode; a
+  // source-only form fixes both to zero.
+  unsigned SizeCode = fieldFromInstruction(Insn, 15, 4);
+  unsigned DstTile = fieldFromInstruction(Insn, 7, 2);
+  bool HasDst = SizeCode != 0 || DstTile != 0;
+
+  if (TwoSources) {
+    bool Reuse0 = Func == 0b011 || Func == 0b100;
+    bool Reuse1 = Func == 0b111 || Func == 0b100;
+    if (HasDst)
+      MI.setOpcode(Reuse0 && Reuse1 ? LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth
+                   : Reuse0         ? LinxV5::B_IOT_TwoSrc_Dst_Reuse0
+                   : Reuse1         ? LinxV5::B_IOT_TwoSrc_Dst_Reuse1
+                                    : LinxV5::B_IOT_TwoSrc_Dst);
+    else
+      MI.setOpcode(Reuse0 && Reuse1 ? LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth
+                   : Reuse0         ? LinxV5::B_IOT_TwoSrc_NoDst_Reuse0
+                   : Reuse1         ? LinxV5::B_IOT_TwoSrc_NoDst_Reuse1
+                                    : LinxV5::B_IOT_TwoSrc_NoDst);
+  } else {
+    MI.setOpcode(HasDst ? LinxV5::B_IOT_OneSrc_Dst_Reuse
+                        : LinxV5::B_IOT_OneSrc_NoDst_Reuse);
+  }
+
+  // Operand order mirrors the generated decoder: definitions first, then the
+  // PEMode, the destination SizeCode, the last flag, and the sources.
+  if (HasDst && DecodeTILE_DSTRegisterClass(MI, DstTile, Address, Decoder) ==
+                    MCDisassembler::Fail)
+    return MCDisassembler::Fail;
+  if (decodePEMode(MI, fieldFromInstruction(Insn, 9, 3), Address, Decoder) ==
+      MCDisassembler::Fail)
+    return MCDisassembler::Fail;
+  if (HasDst &&
+      decodeBIOTDstSizeCode(MI, SizeCode, Address, Decoder) ==
+          MCDisassembler::Fail)
+    return MCDisassembler::Fail;
+  if (decodeUImmOperand<1>(MI, fieldFromInstruction(Insn, 19, 1), Address,
+                           Decoder) == MCDisassembler::Fail)
+    return MCDisassembler::Fail;
+
+  if (DecodeTILE_SRCRegisterClass(MI, fieldFromInstruction(Insn, 20, 6),
+                                  Address, Decoder) == MCDisassembler::Fail)
+    return MCDisassembler::Fail;
+  if (TwoSources &&
+      DecodeTILE_SRCRegisterClass(MI, fieldFromInstruction(Insn, 26, 6),
+                                  Address, Decoder) == MCDisassembler::Fail)
+    return MCDisassembler::Fail;
+  return MCDisassembler::Success;
+}
+
 // PTO-ISA 0.58.4 ADR-0098 range modifiers: fail-closed validation of a
 // decoded B.SUBVIEW/B.ASSEMBLE word. The field-level operand decoders
 // enforce raw ranges, but the following cross-field contracts can only be
@@ -625,6 +713,13 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
       }
       Result =
           decodeInstruction(DecoderTable32, MI, Insn, Address, Decoder, STI);
+      // The generated decoder only covers the non-lifetime B.IOT variants;
+      // the additive reuse/last-use forms fall back to the lifetime decoder.
+      if (Result == MCDisassembler::Fail) {
+        MI.clear();
+        Result = decodeBIOTLifetimeEncoding(MI, static_cast<uint32_t>(Insn),
+                                            Address, Decoder);
+      }
     } else {
       if (Bytes.size() < 2) {
         Size = 0;
@@ -757,23 +852,31 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       Shape.Last = Inst.getOperand(3).getImm();
       return true;
     case LinxV5::B_IOT_OneSrc_Dst:
+    case LinxV5::B_IOT_OneSrc_Dst_Reuse:
       Shape.Sources = 1;
       Shape.Destination = true;
       Shape.Mask = Inst.getOperand(1).getImm();
       Shape.Last = Inst.getOperand(3).getImm();
       return true;
     case LinxV5::B_IOT_TwoSrc_Dst:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
       Shape.Sources = 2;
       Shape.Destination = true;
       Shape.Mask = Inst.getOperand(1).getImm();
       Shape.Last = Inst.getOperand(3).getImm();
       return true;
     case LinxV5::B_IOT_OneSrc_NoDst:
+    case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
       Shape.Sources = 1;
       Shape.Mask = Inst.getOperand(0).getImm();
       Shape.Last = Inst.getOperand(1).getImm();
       return true;
     case LinxV5::B_IOT_TwoSrc_NoDst:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
       Shape.Sources = 2;
       Shape.Mask = Inst.getOperand(0).getImm();
       Shape.Last = Inst.getOperand(1).getImm();

@@ -290,7 +290,9 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
     break;
   }
   case 4: {
-    uint32_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
+    MCInst EncodedMI = MI;
+    normalizeBIOTLifetimeOpcode(EncodedMI);
+    uint32_t Bits = getBinaryCodeForInstr(EncodedMI, Fixups, STI);
     support::endian::write(OS, Bits, support::little);
     break;
   }
@@ -364,6 +366,7 @@ void LinxV5MCCodeEmitter::writeBinaryCodes(raw_ostream &OS,
                                            llvm::SmallVector<MCInst> McVec,
                                            unsigned &Count, bool isNeedFixUp) const {
   for (MCInst &inst : McVec) {
+    normalizeBIOTLifetimeOpcode(inst);
     MCInst out;
     // if (llvm::LinxV5::tryCompressInst(out, inst, STI, this->Ctx)) {
     //   uint16_t Bits = getBinaryCodeForInstr(out, Fixups, STI);

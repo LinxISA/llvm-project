@@ -76,9 +76,17 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     switch (Opcode) {
     case LinxV5::B_IOT_NoSrc_Dst:
     case LinxV5::B_IOT_OneSrc_Dst:
+    case LinxV5::B_IOT_OneSrc_Dst_Reuse:
     case LinxV5::B_IOT_TwoSrc_Dst:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
     case LinxV5::B_IOT_OneSrc_NoDst:
+    case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
     case LinxV5::B_IOT_TwoSrc_NoDst:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
       return true;
     default:
       return false;
@@ -178,12 +186,16 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           DestinationSize = Inst.getOperand(2).getImm();
           return true;
         case LinxV5::B_IOT_OneSrc_Dst:
+        case LinxV5::B_IOT_OneSrc_Dst_Reuse:
           Destination = Inst.getOperand(0).getReg();
           recordMask(Inst.getOperand(1).getImm());
           DestinationSize = Inst.getOperand(2).getImm();
           Sources.push_back(Inst.getOperand(4).getReg());
           return true;
         case LinxV5::B_IOT_TwoSrc_Dst:
+        case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+        case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+        case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
           Destination = Inst.getOperand(0).getReg();
           recordMask(Inst.getOperand(1).getImm());
           DestinationSize = Inst.getOperand(2).getImm();
@@ -191,10 +203,14 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           Sources.push_back(Inst.getOperand(5).getReg());
           return true;
         case LinxV5::B_IOT_OneSrc_NoDst:
+        case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
           recordMask(Inst.getOperand(0).getImm());
           Sources.push_back(Inst.getOperand(2).getReg());
           return true;
         case LinxV5::B_IOT_TwoSrc_NoDst:
+        case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+        case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+        case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
           recordMask(Inst.getOperand(0).getImm());
           Sources.push_back(Inst.getOperand(2).getReg());
           Sources.push_back(Inst.getOperand(3).getReg());

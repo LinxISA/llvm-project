@@ -1558,7 +1558,10 @@ static unsigned MatchLinxV5GlobalRegisteName(StringRef Name) {
 }
 
 static unsigned MatchLinxV5TileRegisteName(StringRef Name) {
-  return StringSwitch<unsigned>(Name.lower())
+  std::string LowerName = Name.lower();
+  StringRef NormalizedName(LowerName);
+  bool Reuse = NormalizedName.consume_back(".reuse");
+  unsigned Reg = StringSwitch<unsigned>(NormalizedName)
       .Case("t#1", LinxV5::Tile_TOS1)
       .Case("t#2", LinxV5::Tile_TOS2)
       .Case("t#3", LinxV5::Tile_TOS3)
@@ -1763,6 +1766,26 @@ static unsigned MatchLinxV5TileRegisteName(StringRef Name) {
       .Case("acc", LinxV5::Tile_ACC)
       .Case("acc#1", LinxV5::Tile_ACCOS1)
       .Default(LinxV5::NoRegister);
+
+  if (!Reuse || Reg == LinxV5::NoRegister)
+    return Reg;
+  if (Reg >= LinxV5::Tile_TOS1 && Reg <= LinxV5::Tile_TOS16)
+    return LinxV5::Tile_TOS1_RU + Reg - LinxV5::Tile_TOS1;
+  if (Reg >= LinxV5::Tile_UOS1 && Reg <= LinxV5::Tile_UOS16)
+    return LinxV5::Tile_UOS1_RU + Reg - LinxV5::Tile_UOS1;
+  if (Reg >= LinxV5::Tile_MOS1 && Reg <= LinxV5::Tile_MOS16)
+    return LinxV5::Tile_MOS1_RU + Reg - LinxV5::Tile_MOS1;
+  if (Reg >= LinxV5::Tile_NOS1 && Reg <= LinxV5::Tile_NOS16)
+    return LinxV5::Tile_NOS1_RU + Reg - LinxV5::Tile_NOS1;
+  if (Reg >= LinxV5::Tile_T1 && Reg <= LinxV5::Tile_T16)
+    return LinxV5::Tile_T1_RU + Reg - LinxV5::Tile_T1;
+  if (Reg >= LinxV5::Tile_U1 && Reg <= LinxV5::Tile_U16)
+    return LinxV5::Tile_U1_RU + Reg - LinxV5::Tile_U1;
+  if (Reg >= LinxV5::Tile_M1 && Reg <= LinxV5::Tile_M16)
+    return LinxV5::Tile_M1_RU + Reg - LinxV5::Tile_M1;
+  if (Reg >= LinxV5::Tile_N1 && Reg <= LinxV5::Tile_N16)
+    return LinxV5::Tile_N1_RU + Reg - LinxV5::Tile_N1;
+  return LinxV5::NoRegister;
 }
 
 static unsigned MatchLinxV5SIMTRegisterName(StringRef Name) {
