@@ -550,6 +550,11 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   if (SrcReg == LinxV5::Tile_ACC1 || DstReg == LinxV5::Tile_ACC1)
     report_fatal_error("could not copy phys `acc' reg, please manually copy it "
                        "to vec tile reg by blk_acccvt()/TCVT()");
+  if (LinxV5::Shared_ABSRegClass.contains(SrcReg) ||
+      LinxV5::Shared_ABSRegClass.contains(DstReg))
+    report_fatal_error(
+        "cannot copy a Shared register: Shared handles have no MOVR/copy "
+        "instruction; use B.IOS to publish or keep the handle in Shared_ABS");
   auto *TRI =
       MBB.getParent()->getSubtarget<LinxV5Subtarget>().getRegisterInfo();
   auto &MRI = MBB.getParent()->getRegInfo();

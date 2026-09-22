@@ -3841,10 +3841,22 @@ LinxV5AsmParser::parseDstRWithArrow(OperandVector &Operands) {
   if (DotPosition != StringRef::npos)
     return MatchOperand_NoMatch;
 
+  SMLoc RegLoc = !getLexer().getTok().getString().compare("->")
+                     ? getLexer().peekTok().getLoc()
+                     : getLexer().getTok().getLoc();
+  StringRef OriginalName(RegLoc.getPointer(), Name.size());
+  unsigned SharedID;
+  bool IsSharedSpelling =
+      OriginalName.size() > 1 && OriginalName.front() == 'S' &&
+      !OriginalName.substr(1).getAsInteger(10, SharedID) && SharedID <= 63;
+  if (IsSharedSpelling)
+    return MatchOperand_ParseFail;
+
   MCRegister RegNo;
   matchRegisterNameHelper(RegNo, Name);
 
-  if (RegNo != LinxV5::NoRegister) {
+  if (RegNo != LinxV5::NoRegister &&
+      !LinxV5MCRegisterClasses[LinxV5::Shared_ABSRegClassID].contains(RegNo)) {
     SMLoc S = getLoc();
     SMLoc E = SMLoc::getFromPointer(S.getPointer());
     Operands.push_back(LinxV5Operand::createReg(RegNo, S, E));
