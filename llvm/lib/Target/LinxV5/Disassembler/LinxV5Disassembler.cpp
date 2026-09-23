@@ -711,6 +711,12 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
           ((Insn & 0x707f) == 0x1053 && assembleWordIllegal(Insn))) {
         return MCDisassembler::Fail;
       }
+      // B.IOS bit 26 is defined only for a source (SizeCode=0). A destination
+      // carrying it is reserved rather than a second spelling of the same ID.
+      if ((Insn & 0xf00871ffULL) == 0x00001013ULL &&
+          fieldFromInstruction(Insn, 15, 4) != 0 &&
+          fieldFromInstruction(Insn, 26, 1) != 0)
+        return MCDisassembler::Fail;
       Result =
           decodeInstruction(DecoderTable32, MI, Insn, Address, Decoder, STI);
       // The generated decoder only covers the non-lifetime B.IOT variants;

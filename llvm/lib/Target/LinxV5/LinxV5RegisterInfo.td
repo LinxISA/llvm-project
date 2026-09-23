@@ -629,6 +629,9 @@ let RegAltNameIndices = [ABIRegAltName] in {
     def Shared_S#Index : LinxV5SharedReg<Index, "shared_s"#Index,
                                            ["S"#Index]>,
                                            DwarfRegNum<[100]>;
+    def Shared_S#Index#_RU : LinxV5SharedReg<Index, "shared_s"#Index#"_reuse",
+                                              ["S"#Index#".reuse"]>,
+                                              DwarfRegNum<[100]>;
   }
 }
 
@@ -636,4 +639,16 @@ def Shared_ABS : RegisterClass<"LinxV5", [i64], 64,
                                (sequence "Shared_S%u", 0, 63)> {
   let Size = 64;
   let isAllocatable = 1;
+}
+
+// Source-only aliases carry an explicit retain decision through macro MC
+// expansion. They are not allocation candidates: compiler-generated Shared
+// values remain in Shared_ABS and are mapped to these aliases from kill flags
+// while lowering MachineInstrs to MCInsts.
+def Shared_SRC : RegisterClass<"LinxV5", [i64], 64, (add
+  (sequence "Shared_S%u", 0, 63),
+  (sequence "Shared_S%u_RU", 0, 63)
+)> {
+  let Size = 64;
+  let isAllocatable = 0;
 }

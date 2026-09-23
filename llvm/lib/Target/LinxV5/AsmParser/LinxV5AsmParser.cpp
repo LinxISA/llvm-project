@@ -2626,6 +2626,7 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   StringRef Str = Tok.getString();
   if (Str.empty())
     Str = Tok.getIdentifier();
+  bool Reuse = Str.consume_back_insensitive(".reuse");
   if (!Str.startswith_insensitive("s"))
     return MatchOperand_NoMatch;
   // Reject the retired "S#n" spelling.
@@ -2641,7 +2642,10 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
     getParser().Error(S, "SharedTileID must be in the range S0..S63");
     return MatchOperand_ParseFail;
   }
-  const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
+  // The MC operand's synthetic bit 6 carries the source lifetime decision:
+  // one means last-use, zero means retain. Only bits 5:0 are SharedTileID.
+  const MCExpr *Val = MCConstantExpr::create(TID | (Reuse ? 0 : 0x40),
+                                             getParser().getContext());
   Operands.push_back(LinxV5Operand::createImm(Val, S, E));
   getLexer().Lex();  // consume 'S17'
   return MatchOperand_Success;
