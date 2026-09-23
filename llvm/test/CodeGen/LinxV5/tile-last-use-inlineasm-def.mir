@@ -1,0 +1,26 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-treg-to-offset -linxv5-enable-reg-to-offset=false -verify-machineinstrs=false -o - %s | FileCheck %s
+
+# INLINEASM has no descriptor-level definitions, so MachineInstr::uses()
+# iterates its explicit regdef operands as well. The Local last-use pass must
+# exclude those definitions before calling MachineOperand::setIsKill().
+--- |
+  define void @inlineasm_tile_def_and_use() {
+    ret void
+  }
+...
+---
+name:            inlineasm_tile_def_and_use
+alignment:       2
+tracksRegLiveness: true
+legalized:       true
+regBankSelected: true
+selected:        true
+failedISel:      false
+body:             |
+  bb.0:
+    liveins: $tile_t1, $tile_u1
+
+    ; CHECK-LABEL: name: inlineasm_tile_def_and_use
+    ; CHECK: INLINEASM
+    INLINEASM &"BSTART.TEPL 112, ${1:D}\0AB.IOT $2, $4, mask=1111, last, ->$0<${3:Z}>\0A", 9 /* sideeffect mayload attdialect */, 655370 /* regdef:Tile_ABS */, def $tile_t1, 13 /* imm */, 1, 655369 /* reguse:Tile_ABS */, killed $tile_t1, 13 /* imm */, 4, 655369 /* reguse:Tile_ABS */, killed $tile_u1
+...

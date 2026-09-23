@@ -1386,7 +1386,8 @@ void LinxV5TRegToOffsetOpt::markTileLastUses(MachineFunction &MF) {
 
       for (MachineInstr &MI : MBB)
         for (MachineOperand &MO : MI.operands())
-          if (MO.isReg() && MO.isUse() && isRC(MO.getReg(), RC, MRI))
+          if (MO.isReg() && MO.isUse() && !MO.isDef() &&
+              isRC(MO.getReg(), RC, MRI))
             MO.setIsKill(false);
 
       for (auto MII = MBB.rbegin(), MIE = MBB.rend(); MII != MIE; ++MII) {
@@ -1405,7 +1406,7 @@ void LinxV5TRegToOffsetOpt::markTileLastUses(MachineFunction &MF) {
 
         DenseMap<Register, SmallVector<MachineOperand *, 2>> Uses;
         for (MachineOperand &MO : MI.uses()) {
-          if (MO.isReg() && isRC(MO.getReg(), RC, MRI))
+          if (MO.isReg() && !MO.isDef() && isRC(MO.getReg(), RC, MRI))
             Uses[MO.getReg()].push_back(&MO);
         }
         for (auto &Use : Uses) {
