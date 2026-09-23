@@ -124,6 +124,7 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     bool Present = false;
     MCRegister Reg = LinxV5::R0;
     unsigned SharedID = 0;
+    bool SharedReuse = false;
     unsigned SizeCode = 0;
     RangeValue Subview;
     RangeValue Assemble;
@@ -376,7 +377,9 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         if (Pos >= BodyEnd || Commands[Pos].getOpcode() != LinxV5::B_IOS)
           break;
         Members[Member].Present = true;
-        Members[Member].SharedID = Commands[Pos].getOperand(0).getImm();
+        unsigned EncodedSharedID = Commands[Pos].getOperand(0).getImm();
+        Members[Member].SharedID = EncodedSharedID & 0x3f;
+        Members[Member].SharedReuse = (EncodedSharedID & 0x40) == 0;
         Members[Member].SizeCode = Commands[Pos].getOperand(2).getImm();
         bool Destination =
             bindingForMember(Member) &&
@@ -805,6 +808,8 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       break;
     case TileMacroBindingKind::SharedSource:
       O << "S" << Value.SharedID;
+      if (Value.SharedReuse)
+        O << ".reuse";
       break;
     case TileMacroBindingKind::SharedDestination:
       O << "->S" << Value.SharedID;
