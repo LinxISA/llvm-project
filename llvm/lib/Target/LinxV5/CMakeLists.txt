@@ -40,6 +40,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5ClockhandsAllocHelper.cpp
   LinxV5ClockhandsColoring.cpp
   LinxV5SharedRegAlloc.cpp
+  LinxV5SharedCopyElim.cpp
   LinxV5EmitHeader.cpp
   LinxV5TileFixup.cpp
   LinxV5SIMTSpillFixup.cpp

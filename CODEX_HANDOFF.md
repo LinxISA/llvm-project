@@ -10954,3 +10954,346 @@ clang -j2` 成功，`git diff --check` 成功。
   2026-09-21T17:14:52Z）关闭，关闭原因为 `completed`。
 - #103 处理闭环完成；后续若出现新回归，应新开 issue 或追加独立修复，不能
   回退本次标量路径不改、tile spill 使用 S64/NORM 的边界。
+
+## 2026-09-22 LLVM issue #106 修复记录：PseudoEmptyTile 不应访问 GM[0]
+
+Issue：`LinxISA/llvm-project#106`。`PseudoEmptyTile` 从保留的 VPAR 占位形式降级为
+TLOAD-shaped bundle 后，原编码使用 `B.IOT PE_MASK=1111` 且省略 `B.IOR`；按 PTO
+语义这不是无操作，而是会使用默认 GM 基址并产生可观察的 GM[0] tile 访问，可能导致
+动态模型/gfsim 死锁。报告属实。
+
+### 根因核实
+
+- PTO ASL `asl/tile/memory-and-data-movement/regular/TLOAD.asl` 明确定义 TLOAD 的
+  GM 地址和 dense-stride 内存语义；省略 `B.IOR` 不会把 TLOAD 变成 no-op。
+- PTO ASL `asl/block/operands/B.IOT.asl` 定义 `PEMode=000` 解码为零掩码；零掩码
+  是严格 no-op，并抑制 placement/schema/effect 检查。
+- TLOAD 的 zero-mask contract 同样明确允许零掩码 no-effect。目标 bundle 仍需合法
+  destination `SizeCode`，因此保留 `SizeCode=1`（128B 的最小合法编码），但不应分配
+  tile 或访问内存。
+
+### 修复（当前工作区，尚未推送）
+
+- `LinxV5TileOpExpand.cpp`：`PseudoEmptyTile` 和 `PseudoEmptyTileASM` 的 `B.IOT`
+  PE mask 从 `1111` 改为 `0000`；destination `SizeCode=1` 保持不变。
+- `LinxV5MCCodeEmitter.cpp`：更新展开路径说明，明确这是 zero-mask TLOAD-shaped
+  no-op，不读取默认 GM 地址。
+- `LinxV5TRegToOffset.cpp`：更新 placeholder 说明；仍使用最小合法 128B 编码容量，
+  不改变 spill/reload 或 datatype lowering。
+- `issue-104-empty-tile-expansion.mir`：回归期望从 `mask=1111` 更新为 `mask=0000`。
+
+本修复不修改标量板块；不修改 tile spill 的 datatype-independent `S64 + NORM`
+逻辑。这里的目标是让 compiler bookkeeping placeholder 不产生内存副作用，而不是
+改变真实 tile spill 的保存/恢复形式。
+
+### 验证
+
+- `ninja -C build-current llc llvm-objdump -j2`：通过。
+- `build-current/bin/llvm-lit -v llvm/test/CodeGen/LinxV5/issue-104-empty-tile-expansion.mir llvm/test/MC/LinxV5/vpar-empty-tile.s`：2/2 PASS。
+- MIR 生成 object 并反汇编：bundle 为
+  `BSTART.TLSU TLOAD, U8`、`C.B.DIMI 1, ->lb0`、`B.IOT mask=0000, last, ->t<128B>`。
+- 编码只发生预期的 mask 位变化：新 bytes 为
+  `81 11 01 d8 7c 00 13 e0 08 00`；旧 `1111` 版本为
+  `81 11 01 d8 7c 00 13 ee 08 00`。
+- `git diff --check`：通过。lit 输出中的缺失工具提示属于当前 build tree 工具不完整，
+  不影响这两个定向测试结果。
+
+### 工作区备忘与待办
+
+- 当前分支：`dev-llvm15_56`；修复尚未 commit/push，远端 push 按 skill 规则需用户明确确认。
+- 只提交本节列出的 4 个 LLVM 文件；`.claude/`、`.gitlab/`、`.zcode/`、`tmp/` 等
+  未跟踪文件均为其他会话遗留，不得纳入提交。
+- 待用户确认后，创建 focused commit，push 到 `linxisa/dev-llvm15_56`，再通过 GitHub
+  API 回复并关闭 issue #106；回复应附 ASL 依据、`1111 -> 0000` 编码变化和定向验证结果。
+
+### #106 闭环状态（2026-09-22）
+
+- 修复提交：`4724f92674d3`，已推送到 `linxisa/dev-llvm15_56`。
+- Issue 回复：`https://github.com/LinxISA/llvm-project/issues/106#issuecomment-5769793760`。
+- Issue #106 已通过 GitHub API 关闭，状态为 `closed`，原因 `completed`。
+- 远端分支在 push 前无新提交；本地修复相对远端领先 1 个 commit，push 成功。
+- #106 处理闭环完成；后续不得将该修复扩大到标量路径或 tile spill datatype/S64-NORM 逻辑，除非出现新的独立反例。
+
+## 2026-09-22 TileOP issue #205 核实记录
+
+Issue：`LinxISA/Linx-TileOP-API#205`，报告包含 LLVM `movr ->S*` 错误编码、O0 BGPR 断言，以及 weight TLOAD/TIMG2COL singleton 在非选中 PE 的模型行为。
+
+### 根因核实
+
+- LLVM MC 复现确认：`parseDstRWithArrow` 的通用寄存器名匹配会把大写 `S0..S63` 当作 scalar 别名接受；`movr` 的目标字段只有 5 bit，因此 `->S1` 会静默别名为 GPR `r1/sp`。PTO ISA 的 Shared ID 是 B.IOS 的 6-bit binder operand，不是 MOVR 目标。
+- `copyPhysReg` 对 Shared_ABS 没有专用传输语义，会落入通用 `ORI` 路径；Shared handle 不存在合法的 MOVR/普通 COPY，不能伪造 scalar 传输。
+- 当前 LLVM `LinxV5TRegToOffset.cpp` 已无 `BGPR multi set!` fatal，仅保留 debug 诊断；本次没有再次修改该路径。
+- 当前 issue 所要求的标量路径不需要修改；tile spill 仍保持 datatype-independent 的 `S64 + NORM` 保存/恢复约定，本次没有修改 spill 尺寸或 datatype 逻辑。
+- 最新 PTO ASL `01445483` 明确 weight Shared 支持 singleton nonzero mask；TIMG2COL 对非协作输出的零行 PE 只完成协议，不做 Local 分配、GM 读写或 definedness 更新。模型断言属于独立模型侧问题，不能通过 LLVM/TileOP wrapper 改动掩盖；本次未修改模型仓。
+
+### 修复（已推送）
+
+- `LinxV5AsmParser.cpp`：`movr` 专用 `parseDstRWithArrow` 拒绝原始拼写 `S0..S63`，避免大小写归一化后与 scalar `s0..s8` 混淆；B.IOS 的独立 `parseSharedTID*` 路径不变。
+- `LinxV5InstrInfo.cpp`：`copyPhysReg` 遇到 Shared_ABS source/destination 时明确 fatal，禁止静默生成 `ORI/MOVR`。
+- `llvm/test/MC/LinxV5/v5-movr-shared-dst-neg.s`：新增 `movr ->S*` 负回归，并验证小写 scalar 及 B.IOS Shared ID 仍可汇编。
+
+### 验证
+
+- `ninja -C build llvm-mc -j2`：通过。
+- `build/bin/llvm-lit -sv llvm/test/MC/LinxV5/v5-movr-shared-dst-neg.s llvm/test/CodeGen/LinxV5/v5-shared-crossblock.ll`：2/2 PASS。
+- `ninja -C build llc clang -j2`：通过。
+- 实测 `c.movr r2, ->S0/S1/S63` 全部拒绝；`B.IOS S1, mask=1111` 与 `c.movr r2, ->s1` 仍成功。
+- 工作区已有的 `CODEX_HANDOFF.md`、未跟踪目录和构建产物均未纳入本次 focused commit。
+
+### 当前状态与待办
+
+- 修复提交 `679005ba1294` 已推送到 `linxisa/dev-llvm15_56`。
+- 已通过 GitHub API 回复 #205：`https://github.com/LinxISA/Linx-TileOP-API/issues/205#issuecomment-5770832522`；issue 保持 `open`，等待模型侧 singleton PE 行为单独修复。TileOP 本次无需要建立的 PR。
+- issue 回复应明确区分：LLVM `movr` 报告属实且已有本地修复；O0 BGPR fatal 已由既有 #103 修复；singleton PE 行为需模型侧依据 ASL 单独处理，不能修改标量或 tile spill 逻辑来规避。
+
+## 2026-09-22 TileOP issue #200 处理记录：TCMPS CUBE GPR predicate 输出
+
+Issue：`LinxISA/Linx-TileOP-API#200`。报告请求为 `TCMPS` 增加 CUBE GPR
+predicate-mask 输出重载。独立核实结论为：Issue 属实，LLVM 工具链和模型已经具备
+该 GPR carrier 形态，TileOP API 缺少 wrapper；模型 canonical `B.IOR` 的
+`RegDst` 位提取错误属于独立的 `SuperScalarModel#806`，不在本次 TileOP 修复范围。
+
+### 根因核实
+
+- 最新 PTO spec commit：`01445483`。
+- `TCMPS` ASL 支持 legacy Predicate、CUBE PredicateCell 和 CUBE GPR 三类
+  predicate carrier。
+- CUBE GPR 形态要求 source-only `B.IOT`，随后使用 `B.IOR` 将 scalar carrier
+  写入 GPR；支持 `CUBE_M16`/`CUBE_M32`。
+- 非 U8 使用 low carrier；U8 可使用 `Sat` 选择 high carrier。carrier 位序和
+  单个 64-bit GPR 的字段容量由 ASL predicate-carrier 规则决定。
+- 静态 `ValidRow`/`ValidCol` 是当前 freshness contract 要求的 immediate `B.DIM`
+  形态；单个 carrier 的容量有限，调用者需按 subview/group 拆分更大的 predicate。
+
+### 修复
+
+- TileOP 分支：`fix/issue-200-tcmps-gpr`。
+- TileOP commit：`5b4effcf1b6136edb28dd1cc4cc1a69083f4d269`。
+- TileOP PR：`https://github.com/LinxISA/Linx-TileOP-API/pull/208`，目标分支为
+  `linx`；当前仍为 open，尚未合入，等待 CI 门禁。
+- `include/jcore/template_asm.hpp`：新增
+  `TCMPS<CmpMode, High>(tile, scalar)` GPR 输出重载，限制在 VEC/CUBE、静态
+  shape、ASL 支持的数据类型及合法 carrier 容量内，并生成 source-only `B.IOT`
+  + `B.IOR`。
+- U8 high carrier 使用 `B.DATR Zero, <CmpMode>, RNONE, sat`。
+- 新增 `Issue200TcmpsGpr` object fixture，并同步更新 `TCMPS.md` 和 `options.md`。
+- LLVM commit：`66816b2b5178`，已推送到 `linxisa/dev-llvm15_56`，增加 U8 high
+  form 所需的 `B.DATR PadValue, CMode, RMode, Sat` alias 及 MC 回归。
+- 本次没有修改标量板块；没有修改 tile spill 的 datatype-independent
+  `S64 + NORM` 保存/恢复逻辑，也没有引入 SIMT/vector fallback。
+
+### 验证
+
+- S32 CUBE_M32：生成 `B.IOT t#1, mask=1111, last` + `B.IOR [a1], ->a0`。
+- U8 high CUBE_M32：生成 `B.DATR Zero, LT, RNONE, sat`，随后生成相同的
+  source-only `B.IOT` + GPR-destination `B.IOR` 形态。
+- TileOP 专用 object fixture 通过。
+- `test_v058_engine_contract`：`53/53 PASS`。
+- LLVM MC 回归 `tcmps-cmode-sat.s`：`1 test passed`。
+- 全 active fixture sweep 中仍有历史预存失败（retired operation、旧 mnemonic、
+  MX scale layout 等），与本次新增 fixture 无关；未修改这些无关失败。
+- PR 当前 CI：`Validate jcore/template_asm.hpp` in progress；PR
+  `mergeable_state=unstable`，尚未启用 auto-merge。
+
+### Issue 回复与待办
+
+- Issue 回复：`https://github.com/LinxISA/Linx-TileOP-API/issues/200#issuecomment-5771762363`。
+- Issue #200 当前保持 open，待 PR #208 CI 通过并合入后再关闭。
+- 需要继续观察 PR #208 的 CI/自动合入状态；若 CI 通过但未自动合入，按仓库门禁流程
+  处理，不要直接向 `linx` 分支推送。
+- `SuperScalarModel#806` 需由模型仓单独修复，不应通过本 wrapper PR 规避。
+
+## 2026-09-22 linx-toolchain-build issue #18 核实记录：MXFP4 大 shape Shared handle 复制/分配缺陷
+
+Issue：`LinxISA/linx-toolchain-build#18`。
+报告现象是大 shape MXFP4 matmul 中四个独立的 Shared TLOAD 结果被错误生成到
+同一个 `S0`，而后续 `TMATMULMX` 仍绑定 `S0/S1/S2/S3`，导致模型读取未定义
+Shared source。小 shape 对照正常。
+
+### 根因核实
+
+- issue 提供的 failing/passing ELF、反汇编和 gfsim 断言证据一致：失败不是 Shared
+  容量溢出，也不是模型随意拒绝；producer/consumer 的 Shared def-use 映射已经在
+  ELF 中不一致。
+- 当前 TileOP `SharedTile` 使用专用 `=Sr`/`Sr` inline-asm 约束，Shared handle
+  不能作为普通整数、GPR ABI 值或普通 tile payload 传递；当前 LLVM 的
+  `Shared_ABS` allocator 只负责绝对 `S0..S63` live-interval 分配。
+- 用 issue 附件 `matmul_shared_lowp.hpp` 构造的当前 HEAD 最小编译单元（当前类型名
+  为 `__fp4_e2m1x2`，旧 issue 源码中的 `__fp8_e2m1x2` 已不再存在）在
+  `dev-llvm15_56@679005ba1294` 触发：
+  `cannot copy a Shared register: Shared handles have no MOVR/copy instruction`。
+  触发点是 `ExpandPostRAPseudos` 调用 `LinxV5InstrInfo::copyPhysReg`，说明当前
+  后端已把原先可能生成非法 Shared 覆盖的路径收紧为编译期 fatal，但尚未修复上游
+  产生普通 Shared COPY 的根因。
+- 关闭 `linxv5-enable-clock-hand-opt` 后仍触发；现有 `v5-shared-register-allocation.ll`
+  和 `v5-shared-crossblock.ll` 定向测试通过，说明不是所有 Shared 分配都错误，问题
+  位于复杂 MXFP4 lowering/优化产生的额外 Shared COPY 或 live-range 处理。
+- 当前工作区的 `CODEX_HANDOFF.md` 既有记录已明确：Shared 没有普通 store/spill/
+  cross-function ABI；不能通过放宽 `copyPhysReg` fatal、生成 `ORI/MOVR`、或把
+  Shared payload 改成 Local tile 来掩盖问题。
+- 本次没有修改标量路径，也没有修改 tile spill 的 datatype-independent
+  `S64 + NORM` 逻辑。
+
+### 复现与验证
+
+- 已从 issue gist 下载 `reproduce.sh`、`matmul_shared_lowp.hpp`、`matmul_lowp.cpp`
+  和证据摘要到 `/tmp/toolchain-issue18`。
+- 原始 benchmark 路径在当前本地 SuperNPUBench checkout 已不存在，旧公共头
+  `multi_thread_res_check.h` 也已删除，因此无法直接运行 issue 原始 `make + gfsim`
+  脚本；使用附件 header 的隔离最小编译单元复现了当前后端 Shared COPY fatal。
+- 当前 LLVM 定向 Shared tests：`v5-shared-register-allocation.ll` 和
+  `v5-shared-crossblock.ll`：2/2 PASS。
+- 当前未生成新的提交；不能把 `copyPhysReg` fatal 降级为可生成代码，也不能声明 issue
+  #18 已修复。需要后续在 MIR 中追踪复杂 MXFP4 lowering 产生 COPY 的具体 pass，并
+  让 Shared handle 在同一 inline-asm SSA 值上保持绝对寄存器映射。
+
+### 当前状态与待办
+
+- Issue #18 保持 open；本次核实结论已闭合责任边界，但修复尚未完成。
+- 下一步应制作可独立运行的 LLVM CodeGen/MIR 回归，覆盖四个同时存活的 Shared
+  outputs（A、B、A-scale、B-scale）及 `TMATMULMX` 四个 Shared binder，验证：
+  1. 不出现 Shared 普通 COPY；
+  2. 四个 producer 与 consumer 的物理 `S` 编号一致；
+  3. 若资源不足则编译期明确失败，而不是生成未定义 Shared 读取。
+- 相关已知边界：Shared 非内联函数参数/返回仍无 ABI；本 issue 的附件 workload 是
+  单函数大展开场景，不能用该 ABI 限制直接关闭。
+
+## 2026-09-22 linx-toolchain-build issue #18 结论更新：SharedTile lambda 必须内联，LLVM 标量/Spill 不改
+
+### Issue 处理结论
+
+- Issue：`LinxISA/linx-toolchain-build#18`。
+- 结论：问题可以修复，但不是缺少 Shared 指令，也不是标量板块或 tile spill datatype 问题。
+- 正确边界：`SharedTile` handle 只能保持在 `Shared_ABS` 的寄存器 SSA 中，不能跨普通 C++ ABI、普通函数调用或普通 `i64` alloca/store/load。
+
+### 根因核实
+
+- Issue 复现 IR 中，四个 `=Sr` TLOAD 输出先写入 `SharedTile` 对象的 `i64 Handle` 字段，随后由捕获 `SharedTile` 的泛型 lambda 读取并调用 `TMATMUL_MX`。
+- 原始 lambda 只生成 `inlinehint`，没有 `alwaysinline`。大展开下它被保留为独立函数，Shared handle 因而跨普通 C++ 调用边界物化为普通 `i64`，后端随后产生 Shared COPY 请求。
+- 当前 HEAD 的 `copyPhysReg` 正确拒绝该请求：Shared 没有 `MOVR/ORI` 或普通 copy 指令；不能通过降低该 fatal、把 Shared 改成 GPR、或生成伪造 copy 来修复。
+- 关闭 clock-hand 优化不改变结果；现有 `v5-shared-register-allocation.ll` 与 `v5-shared-crossblock.ll` 仍通过，说明 Shared allocator 的基本分配逻辑可工作。
+
+### 修复验证
+
+- 对 issue 附件源码仅给 `issueMx` lambda 增加 `__attribute__((always_inline))` 后，当前 LLVM `dev-llvm15_56` 在 `-O2` 成功编译。
+- 生成汇编的四个 producer 为：`TLOAD -> S0`、`TLOAD -> S1`、`TLOAD -> S2`、`TLOAD -> S3`；首个 `TMATMULMX` 消费同一组 `S0/S1/S2/S3`。
+- `-O2` 无 Shared COPY、无 `MOVR/ORI` 伪造，且没有修改标量路径或 tile spill。
+- LLVM 定向 Shared 回归：`2/2 PASS`。
+- `-O0` 仍触发现有 fast-RA/Shared ABI 的独立 Broken function 路径；本次没有把它误判为 scalar 或 tile spill datatype 问题，也没有放宽保护性 assert。
+
+### 修复落点
+
+- 触发 issue 的 TileOP/benchmark 模板应避免让携带 SharedTile 的 lambda 跨普通调用边界：直接展开调用，或给该 lambda 标记 `always_inline`。
+- TileOP 侧已有 `PTO_SHARED_INLINE` 约定，只能保证 TileOP inline-asm wrapper 内联，不能自动保证用户在 wrapper 外定义的泛型 lambda 内联；因此 issue workload 的调用方仍需修正。
+- LLVM 后端不增加 Shared copy 指令，不修改标量板块，不修改 datatype-independent `S64 + NORM` tile spill/reload 逻辑。
+- 本次没有留下 LLVM 源码补丁，也没有 commit/push；两版实验性自动内联 pass 均已撤回，因为它们无法可靠识别并安全传播任意 C++ 调用图中的 Shared handle 语义。
+
+### Issue 状态
+
+- Issue 保持 open，等待在实际 TileOP/benchmark 源仓提交调用方修复并重新跑完整 `gfsim`。
+- 回复中应明确：若调用方不能避免 SharedTile 跨普通 ABI，则应在 API/编译期诊断中拒绝该用法，而不是让后端生成非法 Shared copy。
+
+## 2026-09-22 Linx-TileOP-API Issue #205 复核
+
+- Issue：`LinxISA/Linx-TileOP-API#205`，主题为 `movr` 接受 Shared `S*` 目标并可能把 `S1` 静默编码为 GPR `sp`。
+- 最新 LLVM 修复：`679005ba1294 [LinxV5] Reject Shared aliases as MOVR destinations (issue #205)`，已存在于 `linxisa/dev-llvm15_56`，当前远端 tip `66816b2b5178` 未回退该修复。
+- 修复内容：MOVR parser 拒绝大写 `S0..S63` 目标；`copyPhysReg` 遇到 `Shared_ABS` 明确报错；新增 `v5-movr-shared-dst-neg.s` 负测。
+- 定向验证：`llvm-mc` 对 `c.movr r2, ->S0/S1/S63` 均返回 `Match Instruction Error`；小写 `->s0/->s1` 仍正常编码；`B.IOS S1, mask=1111` 仍正常编码。
+- Issue 2（`-O0 BGPR multi set!`）已由 LLVM #103 处理，不属于当前新增修复。
+- Issue 3（singleton Shared publication 非选中 PE 行为）失败点在 SuperScalarModel 运行时，不是 LLVM/TileOP 发射路径；issue 最新评论引用模型约束 #813。当前不修改编译器绕过模型语义。
+- Issue #205 已有回复 `5770832522`，明确区分三项问题；本轮未重复发送评论。
+
+## 2026-09-22 Linx-TileOP-API issue #212 处理记录：发布工具链 pin 与头文件 provenance
+
+### Issue 处理结论
+
+- Issue：`LinxISA/Linx-TileOP-API#212`。
+- 报告属实：`linx-toolchain-build@e6a31ef` 中安装的 TileOP-API headers 与
+  `Linx-TileOP-API@a7135b76` 逐字节一致，落后于当前 `origin/linx@fac242a9`，因此缺少
+  #190（#184 修复）及其后的多个已合并 PR。
+- 问题不是 ISA 指令编码 bug，而是发布链路缺少可自证的 TileOP-API revision，消费方无法
+  从工具链内部判断实际 pin。
+
+### 核实依据
+
+- TileOP 当前 `origin/linx` 已包含 #190 的 local Right B `[K,N]` 契约修复。
+- toolchain-build 的 `scripts/init-src.sh` 按 `linx` 分支 checkout，`Makefile` 通过
+  `make install` 复制 headers；旧产物没有记录实际 Git SHA。
+- pto-spec 当前主线为 `01445483`；本 issue 的核心依据是实现发布 provenance，而非新增
+  ASL 指令合法性。
+
+### 修复
+
+- 在独立 TileOP worktree `/tmp/tileop-issue212` 分支
+  `fix/issue-212-version-header` 完成并提交：`d4802ec`。
+- 新增 `include/common/pto_tileop_api_revision.hpp`，提供 API/spec 版本、精确 revision
+  和 feature gate；`include/common/pto_tileop.hpp` 自动包含它。
+- `make install` 根据实际 checkout 生成安装头，写入
+  `PTO_TILEOP_API_REVISION`、`PTO_TILEOP_API_REVISION_IS_EXACT` 和
+  `PTO_TILEOP_API_HAS_LOCAL_B_KN_FIX`。
+- README、usage 文档和 `test/test_version_header.py` 同步更新。
+- 已推送远程分支并创建 TileOP PR #213：
+  `https://github.com/LinxISA/Linx-TileOP-API/pull/213`。
+
+### 验证
+
+- `test_version_header.py`：`2/2 PASS`。
+- `test_v058_engine_contract`：`54/54 PASS`。
+- `test_pto0585_layout_interfaces`：`3/3 PASS`。
+- `make check`：PASS，119 个 usage examples 编译通过。
+- install smoke test 验证安装头记录实际 checkout SHA，并区分 dirty checkout。
+
+### Issue 回复与待办
+
+- 已回复 issue：
+  `https://github.com/LinxISA/Linx-TileOP-API/issues/212#issuecomment-5778442605`。
+- PR #213 合入后，仍需在 `linx-toolchain-build` 提升 TileOP-API pin 至包含 #213 的
+  revision 并重新构建发布工具链；完成发布验证后再关闭 issue #212。
+- 当前 `/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API` 原工作区仍在
+  `fix/issue-200-tcmps-gpr` 且与 `origin/linx` 分叉，有既有未提交文件；本次没有 reset、
+  merge 或修改该工作区。
+
+## 2026-09-23 Linx-TileOP-API Issue #205 回复更正
+
+- 参考评论：`https://github.com/LinxISA/Linx-TileOP-API/issues/205#issuecomment-5787555858`。
+- 重要更正：此前“Issue 3 应让非选中 PE 静默跳过”的判断不准确。按 `pto-spec/main@01445483`，special Shared schema 的非零 mask 必须包含当前 PE；不满足时应在参数/状态合法性阶段 `Fault_TileLegality`，不是 silent-skip。
+- Weight-to-Shared TLOAD：`BundleWeightTLOADStateLegal()` 对非零 mask 要求 `(mask AND BundleWeightTLOADPEBit()) != 0`。
+- Shared TIMG2COL：`BundleTIMG2COLStateLegal()` 只接受 one-hot singleton 或 `1111` cooperative mask，并要求当前 PE 被 mask 选中；`0011` 等非 one-hot sparse mask 不能当 singleton。
+- 只有 `PE_MASK=0000` 是严格 no-op。普通 Shared TLOAD 的 sparse-mask skip 不能推广到 weight/TIMG2COL special schema。
+- SuperScalarModel PR #827（当前 open，`[gfrun][TLSU] fail closed special Shared masks`）按该合同修复 preflight/execution 双路径，并增加 `0011`、non-selected one-hot 负测；PR 自报 `DIFF_TEST_ISSUE_205_ONLY=1` PASS=205/FAIL=0，full diff_test PASS=1124474/FAIL=0，ctest 1/1。
+- 因此 Issue 3 的模型侧边界实现缺口已有正确方向：应 fail-closed，不能 silent-skip；待 PR #827 CI/合入。
+- LLVM 侧结论不变但要更精确：`679005ba1294` 已修复 `movr ->S*` 别名误编码和 Shared copy 伪造；编译器不能通过 Shared↔GPR MOVR copy 绕过 special Shared runtime contract。
+- LLVM/TileOP 剩余责任是跨控制流 Shared binder handle 必须保持合法的 `Shared_ABS` SSA 定义，或在无法表达时显式报错；不能生成有硬件副作用的 MOVR/ORI copy。若 workload 仍因 Shared handle 跨普通 ABI/lambda 边界触发 copy fatal，需要修调用方内联/生命周期或增加明确诊断，这与模型 PR #827 是两个独立问题。
+- 当前不重复回复 issue；原评论已明确 LLVM 修复，最新评论已纠正 Issue 3 的模型语义与责任边界。
+
+## 2026-09-23 Shared handle 用户空 asm 消除与 spill/reload 边界
+
+### 已实现
+
+- LLVM 新增 `LinxV5SharedCopyElim` post-rewrite pass：
+  - 文件：`llvm/lib/Target/LinxV5/LinxV5SharedCopyElim.cpp`
+  - 仅删除严格匹配的物理桥接：`Shared S<n> -> GPR (kill)`，随后在多前驱合流块首部 `GPR (kill) -> 同一 Shared S<n>`。
+  - 不伪造 Shared SSA 定义，不自动合并不同 Shared parent，不生成 MOVR/ORI。
+  - 接入普通优化寄存器分配和 fast-regalloc rewrite 路径。
+- `LinxV5InstrInfo::storeRegToStackSlot` 和 `loadRegFromStackSlot` 对 `Shared_ABS` 改为明确 fail-fast：
+  - `Shared register spill is required, but Shared spill is not supported by the current LinxV5 ISA`
+  - `Shared register reload is required, but Shared reload is not supported by the current LinxV5 ISA`
+- 新增回归：`llvm/test/CodeGen/LinxV5/v5-shared-phi-undef.ll`。
+
+### 验证
+
+- `clang++ -O2`：PE0-only Shared publication 场景通过，不再需要用户手写空 `asm`。
+- 对象生成通过，输出不含 Shared/GPR 桥接。
+- `-O0`：不再触发 `Can't load this register from stack slot`，改为明确 Shared spill unsupported 诊断。
+- 相关 lit 4/4 通过：
+  - `v5-shared-phi-undef.ll`
+  - `v5-shared-crossblock.ll`
+  - `v5-shared-inline-asm-modifier.ll`
+  - `v5-movr-shared-dst-neg.s`
+- 两个不同 Shared parent 的真实合流仍 fail-closed，不能被该 pass 错误合并。
+
+### 遗留
+
+- `-O0` 若发生 Shared live-range 溢出仍会编译失败，这是当前 ISA 缺少 Shared spill/reload 指令的真实能力边界，不是静默生成非法代码。
+- 未来 ISA 提供 Shared move/spill/reload 后，再接入真实机器指令；当前不能把 Shared handle 当作普通 Tile/GPR payload 保存到栈。
+- 本次未提交、未推送、未创建 PR。

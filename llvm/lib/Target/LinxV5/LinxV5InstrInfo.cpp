@@ -622,6 +622,11 @@ void LinxV5InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     DL = I->getDebugLoc();
 
   MachineFunction *MF = MBB.getParent();
+  if (LinxV5::Shared_ABSRegClass.hasSubClassEq(RC))
+    report_fatal_error(
+        "Shared register spill is required, but Shared spill is not "
+        "supported by the current LinxV5 ISA");
+
   MachineFrameInfo &MFI = MF->getFrameInfo();
   MachineMemOperand *MMO = MF->getMachineMemOperand(
       MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOStore,
@@ -673,6 +678,11 @@ void LinxV5InstrInfo::loadRegFromStackSlot(
     DL = I->getDebugLoc();
 
   MachineFunction *MF = MBB.getParent();
+  if (LinxV5::Shared_ABSRegClass.hasSubClassEq(RC))
+    report_fatal_error(
+        "Shared register reload is required, but Shared reload is not "
+        "supported by the current LinxV5 ISA");
+
   const MachineFrameInfo &MFI = MF->getFrameInfo();
   MachineMemOperand *MMO = MF->getMachineMemOperand(
       MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOLoad,
