@@ -12,6 +12,7 @@ TSTORE <Row=32, Col=1, FP32>, T#1.reuse, [base=a0, stride=a1]
 MSCATTER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1.reuse, U#1
 MSCATTER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, U#1.reuse
 MSCATTER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1.reuse, U#1.reuse
+TMATMUL <M=16, N=16, K=16, FP32>, T#1, S0.reuse, ->T<512B>
 
 # CHECK: TEXP{{ +}}<Row=32, Col=1, FP32>, T#1.reuse, ->T<128B>
 # CHECK: TADD{{ +}}<Row=32, Col=1, FP32>, T#1.reuse, U#1, ->T<128B>
@@ -21,3 +22,4 @@ MSCATTER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1.reuse, U#1.reuse
 # CHECK: MSCATTER_ADD{{ +}}<ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1.reuse, U#1
 # CHECK: MSCATTER_ADD{{ +}}<ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, U#1.reuse
 # CHECK: MSCATTER_ADD{{ +}}<ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1.reuse, U#1.reuse
+# CHECK: TMATMUL{{ +}}<M=16, N=16, K=16, FP32>, T#1, S0.reuse, ->T<512B>
