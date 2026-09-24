@@ -11297,3 +11297,319 @@ Shared source。小 shape 对照正常。
 - `-O0` 若发生 Shared live-range 溢出仍会编译失败，这是当前 ISA 缺少 Shared spill/reload 指令的真实能力边界，不是静默生成非法代码。
 - 未来 ISA 提供 Shared move/spill/reload 后，再接入真实机器指令；当前不能把 Shared handle 当作普通 Tile/GPR payload 保存到栈。
 - 本次未提交、未推送、未创建 PR。
+
+## 2026-09-23 linx-toolchain-build Issue #19：TROWEXPANDMUL mixed SubTileView 触发 ClockHands getImm 崩溃
+
+### Issue 处理记录
+
+- Issue：`LinxISA/linx-toolchain-build#19`，标题为
+  `[Compiler][ClockHands] TROWEXPANDMUL 的 CUBE_M32 SubTileView source0 触发 MachineOperand::getImm 崩溃`。
+- Issue 当前仍为 open，暂无评论或已有修复；报告复现为 `TROWEXPANDMUL(dst, SubTileView, rowTile)` 在 `ClockHands Coloring` pass 内 host abort。
+
+### 根因核实
+
+- 报告属实，但根因不在 LLVM ClockHands 对合法 `B.SUBVIEW` 寄存器 source 的一般处理，而在 TileOP mixed-subview inline asm 的 operand index 错位。
+- `pto_region_row_expand(Out&, SubTileView&, Tile&)` 的 operands 为：
+  - `%7`：`"r"(range_base0_units)`，供 `B.SUBVIEW 0` 使用；
+  - `%8`：source fragment TileSize；
+  - `%9`：destination TileSize。
+- 原模板却写成 `B.IOT ... ->%0<%Z7>`，导致 LLVM 的 `%Z` modifier 解析 `%7` 这个运行时寄存器并调用 `MachineOperand::getImm()`，从而触发断言。
+- 同样的错误存在于 mixed-subview 的 binary、row-expand、column-expand 6 个重载；双-subview、TCVT 和 reduction-prefix 路径的 `%Z7` 经过 operand 表核对是合法的，未修改。
+- 因此 Issue #19 是 TileOP-API 生成侧 bug；LLVM 后端崩溃是被错误 asm 输入触发的二次表现。LLVM 无需通过放宽 `getImm()` 或 ClockHands 逻辑来掩盖非法尺寸绑定。
+
+### 修复
+
+- 工作区：`/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`。
+- 未提交、未推送、未创建 PR；等待用户确认后再创建修复分支/提交/推送。
+- 修改文件：`include/common/pto_tile_region_inline_asm.hpp`。
+- 将以下 6 个 mixed-subview `B.IOT` 模板中的 `%Z7` 改为 `%Z9`，保留 `B.SUBVIEW` 的 `%7` range GPR：
+  - binary：source0 SubTileView / source1 SubTileView；
+  - row expand：source0 SubTileView / source1 SubTileView；
+  - column expand：source0 SubTileView / source1 SubTileView。
+- 已同步修改头文件到当前 LLVM 安装树：
+  `/home/zhuwei/linx-llvm/build/lib/clang/15.0.4/include/tileop-api/common/pto_tile_region_inline_asm.hpp`。
+
+### 验证
+
+- 目标汇编成功生成：`SubviewVecCube.cpp`、`SubviewVecCubeIssue144.cpp`、`TileRegionCubeSubview.cpp`；输出中 `B.IOT` 正确显示 destination TileSize，`B.SUBVIEW` 继续显示合法 GPR range（如 `a1`）。
+- mixed-subview 相关路径成功：`TileRegionBinary.cpp` 生成双 `B.SUBVIEW`；`PrefixSourceFamilies.cpp` 的 `TROWEXPANDMUL` source1 prefix 生成 `B.SUBVIEW 1`，未再触发 host abort。
+- `cd /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API/test && python3 -m unittest test_v058_engine_contract`：`53/53 PASS`。
+- `TRowExpandMul.cpp` 未作为通过项记录：该现有测例还调用已退休的 `TCONCAT`，被仓库已有 static assertion 拒绝，与本次修改无关。
+- 曾运行错误的 unittest 模块路径 `python3 -m unittest test.test_v058_engine_contract`，该命令仅因模块路径错误失败，不代表代码失败。
+- 磁盘根分区曾满，已仅清理本次下载的 `/tmp/issue19*` 临时复现副本；未清理用户工作区或既有未跟踪文件。
+
+### 工作区备忘
+
+- LLVM `/home/zhuwei/linx-llvm`：分支 `dev-llvm15_56` 与 `linxisa/dev-llvm15_56` 同步；既有大量未跟踪文件，未清理。
+- TileOP `/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API`：分支 `fix/issue-200-tcmps-gpr`，相对 `origin/linx` 原本 ahead/behind 且有既有未跟踪 `AGENTS.md`、`CODEX_HANDOFF.md`、`DIM_REPAIR_LIST.md`；本次未 reset/merge，源码只增加上述 6 处 `%Z7 -> %Z9` 修复。
+- ISA `/tmp/pto-spec-current`：本轮 pull 因网络 TLS 中断未完成；Issue 根因是 inline asm 操作数绑定，未依赖新增 ASL 合同判断。
+- toolchain-build 实际本地目录为 `/home/zhuwei/linx-toolchain-build-online-main`，其 manifest 当前记录的 TileOP revision 为 `94af6a61...`；本次没有修改 toolchain pin 或重新发布工具链。
+
+### 待办
+
+- [ ] 用户确认后，在 TileOP 仓建立 issue #19 修复分支并提交、推送，创建 base=`linx` 的 PR，描述源码编译、汇编形态和预存 `TCONCAT` 测例失败边界。
+- [ ] PR 合入后同步 `linx-toolchain-build` 的 TileOP pin，重新构建并用 Issue #19 原始 `fa_lowp` reproducer 验证生成 ELF。
+- [ ] 回复 `linx-toolchain-build#19`：报告属实，说明实际根因是 TileOP `%Z` operand index 错位而非 LLVM 需要放宽 `getImm()`；附 PR/commit 和验证结果后再关闭 issue。
+
+### 2026-09-23 Issue #19 推送状态更新
+
+- TileOP 修复已从 `origin/linx` 独立分支提交并推送：
+  - 分支：`fix/issue-19-subview-size-operand`
+  - commit：`a79bb7a71b323f23ea42cf2fa389f5e0709d1d44`
+  - 远端分支已由 `git ls-remote` 确认存在。
+- 本次提交仅包含 `include/common/pto_tile_region_inline_asm.hpp` 的 6 处 `%Z7 -> %Z9` 修复。
+- GitHub API 创建 PR 尝试返回 `401 Requires authentication`；当前环境无可用 `gh` 登录态、`GH_TOKEN`/`GITHUB_TOKEN`，VS Code credential socket 也不可用。
+- 因认证阻塞，本轮尚未创建 PR，也尚未回复 `linx-toolchain-build#19`。代码推送已完成，不应重复提交。
+- 待认证恢复后执行：
+  1. 创建 PR：`https://github.com/LinxISA/Linx-TileOP-API/compare/linx...fix/issue-19-subview-size-operand?expand=1`
+  2. base=`linx`，标题使用 `fix(region): bind mixed subview output size operand`，描述沿用 commit/验证记录并 `Closes #19`。
+  3. 回复 Issue #19，说明根因是 TileOP `%Z` operand index 错位，commit 为 `a79bb7a`，并附 PR 链接和 `53/53` 契约测试结果。
+
+### 2026-09-23 Issue #19 PR/回复已完成
+
+- TileOP 修复分支已推送：`fix/issue-19-subview-size-operand`。
+- commit：`a79bb7a71b323f23ea42cf2fa389f5e0709d1d44`。
+- PR 已创建并保持 open：
+  `https://github.com/LinxISA/Linx-TileOP-API/pull/215`
+- PR base 为 `linx`，head 为 `fix/issue-19-subview-size-operand`。
+- `linx-toolchain-build#19` 已回复：
+  `https://github.com/LinxISA/linx-toolchain-build/issues/19#issuecomment-5790909917`
+- 回复内容说明：根因是 TileOP mixed `SubTileView` inline asm 将 `%Z7` 错绑定到 `range_base` GPR，修复为 `%Z9`；不是 LLVM 应放宽 `MachineOperand::getImm()`。
+- API 核验结果：PR #215 状态为 `open`，head SHA 为 `a79bb7a71b323f23ea42cf2fa389f5e0709d1d44`；Issue 回复 ID 为 `5790909917`。
+- 本次使用用户提供的 GitHub token 仅完成 API 操作；token 已出现在会话中，建议用户在 GitHub 立即撤销并重新生成，避免凭据泄露风险。
+- 后续待 PR CI/自动合入；合入后再同步 `linx-toolchain-build` pin 并关闭 Issue #19（若 PR 的 `Closes #19` 已被 GitHub正确关联，也需确认实际关闭状态）。
+
+## 2026-09-23 SuperScalarModel issue #826 A1 核实记录：Shared ID 不可隐式复制
+
+### Issue / 评论
+
+- Issue：`LinxISA/SuperScalarModel#826`。
+- 目标评论：`#issuecomment-5790137520`，A1 代表 ELF 显示四次 `TLOAD -> S0`，而
+  `TMATMULMX` 绑定 `S0/S1/S2/S3`。
+- 已追加回复：
+  `https://github.com/LinxISA/SuperScalarModel/issues/826#issuecomment-5791056063`。
+
+### ASL 核实
+
+- 当前 pto-spec：`main@6c41bde8`。
+- 单 PE issuer 发布完整 Shared parent 后，`mask=1111` cooperative consumer 使用同一
+  Shared ID 合法；producer/consumer PE mask 不要求相同。
+- Shared ID 是绝对槽位：`B.IOS ->S0` 只定义 `S0`，不会隐式定义/复制 `S1/S2/S3`。
+- 因此 TMATMULMX 绑定四个独立 Shared source 时，producer 必须分别发布到对应绝对 ID。
+  模型拒绝未发布的 `S1/S2/S3` 符合 ASL，不应通过等待、隐式 clone 或关闭 assertion 修复。
+
+### 当前实现复现
+
+- LLVM 当前 HEAD：`dev-llvm15_56@4a250724d152`，已包含 Shared bridge-copy elimination
+  和 Shared spill/reload 保护，但没有把非法 Shared ABI 变成合法指令。
+- TileOP 当前 `origin/linx@8ab1ac5`，已包含 #214 MX scale shape 修复。
+- 使用 issue #18 的 MXFP4 大 shape最小 workload：
+  - 原始捕获 `SharedTile` lambda 未强制内联：仍在 `ExpandPostRAPseudos` 报
+    `cannot copy a Shared register`；
+  - 仅给 `issueMx` lambda 添加 `__attribute__((always_inline))`：`-O2` 成功，汇编
+    producer 为 `TLOAD -> S0/S1/S2/S3`，与 TMATMULMX 四个 binder 一致。
+- 结论：A1 代表问题责任在 producer 侧 LLVM/TileOP 调用形态（Shared handle 跨普通
+  C++ ABI），不是 SuperScalarModel 应该隐式复制 Shared ID。
+
+### 处置
+
+- 不修改 SuperScalarModel 的 A1 assertion。
+- 不增加 Shared `MOVR/ORI`，不放宽 LLVM `copyPhysReg` fatal，不修改标量板块或
+  datatype-independent `S64 + NORM` tile spill/reload。
+- A1 producer 修复应让携带 SharedTile 的 lambda/helper 直接展开或强制 `always_inline`；
+  修正后重新生成 ELF，再根据新的首个失败点评估模型。
+- A2 已由 issue 最新评论更正为 producer 发出 ASL 不允许的非默认 LB2，归属 compiler/
+  TileOP/ELF 资产；不应在模型中放宽。
+
+## 2026-09-23 SuperScalarModel issue #826 A2 核实记录：CUBE-M TCVT 非法 LB2 已由 TileOP 修复
+
+### Issue / 评论
+
+- Issue：`LinxISA/SuperScalarModel#826`，A2 目标评论：
+  `https://github.com/LinxISA/SuperScalarModel/issues/826#issuecomment-5790271101`。
+- 本轮追加回复：
+  `https://github.com/LinxISA/SuperScalarModel/issues/826#issuecomment-5791882207`。
+
+### 根因核实
+
+- 当前规范 `/tmp/pto-spec-current@6c41bde8c2` 的 TCVT 合同要求：CUBE_M16/M32 source 保留 CUBE layout 和 logical valid shape；`LB0/LB1` 提供 `ValidCol/ValidRow`；`LB2` 对 CUBE-M TCVT 应省略，省略后的 effective value 为 `1`。
+- A2 列出的旧 ELF 首个 TCVT 显式编码非 1 的 `LB2`，因此是旧 TileOP/compiler/ELF producer 发码错误，不是 SuperScalarModel 合同缺口。
+- `B.DATR Layout=NORM` 对 CUBE-M TCVT 是规范要求，本身不表示 RowMajor，也不是此次失败原因。
+- 规范依据：`asl/block/model/dispatch/tcvt-schema.asl`、`asl/tile/elementwise-tile-tile/format-conversion/TCVT.asl`、`asl/block/model/schema/dimensions.asl`，均对应 `pto-spec@6c41bde8c2`。
+
+### 修复 / 处置
+
+- TileOP PR #191 已修复 CUBE-M TCVT：`PTO_CUBE_TCVT_DATR_ASM` 保持 `B.DATR.Layout=NORM`，CUBE-M 分支只发 `LB0/LB1`，不再发 `LB2`。
+- 当前 TileOP `origin/linx@8ab1ac5` 已包含该修复；不需要修改 SuperScalarModel，不应放宽模型 assertion，也不涉及 LLVM 标量板块或 datatype-independent `S64 + NORM` tile spill/reload 逻辑。
+- 已在 issue #826 回复，建议用包含 #191 的 TileOP 重新生成 6 个 ELF；若新 ELF 在省略 LB2 后仍出现新的首个 CELL descriptor 失败，再按新失败点核查模型。
+
+### 验证
+
+- 使用 LLVM `4a250724d152`、当前 TileOP 头文件和 `Issue178CubeTcvtNorm.cpp` 编译。
+- M32 正向/反向、M16、动态 `ValidRow` 分支生成 `BSTART.TEPL TCVT` 后只有 `LB0/LB1`，没有 `LB2`；示例：`LB0=1`、`LB1=32`、`B.IOT ->t<128B>`。
+- `test_v058_engine_contract`：54/54；`test_pto0585_layout_interfaces`：3/3；版本测试：2/2；usage examples：119 个全部通过。
+- 初次从仓库根目录运行 unittest 的模块路径不正确，随后从 `test/` 目录按仓库约定重跑并通过；不属于代码失败。
+
+### 工作区备忘
+
+- 本轮未修改 TileOP、LLVM 或模型源码，未创建新分支、commit 或 PR。
+- LLVM `/home/zhuwei/linx-llvm` 只追加本 handoff；既有未提交/未跟踪文件保持不动。
+- 使用隔离 worktree `/tmp/tileop-latest-826` 进行 TileOP 审计和编译，未污染 TileOP 原工作区。
+
+### 待办
+
+- [ ] 用包含 TileOP PR #191 的最新工具链/producer 重新生成 A2 的 6 个 ELF 并在模型中复测。
+- [ ] 若重生成后仍有新的首个失败，再单独按新失败点分析；当前不应修改模型 assertion。
+
+## 2026-09-23 Issue #339 compiler/TileOP support
+
+### Conclusion
+
+- `pto-spec` Issue #339 is closed by merged commit `6c41bde8c` (PR #344).
+- The latest ISA requires Local `RowMaxIn`, `RowMaxOut`, and `GroupMaxOut` to use the primary `CUBE_M16`/`CUBE_M32` CellReg layout; RowMajor auxiliary carriers are illegal.
+- Matrix Bias is now Local `CUBE_N8`, logical shape `[1, N]`, accumulator dtype. `CUBE_N8/U64` is the narrow `K2 x N8` exception and is constructed through `ND2N8`; it is not a direct `CUBE_N8` assembler selector.
+- LLVM MC/parser already supports `ND2N8/N82ND` and direct `CUBE_M16/M32` paths. No LLVM compiler change was required for #339; the missing implementation was in TileOP descriptor aliases and static validation.
+
+### TileOP changes prepared
+
+- Isolated worktree: `/tmp/linx-tileop-339`.
+- Branch: `fix/issue-339-cube-aux-bias` from `origin/linx@8ab1ac5`.
+- `CubeBias` now describes Local `CUBE_N8` `[1, N]`; U64 derives the 2-row N8 CELL geometry.
+- U64 `CUBE_M16/M32` is rejected; U64 `CUBE_N8` Local-to-GM store is rejected because the current ISA only authorizes `ND2N8` construction.
+- Matrix post-process validation now requires RowMaxIn/Out and GroupMaxOut to match D's CUBE M layout and keeps per-PE row shape checks.
+- Updated affected examples, docs, positive fixtures, and negative coverage for RowMajor auxiliary rejection.
+
+### Validation
+
+- `python3 -m unittest test_v058_engine_contract`: 54/54 passed.
+- Targeted positive compile passed: `DirectCubeLayout.cpp`, `SharedTransposeNonSquare.cpp`, `MatrixIntegerDtypes.cpp`.
+- Targeted negative compile passed: RowMajor RowMaxOut is rejected with `RowMaxOut must use the primary destination CUBE layout`.
+- Full `compile.all objects` on the current `origin/linx` baseline reported 57 passed / 39 failed. The remaining failures are pre-existing unrelated issues (retired/unsupported TLSU textual op names, Shared ABI bridge-copy cases, stale MX scale fixtures, region tests, GMOV mask cases, etc.); they are not caused by #339 changes.
+- No LLVM source file was modified.
+
+### Pending integration
+
+- Commit and push this TileOP branch, create a PR against `linx`, and reply to PTO-ISA/pto-spec#339 with the PR and validation details.
+- Do not alter LLVM parser legality to accept direct `CUBE_N8`; it is transport-derived under the current ISA.
+
+### Final integration status
+
+- TileOP commit pushed: `ee139c2a1a3ab1f06f27aede62bab59d53561446`.
+- TileOP PR created and open: https://github.com/LinxISA/Linx-TileOP-API/pull/218 (base `linx`, head `fix/issue-339-cube-aux-bias`).
+- `pto-spec#339` reply corrected and published: https://github.com/PTO-ISA/pto-spec/issues/339#issuecomment-5791987627.
+- PR is not merged yet; wait for CI/maintainer review before closing the issue.
+
+## 2026-09-23 linx-toolchain-build issue #20：mixed region expand selector operand 错位
+
+### Issue / 现象
+
+- Issue：`LinxISA/linx-toolchain-build#20`，标题为 `[TileOP][TROWEXPANDMUL] SubTileView overload 将 TileSizeCode 错生成为 TEPL selector`。
+- Issue：`https://github.com/LinxISA/linx-toolchain-build/issues/20`。
+- 已回复：`https://github.com/LinxISA/linx-toolchain-build/issues/20#issuecomment-5793944871`。
+- 现象：mixed `SubTileView + Tile` row-expand 生成 `BSTART.TEPL 5`；5 是 2 KiB 输出 Tile 的 `TilesizeCode`，不是 `TROWEXPANDMUL` selector 71。
+
+### 根因核实
+
+- 当前 `pto-spec@6c41bde8c2` catalog 将 `TROWEXPANDMUL` 定义为 TEPL selector `0x47`（十进制 71）。
+- `include/common/pto_tile_region_inline_asm.hpp` 中 mixed binary/row-expand/col-expand overload 的操作数顺序为：operand 9 是输出 `TilesizeCode`，operand 10 是 `Opcode`；但 `BSTART.TEPL` 错用 `%c9`。
+- 因此问题属于 TileOP inline-asm operand binding 错误，不是 LLVM、gfrun 或模型 assertion 问题；不涉及标量板块和 tile spill 逻辑。
+
+### 修复
+
+- TileOP 分支：`fix/issue-20-row-expand-opcode`。
+- commit：`d0a605e`。
+- PR：`https://github.com/LinxISA/Linx-TileOP-API/pull/220`，base=`linx`，包含 `Closes #20`。
+- 修复 4 个 mixed expand overload：row/column 两个方向，各覆盖 `SubTileView + Tile` 与 `Tile + SubTileView`，将 `BSTART.TEPL %c9` 改为 `%c10`。
+- 新增 `test/tileop_api/src/TileRegionBinaryMixed.cpp`，并加入 `test/tileop_api/compile.all`，覆盖 mixed `TROWEXPANDMUL`。
+- 无需文档更新：API 签名和语义不变，本次仅修正内部 inline-asm operand 索引。
+
+### 验证
+
+- 当前 LLVM `4a250724d152` + 修复后的 TileOP 头文件生成：
+  `BSTART.TEPL TROWEXPANDMUL, FP32`，而不是 selector 5；输出仍为 `->t<2KB>`，`B.SUBVIEW ... 5` 是合法 range index。
+- `test_v058_engine_contract`：56/56。
+- version test：2/2。
+- usage examples：119/119。
+- 新增 `TileRegionBinaryMixed` object fixture：通过。
+- 完整 object gate：59 通过、39 失败；失败为当前基线既有问题（退休 selector、旧 TMOV spelling、MX shape、部分旧 fixture 不兼容等），新增 fixture 不在失败集中。
+- `test_pto0585_layout_interfaces`：基线失败，原因是现有文档索引缺少 `layout-and-rearrangement/layout/TSHUF.md`，与本改动无关。
+
+### 工作区备忘
+
+- TileOP 原工作区 `/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API` 未被修改，保留其既有分支和未跟踪文件。
+- 修复在隔离 worktree `/tmp/tileop-issue20` 完成并已推送；LLVM 工作区仅追加本 handoff，其他既有未提交/未跟踪内容保持不动。
+- PR #220 已自动合入（当前状态：merged）；本轮未修改 toolchain-build pin。
+
+### 待办
+
+- [x] TileOP PR #220 已自动合入。
+- [ ] PR 合入后同步 `linx-toolchain-build` 的 TileOP revision/pin，重新构建工具链。
+- [ ] 使用 issue #20 原始 reproducer 重新生成 ELF，确认 gfrun 不再报告 reserved/deleted selector。
+
+## 2026-09-24 Issue #222 packed Shared Tile capacity
+
+### Issue / root cause
+
+- Issue: `LinxISA/Linx-TileOP-API#222`, packed E2M1X2 RowMajor Shared capacity is doubled.
+- Latest ISA was synchronized to `pto-spec/main@47d13583a`; `TileElementBits` in `asl/tile/model/state/descriptors.asl` and the shared-register descriptor contract define E2M1X2/E1M2X2/HiF4X2/S4X2/U4X2 as 4 logical bits per element.
+- TileOP `type_traits` correctly keeps these types as 8-bit C++ carriers, but non-CUBE `StorageBytes` and `kBytes` incorrectly used `type_traits<DType>::bits`. A `128 x 128` packed Shared tile therefore became 16 KiB instead of the ISA-correct 8 KiB.
+- LLVM only encodes the TileOP-provided SizeCode; no LLVM source change is required.
+
+### Fix
+
+- Isolated worktree: `/tmp/linx-tileop-222`.
+- Branch: `fix/issue-222-packed-shared-capacity` from latest `origin/linx`.
+- Added `tile_element_bits_v`, mapping all architectural packed `*X2` types to 4 logical bits while preserving the 8-bit C++ carrier.
+- Reused the helper for CUBE element width, non-CUBE `StorageBytes`, and `kBytes`.
+- Added 8 KiB assertions for packed Shared Left/Right types and 16 KiB FP8 control assertion.
+- Updated shape/valid-region documentation and Python contract coverage.
+
+### Validation
+
+- `test_v058_engine_contract`: 57/57 passed.
+- Correctly compiled `test/pto0583_contract.cpp` with Linx clang++.
+- Minimal front-end compile confirmed `SharedMatrixLeft<__fp4_e2m1x2, 128, 128>` maps to 8 KiB and FP8 to 16 KiB.
+- Attempting full assembly of a standalone Shared-handle TLOAD reproduces the existing LLVM fatal `cannot copy a Shared register`; this is the known Shared ABI issue and is unrelated to the capacity calculation. It is not included in this TileOP fix.
+- `make check` otherwise passed docs/examples/legacy checks and `test_v058_engine_contract`; the existing `test_pto0585_layout_interfaces` failure is a latest-`linx` baseline documentation-index issue (`TSHUF.md` missing from `docs/tileop-usage/README.md`).
+
+### Integration
+
+- Commit/PR/reply pending at handoff time.
+
+### Final integration status
+
+- TileOP commit pushed: `5316606e9e7bd91139d41a6b0817982ea906acd5`.
+- PR created and open: https://github.com/LinxISA/Linx-TileOP-API/pull/226
+  (base `linx`, head `fix/issue-222-packed-shared-capacity`).
+- Issue #222 reply published and corrected: https://github.com/LinxISA/Linx-TileOP-API/issues/222#issuecomment-5806845922.
+- PR currently reports `mergeable=true`, `mergeable_state=unstable`; CI/maintainer review is pending.
+- The GitHub token used for API operations is exposed in the session history and should be revoked/rotated.
+
+## 2026-09-24 Issue #21 long TileArray B.ASSEMBLE ParentRef wraparound
+
+### Issue / ISA conclusion
+
+- Issue: `LinxISA/linx-toolchain-build#21`.
+- The latest issue report is still open and has no prior comments.
+- `pto-spec/main@47d13583a` requires every participating `B.ASSEMBLE` writer to remain associated with the same open Local generation. The relative tile selector is only a register-window encoding; it cannot silently change the logical parent after `INIT`.
+- The reported 16-fragment `TileArray<PBlock, 1, 16>` is within the parent capacity. The `m#16` to `m#2` change on writer 9 is therefore an invalid compiler-produced ParentRef, not an ISA/model capacity restriction.
+
+### Root cause
+
+- LLVM's `LinxV5TRegToOffset` pass treats all local tile live ranges uniformly and inserts `PseudoTCOPY` when the relative tile window is exhausted.
+- A TASSEMBLY INIT destination is different: copying that tile changes its architectural tile identity, while later MIDDLE/LAST `B.ASSEMBLE` writers must continue to name the original open-generation parent.
+- The old behavior could therefore emit a validly encoded but semantically invalid `B.ASSEMBLE` bundle; gfrun correctly rejected it with `illegal B.ASSEMBLE generation or descriptor contract`.
+
+### LLVM fix
+
+- `llvm/lib/Target/LinxV5/LinxV5TRegToOffset.cpp` now tracks whether a tile live range was defined by inline asm containing `B.ASSEMBLE`.
+- If slot allocation would copy such a live range, LLVM fails closed with:
+  `cannot copy a live B.ASSEMBLE parent: the INIT parent must retain its tile identity through the complete generation`.
+- This prevents silent ParentRef wraparound. A future ISA/backend extension can replace the diagnostic with a generation-aware relocation/copy strategy when such an instruction exists.
+
+### Validation / integration
+
+- `ninja -C build LLVMLinxV5CodeGen -j4` passed; only pre-existing warnings were emitted.
+- The change has not yet been pushed or reported upstream at the time this entry was written.
+- Reproduction evidence: gist `https://gist.github.com/lvhao7896/ff9cd458086235d43d9bc3c3137eff96`; failing writer 9 used `m#2` after the parent had previously been selected as `m#16`.
+- The GitHub token used for API operations is exposed in the session history and should be revoked/rotated.

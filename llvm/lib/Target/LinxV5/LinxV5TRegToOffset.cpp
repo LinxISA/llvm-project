@@ -63,8 +63,10 @@ struct TRLiveRange {
   MachineOperand *DefMO;
   unsigned DefIdx;
   bool IsLiveout;
+  bool IsAssembleParent;
   TRLiveRange(MachineInstr *I)
-      : MI(I), LastUse(nullptr), DefMO(nullptr), DefIdx(-1u), IsLiveout(false) {
+      : MI(I), LastUse(nullptr), DefMO(nullptr), DefIdx(-1u), IsLiveout(false),
+        IsAssembleParent(false) {
   }
 };
 
@@ -72,10 +74,13 @@ struct TRCopyRange {
   LinxRegOp RegOp;
   MachineInstr *LastUse;
   bool IsLiveout;
+  bool IsAssembleParent;
   size_t Idx;
-  TRCopyRange() : LastUse(nullptr), IsLiveout(false), Idx(0) {}
+  TRCopyRange()
+      : LastUse(nullptr), IsLiveout(false), IsAssembleParent(false), Idx(0) {}
   TRCopyRange(LinxRegOp &RO, bool liveout)
-      : RegOp(RO), LastUse(nullptr), IsLiveout(liveout), Idx(0) {}
+      : RegOp(RO), LastUse(nullptr), IsLiveout(liveout),
+        IsAssembleParent(false), Idx(0) {}
 };
 
 struct SlotStatus {
@@ -212,7 +217,16 @@ collectSuccessorLiveInsForRC(MachineBasicBlock &MBB,
 static void initSlot(TRCopyRange *Slot) {
   Slot->RegOp = LinxRegOp();
   Slot->IsLiveout = false;
+  Slot->IsAssembleParent = false;
   Slot->LastUse = nullptr;
+}
+
+static bool isAssembleParentDef(const TRLiveRange &LR) {
+  if (!LR.MI || !LR.MI->isInlineAsm() || !LR.DefMO)
+    return false;
+  return StringRef(LR.MI->getOperand(InlineAsm::MIOp_AsmString)
+                       .getSymbolName())
+      .contains("B.ASSEMBLE");
 }
 
 static unsigned getTSlotOccupation(MachineInstr &MI,
@@ -414,6 +428,11 @@ void SlotCalc::PreAlloc(TRCopyRange Slot) {
 }
 
 void SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
+  if (Slot.IsAssembleParent)
+    report_fatal_error(
+        "cannot copy a live B.ASSEMBLE parent: the INIT parent must retain "
+        "its tile identity through the complete generation");
+
   LLVM_DEBUG(dbgs() << "slot copy for " << Slot.Idx << " head " << HeadIdx
                     << "(" << headsi() << ")"
                     << " limit " << TRNumber << "\n");
@@ -735,6 +754,7 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
       for (int i = 0; i < Occ; ++i) {
         NewSlots[i]->LastUse = LRs[i]->LastUse;
         NewSlots[i]->RegOp.Size = getRegSize(*LRs[i]);
+        NewSlots[i]->IsAssembleParent = isAssembleParentDef(*LRs[i]);
         if (LRs[i]->LastUse != nullptr || LRs[i]->IsLiveout) {
           NewSlots[i]->RegOp.Reg = LRs[i]->DefMO->getReg();
         }
