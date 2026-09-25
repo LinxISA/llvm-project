@@ -26,6 +26,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     bool Present = false;
     MCRegister Reg = LinxV5::R0;
     unsigned SharedID = 0;
+    bool SharedReuse = false;
     unsigned SizeCode = 0;
     char TileClass = 0;
     RangeValue Subview;
@@ -176,7 +177,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     SizeCode = matchTileSizeHelper(Text);
     return SizeCode < 16;
   };
-  auto parseSharedID = [&](StringRef Name, unsigned &ID) {
+  auto parseSharedID = [&](StringRef Name, unsigned &ID, bool &Reuse) {
+    Reuse = Name.consume_back_insensitive(".reuse");
     if (Name.size() < 2 ||
         std::toupper(static_cast<unsigned char>(Name.front())) != 'S')
       return false;
@@ -422,7 +424,10 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       break;
     case TileMacroBindingKind::SharedSource:
     case TileMacroBindingKind::SharedDestination:
-      Matched = parseSharedID(Name, SharedID);
+      Matched = parseSharedID(Name, SharedID, Value.SharedReuse);
+      if (Binding.Kind == TileMacroBindingKind::SharedDestination &&
+          Value.SharedReuse)
+        Matched = false;
       Value.SharedID = SharedID;
       break;
     case TileMacroBindingKind::GPRSource:
@@ -1086,7 +1091,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
             Binding && Binding->Kind == TileMacroBindingKind::SharedDestination;
         emitToStreamer(
             Out, MCInstBuilder(LinxV5::B_IOS)
-                     .addImm(P.Members[Member].SharedID)
+                     .addImm(P.Members[Member].SharedID |
+                             (!IsDestination &&
+                                      !P.Members[Member].SharedReuse
+                                  ? 0x40
+                                  : 0))
                      .addImm(P.PEMask)
                      .addImm(IsDestination ? P.Members[Member].SizeCode : 0));
         emitRangeModifiers(Member);

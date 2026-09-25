@@ -1558,7 +1558,10 @@ static unsigned MatchLinxV5GlobalRegisteName(StringRef Name) {
 }
 
 static unsigned MatchLinxV5TileRegisteName(StringRef Name) {
-  return StringSwitch<unsigned>(Name.lower())
+  std::string LowerName = Name.lower();
+  StringRef NormalizedName(LowerName);
+  bool Reuse = NormalizedName.consume_back(".reuse");
+  unsigned Reg = StringSwitch<unsigned>(NormalizedName)
       .Case("t#1", LinxV5::Tile_TOS1)
       .Case("t#2", LinxV5::Tile_TOS2)
       .Case("t#3", LinxV5::Tile_TOS3)
@@ -1763,6 +1766,26 @@ static unsigned MatchLinxV5TileRegisteName(StringRef Name) {
       .Case("acc", LinxV5::Tile_ACC)
       .Case("acc#1", LinxV5::Tile_ACCOS1)
       .Default(LinxV5::NoRegister);
+
+  if (!Reuse || Reg == LinxV5::NoRegister)
+    return Reg;
+  if (Reg >= LinxV5::Tile_TOS1 && Reg <= LinxV5::Tile_TOS16)
+    return LinxV5::Tile_TOS1_RU + Reg - LinxV5::Tile_TOS1;
+  if (Reg >= LinxV5::Tile_UOS1 && Reg <= LinxV5::Tile_UOS16)
+    return LinxV5::Tile_UOS1_RU + Reg - LinxV5::Tile_UOS1;
+  if (Reg >= LinxV5::Tile_MOS1 && Reg <= LinxV5::Tile_MOS16)
+    return LinxV5::Tile_MOS1_RU + Reg - LinxV5::Tile_MOS1;
+  if (Reg >= LinxV5::Tile_NOS1 && Reg <= LinxV5::Tile_NOS16)
+    return LinxV5::Tile_NOS1_RU + Reg - LinxV5::Tile_NOS1;
+  if (Reg >= LinxV5::Tile_T1 && Reg <= LinxV5::Tile_T16)
+    return LinxV5::Tile_T1_RU + Reg - LinxV5::Tile_T1;
+  if (Reg >= LinxV5::Tile_U1 && Reg <= LinxV5::Tile_U16)
+    return LinxV5::Tile_U1_RU + Reg - LinxV5::Tile_U1;
+  if (Reg >= LinxV5::Tile_M1 && Reg <= LinxV5::Tile_M16)
+    return LinxV5::Tile_M1_RU + Reg - LinxV5::Tile_M1;
+  if (Reg >= LinxV5::Tile_N1 && Reg <= LinxV5::Tile_N16)
+    return LinxV5::Tile_N1_RU + Reg - LinxV5::Tile_N1;
+  return LinxV5::NoRegister;
 }
 
 static unsigned MatchLinxV5SIMTRegisterName(StringRef Name) {
@@ -2603,6 +2626,7 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   StringRef Str = Tok.getString();
   if (Str.empty())
     Str = Tok.getIdentifier();
+  bool Reuse = Str.consume_back_insensitive(".reuse");
   if (!Str.startswith_insensitive("s"))
     return MatchOperand_NoMatch;
   // Reject the retired "S#n" spelling.
@@ -2618,7 +2642,10 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
     getParser().Error(S, "SharedTileID must be in the range S0..S63");
     return MatchOperand_ParseFail;
   }
-  const MCExpr *Val = MCConstantExpr::create(TID, getParser().getContext());
+  // The MC operand's synthetic bit 6 carries the source lifetime decision:
+  // one means last-use, zero means retain. Only bits 5:0 are SharedTileID.
+  const MCExpr *Val = MCConstantExpr::create(TID | (Reuse ? 0 : 0x40),
+                                             getParser().getContext());
   Operands.push_back(LinxV5Operand::createImm(Val, S, E));
   getLexer().Lex();  // consume 'S17'
   return MatchOperand_Success;

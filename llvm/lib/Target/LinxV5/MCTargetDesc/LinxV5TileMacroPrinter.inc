@@ -76,9 +76,17 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     switch (Opcode) {
     case LinxV5::B_IOT_NoSrc_Dst:
     case LinxV5::B_IOT_OneSrc_Dst:
+    case LinxV5::B_IOT_OneSrc_Dst_Reuse:
     case LinxV5::B_IOT_TwoSrc_Dst:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
     case LinxV5::B_IOT_OneSrc_NoDst:
+    case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
     case LinxV5::B_IOT_TwoSrc_NoDst:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
       return true;
     default:
       return false;
@@ -104,6 +112,7 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     bool Present = false;
     MCRegister Reg = LinxV5::R0;
     unsigned SharedID = 0;
+    bool SharedReuse = false;
     unsigned SizeCode = 0;
     RangeValue Subview;
     RangeValue Assemble;
@@ -178,12 +187,16 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           DestinationSize = Inst.getOperand(2).getImm();
           return true;
         case LinxV5::B_IOT_OneSrc_Dst:
+        case LinxV5::B_IOT_OneSrc_Dst_Reuse:
           Destination = Inst.getOperand(0).getReg();
           recordMask(Inst.getOperand(1).getImm());
           DestinationSize = Inst.getOperand(2).getImm();
           Sources.push_back(Inst.getOperand(4).getReg());
           return true;
         case LinxV5::B_IOT_TwoSrc_Dst:
+        case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+        case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+        case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
           Destination = Inst.getOperand(0).getReg();
           recordMask(Inst.getOperand(1).getImm());
           DestinationSize = Inst.getOperand(2).getImm();
@@ -191,10 +204,14 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           Sources.push_back(Inst.getOperand(5).getReg());
           return true;
         case LinxV5::B_IOT_OneSrc_NoDst:
+        case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
           recordMask(Inst.getOperand(0).getImm());
           Sources.push_back(Inst.getOperand(2).getReg());
           return true;
         case LinxV5::B_IOT_TwoSrc_NoDst:
+        case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+        case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+        case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
           recordMask(Inst.getOperand(0).getImm());
           Sources.push_back(Inst.getOperand(2).getReg());
           Sources.push_back(Inst.getOperand(3).getReg());
@@ -302,7 +319,9 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         if (Pos >= BodyEnd || Commands[Pos].getOpcode() != LinxV5::B_IOS)
           break;
         Members[Member].Present = true;
-        Members[Member].SharedID = Commands[Pos].getOperand(0).getImm();
+        unsigned EncodedSharedID = Commands[Pos].getOperand(0).getImm();
+        Members[Member].SharedID = EncodedSharedID & 0x3f;
+        Members[Member].SharedReuse = (EncodedSharedID & 0x40) == 0;
         Members[Member].SizeCode = Commands[Pos].getOperand(2).getImm();
         recordMask(Commands[Pos].getOperand(1).getImm());
         unsigned CommandStart = Pos;
@@ -715,6 +734,8 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       break;
     case TileMacroBindingKind::SharedSource:
       O << "S" << Value.SharedID;
+      if (Value.SharedReuse)
+        O << ".reuse";
       break;
     case TileMacroBindingKind::SharedDestination:
       O << "->S" << Value.SharedID;

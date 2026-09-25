@@ -156,6 +156,7 @@ private:
   void insertCopy(MachineBasicBlock &MBB);
 
   void legalityCheck(MachineFunction &MF);
+  void markTileLastUses(MachineFunction &MF);
 
   // Phase-2
   void rewriteMBB(MachineBasicBlock &MBB);
@@ -192,6 +193,26 @@ static bool isScalarReg(const TargetRegisterClass *RC) {
       RC == &LinxV5::TILE_ABS_ACCRegClass)
     return false;
   assert(0 && "Reg Class is not offset register!");
+}
+
+static Register getTileReuseReg(Register Reg) {
+  if (Reg >= LinxV5::Tile_T1 && Reg <= LinxV5::Tile_T16)
+    return LinxV5::Tile_T1_RU + Reg - LinxV5::Tile_T1;
+  if (Reg >= LinxV5::Tile_U1 && Reg <= LinxV5::Tile_U16)
+    return LinxV5::Tile_U1_RU + Reg - LinxV5::Tile_U1;
+  if (Reg >= LinxV5::Tile_M1 && Reg <= LinxV5::Tile_M16)
+    return LinxV5::Tile_M1_RU + Reg - LinxV5::Tile_M1;
+  if (Reg >= LinxV5::Tile_N1 && Reg <= LinxV5::Tile_N16)
+    return LinxV5::Tile_N1_RU + Reg - LinxV5::Tile_N1;
+  if (Reg >= LinxV5::Tile_TOS1 && Reg <= LinxV5::Tile_TOS16)
+    return LinxV5::Tile_TOS1_RU + Reg - LinxV5::Tile_TOS1;
+  if (Reg >= LinxV5::Tile_UOS1 && Reg <= LinxV5::Tile_UOS16)
+    return LinxV5::Tile_UOS1_RU + Reg - LinxV5::Tile_UOS1;
+  if (Reg >= LinxV5::Tile_MOS1 && Reg <= LinxV5::Tile_MOS16)
+    return LinxV5::Tile_MOS1_RU + Reg - LinxV5::Tile_MOS1;
+  if (Reg >= LinxV5::Tile_NOS1 && Reg <= LinxV5::Tile_NOS16)
+    return LinxV5::Tile_NOS1_RU + Reg - LinxV5::Tile_NOS1;
+  return Reg;
 }
 
 static bool isRC(Register Reg, const TargetRegisterClass *RC,
@@ -1336,9 +1357,25 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   legalityCheck(MF);
 
+  // Freeze each tile source's lifetime decision while operands still carry
+  // their absolute virtual identity. The following phase rewrites them to
+  // relative offsets, after which ordinary kill/live-out analysis cannot
+  // distinguish generations of the same offset register.
+  markTileLastUses(MF);
+
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
-  if (!EnableReg2Offset)
+  if (!EnableReg2Offset) {
+    // Preserve the retain decision even in the absolute-register output mode.
+    // A bare absolute Tile source now means last-use, so leaving a non-kill
+    // operand unmarked would silently release a still-live value.
+    for (MachineBasicBlock &MBB : MF)
+      for (MachineInstr &MI : MBB)
+        for (MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
+              !MO.isKill())
+            MO.setReg(getTileReuseReg(MO.getReg()));
     return true;
+  }
 
   // Phase-2: Rewrite to offset register for codeGen.
   DoneMBBs.clear();
@@ -1352,6 +1389,56 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   }
 
   return true;
+}
+
+void LinxV5TRegToOffsetOpt::markTileLastUses(MachineFunction &MF) {
+  for (auto &RCInfo : RCsInfo) {
+    const TargetRegisterClass *RC = RCInfo.first;
+    if (!isTileReg(RC) || RC == &LinxV5::TILE_ABS_ACCRegClass)
+      continue;
+
+    for (MachineBasicBlock &MBB : MF) {
+      DenseSet<Register> Live;
+      DenseSet<Register> SeenUse;
+      for (const auto &LiveOut : MBB.liveouts())
+        if (isRC(LiveOut.PhysReg, RC, MRI))
+          Live.insert(LiveOut.PhysReg);
+
+      for (MachineInstr &MI : MBB)
+        for (MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.isUse() && !MO.isDef() &&
+              isRC(MO.getReg(), RC, MRI))
+            MO.setIsKill(false);
+
+      for (auto MII = MBB.rbegin(), MIE = MBB.rend(); MII != MIE; ++MII) {
+        MachineInstr &MI = *MII;
+        if (canSkipMI(MI))
+          continue;
+
+        // A definition starts a distinct generation. In reverse order it
+        // terminates liveness from later instructions before this MI's uses.
+        for (MachineOperand &MO : MI.defs()) {
+          if (!MO.isReg() || !isRC(MO.getReg(), RC, MRI))
+            continue;
+          Live.erase(MO.getReg());
+          SeenUse.erase(MO.getReg());
+        }
+
+        DenseMap<Register, SmallVector<MachineOperand *, 2>> Uses;
+        for (MachineOperand &MO : MI.uses()) {
+          if (MO.isReg() && !MO.isDef() && isRC(MO.getReg(), RC, MRI))
+            Uses[MO.getReg()].push_back(&MO);
+        }
+        for (auto &Use : Uses) {
+          Register Reg = Use.first;
+          if (!Live.count(Reg) && !SeenUse.count(Reg))
+            for (MachineOperand *MO : Use.second)
+              MO->setIsKill(true);
+          SeenUse.insert(Reg);
+        }
+      }
+    }
+  }
 }
 
 bool hasImplicitDef(DenseMap<Register, unsigned int> &TRegIdx) {
@@ -1464,6 +1551,9 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             // def in this block's tracked TRegIdx (e.g. live-in from a
             // block we couldn't pick a pred for). Skip rewriting the offset
             // for this use; the vreg will be handled by later regalloc.
+            if (isTileReg(RC) && RC != &LinxV5::TILE_ABS_ACCRegClass &&
+                MO.getReg().isPhysical() && !MO.isKill())
+              MO.setReg(getTileReuseReg(MO.getReg()));
             continue;
           }
           int64_t Index = CurIdx - TRegIdx[MO.getReg()];
@@ -1472,6 +1562,9 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
                      << CurIdx << " LastIdx " << TRegIdx[MO.getReg()] << "\n");
           assert(Index <= RC->getNumRegs());
           Register NewReg = OffsetBase + (Index - 1);
+          if (isTileReg(RC) && RC != &LinxV5::TILE_ABS_ACCRegClass &&
+              !MO.isKill())
+            NewReg = getTileReuseReg(NewReg);
           MO.setReg(NewReg);
         }
       } else if (MO.isDef() && isRC(MO.getReg(), RC, MRI)) {
