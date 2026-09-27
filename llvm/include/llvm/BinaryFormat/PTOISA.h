@@ -14,10 +14,10 @@
 
 namespace llvm::PTOISA {
 
-#define LLVM_PTO_ISA_RELEASE "0.58.6"
-#define LLVM_PTO_ISA_ENCODING_ABI "pto-isa-0.58.6-mode-function-v1"
+#define LLVM_PTO_ISA_RELEASE "0.58.7"
+#define LLVM_PTO_ISA_ENCODING_ABI "pto-isa-0.58.7-mode-function-v1"
 #define LLVM_PTO_ISA_ENCODING_PROJECTION_SHA256                                \
-  "a757f2e50ec8050d2131b6b9ad38657511df80cf3f9424d5f009ea6e0cc35839"
+  "9c49cdfa79a4eda6b27c1548bfd06ef681b6189f7d02d466ddfd43f59993b93d"
 
 inline constexpr StringLiteral Release = LLVM_PTO_ISA_RELEASE;
 inline constexpr StringLiteral EncodingABI = LLVM_PTO_ISA_ENCODING_ABI;
