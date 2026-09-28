@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate one valid default-oriented macro case for every PTO 0.58.6 form."""
+"""Generate one valid default-oriented macro case for every PTO 0.58.7 form."""
 
 import json
 import sys
@@ -52,7 +52,9 @@ for operation in catalog["operations"]:
         config = []
         dims = [c["field"] for c in form["configuration"]
                 if c.get("configuration_kind") == "dimension"]
-        if dims == ["Row", "Col", "ValidRow", "ValidCol"]:
+        if dims == ["Col", "ValidRow", "ValidCol"]:
+            config.append("Col=1")
+        elif dims == ["Row", "Col", "ValidRow", "ValidCol"]:
             if any(c["field"] == "CubeLayout" for c in form["configuration"]):
                 config.extend(["Row=1", "Col=32"])
             elif form["spelling"] == "TGPR2T":

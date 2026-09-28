@@ -1,6 +1,6 @@
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
 
-# PTO 0.58.6: B.DATR.Layout assigned codes decode to their canonical names;
+# PTO 0.58.7: B.DATR.Layout assigned codes decode to their canonical names;
 # reserved codes (2,5,7,12..16,19) fail closed. Layouts 29/31 are the
 # direct-Local CUBE_M32/CUBE_M16 codes and decode to their canonical names.
 

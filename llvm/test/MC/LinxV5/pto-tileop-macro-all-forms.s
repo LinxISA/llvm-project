@@ -11,73 +11,73 @@
 GMOV <FP32>, T#1, a0, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER operation=MGATHER
 # CHECK: MGATHER{{ +}}<
-MGATHER <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a1, T#1, ->T<128B>
+MGATHER <Col=1, FP32>, [base=a0], T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_ADD operation=MGATHER_ADD
 # CHECK: MGATHER_ADD{{ +}}<
-MGATHER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_ADD <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_AND operation=MGATHER_AND
 # CHECK: MGATHER_AND{{ +}}<
-MGATHER_AND <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_AND <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_CAS operation=MGATHER_CAS
 # CHECK: MGATHER_CAS{{ +}}<
-MGATHER_CAS <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a2, T#1, T#1, T#1, ->T<128B>
+MGATHER_CAS <Col=1, FP32>, [base=a0], T#1, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_DEC operation=MGATHER_DEC
 # CHECK: MGATHER_DEC{{ +}}<
-MGATHER_DEC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_DEC <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_EXCH operation=MGATHER_EXCH
 # CHECK: MGATHER_EXCH{{ +}}<
-MGATHER_EXCH <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_EXCH <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_INC operation=MGATHER_INC
 # CHECK: MGATHER_INC{{ +}}<
-MGATHER_INC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_INC <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_MASK operation=MGATHER_MASK
 # CHECK: MGATHER_MASK{{ +}}<
-MGATHER_MASK <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a3, T#1, U#1, ->T<128B>
+MGATHER_MASK <Col=1, FP32>, [base=a0], T#1, U#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_MAX operation=MGATHER_MAX
 # CHECK: MGATHER_MAX{{ +}}<
-MGATHER_MAX <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_MAX <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_MIN operation=MGATHER_MIN
 # CHECK: MGATHER_MIN{{ +}}<
-MGATHER_MIN <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_MIN <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_OR operation=MGATHER_OR
 # CHECK: MGATHER_OR{{ +}}<
-MGATHER_OR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_OR <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MGATHER_XOR operation=MGATHER_XOR
 # CHECK: MGATHER_XOR{{ +}}<
-MGATHER_XOR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1, ->T<128B>
+MGATHER_XOR <Col=1, FP32>, [base=a0], T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=MSCATTER operation=MSCATTER
 # CHECK: MSCATTER{{ +}}<
-MSCATTER <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a4, T#1, T#1
+MSCATTER <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_ADD operation=MSCATTER_ADD
 # CHECK: MSCATTER_ADD{{ +}}<
-MSCATTER_ADD <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_ADD <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_AND operation=MSCATTER_AND
 # CHECK: MSCATTER_AND{{ +}}<
-MSCATTER_AND <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_AND <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_DEC operation=MSCATTER_DEC
 # CHECK: MSCATTER_DEC{{ +}}<
-MSCATTER_DEC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_DEC <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_INC operation=MSCATTER_INC
 # CHECK: MSCATTER_INC{{ +}}<
-MSCATTER_INC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_INC <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_MASK operation=MSCATTER_MASK
 # CHECK: MSCATTER_MASK{{ +}}<
-MSCATTER_MASK <ValidRow=32, ValidCol=8, FP32>, [base=a0], stride=a5, T#1, T#1, U#1
+MSCATTER_MASK <Col=1, FP32>, [base=a0], T#1, T#1, U#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_MAX operation=MSCATTER_MAX
 # CHECK: MSCATTER_MAX{{ +}}<
-MSCATTER_MAX <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_MAX <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_MIN operation=MSCATTER_MIN
 # CHECK: MSCATTER_MIN{{ +}}<
-MSCATTER_MIN <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_MIN <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_OR operation=MSCATTER_OR
 # CHECK: MSCATTER_OR{{ +}}<
-MSCATTER_OR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_OR <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_POPC operation=MSCATTER_POPC
 # CHECK: MSCATTER_POPC{{ +}}<
-MSCATTER_POPC <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1
+MSCATTER_POPC <Col=1, FP32>, [base=a0], T#1
 # FORM: fold=1 canonical=1 spelling=MSCATTER_XOR operation=MSCATTER_XOR
 # CHECK: MSCATTER_XOR{{ +}}<
-MSCATTER_XOR <ValidRow=32, ValidCol=8, FP32>, [base=a0], T#1, T#1
+MSCATTER_XOR <Col=1, FP32>, [base=a0], T#1, T#1
 # FORM: fold=1 canonical=1 spelling=TABS operation=TABS
 # CHECK: TABS{{ +}}<
 TABS <Row=32, Col=1, FP32>, T#1, ->T<128B>
@@ -86,16 +86,16 @@ TABS <Row=32, Col=1, FP32>, T#1, ->T<128B>
 TADD <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TADDS operation=TADDS
 # CHECK: TADDS{{ +}}<
-TADDS <Row=32, Col=1, FP32>, T#1, a6, ->T<128B>
+TADDS <Row=32, Col=1, FP32>, T#1, a1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TAND operation=TAND
 # CHECK: TAND{{ +}}<
 TAND <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TANDS operation=TANDS
 # CHECK: TANDS{{ +}}<
-TANDS <Row=32, Col=1, FP32>, T#1, a7, ->T<128B>
+TANDS <Row=32, Col=1, FP32>, T#1, a2, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TCI operation=TCI
 # CHECK: TCI{{ +}}<
-TCI <Row=32, Col=1, U32>, a0, a1, ->T<128B>
+TCI <Row=32, Col=1, U32>, a3, a4, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TCMP operation=TCMP
 # CHECK: TCMP{{ +}}<
 TCMP <Row=32, Col=1, FP32>, T#1, T#1, ->U<128B>
@@ -104,16 +104,16 @@ TCMP <Row=32, Col=1, FP32>, T#1, T#1, ->U<128B>
 TCMP <Row=32, Col=1, FP32>, T#1, T#1, ->M<128B>
 # FORM: fold=1 canonical=1 spelling=TCMP operation=TCMP
 # CHECK: TCMP{{ +}}<
-TCMP <Row=32, Col=1, FP32>, T#1, T#1, ->a2
+TCMP <Row=32, Col=1, FP32>, T#1, T#1, ->a5
 # FORM: fold=1 canonical=1 spelling=TCMPS operation=TCMPS
 # CHECK: TCMPS{{ +}}<
-TCMPS <Row=32, Col=1, FP32>, T#1, a3, ->U<128B>
+TCMPS <Row=32, Col=1, FP32>, T#1, a6, ->U<128B>
 # FORM: fold=1 canonical=0 spelling=TCMPS operation=TCMPS
 # CHECK: TCMPS{{ +}}<
-TCMPS <Row=32, Col=1, FP32>, T#1, a4, ->M<128B>
+TCMPS <Row=32, Col=1, FP32>, T#1, a7, ->M<128B>
 # FORM: fold=1 canonical=1 spelling=TCMPS operation=TCMPS
 # CHECK: TCMPS{{ +}}<
-TCMPS <Row=32, Col=1, FP32>, T#1, a5, ->a6
+TCMPS <Row=32, Col=1, FP32>, T#1, a0, ->a1
 # FORM: fold=1 canonical=1 spelling=TCOLARGMAX operation=TCOLARGMAX
 # CHECK: TCOLARGMAX{{ +}}<
 TCOLARGMAX <Row=32, Col=1, FP32>, T#1, ->T<128B>
@@ -164,13 +164,13 @@ TCVT <Row=32, Col=1, FP32>, T#1, ->T<128B>
 TDIV <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TDIVS operation=TDIVS
 # CHECK: TDIVS{{ +}}<
-TDIVS <Row=32, Col=1, FP32>, T#1, a7, ->T<128B>
+TDIVS <Row=32, Col=1, FP32>, T#1, a2, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TEXP operation=TEXP
 # CHECK: TEXP{{ +}}<
 TEXP <Row=32, Col=1, FP32>, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TEXPANDS operation=TEXPANDS
 # CHECK: TEXPANDS{{ +}}<
-TEXPANDS <Row=32, Col=1, FP32>, a0, ->T<128B>
+TEXPANDS <Row=32, Col=1, FP32>, a3, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TFMA operation=TFMA
 # CHECK: TFMA{{ +}}<
 TFMA <Row=32, Col=1, FP32>, T#1, T#1, T#1, ->T<128B>
@@ -197,7 +197,7 @@ TGEMV_MX_ACC <M=1, N=8, K=16, FP32>, T#1, T#1, T#1, ->T<128B>
 TGEMV_MX_BIAS <M=1, N=8, K=16, FP32>, T#1, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TGPR2T operation=TGPR2T
 # CHECK: TGPR2T{{ +}}<
-TGPR2T <Row=32, Col=4, U8>, a1, a2, a3, a4, ->T<128B>
+TGPR2T <Row=32, Col=4, U8>, a4, a5, a6, a7, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TLOAD operation=TLOAD
 # CHECK: TLOAD{{ +}}<
 TLOAD <Row=32, Col=1, FP32>, [base=a0, stride=a1], ->T<128B>
@@ -272,13 +272,13 @@ TMATMUL_MX_BIAS <M=2, N=3, K=4, FP32>, S2, S3, T#1, ->T<128B>
 TMAX <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TMAXS operation=TMAXS
 # CHECK: TMAXS{{ +}}<
-TMAXS <Row=32, Col=1, FP32>, T#1, a5, ->T<128B>
+TMAXS <Row=32, Col=1, FP32>, T#1, a0, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TMIN operation=TMIN
 # CHECK: TMIN{{ +}}<
 TMIN <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TMINS operation=TMINS
 # CHECK: TMINS{{ +}}<
-TMINS <Row=32, Col=1, FP32>, T#1, a6, ->T<128B>
+TMINS <Row=32, Col=1, FP32>, T#1, a1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TMOV operation=TMOV
 # CHECK: TMOV{{ +}}<
 TMOV <FP32>, T#1, ->T<128B>
@@ -287,7 +287,7 @@ TMOV <FP32>, T#1, ->T<128B>
 TMUL <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TMULS operation=TMULS
 # CHECK: TMULS{{ +}}<
-TMULS <Row=32, Col=1, FP32>, T#1, a7, ->T<128B>
+TMULS <Row=32, Col=1, FP32>, T#1, a2, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TNEG operation=TNEG
 # CHECK: TNEG{{ +}}<
 TNEG <Row=32, Col=1, FP32>, T#1, ->T<128B>
@@ -299,10 +299,10 @@ TNOT <Row=32, Col=1, FP32>, T#1, ->T<128B>
 TOR <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TORS operation=TORS
 # CHECK: TORS{{ +}}<
-TORS <Row=32, Col=1, FP32>, T#1, a0, ->T<128B>
+TORS <Row=32, Col=1, FP32>, T#1, a3, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TPACK operation=TPACK
 # CHECK: TPACK{{ +}}<
-TPACK <U32>, T#1, T#1, a1, ->T<128B>
+TPACK <U32>, T#1, T#1, a4, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TPERMUTE operation=TPERMUTE
 # CHECK: TPERMUTE{{ +}}<
 TPERMUTE <FP32>, T#1, T#1, T#1, ->T<128B>
@@ -320,7 +320,7 @@ TRELU <Row=32, Col=1, FP32>, T#1, ->T<128B>
 TREM <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TREMS operation=TREMS
 # CHECK: TREMS{{ +}}<
-TREMS <Row=32, Col=1, FP32>, T#1, a2, ->T<128B>
+TREMS <Row=32, Col=1, FP32>, T#1, a5, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TROWARGMAX operation=TROWARGMAX
 # CHECK: TROWARGMAX{{ +}}<
 TROWARGMAX <Row=32, Col=1, FP32>, T#1, ->T<128B>
@@ -377,31 +377,31 @@ TSEL <Row=32, Col=1, FP32>, U#1, T#1, T#1, ->T<128B>
 TSEL <Row=32, Col=1, FP32>, M#1, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSEL operation=TSEL
 # CHECK: TSEL{{ +}}<
-TSEL <Row=32, Col=1, FP32>, a3, T#1, T#1, ->T<128B>
+TSEL <Row=32, Col=1, FP32>, a6, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSELS operation=TSELS
 # CHECK: TSELS{{ +}}<
-TSELS <Row=32, Col=1, FP32>, U#1, T#1, a4, ->T<128B>
+TSELS <Row=32, Col=1, FP32>, U#1, T#1, a7, ->T<128B>
 # FORM: fold=1 canonical=0 spelling=TSELS operation=TSELS
 # CHECK: TSELS{{ +}}<
-TSELS <Row=32, Col=1, FP32>, M#1, T#1, a5, ->T<128B>
+TSELS <Row=32, Col=1, FP32>, M#1, T#1, a0, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSELS operation=TSELS
 # CHECK: TSELS{{ +}}<
-TSELS <Row=32, Col=1, FP32>, a6, T#1, a7, ->T<128B>
+TSELS <Row=32, Col=1, FP32>, a1, T#1, a2, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSHL operation=TSHL
 # CHECK: TSHL{{ +}}<
 TSHL <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSHLS operation=TSHLS
 # CHECK: TSHLS{{ +}}<
-TSHLS <Row=32, Col=1, FP32>, T#1, a0, ->T<128B>
+TSHLS <Row=32, Col=1, FP32>, T#1, a3, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSHR operation=TSHR
 # CHECK: TSHR{{ +}}<
 TSHR <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSHRS operation=TSHRS
 # CHECK: TSHRS{{ +}}<
-TSHRS <Row=32, Col=1, FP32>, T#1, a1, ->T<128B>
+TSHRS <Row=32, Col=1, FP32>, T#1, a4, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSHUF operation=TSHUF
 # CHECK: TSHUF{{ +}}<
-TSHUF <FP32>, T#1, T#1, a2, ->T<128B>
+TSHUF <FP32>, T#1, T#1, a5, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSQRT operation=TSQRT
 # CHECK: TSQRT{{ +}}<
 TSQRT <Row=32, Col=1, FP32>, T#1, ->T<128B>
@@ -419,18 +419,18 @@ TSTORE <Row=1, Col=32, FP32, M322ND>, T#1, [base=a0, stride=a1]
 TSUB <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TSUBS operation=TSUBS
 # CHECK: TSUBS{{ +}}<
-TSUBS <Row=32, Col=1, FP32>, T#1, a3, ->T<128B>
+TSUBS <Row=32, Col=1, FP32>, T#1, a6, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TTRI operation=TTRI
 # CHECK: TTRI{{ +}}<
-TTRI <Row=32, Col=1, FP32>, a4, a5, ->T<128B>
+TTRI <Row=32, Col=1, FP32>, a7, a0, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TUNPACK operation=TUNPACK
 # CHECK: TUNPACK{{ +}}<
-TUNPACK <U32>, T#1, a6, ->T<128B>
+TUNPACK <U32>, T#1, a1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TXOR operation=TXOR
 # CHECK: TXOR{{ +}}<
 TXOR <Row=32, Col=1, FP32>, T#1, T#1, ->T<128B>
 # FORM: fold=1 canonical=1 spelling=TXORS operation=TXORS
 # CHECK: TXORS{{ +}}<
-TXORS <Row=32, Col=1, FP32>, T#1, a7, ->T<128B>
+TXORS <Row=32, Col=1, FP32>, T#1, a2, ->T<128B>
 # PHYSICAL: BSTART
 # PHYSICAL-NOT: C.B.DIMI 1,

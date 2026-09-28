@@ -22,4 +22,4 @@ TADD <Row=8, Col=64, FP32>, T#1[base=a0, offset=0, size=<128B>], T#2, ->T<2KB>
 TEXPANDS <Row=16, Col=8, ValidRow=8, U8, CUBE_M16>, a2, ->T<2KB>
 TADD <Row=8, Col=64, FP32>, T#1, T#2, ->T#1<2KB>
 
-# CHECK-COUNT-21: error: {{(unknown operand|TileOp operands/configuration do not match any exact PTO 0.58.6 form)}}
+# CHECK-COUNT-21: error: {{(unknown operand|TileOp operands/configuration do not match any exact PTO 0.58.7 form)}}

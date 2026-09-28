@@ -66,6 +66,6 @@ canonical = sum(form["canonical"] for form in forms)
 if canonical != 138:
     raise SystemExit(f"expected 138 canonical physical schemas, found {canonical}")
 print(
-    f"verified 142 PTO TileOp forms: {folds} macro folds, "
+    f"verified 142 implemented PTO TileOp forms: {folds} macro folds, "
     f"{canonical} canonical physical schemas, 0 physical fallbacks"
 )

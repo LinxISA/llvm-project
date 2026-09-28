@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the exact PTO 0.58.6 TileOp macro schema used by LLVM MC."""
+"""Generate the exact PTO 0.58.7 TileOp macro schema used by LLVM MC."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import json
 from pathlib import Path
 
 
-EXPECTED_ARCHITECTURE = "0.58.6"
-EXPECTED_OPERATIONS = 117
-EXPECTED_FORMS = 142
+EXPECTED_ARCHITECTURE = "0.58.7"
+EXPECTED_OPERATIONS = 118
+EXPECTED_FORMS = 143
 
 
 def cxx_string(value: str) -> str:
@@ -51,6 +51,7 @@ def shape_kind(form: dict) -> str:
     )
     shapes = {
         ("Row", "Col", "ValidRow", "ValidCol"): "Rectangular",
+        ("Col", "ValidRow", "ValidCol"): "Rectangular",
         ("ValidRow", "ValidCol"): "Rectangular",
         ("M", "N", "K"): "Matrix",
         ("ValidCol",): "ValidCol",

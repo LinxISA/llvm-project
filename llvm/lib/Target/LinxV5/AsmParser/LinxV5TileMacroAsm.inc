@@ -1,4 +1,4 @@
-// Exact PTO 0.58.6 TileOp macro parser and physical bundle planner.
+// Exact PTO 0.58.7 TileOp macro parser and physical bundle planner.
 
 bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
   std::unique_ptr<ParsedTileMacroLine> Parsed = std::move(PendingTileMacro);
@@ -829,8 +829,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
   if (Matches.size() != 1)
     return Error(IDLoc, Matches.empty()
                             ? "TileOp operands/configuration do not match any "
-                              "exact PTO 0.58.6 form"
-                            : "TileOp line matches multiple PTO 0.58.6 forms");
+                              "exact PTO 0.58.7 form"
+                            : "TileOp line matches multiple PTO 0.58.7 forms");
   Plan &P = Matches.front();
   const auto &Form = *P.Form;
   const auto &Operation = TileMacroOperations[Form.Operation];

@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory() as directory:
     )
 
 message = (
-    "error: TileOp operands/configuration do not match any exact PTO 0.58.6 form"
+    "error: TileOp operands/configuration do not match any exact PTO 0.58.7 form"
 )
 rejected_forms = set()
 for match in re.finditer(
