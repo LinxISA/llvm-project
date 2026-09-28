@@ -1,0 +1,51 @@
+
+element-if-demo/elementwise_if_for.o:	file format elf64-unknown
+
+Disassembly of section .text:
+
+0000000000000000 <.text>:
+       0:      	C.BSTOP
+
+Disassembly of section .text._Z18elementwise_if_forRDv128_fRKS_S2_:
+
+0000000000000000 <_Z18elementwise_if_forRDv128_fRKS_S2_>:
+       0:      	BSTART.TLSU	TLOAD, S64
+       4:      	B.DATR	NORM.normal, Zero
+       8:      	C.B.DIMI	64, 	->lb0
+       a:      	C.B.DIMI	64, 	->lb2
+       c:      	B.IOT	mask=1111, last, 	->t<512B>
+      10:      	B.IOR	[a1], []
+      14:      	BSTART.TLSU	TLOAD, S64
+      18:      	B.DATR	NORM.normal, Zero
+      1c:      	C.B.DIMI	64, 	->lb0
+      1e:      	C.B.DIMI	64, 	->lb2
+      20:      	B.IOT	mask=1111, last, 	->t<512B>
+      24:      	B.IOR	[a2], []
+      28:      	C.BSTART.STD	
+      2a:      	addtpc	0, 	->t
+      2e:      	lwi.u	[t#1, 0], 	->a1
+      32:      	TEXPANDS          <Row=16, Col=8, ValidRow=8, ValidCol=16, FP32>, a1, ->T<512B>
+      44:      	BSTART.TEPL	TCMP, FP32
+      48:      	B.DATR	CUBE_M16.normal, FP32, Zero, GT
+      4c:      	C.B.DIMI	16, 	->lb0
+      4e:      	C.B.DIMI	8, 	->lb1
+      50:      	B.IOT	t#3, t#1, mask=1111, last, 	->t<512B>
+      54:      	C.BSTART.STD	
+      56:      	c.movi	-1, 	->a1
+      58:      	BSTART.TEPL	TADD, FP32
+      5c:      	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 0, 1
+      60:      	C.B.DIMI	16, 	->lb0
+      62:      	C.B.DIMI	8, 	->lb1
+      64:      	B.IOT	t#4, t#3, mask=1111, last, 	->t<512B>
+      68:      	B.IOR [a1,a1,zero], ExecMaskPresent
+      6c:      	BSTART.TEPL	TSUB, FP32
+      70:      	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 0, 1
+      74:      	C.B.DIMI	16, 	->lb0
+      76:      	C.B.DIMI	8, 	->lb1
+      78:      	B.IOT	t#5, t#4, mask=1111, last, 	->t<512B>
+      7c:      	B.IOR [a1,a1,zero], ExecMaskPresent
+      80:      	TSEL              <Row=8, Col=8, ValidCol=16, FP32>, T#1, T#3, T#1, ->T<512B>
+      92:      	TSTORE            <Col=64, ValidCol=64, S64>, T#1, [base=a0]
+      a6:      	C.BSTART.STD	RET
+      a8:      	c.setc.tgt	ra
+      aa:      	C.BSTART.STD	
