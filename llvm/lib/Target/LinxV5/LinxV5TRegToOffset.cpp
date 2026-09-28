@@ -32,6 +32,20 @@ STATISTIC(NumCopy, "number copys inserted");
 STATISTIC(TileLongCopy, "Number jcore-tile long live range copys");
 STATISTIC(TileCFGCopy, "Number jcore-tile control flow copys");
 
+// Issue #112: the window rotation TMOV-copies the oldest live tile when the
+// 16-slot relative window wraps, and an assembled parent whose generation is
+// still open is often that oldest tile. The current SuperScalarModel follows
+// the copied parent for the remaining MIDDLE/LAST writers (verified on
+// fa_lowp_algB Tk=256), so the rotation is allowed by default. The flag
+// restores the af743c28 fail-closed guard for models that reject a copied
+// open-generation parent (the toolchain-build#21 behavior).
+static cl::opt<bool> AllowLiveAssembleParentCopy(
+    "linxv5-allow-live-assemble-parent-copy",
+    cl::desc("Allow the TRegToOffset window rotation to TMOV-copy a tile "
+             "whose B.ASSEMBLE generation is still open. Disable to restore "
+             "the fail-closed guard against copied open-generation parents."),
+    cl::init(true));
+
 static cl::opt<bool> EnableGlobalDataSync(
     "linxv5-enable-global-sync",
     cl::desc("Enable Global Data sync for SIMT Clock-Hand."), cl::init(true),
@@ -507,7 +521,7 @@ void SlotCalc::PreAlloc(TRCopyRange Slot) {
 }
 
 void SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
-  if (Slot.IsAssembleParent)
+  if (Slot.IsAssembleParent && !AllowLiveAssembleParentCopy)
     report_fatal_error(
         "cannot copy a live B.ASSEMBLE parent: the INIT parent must retain "
         "its tile identity through the complete generation");
