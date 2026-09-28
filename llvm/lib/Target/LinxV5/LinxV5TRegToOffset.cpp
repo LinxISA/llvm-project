@@ -20,6 +20,7 @@
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
 
 #define DEBUG_TYPE "linxv5-treg-to-offset"
@@ -221,12 +222,90 @@ static void initSlot(TRCopyRange *Slot) {
   Slot->LastUse = nullptr;
 }
 
+/// Resolve the value of the OperandIndex-th control operand placeholder
+/// after "B.ASSEMBLE" (0 = Init, 1 = Last) in an inline-asm template.
+/// Understands the positional spellings `${N:c}` and `%cN`; named operands
+/// (`%c[Last]`) return None so callers fail closed.
+static Optional<bool> getAssembleControlBit(const MachineInstr &MI,
+                                                 unsigned OperandIndex) {
+  if (!MI.isInlineAsm())
+    return None;
+  StringRef Asm(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName());
+  size_t Pos = Asm.find("B.ASSEMBLE");
+  if (Pos == StringRef::npos)
+    return None;
+  Pos += strlen("B.ASSEMBLE");
+  unsigned ConstraintIdx = 0;
+  for (unsigned Seen = 0; Seen <= OperandIndex; ++Seen) {
+    size_t Dollar = Asm.find_first_of("$%", Pos);
+    if (Dollar == StringRef::npos)
+      return None;
+    Pos = Dollar;
+    StringRef Digits;
+    if (Asm[Pos] == '$') {
+      ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == '{') {
+        size_t Close = Asm.find('}', Pos);
+        if (Close == StringRef::npos)
+          return None;
+        StringRef Body = Asm.substr(Pos + 1, Close - Pos - 1);
+        size_t Colon = Body.find(':');
+        if (Colon != StringRef::npos)
+          Body = Body.substr(0, Colon);
+        Digits = Body;
+        Pos = Close + 1;
+      } else {
+        size_t End = Asm.find_first_not_of("0123456789", Pos);
+        Digits = Asm.slice(Pos, End == StringRef::npos ? Asm.size() : End);
+        Pos = End == StringRef::npos ? Asm.size() : End;
+      }
+    } else {
+      ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == 'c')
+        ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == '[')
+        return None; // named operand: not positionally resolvable
+      size_t End = Asm.find_first_not_of("0123456789", Pos);
+      Digits = Asm.slice(Pos, End == StringRef::npos ? Asm.size() : End);
+      Pos = End == StringRef::npos ? Asm.size() : End;
+    }
+    if (Digits.empty() || Digits.getAsInteger(10, ConstraintIdx))
+      return None;
+  }
+  // Constraint %k is the k-th operand group of the INLINEASM MI (outputs
+  // then inputs, in constraint order); each group is a flag immediate
+  // followed by its register/immediate operands.
+  unsigned Group = 0;
+  for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+       I < E; ++Group) {
+    const MachineOperand &Flag = MI.getOperand(I);
+    if (!Flag.isImm())
+      return None;
+    unsigned N = InlineAsm::getNumOperandRegisters(Flag.getImm());
+    if (Group == ConstraintIdx) {
+      if (N != 1 || I + 1 >= E || !MI.getOperand(I + 1).isImm())
+        return None;
+      return MI.getOperand(I + 1).getImm() != 0;
+    }
+    I += 1 + N;
+  }
+  return None;
+}
+
 static bool isAssembleParentDef(const TRLiveRange &LR) {
   if (!LR.MI || !LR.MI->isInlineAsm() || !LR.DefMO)
     return false;
-  return StringRef(LR.MI->getOperand(InlineAsm::MIOp_AsmString)
-                       .getSymbolName())
-      .contains("B.ASSEMBLE");
+  if (!StringRef(LR.MI->getOperand(InlineAsm::MIOp_AsmString)
+                     .getSymbolName())
+           .contains("B.ASSEMBLE"))
+    return false;
+  // Only an OPEN generation pins the parent identity. When the defining
+  // bundle already carries Last=1 (a single-fragment TileArray slot), the
+  // generation opens and closes in this instruction and the tile is
+  // ordinary data immediately after. Templates whose control operands
+  // cannot be resolved positionally keep the conservative open marking.
+  Optional<bool> Last = getAssembleControlBit(*LR.MI, /*LastIdx=*/1);
+  return !Last || !*Last;
 }
 
 static unsigned getTSlotOccupation(MachineInstr &MI,
@@ -762,6 +841,28 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
       LLVM_DEBUG(dbgs() << "emit " << *OI.MI);
     } else {
       ++OII;
+    }
+
+    // A B.ASSEMBLE writer carrying Last=1 closes its generation: the parent
+    // tile becomes ordinary published data and later window copies of it
+    // are legal (issue #112). Clear the open-generation protection on the
+    // live slot holding the referenced parent register; slots of other
+    // registers and already-closed parents are unaffected.
+    Optional<bool> ClosedLast = getAssembleControlBit(*MI, /*LastIdx=*/1);
+    if (ClosedLast && *ClosedLast) {
+      for (size_t j = 0; j < TRNumber; ++j) {
+        if (!LiveSlots[j].IsAssembleParent)
+          continue;
+        Register R = LiveSlots[j].RegOp.Reg;
+        if (R == LinxV5::NoRegister)
+          continue;
+        for (const MachineOperand &MO : MI->operands()) {
+          if (MO.isReg() && !MO.isDef() && MO.getReg() == R) {
+            LiveSlots[j].IsAssembleParent = false;
+            break;
+          }
+        }
+      }
     }
 
     // try release live slots
