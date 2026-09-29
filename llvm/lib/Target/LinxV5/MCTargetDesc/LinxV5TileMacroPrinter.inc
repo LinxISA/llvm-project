@@ -99,6 +99,9 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     bool Present = false;
     MCRegister Base = LinxV5::R0;
     unsigned Offset = 0;
+    unsigned Init = 0;
+    unsigned Last = 0;
+    unsigned WriterSize = 0;
   };
   struct BoundValue {
     bool Present = false;
@@ -204,14 +207,25 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         }
       };
   auto captureRangeModifiers = [&](ArrayRef<unsigned> SourceMembers,
-                                   int DestinationMember, unsigned &Position) {
+                                   int DestinationMember,
+                                   unsigned &Position) -> bool {
     while (Position < BodyEnd) {
       const MCInst &Modifier = Commands[Position];
       if (Modifier.getOpcode() == LinxV5::B_SUBVIEW) {
+        if (Modifier.getNumOperands() != 4)
+          return false;
         unsigned SourceSelect = Modifier.getOperand(0).getImm();
         if (SourceSelect >= SourceMembers.size())
-          break;
+          return false;
         BoundValue &Value = Members[SourceMembers[SourceSelect]];
+        if (Value.Subview.Present ||
+            Modifier.getOperand(1).getReg() < LinxV5::R0 ||
+            Modifier.getOperand(1).getReg() > LinxV5::R23 ||
+            Modifier.getOperand(2).getImm() < 0 ||
+            Modifier.getOperand(2).getImm() > 2047 ||
+            Modifier.getOperand(3).getImm() == 0 ||
+            Modifier.getOperand(3).getImm() > 12)
+          return false;
         Value.Subview.Present = true;
         Value.Subview.Base = Modifier.getOperand(1).getReg();
         Value.Subview.Offset = Modifier.getOperand(2).getImm();
@@ -220,15 +234,34 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       }
       if (Modifier.getOpcode() == LinxV5::B_ASSEMBLE &&
           DestinationMember >= 0) {
+        if (Modifier.getNumOperands() != 5)
+          return false;
         BoundValue &Value = Members[DestinationMember];
+        if (Value.Assemble.Present ||
+            Modifier.getOperand(2).getReg() < LinxV5::R0 ||
+            Modifier.getOperand(2).getReg() > LinxV5::R23 ||
+            Modifier.getOperand(3).getImm() < 0 ||
+            Modifier.getOperand(3).getImm() > 2047 ||
+            // A folded macro destination must be an allocating binder.
+            // SizeCode=0 is the source-only ParentRef carrier and cannot be
+            // represented by this destination binding.
+            Value.SizeCode == 0 || Value.SizeCode > 12 ||
+            Modifier.getOperand(0).getImm() > 1 ||
+            Modifier.getOperand(1).getImm() > 1 ||
+            Modifier.getOperand(4).getImm() > 12)
+          return false;
         Value.Assemble.Present = true;
         Value.Assemble.Base = Modifier.getOperand(2).getReg();
         Value.Assemble.Offset = Modifier.getOperand(3).getImm();
+        Value.Assemble.Init = Modifier.getOperand(0).getImm();
+        Value.Assemble.Last = Modifier.getOperand(1).getImm();
+        Value.Assemble.WriterSize = Modifier.getOperand(4).getImm();
         ++Position;
         continue;
       }
       break;
     }
+    return true;
   };
   for (unsigned C = 0; C != Form.NumCommands; ++C) {
     const auto &Expected = TileMacroCommands[Form.FirstCommand + C];
@@ -293,7 +326,8 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           RangeDestination = DestinationMember;
           SeenDestination = true;
         }
-        captureRangeModifiers(RangeSources, RangeDestination, Pos);
+        if (!captureRangeModifiers(RangeSources, RangeDestination, Pos))
+          return;
         markConsumed(CommandStart, Pos);
       } while (SeenSources < RequiredSources ||
                (RequiredDestination && !SeenDestination));
@@ -304,6 +338,14 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         Members[Member].Present = true;
         Members[Member].SharedID = Commands[Pos].getOperand(0).getImm();
         Members[Member].SizeCode = Commands[Pos].getOperand(2).getImm();
+        bool Destination =
+            bindingForMember(Member) &&
+            bindingForMember(Member)->Kind ==
+                TileMacroBindingKind::SharedDestination;
+        if ((Destination && (Members[Member].SizeCode == 0 ||
+                             Members[Member].SizeCode > 12)) ||
+            (!Destination && Members[Member].SizeCode != 0))
+          return;
         recordMask(Commands[Pos].getOperand(1).getImm());
         unsigned CommandStart = Pos;
         ++Pos;
@@ -314,7 +356,8 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           RangeDestination = Member;
         else
           RangeSources.push_back(Member);
-        captureRangeModifiers(RangeSources, RangeDestination, Pos);
+        if (!captureRangeModifiers(RangeSources, RangeDestination, Pos))
+          return;
         markConsumed(CommandStart, Pos);
       }
     } else {
@@ -741,8 +784,22 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     if (Value.Subview.Present)
       O << "[base=" << getRegisterName(Value.Subview.Base)
         << ", offset=" << Value.Subview.Offset << "]";
-    if (Value.Assemble.Present)
+    if (Value.Assemble.Present) {
       O << "[base=" << getRegisterName(Value.Assemble.Base)
-        << ", offset=" << Value.Assemble.Offset << "]";
+        << ", offset=" << Value.Assemble.Offset;
+      // Keep the historical spelling for the ordinary INIT_LAST writer, but
+      // make non-trivial generation phases explicit so INIT/MIDDLE/LAST
+      // cannot be mistaken for a plain destination range.
+      if (Value.Assemble.WriterSize != 1 ||
+          Value.Assemble.Init != 1 || Value.Assemble.Last != 1) {
+        O << ", assemble=";
+        if (Value.Assemble.Init)
+          O << (Value.Assemble.Last ? "init_last" : "init");
+        else
+          O << (Value.Assemble.Last ? "last" : "middle");
+        O << ", writer=" << Value.Assemble.WriterSize;
+      }
+      O << "]";
+    }
   }
 }

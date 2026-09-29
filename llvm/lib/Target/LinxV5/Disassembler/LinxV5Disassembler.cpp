@@ -722,6 +722,11 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       break;
     }
     if (LinxV5II::isBSTART(TSFlags) && !LinxV5II::isBlockModifier(TSFlags)) {
+      // A repeated header may begin a continuation generation, but the
+      // catalog currently describes one binder generation per macro.  Do not
+      // consume the next header (or speculate over its body): doing so would
+      // make a fail-closed physical disassembly skip instructions.  The next
+      // call to getInstruction will decode the continuation independently.
       Boundary = TileMacroBoundary::NextBSTART;
       break;
     }
@@ -1045,11 +1050,32 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
         if (Modifier.getOpcode() == LinxV5::B_ASSEMBLE) {
           if (Modifier.getNumOperands() != 5 || DestinationMember < 0 ||
               DestinationSeen ||
-              !(TileMacroBindingMembers[DestinationMember].ModifierFlags & 2) ||
-              Modifier.getOperand(0).getImm() != 1 ||
-              Modifier.getOperand(1).getImm() != 1 ||
-              Modifier.getOperand(4).getImm() != 1)
+              !(TileMacroBindingMembers[DestinationMember].ModifierFlags & 2))
             return false;
+
+          // B.ASSEMBLE is a generation modifier.  Do not restrict folding to
+          // the old INIT_LAST/WriterSizeCode=1 spelling: PTO-ISA #265 permits
+          // INIT, MIDDLE, LAST and INIT_LAST, and the writer size is the
+          // current writer extent (0..12), not a boolean parent-size marker.
+          unsigned Init = Modifier.getOperand(0).getImm();
+          unsigned Last = Modifier.getOperand(1).getImm();
+          unsigned RegSrc = Modifier.getOperand(2).getReg();
+          unsigned WriterSize = Modifier.getOperand(4).getImm();
+          unsigned DestinationSize =
+              Body[Position - 1].getOpcode() == LinxV5::B_IOT_NoSrc_Dst ||
+                      Body[Position - 1].getOpcode() == LinxV5::B_IOT_OneSrc_Dst ||
+                      Body[Position - 1].getOpcode() == LinxV5::B_IOT_TwoSrc_Dst
+                  ? Body[Position - 1].getOperand(2).getImm()
+                  : 0;
+          if (Init > 1 || Last > 1 || RegSrc < LinxV5::R0 ||
+              RegSrc > LinxV5::R23 || WriterSize > 12 ||
+              DestinationSize == 0 || DestinationSize > 12)
+            return false;
+
+          // A single binder can carry only one generation phase.  The
+          // generation may be continued by later bundles; this local check
+          // deliberately preserves the phase in the folded macro rather than
+          // pretending that an INIT is an INIT_LAST operation.
           DestinationSeen = true;
           ++Position;
           continue;

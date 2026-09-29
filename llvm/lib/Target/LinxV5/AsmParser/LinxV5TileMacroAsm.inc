@@ -21,6 +21,9 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     MCRegister Base = LinxV5::R0;
     unsigned Offset = 0;
     unsigned SizeCode = 0;
+    unsigned Init = 1;
+    unsigned Last = 1;
+    unsigned WriterSize = 1;
   };
   struct BoundValue {
     bool Present = false;
@@ -445,6 +448,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
         Binding.Kind == TileMacroBindingKind::PredicateCellDestination;
     if (NeedsSize && !parseSize(Pos, Value.SizeCode))
       return false;
+    // A destination binder allocates a parent and therefore cannot use the
+    // source-only SizeCode=0 form.  Zero is reserved for the source carrier
+    // used by continuation/ParentRef encodings; 13..15 are reserved too.
+    if (NeedsSize && (Value.SizeCode == 0 || Value.SizeCode > 12))
+      return false;
     Value.Present = true;
     return true;
   };
@@ -482,13 +490,44 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     unsigned Offset = Tokens[Pos + 3].Integer;
     Pos += 4;
     if (!tokenIs(Pos, "]"))
+      {
+        if (!IsDestination || !tokenIs(Pos, ",") ||
+            !tokenIs(Pos + 1, "assemble") || !tokenIs(Pos + 2, "="))
+          return false;
+        Pos += 3;
+        StringRef Phase = Pos < Tokens.size() ? Tokens[Pos].Text : StringRef();
+        if (Phase.equals_insensitive("init")) {
+          Value.Assemble.Init = 1;
+          Value.Assemble.Last = 0;
+        } else if (Phase.equals_insensitive("init_last")) {
+          Value.Assemble.Init = 1;
+          Value.Assemble.Last = 1;
+        } else if (Phase.equals_insensitive("middle")) {
+          Value.Assemble.Init = 0;
+          Value.Assemble.Last = 0;
+        } else if (Phase.equals_insensitive("last")) {
+          Value.Assemble.Init = 0;
+          Value.Assemble.Last = 1;
+        } else {
+          return false;
+        }
+        ++Pos;
+        if (!tokenIs(Pos, ",") || !tokenIs(Pos + 1, "writer") ||
+            !tokenIs(Pos + 2, "=") || Pos + 3 >= Tokens.size() ||
+            Tokens[Pos + 3].Kind != AsmToken::Integer ||
+            Tokens[Pos + 3].Integer < 0 || Tokens[Pos + 3].Integer > 12)
+          return false;
+        Value.Assemble.WriterSize = Tokens[Pos + 3].Integer;
+        Pos += 4;
+      }
+    if (!tokenIs(Pos, "]"))
       return false;
     ++Pos;
     RangeValue &Range = IsDestination ? Value.Assemble : Value.Subview;
     Range.Present = true;
     Range.Base = Base;
     Range.Offset = Offset;
-    Range.SizeCode = 1;
+    Range.SizeCode = IsDestination ? Value.SizeCode : 1;
     return true;
   };
 
@@ -1005,11 +1044,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     }
     if (Value.Assemble.Present)
       emitToStreamer(Out, MCInstBuilder(LinxV5::B_ASSEMBLE)
-                              .addImm(1)
-                              .addImm(1)
+                              .addImm(Value.Assemble.Init)
+                              .addImm(Value.Assemble.Last)
                               .addReg(Value.Assemble.Base)
                               .addImm(Value.Assemble.Offset)
-                              .addImm(Value.Assemble.SizeCode));
+                              .addImm(Value.Assemble.WriterSize));
   };
 
   for (unsigned I : ActiveCommands) {
