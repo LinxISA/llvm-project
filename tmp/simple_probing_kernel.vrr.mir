@@ -1,0 +1,337 @@
+--- |
+  ; ModuleID = 'tmp/simple_probing_kernel.ll'
+  source_filename = "tmp/simple_probing_kernel.cpp"
+  target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
+  target triple = "linx64v5-unknown-linux-musl"
+  
+  $_Z6lookupILi256ELi1EEvPhPlPiPjjiii = comdat any
+  
+  ; Function Attrs: mustprogress noinline nounwind
+  define weak_odr dso_local void @_Z6lookupILi256ELi1EEvPhPlPiPjjiii(ptr noalias noundef %slot, ptr noalias noundef %keys, ptr noalias noundef %values_output, ptr noalias noundef %hashes_output, i32 noundef signext %capacity, i32 noundef signext %num, i32 noundef %entry_size, i32 noundef %max_probe) local_unnamed_addr #0 comdat {
+  entry:
+    %0 = tail call i16 @llvm.blkv.get.index.x()
+    %conv = zext i16 %0 to i32
+    %1 = tail call i16 @llvm.blkv.get.index.y()
+    %conv1 = zext i16 %1 to i32
+    %mul = shl nuw nsw i32 %conv1, 8
+    %add = add nuw nsw i32 %mul, %conv
+    %cmp = icmp slt i32 %add, %num
+    %2 = call { i1, i64 } @llvm.blkv.if.i64(i1 %cmp)
+    %3 = extractvalue { i1, i64 } %2, 0
+    %4 = extractvalue { i1, i64 } %2, 1
+    br i1 %3, label %if.then, label %if.end19
+  
+  if.then:                                          ; preds = %entry
+    %idxprom = zext i32 %add to i64
+    %arrayidx = getelementptr inbounds i64, ptr %keys, i64 %idxprom
+    %5 = load i64, ptr %arrayidx, align 8, !tbaa !6
+    %.tr = trunc i64 %5 to i32
+    %conv3 = shl i32 %.tr, 3
+    %arrayidx5 = getelementptr inbounds i32, ptr %hashes_output, i64 %idxprom
+    store i32 %conv3, ptr %arrayidx5, align 4, !tbaa !10
+    %cmp633 = icmp sgt i32 %max_probe, 0
+    br i1 %cmp633, label %for.body.lr.ph, label %if.end19, !structurizecfg.uniform !12
+  
+  for.body.lr.ph:                                   ; preds = %if.then
+    br label %for.body, !structurizecfg.uniform !12
+  
+  for.body:                                         ; preds = %if.end, %for.body.lr.ph
+    %phi.broken = phi i64 [ %11, %if.end ], [ 0, %for.body.lr.ph ]
+    %conv3.pn = phi i32 [ %conv3, %for.body.lr.ph ], [ %add17, %if.end ]
+    %probe_cnt.034 = phi i32 [ 0, %for.body.lr.ph ], [ %inc, %if.end ]
+    %curr_slot.035 = urem i32 %conv3.pn, %capacity
+    %mul7 = mul i32 %curr_slot.035, %entry_size
+    %idx.ext = zext i32 %mul7 to i64
+    %add.ptr = getelementptr inbounds i8, ptr %slot, i64 %idx.ext
+    %6 = load i64, ptr %add.ptr, align 8, !tbaa !6
+    %cmp13 = icmp eq i64 %6, %5
+    %7 = call { i1, i64 } @llvm.blkv.if.i64(i1 %cmp13)
+    %8 = extractvalue { i1, i64 } %7, 0
+    %9 = extractvalue { i1, i64 } %7, 1
+    br i1 %8, label %if.then14, label %if.end
+  
+  if.then14:                                        ; preds = %for.body
+    %add.ptr11 = getelementptr inbounds i8, ptr %add.ptr, i64 8
+    %10 = load i32, ptr %add.ptr11, align 4, !tbaa !10
+    %sunkaddr = mul i64 %idxprom, 4
+    %sunkaddr1 = getelementptr inbounds i8, ptr %values_output, i64 %sunkaddr
+    store i32 %10, ptr %sunkaddr1, align 4, !tbaa !10
+    br label %if.end
+  
+  if.end:                                           ; preds = %if.then14, %for.body
+    %probe_cnt.1.phi1 = phi i32 [ %probe_cnt.034, %if.then14 ], [ %probe_cnt.034, %for.body ]
+    %probe_cnt.1.phi0 = phi i32 [ %max_probe, %if.then14 ], [ undef, %for.body ]
+    %merge = call i32 @llvm.blkv.merge.cf.i32(i32 %probe_cnt.1.phi0, i32 %probe_cnt.1.phi1)
+    call void @llvm.blkv.end.cf.i64(i64 %9)
+    %add17 = add nuw i32 %curr_slot.035, 1
+    %inc = add nsw i32 %merge, 1
+    %cmp6 = icmp sge i32 %inc, %max_probe
+    %11 = call i64 @llvm.blkv.if.break.i64(i1 %cmp6, i64 %phi.broken)
+    %12 = call i1 @llvm.blkv.loop.i64(i64 %11)
+    br i1 %12, label %Flow, label %for.body
+  
+  Flow:                                             ; preds = %if.end
+    call void @llvm.blkv.end.cf.i64(i64 %11)
+    br label %if.end19
+  
+  if.end19:                                         ; preds = %entry, %Flow, %if.then
+    call void @llvm.blkv.end.cf.i64(i64 %4)
+    ret void
+  }
+  
+  ; Function Attrs: nounwind readnone
+  declare i16 @llvm.blkv.get.index.x() #1
+  
+  ; Function Attrs: nounwind readnone
+  declare i16 @llvm.blkv.get.index.y() #1
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.if.i64(i1) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.flow.i64.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i64 @llvm.blkv.if.break.i64(i1, i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i1 @llvm.blkv.loop.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare void @llvm.blkv.end.cf.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i32 @llvm.blkv.merge.cf.i32(i32, i32) #2
+  
+  attributes #0 = { mustprogress noinline nounwind "__mtc__" "frame-pointer"="none" "min-legal-vector-width"="0" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+relax" }
+  attributes #1 = { nounwind readnone }
+  attributes #2 = { convergent nounwind willreturn }
+  
+  !llvm.linker.options = !{}
+  !llvm.module.flags = !{!0, !1, !2, !3, !4}
+  !llvm.ident = !{!5}
+  
+  !0 = !{i32 1, !"wchar_size", i32 4}
+  !1 = !{i32 1, !"target-abi", !"lp64"}
+  !2 = !{i32 7, !"PIC Level", i32 2}
+  !3 = !{i32 7, !"PIE Level", i32 2}
+  !4 = !{i32 1, !"SmallDataLimit", i32 8}
+  !5 = !{!"clang version 15.0.4 (linx64v5-musl-local f25aa63f7aa291eff97acefb9fa16fe7a9d6580c)"}
+  !6 = !{!7, !7, i64 0}
+  !7 = !{!"long", !8, i64 0}
+  !8 = !{!"omnipotent char", !9, i64 0}
+  !9 = !{!"Simple C++ TBAA"}
+  !10 = !{!11, !11, i64 0}
+  !11 = !{!"int", !8, i64 0}
+  !12 = !{}
+
+...
+---
+name:            _Z6lookupILi256ELi1EEvPhPlPiPjjiii
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: true
+registers:
+  - { id: 0, class: simtcgvl, preferred-register: '' }
+  - { id: 1, class: simtcgsl, preferred-register: '' }
+  - { id: 2, class: simtcgvl, preferred-register: '' }
+  - { id: 3, class: simtcgv, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgs, preferred-register: '' }
+  - { id: 6, class: simtcgv, preferred-register: '' }
+  - { id: 7, class: simtcgv, preferred-register: '' }
+  - { id: 8, class: simtcgv, preferred-register: '' }
+  - { id: 9, class: simtcgvl, preferred-register: '' }
+  - { id: 10, class: simtcgsl, preferred-register: '' }
+  - { id: 11, class: simtcgv, preferred-register: '' }
+  - { id: 12, class: simtcgs, preferred-register: '' }
+  - { id: 13, class: simtcgvl, preferred-register: '' }
+  - { id: 14, class: simtcgvl, preferred-register: '' }
+  - { id: 15, class: simtcgs, preferred-register: '' }
+  - { id: 16, class: simtcgs, preferred-register: '' }
+  - { id: 17, class: simtcgs, preferred-register: '' }
+  - { id: 18, class: simtcgs, preferred-register: '' }
+  - { id: 19, class: simtcgs, preferred-register: '' }
+  - { id: 20, class: simtcgs, preferred-register: '' }
+  - { id: 21, class: simtcgs, preferred-register: '' }
+  - { id: 22, class: simtcgs, preferred-register: '' }
+  - { id: 23, class: simtcgs, preferred-register: '' }
+  - { id: 24, class: simtcgv, preferred-register: '' }
+  - { id: 25, class: simtcgs, preferred-register: '' }
+  - { id: 26, class: simtcgvl, preferred-register: '' }
+  - { id: 27, class: simtcgvl, preferred-register: '' }
+  - { id: 28, class: simtcgsl, preferred-register: '' }
+  - { id: 29, class: simtcgsl, preferred-register: '' }
+  - { id: 30, class: cgsl, preferred-register: '' }
+  - { id: 31, class: simtcgvl, preferred-register: '' }
+  - { id: 32, class: simtcgvl, preferred-register: '' }
+  - { id: 33, class: simtcgvl, preferred-register: '' }
+  - { id: 34, class: simtcgvl, preferred-register: '' }
+  - { id: 35, class: cgsl, preferred-register: '' }
+  - { id: 36, class: simtcgs, preferred-register: '' }
+  - { id: 37, class: simtcgv, preferred-register: '' }
+  - { id: 38, class: simtcgv, preferred-register: '' }
+  - { id: 39, class: simtcgs, preferred-register: '' }
+  - { id: 40, class: simtcgsl, preferred-register: '' }
+  - { id: 41, class: simtcgvl, preferred-register: '' }
+  - { id: 42, class: simtcgvl, preferred-register: '' }
+  - { id: 43, class: simtcgvl, preferred-register: '' }
+  - { id: 44, class: simtcgvl, preferred-register: '' }
+  - { id: 45, class: simtcgvl, preferred-register: '' }
+  - { id: 46, class: simtcgvl, preferred-register: '' }
+  - { id: 47, class: simtcgsl, preferred-register: '' }
+  - { id: 48, class: simtcgsl, preferred-register: '' }
+  - { id: 49, class: simtcgsl, preferred-register: '' }
+  - { id: 50, class: cgsl, preferred-register: '' }
+  - { id: 51, class: simtcgvl, preferred-register: '' }
+  - { id: 52, class: simtcgvl, preferred-register: '' }
+  - { id: 53, class: simtcgvl, preferred-register: '' }
+  - { id: 54, class: simtcgvl, preferred-register: '' }
+  - { id: 55, class: simtcgvl, preferred-register: '' }
+  - { id: 56, class: simtcgsl, preferred-register: '' }
+  - { id: 57, class: simtcgsl, preferred-register: '' }
+  - { id: 58, class: simtcgsl, preferred-register: '' }
+  - { id: 59, class: simtcgsl, preferred-register: '' }
+  - { id: 60, class: simtcgsl, preferred-register: '' }
+  - { id: 61, class: simtcgsl, preferred-register: '' }
+  - { id: 62, class: cgsl, preferred-register: '' }
+  - { id: 63, class: simtcgsl, preferred-register: '' }
+  - { id: 64, class: simtcgvl, preferred-register: '' }
+  - { id: 65, class: simtcgv, preferred-register: '' }
+  - { id: 66, class: simtcgvl, preferred-register: '' }
+  - { id: 67, class: simtcgsl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%16' }
+  - { reg: '$simt_ri1', virtual-reg: '%17' }
+  - { reg: '$simt_ri2', virtual-reg: '%18' }
+  - { reg: '$simt_ri3', virtual-reg: '%19' }
+  - { reg: '$simt_ri4', virtual-reg: '%20' }
+  - { reg: '$simt_ri5', virtual-reg: '%21' }
+  - { reg: '$simt_ri6', virtual-reg: '%22' }
+  - { reg: '$simt_ri7', virtual-reg: '%23' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x40000000), %bb.7(0x40000000)
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2, $simt_ri3, $simt_ri4, $simt_ri5, $simt_ri6, $simt_ri7
+  
+    %0:simtcgvl = nuw nsw SIMT_ADD 1, $simt_lc0, 2, $simt_lc1, 2, 0, 8, 0, implicit $simt_p
+    %27:simtcgvl = SIMT_CMP_LT 0, %0, 5, $simt_ri5, 5, implicit $simt_p
+    %1:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    SIMT_CMP_NEI_P %27, 0, 0, implicit-def $simt_p, implicit $simt_p
+    %29:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    %30:cgsl = SIMT_CMP_EQI_SCAR 0, %29, 4, 0, implicit $simt_p
+    BNE %30, $r0, %bb.7
+    J %bb.1
+  
+  bb.1.if.then:
+    successors: %bb.2(0x50000000), %bb.7(0x30000000)
+  
+    %2:simtcgvl = SIMT_ICVT_U322U64 0, %0, 1, 0, 0, implicit $simt_p
+    %32:simtcgvl = SIMT_LD_GLOBAL 0, $simt_ri1, 4, %0, 1, 3, implicit $simt_p :: (load (s64) from %ir.arrayidx, !tbaa !6)
+    %33:simtcgvl = SIMT_ICVT_S642S32 1, %32, 4, 0, 0, implicit $simt_p
+    %64:simtcgvl = SIMT_SLLI 1, %33, 5, 3, implicit $simt_p
+    SIMT_SW_GLOBAL %64, 5, $simt_ri3, 4, %0, 1, 0, implicit $simt_p :: (store (s32) into %ir.arrayidx5, !tbaa !10)
+    %35:cgsl = SIMT_CMP_LTI_SCAR 0, $simt_ri7, 5, 1, implicit $simt_p
+    BNE %35, $r0, %bb.7
+    J %bb.2
+  
+  bb.2.for.body.lr.ph:
+    successors: %bb.3(0x80000000)
+  
+    %63:simtcgsl = COPY $r0
+    %66:simtcgvl = COPY $r0
+  
+  bb.3.for.body:
+    successors: %bb.4(0x40000000), %bb.5(0x40000000)
+  
+    %41:simtcgvl = SIMT_REM 1, %64, 1, $simt_ri4, 1, implicit $simt_p
+    %42:simtcgvl = SIMT_MUL 1, %41, 5, $simt_ri6, 5, implicit $simt_p
+    %43:simtcgvl = SIMT_ICVT_U322U64 0, %42, 1, 0, 0, implicit $simt_p
+    %9:simtcgvl = SIMT_ADD 0, $simt_ri0, 4, %43, 4, 0, 0, 0, implicit $simt_p
+    %45:simtcgvl = SIMT_LD_GLOBAL 0, $simt_ri0, 4, %42, 1, 0, implicit $simt_p :: (load (s64) from %ir.add.ptr, !tbaa !6)
+    %46:simtcgvl = SIMT_CMP_EQ 0, %45, 4, %32, 4, implicit $simt_p
+    %10:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    SIMT_CMP_NEI_P %46, 0, 0, implicit-def $simt_p, implicit $simt_p
+    %48:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    %67:simtcgsl = LinxV5ImplicitSDef 1, implicit $simt_p
+    %50:cgsl = SIMT_CMP_EQI_SCAR 0, %48, 4, 0, implicit $simt_p
+    BNE %50, $r0, %bb.5
+    J %bb.4
+  
+  bb.4.if.then14:
+    successors: %bb.5(0x80000000)
+  
+    %67:simtcgsl = COPY $simt_ri7
+    %51:simtcgvl = SIMT_LWI_GLOBAL 1, %9, 4, 2, implicit $simt_p :: (load (s32) from %ir.add.ptr11, !tbaa !10)
+    SIMT_SW_GLOBAL %51, 5, $simt_ri2, 4, %2, 4, 0, implicit $simt_p :: (store (s32) into %ir.sunkaddr1, !tbaa !10)
+  
+  bb.5.if.end:
+    successors: %bb.6(0x04000000), %bb.3(0x7c000000)
+  
+    %52:simtcgvl = SIMT_PSEL 1, $simt_p, 4, %67, 5, %66, 5, 0, implicit $simt_p
+    LinxV5PseudoCopy2PTerm %10, implicit-def dead $simt_p, implicit $simt_p
+    %64:simtcgvl = nuw SIMT_ADDI 1, %41, 5, 1, implicit $simt_p
+    %66:simtcgvl = nsw SIMT_ADDI 1, %52, 5, 1, implicit $simt_p
+    %55:simtcgvl = SIMT_CMP_GE 0, %66, 5, $simt_ri7, 5, implicit $simt_p
+    %56:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    SIMT_CMP_NEI_P %55, 0, 0, implicit-def $simt_p, implicit $simt_p
+    %57:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    LinxV5PseudoCopy2P %56, implicit-def dead $simt_p, implicit $simt_p
+    %63:simtcgsl = SIMT_OR_SCAR 0, %57, 4, %63, 4, 0, 0, implicit $simt_p
+    %59:simtcgsl = SIMT_XORI_SCAR 0, %63, 4, -1, implicit $simt_p
+    %60:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    %61:simtcgsl = SIMT_AND_SCAR 0, %59, 4, %60, 4, 0, 0, implicit $simt_p
+    LinxV5PseudoCopy2PTerm %61, implicit-def dead $simt_p, implicit $simt_p
+    %62:cgsl = SIMT_CMP_NEI_SCAR 0, %61, 4, 0, implicit $simt_p
+    BNE %62, $r0, %bb.3
+    J %bb.6
+  
+  bb.6.Flow:
+    successors: %bb.7(0x80000000)
+  
+    LinxV5PseudoCopy2PTerm %63, implicit-def dead $simt_p, implicit $simt_p
+  
+  bb.7.if.end19:
+    LinxV5PseudoCopy2PTerm %1, implicit-def dead $simt_p, implicit $simt_p
+    PseudoRET
+
+...

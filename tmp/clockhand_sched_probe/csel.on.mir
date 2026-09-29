@@ -1,0 +1,654 @@
+--- |
+  ; ModuleID = '<stdin>'
+  source_filename = "<stdin>"
+  target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
+  target triple = "linx64v5-unknown-linux-musl"
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @csel64(ptr %p, ptr %addra, ptr %addrb) #0 {
+  entry:
+    %a = load i64, ptr %addra, align 8
+    %b = load i64, ptr %addrb, align 8
+    %cmp = icmp eq i64 %a, %b
+    %ret = select i1 %cmp, i64 %a, i64 %b
+    store i64 %ret, ptr %p, align 8
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @csel32(ptr %p, ptr %addra, ptr %addrb) #0 {
+  entry:
+    %a = load i32, ptr %addra, align 4
+    %b = load i32, ptr %addrb, align 4
+    %cmp = icmp eq i32 %a, %b
+    %ret = select i1 %cmp, i32 %a, i32 %b
+    store i32 %ret, ptr %p, align 4
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @csel16(ptr %p, ptr %addra, ptr %addrb) #0 {
+  entry:
+    %a = load i16, ptr %addra, align 2
+    %b = load i16, ptr %addrb, align 2
+    %cmp = icmp eq i16 %a, %b
+    %ret = select i1 %cmp, i16 %a, i16 %b
+    store i16 %ret, ptr %p, align 2
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @csel8(ptr %p, ptr %addra, ptr %addrb) #0 {
+  entry:
+    %a = load i8, ptr %addra, align 1
+    %b = load i8, ptr %addrb, align 1
+    %cmp = icmp eq i8 %a, %b
+    %ret = select i1 %cmp, i8 %a, i8 %b
+    store i8 %ret, ptr %p, align 1
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @cself64(ptr %p, ptr %addra, ptr %addrb) #0 {
+    %a = load double, ptr %addra, align 8
+    %b = load double, ptr %addrb, align 8
+    %cmp = fcmp oeq double %a, %b
+    %sel = select i1 %cmp, double %a, double %b
+    store double %sel, ptr %p, align 8
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @cself32(ptr %p, ptr %addra, ptr %addrb) #0 {
+    %a = load float, ptr %addra, align 4
+    %b = load float, ptr %addrb, align 4
+    %cmp = fcmp oeq float %a, %b
+    %sel = select i1 %cmp, float %a, float %b
+    store float %sel, ptr %p, align 4
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @cself16(ptr %p, ptr %addra, ptr %addrb) #0 {
+    %a = load half, ptr %addra, align 2
+    %b = load half, ptr %addrb, align 2
+    %cmp = fcmp oeq half %a, %b
+    %sel = select i1 %cmp, half %a, half %b
+    store half %sel, ptr %p, align 2
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define void @cselbf16(ptr %p, ptr %addra, ptr %addrb) #0 {
+    %a = load bfloat, ptr %addra, align 2
+    %b = load bfloat, ptr %addrb, align 2
+    %cmp = fcmp oeq bfloat %a, %b
+    %sel = select i1 %cmp, bfloat %a, bfloat %b
+    store bfloat %sel, ptr %p, align 2
+    ret void
+  }
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.if.i64(i1) #1
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.flow.i64.i64(i64) #1
+  
+  ; Function Attrs: convergent nounwind readnone willreturn
+  declare i64 @llvm.blkv.if.break.i64(i1, i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i1 @llvm.blkv.loop.i64(i64) #1
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare void @llvm.blkv.end.cf.i64(i64) #1
+  
+  attributes #0 = { mustprogress nofree noinline norecurse nosync nounwind readnone willreturn "__vec__" "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+m,+relax" }
+  attributes #1 = { convergent nounwind willreturn }
+  attributes #2 = { convergent nounwind readnone willreturn }
+
+...
+---
+name:            csel64
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LD_GLOBAL 0, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s64) from %ir.addra)
+    %4:simtcgvl = SIMT_LD_GLOBAL 0, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s64) from %ir.addrb)
+    %5:simtcgvl = SIMT_CMP_EQ 0, %3, 4, %4, 4, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 0, %5, 4, %3, 4, %4, 4, 0, implicit $simt_p
+    SIMT_SD_GLOBAL %6, 4, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s64) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            csel32
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LW_GLOBAL 1, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s32) from %ir.addra)
+    %4:simtcgvl = SIMT_LW_GLOBAL 1, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s32) from %ir.addrb)
+    %5:simtcgvl = SIMT_CMP_EQ 0, %3, 5, %4, 5, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 1, %5, 4, %3, 5, %4, 5, 0, implicit $simt_p
+    SIMT_SW_GLOBAL %6, 5, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s32) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            csel16
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LH_GLOBAL 2, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s16) from %ir.addra)
+    %4:simtcgvl = SIMT_LH_GLOBAL 2, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s16) from %ir.addrb)
+    %5:simtcgvl = SIMT_CMP_EQ 0, %3, 6, %4, 6, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 2, %5, 4, %3, 6, %4, 6, 0, implicit $simt_p
+    SIMT_SH_GLOBAL %6, 6, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s16) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            csel8
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LB_GLOBAL 3, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s8) from %ir.addra)
+    %4:simtcgvl = SIMT_LB_GLOBAL 3, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s8) from %ir.addrb)
+    %5:simtcgvl = SIMT_CMP_EQ 0, %3, 7, %4, 7, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 3, %5, 4, %3, 7, %4, 7, 0, implicit $simt_p
+    SIMT_SB_GLOBAL %6, 7, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s8) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            cself64
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0 (%ir-block.0):
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LD_GLOBAL 0, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s64) from %ir.addra)
+    %4:simtcgvl = SIMT_LD_GLOBAL 0, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s64) from %ir.addrb)
+    %5:simtcgvl = SIMT_FEQ 0, %3, 0, %4, 0, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 0, %5, 4, %3, 4, %4, 4, 0, implicit $simt_p
+    SIMT_SD_GLOBAL %6, 4, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s64) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            cself32
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0 (%ir-block.0):
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LW_GLOBAL 1, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s32) from %ir.addra)
+    %4:simtcgvl = SIMT_LW_GLOBAL 1, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s32) from %ir.addrb)
+    %5:simtcgvl = SIMT_FEQ 0, %3, 1, %4, 1, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 1, %5, 4, %3, 5, %4, 5, 0, implicit $simt_p
+    SIMT_SW_GLOBAL %6, 5, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s32) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            cself16
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0 (%ir-block.0):
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LH_GLOBAL 2, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s16) from %ir.addra)
+    %4:simtcgvl = SIMT_LH_GLOBAL 2, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s16) from %ir.addrb)
+    %5:simtcgvl = SIMT_FEQ 0, %3, 2, %4, 2, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 2, %5, 4, %3, 6, %4, 6, 0, implicit $simt_p
+    SIMT_SH_GLOBAL %6, 6, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s16) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            cselbf16
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+  - { id: 4, class: simtcgvl, preferred-register: '' }
+  - { id: 5, class: simtcgvl, preferred-register: '' }
+  - { id: 6, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0 (%ir-block.0):
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgvl = SIMT_LH_GLOBAL 2, $simt_ri1, 4, $r0, 4, 0, implicit $simt_p :: (load (s16) from %ir.addra)
+    %4:simtcgvl = SIMT_LH_GLOBAL 2, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (load (s16) from %ir.addrb)
+    %5:simtcgvl = SIMT_FEQ 0, %3, 2, %4, 2, implicit $simt_p
+    %6:simtcgvl = SIMT_CSEL 2, %5, 4, %3, 6, %4, 6, 0, implicit $simt_p
+    SIMT_SH_GLOBAL %6, 6, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s16) into %ir.p)
+    PseudoRET
+
+...

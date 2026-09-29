@@ -1,0 +1,92 @@
+{
+  "url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/issues/235",
+  "repository_url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API",
+  "labels_url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/issues/235/labels{/name}",
+  "comments_url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/issues/235/comments",
+  "events_url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/issues/235/events",
+  "html_url": "https://github.com/LinxISA/Linx-TileOP-API/issues/235",
+  "id": 5608065659,
+  "node_id": "I_kwDOTCb_R88AAAABTkRKew",
+  "number": 235,
+  "title": "[TileOP API][PTO 0.59] 为 Local CUBE TileOp 增加 GPR / PredicateCell ExecutionMask API",
+  "user": {
+    "login": "zhoubot",
+    "id": 637081,
+    "node_id": "MDQ6VXNlcjYzNzA4MQ==",
+    "avatar_url": "https://avatars.githubusercontent.com/u/637081?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/zhoubot",
+    "html_url": "https://github.com/zhoubot",
+    "followers_url": "https://api.github.com/users/zhoubot/followers",
+    "following_url": "https://api.github.com/users/zhoubot/following{/other_user}",
+    "gists_url": "https://api.github.com/users/zhoubot/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/zhoubot/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/zhoubot/subscriptions",
+    "organizations_url": "https://api.github.com/users/zhoubot/orgs",
+    "repos_url": "https://api.github.com/users/zhoubot/repos",
+    "events_url": "https://api.github.com/users/zhoubot/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/zhoubot/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+    {
+      "id": 11310235113,
+      "node_id": "LA_kwDOTCb_R88AAAACoiR96Q",
+      "url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/labels/enhancement",
+      "name": "enhancement",
+      "color": "a2eeef",
+      "default": true,
+      "description": "New feature or request",
+      "archived_at": null,
+      "archived_by": null
+    }
+  ],
+  "state": "open",
+  "locked": false,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 0,
+  "created_at": "2026-09-28T01:36:45Z",
+  "updated_at": "2026-09-28T01:44:35Z",
+  "closed_at": null,
+  "assignee": null,
+  "author_association": "COLLABORATOR",
+  "issue_field_values": [
+
+  ],
+  "type": null,
+  "active_lock_reason": null,
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "## 背景\n\nPTO-SPEC 已通过 [PR #352](https://github.com/PTO-ISA/pto-spec/pull/352)（合并提交\n[`7b8b9a7987c42e7d96a8ba36002505258e0b6d4c`](https://github.com/PTO-ISA/pto-spec/commit/7b8b9a7987c42e7d96a8ba36002505258e0b6d4c)）接受 Local CUBE\n`ExecutionMask` 的 0.59 初步架构扩展。架构来源是\n[PTO-SPEC #277](https://github.com/PTO-ISA/pto-spec/issues/277) revision 4 和\n[PTO-SPEC #349](https://github.com/PTO-ISA/pto-spec/issues/349)，当前仍是 0.59\n候选，并未发布 0.59 release。\n\n`Linx-TileOP-API` 当前 `linx` 分支仍以 PTO ISA 0.58.6 为基线：公共 Tile 类型没有\n独立的 PredicateCell carrier 类型，各 TileOp wrapper 也没有通用 ExecutionMask 参数，\n无法表达这项已经进入 PTO `main` 的能力。\n\n本 issue 只负责低层 TileOp API、header lowering、文档和测试闭环。旧 RFC\n[#228](https://github.com/LinxISA/Linx-TileOP-API/issues/228) 已关闭：其中有关新 64-bit\n`B.IOR.P`、packed-i1 `MaskTile`、mask stack 的描述不是 PR #352 接受的架构。更上层的\n`TPARTELEMENT`、`#pragma parallel for`、控制流 reconvergence 和逐元素 atomic 编程模型\n若继续推进，应在本低层 API 与新的 ISA owner 之上另开 RFC，不能沿用 #228 的旧编码假设。\n\n## 已接受的 ISA 合同\n\n### 两种互斥载体\n\n一次 eligible TileOp 可以选择以下一种显式 ExecutionMask：\n\n1. **GPR carrier**\n   - 使用现有 32-bit `B.IOR`，不新增 `B.IOR.P`。\n   - mask word(s) 排在所有 operation-owned GPR 输入之后。\n   - 最多使用两条连续 `B.IOR`，第二条只允许 source。\n   - `B.IOR[26] = ExecMaskPresent` 只在最后一条 mask binding record 上置 1；\n     `B.IOR[25]` 继续固定为 0。\n   - mask 需要一个还是两个 64-bit word 由具体 operation dtype、CUBE layout、shape\n     以及 `TPACK/TUNPACK` 的 CELL-word 坐标合同决定，API 不能用“固定 32/64/128 lane”\n     规则替代 ISA 计算。\n\n2. **PredicateCell Tile carrier**\n   - 使用已有的 canonical `U8 TileStorage_PredicateCell`，每个有效 cell 只能为\n     `0x00` 或 `0x01`。\n   - mask 是所有 operation-owned Tile source 之后的最后一个逻辑 `B.IOT` source，\n     不占用原操作 operand ordinal；wrapper 必须据实际 cardinality 生成合法 record\n     数量、顺序和最终 `last`。\n   - mask 的 layout、`ValidRow`、`ValidCol` 必须与该操作的 ExecutionMask 坐标域匹配。\n     通用 ExecutionMask 消费不要求 PredicateCell 的 `predicate_basis_type` 与当前操作\n     dtype 相同。\n   - 这不是任意 numeric `Tile<uint8_t>`，也不是新的 packed-i1、layout-independent\n     `MaskTile`。\n\n两种载体不得同时出现。`B.IOT mask=1111` 仍是 PE mask，不是逐元素 ExecutionMask。\n\n### 控制和效果\n\n- `B.DATR.PredInv=1` 反转逐坐标 mask；默认 0。\n- `B.DATR.Zero=0` 表示 inactive destination **MERGE**（保留旧目标值）；\n  `Zero=1` 表示 **ZERO**。\n- effective activity 是 `PE_MASK[pe] && (mask_bit XOR PredInv)`。\n- carrier 在可能重叠的 predicate destination 分配或发布之前快照。\n- inactive 坐标不得读取 element-only source payload、贡献数值状态、探测或 fault\n  memory、执行 atomic/reduction effect；destination 只按 MERGE 或 ZERO 更新。\n- 该扩展只适用于已经合法的 Local `CUBE_M16/CUBE_M32` form。规范 helper 列出 91 个\n  eligible operation identity；其中 `TGATHER`、`TSCATTER`、`TTRI` 当前没有合法的\n  Local CUBE form，因此实际 mnemonic closure 是 89。RowMajor、Shared、matrix\n  contraction、reduction、GMOV、TPREFETCH 等不能因 API overload 被意外放开。\n\n## 建议的公共 API 方向\n\n需要提供一个与普通 scalar、operation predicate、GM base、PE mask 分离的强类型\nExecutionMask 配置。以下命名只是建议，最终可以按仓库风格调整，但类型边界和语义必须\n保留：\n\n```cpp\nnamespace pto::predicate {\n\nenum class InactivePolicy { Merge, Zero };\n\nauto gpr(uint64_t low, InactivePolicy policy, bool invert = false);\nauto gpr(uint64_t low, uint64_t high,\n         InactivePolicy policy, bool invert = false);\n\ntemplate <predicate_cell_tile Tile>\nauto tile(Tile &mask, InactivePolicy policy, bool invert = false);\n\n} // namespace pto::predicate\n\nauto mask = pto::predicate::gpr(mask_low,\n                                pto::predicate::InactivePolicy::Zero);\nTADD(dst, lhs, rhs, mask);\n\nauto tile_mask = pto::predicate::tile(\n    predicate_cell, pto::predicate::InactivePolicy::Merge);\nTSTORE(gm, src, tile_mask);\n```\n\n要求：\n\n- mask 参数必须是强类型，不能与 `uint64_t scalar`、GM base、stride、`TSEL` 自身的\n  selection predicate 或 `MGATHER_MASK/MSCATTER_MASK` 的 operation-owned MaskTile 混淆。\n- 既有无 mask overload 和其精确汇编保持不变。\n- MERGE 会读取调用前的 destination。公共接口必须让 destination 的 in/out 或显式\n  passthrough 需求可见，并在 fresh/uninitialized destination 上给出编译期拒绝或明确诊断；\n  不应把 ISA 的 `Zero=0` 默认值静默变成未初始化读取。\n- PredicateCell 必须有独立于 ordinary numeric U8 Tile 的 C++ 类型或 carrier trait。\n  `TCMP/TCMPS` 的 PredicateCell 输出应保留该类型，可直接作为后续 ExecutionMask。\n- GPR mask word 数和 PredicateCell shape 应能在静态已知时编译期检查；动态 shape 路径\n  必须发出与 ISA 一致的运行期/执行前约束，不能截断、补齐或偷偷换载体。\n- `PredInv`、inactive policy 与已有 `B.DATR` layout/dtype/padding/rounding 字段必须在\n  同一条合法 `B.DATR` 中组合，不能发两条属性命令。\n\n## 实现范围\n\n1. **类型与 traits**\n   - 增加 GPR mask carrier、PredicateCell Tile carrier、inactive policy 和 invert 控制。\n   - 增加 compile-time concepts/traits，区分 numeric Tile、legacy operation predicate、\n     generic ExecutionMask PredicateCell。\n\n2. **统一 lowering helper**\n   - 在 `include/jcore/template_asm.hpp` 抽取 mask-aware `B.DATR`、dense GPR input stream\n     和 appended PredicateCell `B.IOT` stream 的公共 helper，避免给 89 个 mnemonic\n     手写相互漂移的 binder 顺序。\n   - 保持 operation-owned GPR/Tile operand 在前，ExecutionMask 永远追加。\n   - 正确处理已经占用 GPR slot 或多条 B.IOT 的 `TADDS`、`TSEL/TSELS`、TLSU、CAS、\n     atomics、`TPACK/TUNPACK` 等 family。\n\n3. **operation overload**\n   - 为 PTO `TileOperationExecutionMaskEligible` 集合中实际存在 Local CUBE form 的\n     89 个 mnemonic 提供 mask-aware overload，或通过受约束的统一 wrapper 覆盖同一集合。\n   - 不支持的 operation/layout/location 必须编译期拒绝；不要通过宽泛模板让非法 bundle\n     留到运行时才失败。\n\n4. **版本和文档**\n   - 新增 feature gate，例如 `PTO_TILEOP_API_HAS_EXECUTION_MASK`。\n   - 在 PTO 0.59 正式发布前，不要把 `PTO_TILEOP_API_SPEC_VERSION` 宣称为已发布的\n     `0.59`；可以把实现标记为 draft/experimental 并锁定 PTO-SPEC commit。\n   - 更新每个受影响 operation page 的 C++ signature、MERGE/ZERO、fault suppression、\n     carrier/shape 限制和 bundle 示例。\n   - 更新 #228/本地 0.59 proposal 中与已接受 ISA 冲突的 `B.IOR.P`、packed-i1\n     MaskTile 和 mask-stack 描述，把更高层编程模型与本 low-level API 分层。\n\n## 验收标准\n\n- [ ] 无 mask 的既有 0.58.6 wrapper 汇编输出不变。\n- [ ] GPR carrier：覆盖一个 word、两个 word、已有 operation-owned GPR 输入跨到第二条\n      `B.IOR`、GPR0 作为真实 mask、非法第三条/非 final `ExecMaskPresent` 的正反测试。\n- [ ] PredicateCell carrier：覆盖单独新增 `B.IOT` record 和与已有 record 合并两种\n      cardinality；验证 mask 是最后一个 logical source 且 `last` 只出现在最终 record。\n- [ ] `PredInv × {MERGE, ZERO}` 四种组合有精确汇编测试；非 masked 或非 eligible\n      operation 上使用非零控制必须编译期拒绝。\n- [ ] `TCMP/TCMPS` 产生的 PredicateCell 可以直接喂给不同但 shape/layout 相容的 eligible\n      operation，不错误要求 basis dtype 相同。\n- [ ] inactive source 可未定义且不被读取；inactive divide-by-zero、非法 selector/index、\n      memory address、atomic/reduction effect 不触发对应 effect/fault。\n- [ ] MERGE 保留旧 destination，ZERO 写零；全 inactive mask 不产生逐元素或 memory effect。\n- [ ] 覆盖 `TSEL/TSELS` 自身 predicate 与 generic ExecutionMask 同时存在，二者 operand\n      role 不串位。\n- [ ] 覆盖 CUBE TLOAD/TSTORE conversion layout、TCVT、TPACK/TUNPACK CELL-word 坐标、\n      packed U4X2/S4X2 gather 的 transfer-mask 坐标。\n- [ ] C++ compile-fail 测试覆盖 RowMajor、Shared、CUBE_N8、shape/layout 不匹配、numeric\n      U8 冒充 PredicateCell、同时传 GPR 与 Tile carrier、未初始化 MERGE destination。\n- [ ] 与支持 PTO 0.59 draft encoding 的 assembler/MC 做汇编与反汇编 round trip，并用\n      pto-spec #352 的重点 AVS 场景做至少一条 executable smoke path。\n\n## 依赖与非目标\n\n- 依赖 Linx assembler/MC 接受 `B.IOR ExecMaskPresent`、`B.DATR PredInv/Zero` 和对应\n  0.59 draft identity；在工具链未就绪时，header 测试可以先检查文本/compile-time\n  contract，但不能声称端到端可用。\n- 本 issue 不定义新的 packed-i1 MaskTile、P0..P7、隐式 current mask、mask stack、\n  branch-any/all、RowMajor predication 或新 opcode。\n- 本 issue 不启动或发布 PTO 0.59；正式版本号、manifest 和 release gate 另行处理。\n",
+  "closed_by": null,
+  "reactions": {
+    "url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/issues/235/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "timeline_url": "https://api.github.com/repos/LinxISA/Linx-TileOP-API/issues/235/timeline",
+  "performed_via_github_app": null,
+  "state_reason": null,
+  "pinned_comment": null
+}

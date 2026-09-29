@@ -11613,3 +11613,1032 @@ Shared source。小 shape 对照正常。
 - The change has not yet been pushed or reported upstream at the time this entry was written.
 - Reproduction evidence: gist `https://gist.github.com/lvhao7896/ff9cd458086235d43d9bc3c3137eff96`; failing writer 9 used `m#2` after the parent had previously been selected as `m#16`.
 - The GitHub token used for API operations is exposed in the session history and should be revoked/rotated.
+
+## 2026-09-24 Issue #229 TIMG2COL type predicate namespace regression
+
+### Issue / root cause
+
+- Issue: `LinxISA/Linx-TileOP-API#229`, `TIMG2COL: is_timg2col_type_code undeclared`.
+- Latest TileOP `origin/linx@2e23a08c` referenced `is_timg2col_type_code` unqualified at four `TIMG2COL`/`TIMG2COL_SPART` call sites in `include/jcore/template_asm.hpp`.
+- The predicate is defined in `pto::range` in `include/common/pto_tile.hpp`; this is a TileOP C++ name-lookup regression introduced by the surrounding TIMG2COL changes, not an ISA or LLVM encoding issue.
+
+### Fix / integration
+
+- Isolated worktree: `/tmp/linx-tileop-229`.
+- Branch: `fix/issue-229-timg2col-type-code`.
+- Changed all four calls to `range::is_timg2col_type_code(...)`.
+- Commit: `92da9a7`.
+- Pushed to TileOP remote.
+- PR: `https://github.com/LinxISA/Linx-TileOP-API/pull/230`, base=`linx`, includes `Closes #229`.
+- Issue reply published: `https://github.com/LinxISA/Linx-TileOP-API/issues/229#issuecomment-5810713936`.
+
+### Validation
+
+- `python3 -m unittest test_v058_engine_contract`: 56/56 passed.
+- `TImg2Col.cpp` compiles with current LLVM and emits `BSTART.TIMG2COL FP32` after synchronizing `template_asm.hpp` and `pto_tile.hpp` into the LLVM install tree.
+- The NCHW/Shared TIMG2COL fixture passes the original namespace lookup failure and then reaches the separate LLVM fatal `Shared register spill is required, but Shared spill is not supported by the current LinxV5 ISA`; that is an independent backend/ISA limitation and remains separate from #229.
+
+### Worktree / follow-up
+
+- Original TileOP worktree `/home/zhuwei/linx-BLK-build/src/Linx-TileOP-API` was not modified; it remains on the existing Issue #19 branch with pre-existing untracked files.
+- LLVM source was not changed for #229.
+- The GitHub token used for API operations is exposed in session history and should be revoked/rotated.
+
+## 2026-09-24 LLVM issue #111：TIMG2COL Shared handle 触发非法 copy/spill（暂不改 LLVM）
+
+### Issue / 现象
+
+- Issue：`LinxISA/llvm-project#111`。
+- 标题：`LinxV5: Shared MOVR reject blocks SuperNPUBench conv2d_img2col_dyn (TIMG2COL Shared)`。
+- 已回复：`https://github.com/LinxISA/llvm-project/issues/111#issuecomment-5811467385`。
+- TileOP 前置问题 #229 / PR #230 已修复；当前剩余失败为 LLVM 后端在 Shared handle 生命周期结束时触发：
+  - `-O0`：`Shared register spill is required, but Shared spill is not supported by the current LinxV5 ISA`；
+  - `-O1/-O2`：`cannot copy a Shared register`。
+
+### 根因核实
+
+- 使用当前 LLVM `dev-llvm15_56@4a250724d152`、TileOP `origin/linx@680e753`（已包含 PR #230）和 `Issue194Timg2colNchw.cpp` 最小 fixture 稳定复现。
+- `TIMG2COL` Shared overload 的 inline asm 使用：
+  `: [Shared] "=Sr"(dst.handle_ref())`。
+- `SharedTile::handle_ref()` 返回普通 C++ `unsigned long &`，LLVM IR 明确生成：
+  `call i64 asm ... "=@2Sr,..."` 后接 `store i64 %shared, ptr %handle_ref`。
+- 这将架构上的绝对 Shared ID 强行物化到普通 `i64` 内存对象；寄存器分配随后只能尝试 Shared COPY 或 Shared spill。LinxV5 没有 Shared MOVR/copy，也没有 Shared spill 指令。
+- 独立最小 `TLOAD(SharedTile&)` 和 Shared-return `TLOAD<...>(src)` 也复现同类失败，说明不是 TIMG2COL selector、参数或单一 wrapper 错误，而是 Shared wrapper/普通 C++ ABI 生命周期设计问题。
+
+### ISA 依据与处置
+
+- 最新本地 `pto-spec@47d13583a3` 的 TLOAD/TSTORE/TIMG2COL 合同将 Shared 操作数定义为通过 `B.IOS` 发布/消费的绝对 Shared destination/source，并要求 Shared source whole-parent readiness/publication。
+- Shared ID 不是普通整数 payload，不能存入内存、通过普通 C++ 参数/返回 ABI 传递，或用 MOVR/ORI 复制。
+- 不修改 LLVM `copyPhysReg` fatal；不增加伪造 Shared MOVR；不把 Shared spill 当作 datatype-independent `S64 + NORM` tile spill；不修改标量板块。
+- 已在 issue #111 说明责任边界落在 Shared producer/API ABI：Shared producer 必须直接进入支持 `Sr` 的 Shared-aware consumer 生命周期，或由 TileOP/编译器提供专用 Shared wrapper 生命周期，不能先写入普通 `unsigned long` 对象。
+- 当前没有提交 LLVM 代码或 PR，因为放宽检查会生成违反 ISA 的 ELF，属于错误修复方向。
+
+### 验证
+
+- TileOP #229 前置 namespace lookup 已确认生效；当前失败已推进到 LLVM backend。
+- `Issue194Timg2colNchw.cpp`：`-O0` 在 FastRA Shared spill 处失败；`-O1/-O2` 在 Post-RA Shared copy 处失败。
+- LLVM IR 证据保存于 `/tmp/issue111-stages/Issue194.ll`；关键位置是 Shared inline asm 返回 `i64` 后的 `store i64`。
+- 最新规范版本：`/tmp/pto-spec-current@47d13583a3`。
+
+### 工作区备忘 / 待办
+
+- LLVM `/home/zhuwei/linx-llvm` 未修改源码，仅追加本 handoff；既有未提交/未跟踪文件保持不动。
+- TileOP 原工作区未修改；验证使用隔离 worktree `/tmp/tileop-issue111`。
+- [ ] TileOP/API 重新设计 Shared producer/output 生命周期，消除 `handle_ref()` 到普通 `i64` memory 的物化。
+- [ ] 以修订后的 Shared-aware fixture 重新验证 LLVM；只有确认 LLVM 在合法 Shared SSA 生命周期内错误插入 copy/spill 时，才重新打开 LLVM 侧修复。
+
+## 2026-09-24 LLVM issue #111 复核：Shared spill/copy 不是硬件必需，TileOP API 生命周期有问题
+
+### 用户关切与最终判定
+
+- #111 的 Shared spill/copy **不是 LinxV5 硬件或 ISA 必须发生的动作**。
+- 当前 TileOP 实现存在问题：`SharedTile` 将硬件 Shared 句柄暴露为普通 C++ `unsigned long` 成员，并通过 `handle_ref()` 作为 `=Sr` inline-asm 输出目标。
+- 该接口会把 `B.IOS` 产生的 Shared SSA 值物化为普通 `i64` 内存；随后 LLVM 只能尝试 Shared copy 或 Shared spill，而 ISA 正确地拒绝这两种非法操作。
+- 因此不能通过放宽 LLVM 的 Shared `copyPhysReg`/spill fatal 修复，也不能伪造 MOVR/ORI 或把 Shared 当普通 S64 tile spill。
+
+### 独立验证
+
+- TileOP `origin/linx@b9dbd9d`，LLVM `dev-llvm15_56@4a250724d152`。
+- `TIMG2COL(SharedTile&, ...)` 和 `TLOAD(SharedTile&, ...)` 均生成：`i64 asm ... @2Sr` 后跟 `store i64` 到 `SharedTile` 对象。
+- `Issue194Timg2colNchw.cpp`：`-O0` 在 FastRA 触发 Shared spill；`-O1/-O2` 在 Post-RA 触发 Shared copy。
+- 返回值形式 `TLOAD<shape>(src)` 在 LLVM IR 中不再生成 Shared handle `store i64`，说明直接 Shared SSA producer/consumer 才是正确方向；但现有 `SharedTile` 对象式 API 仍无法承载该生命周期。
+- 跨普通 C++ 函数参数/返回传递 Shared handle 同样会触发物化，不能把 Shared ID 当普通 ABI 值传递。
+- `-O0` 即使采用直接返回值形态仍可能因当前 FastRA 无法保持 Shared 活跃值而要求 spill；这说明要完整支持 O0，还需要专用 Shared-aware ABI/寄存器分配策略，不能用普通 spill 代替。
+
+### 历史原因
+
+- 在 `4a250724d152` 之前，LLVM 未严格拒绝所有 Shared bridge copy/spill，旧版本“能过”不代表硬件允许，而是非法路径尚未被拦截。
+- `679005ba1294` 和 `4a250724d152` 将该非法行为改为明确拒绝，因而暴露了 TileOP 的 Shared 生命周期设计缺陷。
+
+### 处置结论
+
+- 当前不修改标量板块、不修改 Shared spill 为普通 tile spill、不放宽 LLVM fatal。
+- TileOP 需要重新设计 Shared producer/output 生命周期：Shared producer 必须直接绑定到 Shared-aware consumer，或由编译器提供专用 Shared wrapper/SSA 机制；不能继续把 `=Sr` 输出写入普通 C++ 对象。
+- 现有 `TLOAD(SharedTile&)`、`TIMG2COL(SharedTile&)` 形式应视为需要重构的 API，而不是通过后端 workaround 保持兼容。
+- 已有的 LLVM issue #111 早先评论过于保守；后续应追加更正评论，明确这是 TileOP API 问题，但完整修复不是单个 wrapper 改动，需要先确定 Shared-aware API/LLVM ABI 方案。
+
+### 工作区
+
+- TileOP 隔离分支：`/tmp/tileop-issue111`，`fix/issue-111-shared-handle-lifetime`，基于 `origin/linx@b9dbd9d`；未提交代码改动。
+- LLVM 源码未修改；仅更新本 handoff。
+- 用户特别要求记录：标量板块不应因该问题修改；tile spill 不能按 datatype 处理为普通 spill，Shared handle 也不能套用该逻辑。
+
+### 待办
+
+- [ ] 设计并实现 Shared-aware producer/consumer API 或 LLVM/Clang 专用 Shared SSA ABI。
+- [ ] 为 Shared TLOAD/TIMG2COL 增加不允许普通对象物化的负向测试。
+- [ ] 在新 ABI 确认后重新验证 `-O0/-O1/-O2`，再创建 TileOP PR 并更新 LLVM #111。
+
+## 2026-09-24 继续复核 #111：O0 Shared 预分配实验失败，未合入伪修复
+
+### 新实验
+
+- 临时实现了仅在 `-O0`、FastRA 前将 `Shared_ABS` vreg 绑定到 `S0..S63` 的 LLVM pass，目的是避免 Shared vreg 进入普通 spill 路径。
+- LLVM CodeGen 可以编译，但验证失败：
+  - 最小直接 `B.IOS` producer→consumer 在 `-O0` 仍触发 Shared copy；
+  - `SharedTile`/`TIMG2COL` 对象式 API 在 `-O0/-O1/-O2` 仍触发 Shared copy；
+  - MIR 显示根因是 `Shared_ABS -> mixedgpr -> stack -> mixedgpr -> Shared_ABS` 的对象/普通整数桥接，而不是 Shared 物理寄存器数量不足。
+- 临时 pass 已完全撤销；LLVM 源码恢复为实验前状态，仅保留本 handoff 修改。
+
+### 进一步结论
+
+- 不能靠 O0 专用寄存器预分配修复 #111。
+- 不能靠普通 `Shared_ABS` call-preserved mask 修复，因为最小无普通调用的 `unsigned long` handle 也会在 `-O0` 进入栈物化。
+- `-O1/-O2` 能通过的直接 SSA 形式只证明“硬件不要求 spill/copy”；并不意味着当前 `SharedTile&` API 合法。
+- 完整修复仍需要二者之一：
+  1. TileOP 改成 producer 直接绑定 Shared-aware consumer、禁止 Shared handle 进入普通 C++ 对象/ABI；并为 `-O0` 提供相应编译器保持策略；或
+  2. LLVM/Clang 增加真正的 Shared opaque SSA 类型/约束，使 C++ wrapper 不再降低为普通 `i64` load/store。
+
+### 当前状态
+
+- **代码修复：未完成，未提交 PR。**
+- **LLVM fatal：保持不变。**
+- **标量板块：未修改。**
+- **普通 tile spill：未修改，Shared 不按 datatype-independent `S64` tile spill 处理。**
+- 之前追加到 LLVM #111 的更正评论仍然有效，但需补充说明：O0 也需要 Shared-aware 编译器支持，不能只改 TileOP wrapper。
+
+## 2026-09-24 继续复核 LLVM #111：未发现可安全提交的后端修复
+
+### 最终判定
+
+- LLVM issue：`LinxISA/llvm-project#111`。
+- 当前 `-O0` 的 `Shared register spill` 和 `-O1/-O2` 的 `Shared register copy` 均可稳定复现。
+- 这不是 LinxV5 硬件必须执行的 spill/copy，也不是 LLVM 在合法 Shared SSA 生命周期内错误插入的普通 copy。
+- 根因仍是 TileOP `SharedTile` 对象式 API：`=Sr` producer 通过 `handle_ref()` 把 Shared handle 降为普通 `unsigned long`/`i64` C++ 对象，形成 `Shared_ABS -> mixedgpr -> stack -> mixedgpr -> Shared_ABS` 桥接。
+
+### ISA/API 核验
+
+- `pto-spec/main@47d13583a3` 的 `B.IOS` 合同规定 Shared operand 是绝对 `S0..S63`，SizeCode=0 为 source，SizeCode=1..12 为 destination capacity；Shared 绑定通过 bundle header 完成，不提供 Shared MOVR/copy 或 Shared spill/reload。
+- 因此不能把 Shared ID 当普通整数写内存、通过普通 C++ ABI 传递，不能伪造 `MOVR/ORI`，也不能把 Shared spill 改成普通 `S64` 或普通 tile spill。
+- 直接 Shared SSA producer/consumer 可生成合法 `B.IOS`，证明 spill/copy 不是硬件要求；当前 `SharedTile&` API 才是非法物化的来源。
+
+### LLVM 侧处置
+
+- 未修改标量寄存器板块。
+- 未修改普通 tile spill/reload 或 datatype/尺寸逻辑。
+- 未放宽 `copyPhysReg`、Shared spill/reload fatal，也未增加 O0 预分配 workaround；此前的 `S0..S63` FastRA 实验已撤销，无法解决对象 ABI 桥接。
+- 当前不提交 LLVM PR。继续改 LLVM 只会把非法 Shared copy/spill 变成可能生成但不符合 ISA 的汇编。
+
+### 验证
+
+- 已核对 LLVM 当前 Shared constraint/copy/spill 实现、TileOP `SharedTile::handle_ref()`、以及 `B.IOS`/`BSTART.TIMG2COL` ASL 合同。
+- 已有最小复现结果保持：`-O0` 触发 Shared spill；`-O1/-O2` 触发 Shared copy；直接 Shared SSA 形式在优化级别较高时可避免对象 `store i64`。
+- LLVM 工作区目标代码无遗留实验 diff；`git diff --check` 通过。
+
+### Issue 状态
+
+- LLVM #111 已有三条评论，最后一条已说明 O0 预分配实验失败、Shared-aware ABI/opaque SSA 才是完整修复方向；本轮没有重复发布评论。
+- 后续应在 TileOP/API 确认 Shared-aware producer/consumer 或编译器专用 opaque Shared SSA 方案后，再开 TileOP PR，并重新验证 `-O0/-O1/-O2`。
+
+### 工作区备忘
+
+- LLVM 当前只保留既有 `CODEX_HANDOFF.md` 修改及用户/历史未跟踪文件；未修改 `llvm/lib/Target/LinxV5`。
+- TileOP 隔离树：`/tmp/tileop-issue111`，分支 `fix/issue-111-shared-handle-lifetime`，无实际修复提交。
+- 标量无需修改；普通 tile spill 无需修改；Shared 不按 datatype-independent `S64` tile spill 处理。
+
+## 2026-09-24 — LLVM issue #111 Shared handle lifetime 修复闭环
+
+### Issue 处理记录
+
+- 仓库：`LinxISA/llvm-project`，issue #111：Shared `MOVR`/copy fatal 阻塞 SuperNPUBench `conv2d_img2col_dyn`。
+- 关联 TileOP 仓库：`LinxISA/Linx-TileOP-API`。
+- 结论：问题真实存在，但不是标量寄存器、普通 tile spill/reload 或 LLVM Shared copy 检查错误。
+
+### 根因核实
+
+- 原 `SharedTile` producer 使用 `=Sr` 写入普通 C++ `unsigned long` handle；LLVM IR 随后把 Shared 架构值物化为普通整数 ABI 对象。
+- `-O2` 出现 `Shared_ABS -> mixedgpr -> stack -> mixedgpr -> Shared_ABS`，`-O0` 还可能直接要求 Shared spill。
+- LinxV5 ISA 没有合法 Shared MOVR/copy，也没有 Shared spill；LLVM 的 fatal 是防止非法编码，不能放宽。
+- 硬件不要求发生 Shared spill/copy；此前 O0 预分配实验不能消除 C++ ABI bridge，因此撤销 LLVM workaround。
+- 标量板块、普通 tile spill/reload、Shared datatype-independent S64 spill 均不需要修改。
+
+### 修复
+
+- TileOP 分支：`fix/issue-111-shared-handle-lifetime`。
+- Commit：`edd2f49 fix(tileop): add explicit Shared slot API`。
+- PR：`LinxISA/Linx-TileOP-API#233`，已创建并等待门禁。
+- 新增 `SharedTileSlot<Slot, LocalTile>`：空 carrier，仅表达 `S0..S63`，无 `Handle`/`handle_ref()`。
+- 新增 `TLOAD_SLOT`、`TIMG2COL_SPART_SLOT`、`TMATMUL_SLOT`，producer/consumer 直接编码同一架构 Shared slot。
+- 新增 `Issue111SharedSlot.cpp` 和 `test_shared_slot_contract.py`，并更新 Shared 生命周期及 options 文档。
+- SuperNPUBench 原 benchmark 尚未迁移；旧 `SharedTile` 调用方不会被 TileOP PR 自动改写，后续需单独迁移 PR。
+
+### 验证
+
+- `python3 -m unittest test_shared_slot_contract test_v058_engine_contract`：`60/60` 通过。
+- `Issue111SharedSlot.cpp`：`-O0/-O1/-O2` 全部通过。
+- 三档汇编均直接使用 `S0`/`S1` 发布和消费，无 Shared copy、`MOVR`、spill 或 reload。
+- TileOP 完整 object gate：新增 fixture 通过；整体为 `58 passed / 41 failed`，失败集中在当前仓库既有 retired-operation、旧合同和基线不兼容 fixture，不由本次 slot API 引入。
+- `python3 -m unittest discover -p 'test_*.py'`：已有 `test_weight_tload_contract` 基线合同断言失败；其断言扫描范围与当前旧 TLOAD 文本拼写不一致，本次未修改无关合同。
+- LLVM issue 已追加最终评论：`https://github.com/LinxISA/llvm-project/issues/111#issuecomment-5815856506`。
+
+### 工作区备忘
+
+- TileOP worktree：`/tmp/tileop-issue111`，分支已推送到 `origin/fix/issue-111-shared-handle-lifetime`。
+- LLVM 安装树已同步 `/tmp/tileop-issue111/include` 到 `/home/zhuwei/linx-llvm/build/lib/clang/15.0.4/include/tileop-api/`，用于三档编译验证。
+- LLVM 源码未修改；`CODEX_HANDOFF.md` 为本次记录变更。其他 untracked 文件为用户既有工作区内容，不清理、不 reset。
+
+### 待办
+
+- 等待 TileOP PR #233 CI/自动合入。
+- 将 SuperNPUBench `conv2d_img2col_dyn.hpp` 正式迁移到 `SharedTileSlot` API，并用实际 benchmark 复测。
+- PR 合入后同步安装树并更新 LLVM #111 最终合入状态。
+
+### 2026-09-24 PR 状态更新
+
+- PR #233 已同步最新 `origin/linx@0295b56`，当前分支头为 `ace56bf`（merge commit）。
+- 同步后 `test_shared_slot_contract` + `test_v058_engine_contract`：`60/60` 通过；`Issue111SharedSlot` 的 `-O0/-O1/-O2` 全部通过。
+- PR 当前仍为 open，GitHub `mergeable_state=blocked`，等待合并基线后的 CI 重跑；尚未合入。
+
+## 2026-09-25 — PTO element-wise 前端框架初始骨架
+
+### 处理记录
+
+- 针对 TileOP API issue #228 的 0.59 element-wise C++ RFC，开始在 LLVM `dev-llvm15_56` 实现“借鉴 SIMT 控制流、但不使用 SIMT 硬件语义”的前端框架。
+- 当前实现仍是框架，不是完整的 `TPARTELEMENT`/pragma/TileOp lowering；RFC 所需 ISA、mask carrier 和 bundle schema 尚未冻结。
+
+### 实现
+
+- 新增 `llvm/lib/Target/LinxV5/LinxV5ElementwiseMask.cpp`。
+- 新增 opt-in 函数属性 `"linx.elementwise"`：仅对该属性函数运行框架 pass。
+- 复用 `LegacyDivergenceAnalysis` 判断 divergent branch，复用 `LoopInfo` 标记 loop header。
+- 为 element-wise 函数写入 `linx.elementwise.mask-model = "logical-i1"` 函数 metadata；为 divergent branch 写入 `linx.elementwise.branch` metadata，为 loop header 写入 `linx.elementwise.loop` metadata。
+- 对带 `__vec__` 或 `__mtc__` 属性的函数直接跳过，明确防止框架进入 SIMT 前端路径。
+- pass 已接入 `addPreISel()`，位置在 `StructurizeCFG` 与现有 `LinxV5AnnotateControlFlow` 之前；未复用 `blkv_if`/`blkv_flow`，未新增任何 SIMT 寄存器或指令。
+- 新增回归文件 `llvm/test/CodeGen/LinxV5/elementwise-mask-framework.ll`，使用 `-mcpu=janus` 验证普通路径汇编不出现 SIMT 寄存器/指令。
+
+### 验证
+
+- `ninja -C build LLVMLinxV5CodeGen -j4` 通过。
+- 最小 IR 经 `build/bin/llc -mtriple=linx64v5-unknown-linux-gnu -mcpu=janus -O2` 成功生成 Block 路径汇编，无 `v.`/`l.`、`ri*`、`vt#`、`vu#`、`vm#`、`vn#` 内容。
+- 当前框架只标注逻辑 mask contract；尚未生成 active-mask SSA，也未接入 GPR/Mask Tile carrier 或任何 PTO TileOp。
+
+### 工作区备忘
+
+- 本次新增/修改：`llvm/lib/Target/LinxV5/LinxV5ElementwiseMask.cpp`、`llvm/lib/Target/LinxV5/LinxV5.h`、`llvm/lib/Target/LinxV5/LinxV5TargetMachine.cpp`、`llvm/lib/Target/LinxV5/CMakeLists.txt`、`llvm/test/CodeGen/LinxV5/elementwise-mask-framework.ll`。
+- `CODEX_HANDOFF.md`、未跟踪临时文件和其他既有工作区内容未清理、未 reset。
+
+### 待办
+
+- 将 metadata-only contract 升级为显式逻辑 active-mask SSA 或目标 intrinsic；建议先支持 RowMajor、固定 `N <= 128`、单/双层 if/else、`TCMP/TADD/TSEL`，再实现 GPR mask binder。
+- 在 Clang 中把 `TPARTELEMENT` 和 `#pragma parallel for` 映射到 `linx.elementwise` 函数/region contract。
+- 在 ISA/NDF 冻结后实现 Mask Tile、`B.IOR` 扩展、gather/scatter 和 atomic lowering；保持 janus 路径不依赖 `FeatureSIMT`。
+
+## 2026-09-25 — element-wise mask carrier contract 扩展
+
+### 实现
+
+- 扩展 `LinxV5ElementwiseMask`：读取可选函数属性 `"linx.elementwise.lanes"`。
+- lane 数必须是正整数；不提供时仍保留 `logical-i1` 模型但不做 carrier 选择。
+- `lanes <= 128` 记录 `gpr-mask`，`lanes > 128` 记录 `mask-tile`；128 仅作为物理 carrier 边界，不代表编程模型上限。
+- `linx.elementwise.mask-model` metadata 现在包含逻辑模型、lane 数（若提供）和 carrier 名称。
+- divergent branch metadata 记录 `divergent` + `active-mask-operand`；loop header metadata 记录 `active-mask-phi` + `break-mask`，为后续显式 mask SSA lowering 保留 contract。
+- 仍不生成任何 `blkv_*`、SIMT register、SIMT instruction 或 PTO 物理 mask binder。
+
+### 验证
+
+- `ninja -C build LLVMLinxV5CodeGen -j4` 通过。
+- `llvm-lit -v llvm/test/CodeGen/LinxV5/elementwise-mask-framework.ll llvm/test/CodeGen/LinxV5/elementwise-mask-contract.ll`：2/2 通过。
+- `elementwise-mask-contract.ll` 覆盖 `128 -> gpr-mask` 和 `129 -> mask-tile` 两个边界输入；两条路径均使用 `-mcpu=janus`，汇编没有 SIMT 寄存器。
+
+### 当前边界
+
+- 当前分支条件必须在后续 Clang/IR contract 中明确表达为逐 lane predicate；普通标量 `i1` 不能直接当作 element-wise mask。
+- 当前 metadata 仍是后端内部 contract，不是最终的 `llvm.linx.ew.mask.*` intrinsic；下一步应先定义 active/and/andnot/merge 的逻辑 SSA 形状，再接 `TCMP/TADD/TSEL`。
+
+## 2026-09-25 — 可落地 element-wise mask algebra intrinsic
+
+### 实现
+
+- 在 `llvm/include/llvm/IR/IntrinsicsLinx.td` 新增实验性逻辑 mask intrinsic：
+  - `llvm.linx.experimental.ew.mask.splat`
+  - `llvm.linx.experimental.ew.mask.and`
+  - `llvm.linx.experimental.ew.mask.andnot`
+  - `llvm.linx.experimental.ew.mask.or`
+  - `llvm.linx.experimental.ew.mask.any`
+  - `llvm.linx.experimental.ew.mask.all`
+- 这些 intrinsic 只表达前端逻辑 mask SSA，不代表 SIMT 寄存器或硬件 mask 编码。
+- `LinxV5ElementwiseMask` 在指令选择前将其降级为普通 LLVM SSA：
+  - `splat` -> vector splat；
+  - `and/andnot/or` -> vector bitwise operations；
+  - `any/all` -> `vector.reduce.or/and`。
+- 降级要求 mask 是固定长度 `<N x i1>`；非 `i1` 或非 fixed vector 会触发明确 fatal diagnostic。
+- 该接口只在带有 `linx.elementwise` 属性的函数中参与当前 element-wise pipeline；没有引入任何 SIMT register、`blkv_*` intrinsic 或 PTO 物理 mask binder。
+
+### 验证
+
+- `ninja -C build LLVMLinxV5CodeGen -j4` 通过。
+- 由于修改 `IntrinsicsLinx.td`，相关 LLVMCore/CodeGen 依赖和 `llc` 已重新构建通过。
+- `llvm-lit -v llvm/test/CodeGen/LinxV5/elementwise-mask-framework.ll llvm/test/CodeGen/LinxV5/elementwise-mask-contract.ll llvm/test/CodeGen/LinxV5/elementwise-mask-intrinsics.ll`：3/3 通过。
+- 新增 `elementwise-mask-intrinsics.ll` 覆盖六种 mask algebra；最终 `janus` 汇编没有 intrinsic 残留，也没有 `ri*`/`vt#`/`vu#`/`vm#`/`vn#` 等 SIMT 寄存器。
+
+### 当前可用边界
+
+- 前端现在可以生成稳定的 `<N x i1>` 逻辑 mask SSA algebra，再由 LinxV5 pass 规范化；这部分不需要等待最终 PTO mask 编码。
+- 目前尚未把 mask 接到 `TCMP/TADD/TSEL` 的 PTO TileOp operand，也未实现 GPR mask binder、Mask Tile `B.IOT`、gather/scatter、atomic 或 Clang `TPARTELEMENT`/pragma 语法。
+- 普通标量 `i1` 分支仍不能直接视为逐 lane mask；需要前端显式生成 `<N x i1>` predicate 后再使用上述 intrinsic。
+- 具体测例到来后，下一步可围绕实际 Tile shape、predicate 来源、分支合流和目标 TileOp 逐项接通。
+
+## 2026-09-25 — provisional element-wise active-mask lowering
+
+### 实现
+
+- 不等待具体测例，继续实现了一版可运行的 provisional element-wise mask lowering。
+- 新增 `llvm.linx.experimental.ew.mask.select`，用于按逐 lane predicate 选择两个逻辑 mask。
+- `LinxV5ElementwiseMask` 现在在 ISel 前规范化完整 mask algebra：
+  - `splat`：生成 `<N x i1>` active/predicate mask；
+  - `and`：生成 then mask；
+  - `andnot`：生成 else mask；
+  - `or`：生成 merge mask；
+  - `select`：按 mask 组合两个 mask/value；
+  - `any/all`：生成 scalar 摘要。
+- 所有 mask 输入/输出均强制为 fixed `<N x i1>`；错误类型会触发明确 fatal diagnostic。
+- 新增 `llvm/test/CodeGen/LinxV5/elementwise-mask-provisional.ll`，覆盖 active → then/else → merge → select → any/all 的完整逻辑链。
+- 该 provisional lowering 仍只使用普通 LLVM SSA 和 vector operations，不把逻辑 mask 绑定到 SIMT 寄存器、`blkv_*` 或尚未冻结的 PTO B.IOR/B.IOT 编码。
+
+### 验证
+
+- `ninja -C build LLVMLinxV5CodeGen llc -j4` 通过；intrinsic 变更触发的 LLVMCore/CodeGen 依赖和 `llc` 已重新构建。
+- `llvm-lit -v llvm/test/CodeGen/LinxV5/elementwise-mask-framework.ll llvm/test/CodeGen/LinxV5/elementwise-mask-contract.ll llvm/test/CodeGen/LinxV5/elementwise-mask-intrinsics.ll llvm/test/CodeGen/LinxV5/elementwise-mask-provisional.ll`：4/4 通过。
+- `janus` 汇编无 `llvm.linx.experimental.ew.mask` 残留，无 `ri*`/`vt#`/`vu#`/`vm#`/`vn#` SIMT 寄存器。
+
+### 后续替换点
+
+- 当前 `mask.select` 的结果仍是普通 `<N x i1>` SSA；未来可在同一 intrinsic 位置接入 `TSEL` 或对应 masked TileOp。
+- 当前 `any/all` 使用 LLVM vector reduction；未来 GPR-mask 路径可替换为低/高 GPR 摘要，Mask Tile 路径可替换为 Mask Tile reduction。
+- 当前 active mask 由前端显式生成 `mask.splat(true)`；未来 Clang `TPARTELEMENT`/`parallel for` lowering 应自动生成 region entry mask、分支 mask 和 loop mask。
+- 当前 mask predicate 仍是逻辑 `<N x i1>`；gather/scatter、atomic、TileOp execution-mask binder 和寄存器分配仍待后续接入。
+
+## 2026-09-25 — LLVM #111 SharedTile CFG 生命周期最终实现
+
+### Issue 处理记录
+
+- 仓库：`LinxISA/llvm-project#111`；关联 TileOP API 为原有 `SharedTile` 对象式接口。
+- 现象：Shared producer 在分支中写入普通 C++ `unsigned long` 对象，汇合后再读取；LLVM 生成 `Shared -> GPR -> stack/object -> GPR -> Shared`，随后因 Shared copy/spill/reload 不支持而 fatal。
+
+### 根因核实
+
+- ISA 侧 Shared ID 不是普通整数 payload，不能生成 `MOVR/ORI`，也没有 Shared spill/reload 指令。
+- 标量寄存器板块、普通 Tile spill/reload 均不是根因，未修改。
+- TileOP 原 `SharedTile` API 保持不变；问题在 LLVM 将合法互斥 CFG 生命周期物化成 Shared/GPR 桥接。
+
+### 修复
+
+- 新增/完善 `LinxV5SharedCopyElim`：
+  - O0 FastRA 前：识别同一 frame object 的 Shared producer/store/load/consumer 桥接；在已证明的 CFG 模式下将多个 Shared virtual value 统一到同一 Shared physical register，删除 GPR/stack bridge。
+  - O1/O2 post-RA：仅删除已证明的单前驱物理 Shared↔GPR bridge；不生成 Shared copy、`MOVR` 或 `ORI`。
+  - 真实 Shared copy/spill/reload 仍保留 fatal，超过 Shared 资源或无法证明等价时不做改写。
+- `LinxV5TargetMachine`：O0 在 `PHIElimination`/`TwoAddressInstructionPass` 后运行 Shared bridge 消除；优化路径保留 post-fast-RA/post-rewrite 处理。
+- TileOP 仓不需要新增 `SharedTileSlot` 迁移，也不修改标量或普通 Tile spill 逻辑。
+
+### 验证
+
+- `ninja -C build clang llc -j2` 通过。
+- 裸 inline-asm Shared CFG 最小复现：`-O0/-O1/-O2` 全部通过。
+- LLVM lit：
+  - `llvm/test/CodeGen/LinxV5/v5-shared-phi-undef.ll`：PASS；
+  - `llvm/test/CodeGen/LinxV5/v5-shared-object-bridge.ll`：PASS。
+- 新增 O0 对象桥接 IR 回归，确认输出只保留 Shared producer/consumer，不含 `SDI`、`LDI` 或 Shared `COPY`。
+- TileOP 现有 `SharedTLoad.cpp` 直接编译仍受仓库既有 `TMOV.S2L.BROADCAST` numeric-code 约束影响；该失败与本 Shared bridge 修复无关。原始对象式 Shared producer/consumer 的 LLVM 核心路径已由独立最小复现覆盖。
+
+### 工作区备忘
+
+- LLVM 改动：`llvm/lib/Target/LinxV5/LinxV5SharedCopyElim.cpp`、`LinxV5TargetMachine.cpp`、两个 Shared CodeGen 回归测试。
+- 工作区原有其他 agent 改动未清理、未 reset；`CODEX_HANDOFF.md` 继续保持未提交。
+- TileOP `/tmp/tileop-issue111` 的 `SharedTileSlot` PR #233 不应作为最终架构修复；原对象式 API 现在由 LLVM 侧支持。
+
+### 待办
+
+- 外部推送 LLVM 分支前需确认；TileOP PR #233 应关闭或追加更正说明，避免把 slot API 误认为最终修复。
+- 推送后在 LLVM #111 回复最终实现、回归结果及“标量/普通 Tile spill 未修改”的边界说明。
+
+## 2026-09-25 — LLVM #111 真实 benchmark 根因更正与 TileOP 修复
+
+### Issue 处理记录
+
+- Issue：`LinxISA/llvm-project#111`，真实复现为 `SuperNPUBench` commit `5da6474fa8cd108e09d587ced65d8f60bac9cf0e` 的 `conv2d_img2col_dyn<32,64,16>`。
+- 现象：`TIMG2COL_SPART` 通过真实 C++ 函数调用传递 `SharedTile&`，后端将 Shared 句柄物化为 GPR，再生成非法 Shared copy；O2 在 Post-RA 失败。
+
+### 根因核实
+
+- `SharedTile` 是架构 Shared 寄存器句柄，不能通过普通 C++ ABI 传递。
+- `TIMG2COL_SPART` 是 Shared producer，但此前漏写 `PTO_SHARED_INLINE`；因此生成了 `_Z14TIMG2COL_SPART...` 的 `PseudoCALL`，调用边界触发 `Shared -> GPR -> Shared` 桥接。
+- 该根因与普通标量寄存器无关，也不是普通 Tile spill/reload 的尺寸问题。
+
+### 修复
+
+- TileOP `include/jcore/template_asm.hpp`：将 `TIMG2COL_SPART` 改为 `PTO_SHARED_INLINE`，使 `B.IOS ->S<slot>` 直接在调用点展开。
+- TileOP `docs/block/TIMG2COL.md`：明确 SharedTile 不得跨普通 C++ ABI，接口必须强制内联。
+- 已同步到 LLVM 编译器安装树：`build/lib/clang/15.0.4/include/tileop-api/jcore/template_asm.hpp`。
+- 未修改标量寄存器分配、普通 Tile spill/reload，也未引入 Shared S64 spill、MOVR、ORI 或 SIMT fallback。
+
+### 验证
+
+- 真实 benchmark O2 编译通过，目标对象不再包含 `TIMG2COL_SPART` 函数调用符号；反汇编直接出现 `BSTART.TIMG2COL`、`B.IOS ->S0<8KB>`、`B.IOS ->S1<2KB>` 与 `TMATMUL`。
+- 反汇编未发现 `MOVR`、`ORI`、spill/reload 或 Shared bridge copy。
+- Makefile 完整流程仍会在后续宿主 `x86_64` runtime 编译阶段失败，因为 Linx clang 不支持该宿主 target；这不是 kernel 编译失败。
+- O0 仍可能因 Shared 活跃区间确实需要 spill 而失败；这是当前 ISA 约束下的预期保护，不应改成 datatype-independent S64 spill。普通 Tile spill 逻辑保持不变。
+
+### 当前状态与待办
+
+- LLVM #111 的 O2 真实 benchmark 根因已修复；最小 CFG bridge 回归继续通过。
+- 不能据此宣称所有 O0 Shared 跨控制流场景都已支持；发生真实 Shared copy/spill/reload 时仍应报错。
+- TileOP 工作区改动待在 `LinxISA/Linx-TileOP-API` 分支提交并创建 PR；LLVM 侧现有未提交改动仍需与本次修复分开审核。
+
+## 2026-09-25 — LLVM #111 TileOP PR 与 issue 同步完成
+
+- TileOP 修复分支：`fix/issue-111-timg2col-spart-inline`。
+- 提交：`ce8d316 fix(shared): inline TIMG2COL_SPART handle path`。
+- PR：`LinxISA/Linx-TileOP-API#234`，当前状态 `open`，`mergeable=true`，等待 CI；PR 已修正为只包含 `docs/block/TIMG2COL.md` 和 `include/jcore/template_asm.hpp`，未带入其他历史提交。
+- LLVM #111 已追加最终复核评论：`issuecomment-5835306488`。评论明确 O2 指定 benchmark 已通过，但 O0 真实 Shared spill 仍按 ISA 约束拒绝，因此 issue 暂不关闭。
+- 当前未执行 merge；需等待 PR #234 CI 通过并确认消费分支回归后再关闭 LLVM #111。
+
+## 2026-09-26 — PTO-SPEC PR #352 ExecutionMask 方案评估
+
+### 评估对象
+
+- PR：`PTO-ISA/pto-spec#352`，标题 `spec: add Local CUBE ExecutionMask carriers and predication (#277, #349)`。
+- PR head：`fab866661dccd89e9e47bad10465cd89ce0e3347`；本地 `/tmp/pto-spec-current` 仍在 `47d13583a`，未将 PR 分支合入本地规范树。
+
+### 核心结论
+
+- PR #352 的 ExecutionMask contract 适合作为 PTO 物理后端依据：显式 mask 可使用既有 Predicate-GPR 或 U8 PredicateCell Tile，不引入新的 predicate register file；mask 在 bundle 中显式绑定，并在可能与比较目标重叠时先 snapshot；inactive lane 支持 MERGE/ZERO；`PredInv`/`Zero` 由 B.DATR 控制。
+- 但它不是 RFC #228 所描述的通用 element-wise 编程模型。PR #352 将 ExecutionMask 限制在已经合法的 Local `CUBE_M16/CUBE_M32` 形式，不新增 RowMajor 适用性；GPR carrier 也要求 CUBE layout 和其容量/位序合同。TGATHER/TSCATTER/TTRI 等仍不适用。
+- 因此 LLVM 前端的逻辑 `<N x i1>` mask 不能直接当作物理 GPR 或 PredicateCell。必须增加 layout/shape-aware physical carrier lowering；不支持的 RowMajor、任意 N、CUBE shape 或 operation schema 必须给出诊断或回退到尚未实现的路径。
+
+### 关键位序差异
+
+- PR #352 的 CUBE GPR mask 坐标为 `packed_index = row + column * rows`；M16 使用 16 行，M32 使用 32 行，低/高两个 64-bit word 覆盖最多 128 bit。
+- PredicateCell mask 使用逻辑稠密位序 `row * ValidCols + column`，再从 PredicateCell payload 取 bit 0。
+- 这与 RFC #228 早期宣称的布局无关 `lane = row * ValidCols + column` 不同；CUBE GPR 路径必须做显式 logical-to-CUBE packing，不能直接 bitcast 当前 `<N x i1>`。
+
+### 对当前 LLVM provisional 实现的影响
+
+- 当前 `LinxV5ElementwiseMask` 把 mask algebra 过早降级为普通 LLVM vector `and/or/select/reduce`，这对逻辑 contract 测试可用，但会丢失未来 TileOp execution-mask operand 身份。
+- 下一步接 PR #352 时，应保留 target-aware mask SSA 到 TileOp lowering 边界；至少为 `TCMP/TCMPS/TSEL/TSELS` 和支持的 CUBE TileOp 建立独立 execution-mask operand，再按 `CUBE GPR` 或 `PredicateCell` 选择物理 schema。
+- 建议先实现 CUBE_M16/M32 + GPR carrier + `PredInv=0/Zero=0` 的最小闭环，再加入 MERGE/ZERO、PredicateCell 和双 GPR packing；RowMajor 与任意 N 不应在没有 ISA contract 的情况下伪造支持。
+
+## 2026-09-26 — PR #352 CUBE GPR packing provisional implementation
+
+### 实现
+
+- `IntrinsicsLinx.td` 新增两个逻辑到物理 carrier 的 provisional intrinsic：
+  - `llvm.linx.experimental.ew.mask.pack.gpr.low`
+  - `llvm.linx.experimental.ew.mask.pack.gpr.high`
+- intrinsic 接口为：`(<N x i1> mask, i64 valid_rows, i64 valid_cols, i1 is_m32) -> i64`。
+- `LinxV5ElementwiseMask` 在 ISel 前将 intrinsic 降为普通 LLVM `i64` SSA，避免当前阶段伪造真实 `B.IOR` 编码。
+- 输入索引保持逻辑 PredicateCell/RFC mask 顺序：`logical_index = row * valid_cols + column`。
+- 输出 bit 按 PR #352 CUBE GPR contract 打包：`cube_bit = row + column * rows`；`rows` 为 M16 的 16 或 M32 的 32；low/high intrinsic 分别覆盖 bit `[0,63]` 与 `[64,127]`。
+
+### 合法性边界
+
+- 仅接受 fixed `<N x i1>` mask。
+- `valid_rows`、`valid_cols` 必须是正的编译期 i16-sized 常量。
+- `is_m32` 必须是编译期常量；当前只支持 CUBE_M16/CUBE_M32。
+- 拒绝超过物理 carrier 容量、超过有效行数或超过逻辑 mask 长度的请求。
+- 当前实现不支持 RowMajor、任意 N 的隐式映射、PredicateCell 分配、真实 `B.IOR/B.IOT` emission，也不处理 gather/scatter/atomic execution mask。
+
+### 验证
+
+- `ninja -C build LLVMLinxV5CodeGen -j4` 通过。
+- 因 intrinsic TableGen 变更，重新构建 `ninja -C build llc -j4` 通过。
+- 新增 `llvm/test/CodeGen/LinxV5/elementwise-mask-gpr-pack.ll`，覆盖 CUBE_M16 `(2,3)` 和 CUBE_M32 `(4,2)` 的 low/high packing；测试通过。
+- element-wise 相关回归共 5/5 通过：framework、contract、logical intrinsics、provisional active mask、GPR packing。
+- `-mcpu=janus` 输出未观察到 `llvm.linx.experimental.ew.mask` 残留或 `ri*`/`vt#`/`vu#`/`vm#`/`vn#` SIMT 路径。
+
+### 后续接入顺序
+
+1. 保留 mask SSA 身份并为 `TCMP/TCMPS/TSEL/TSELS` 建立真实 execution-mask operand。
+2. 将 low/high GPR packing 接到合法 CUBE TileOp 的 `B.IOR` binding，而不是继续停留在普通 `i64` SSA。
+3. 接入 `PredInv=0`、`Zero=0` 的最小 masked TileOp 闭环，再实现 MERGE/ZERO。
+4. 增加 PredicateCell carrier 和 `B.IOT` source stream。
+5. 最后接 Clang `TPARTELEMENT`/`parallel for` 前端生成以及其他受规范支持的 masked operations。
+
+## 2026-09-26 — Provisional CUBE execution-mask B.IOR binding
+
+### 实现
+
+- 新增实验性 intrinsic：
+  - `llvm.linx.experimental.ew.cube.matmul.masked`
+  - 参数：`M/N/K`、A/B dtype、两个 Local tile、GPR mask low/high。
+- 新增独立 `BLK_MATMUL_MASKED` SelectionDAG 节点和
+  `PseudoMAMULB_Masked_SizeI` CUBE pseudo；普通 `llvm.linx.blk.matmul` ABI 和 pseudo 未修改。
+- masked pseudo 在 MC 层展开为：
+  1. `BSTART.CUBE TMATMUL`
+  2. 现有 CUBE `B.FPATR`
+  3. 普通 Local Tile `B.IOT`
+  4. 两个 mask GPR 通过 `B.IOR` 绑定
+  5. 现有 `B.DIM`。
+- 当前复用现有 GPR source 通道，仅验证 Predicate-GPR carrier binding；没有伪造独立 predicate register file。
+
+### 设计边界
+
+- `B.IOR` 的低/高 mask word 当前作为显式 GPR source，由后端分配到普通 GPR 并在 MC 展开绑定。
+- 当前 B.IOT 仍使用 `PE_MASK=1111`；PR #352 的 `PredInv`、`Zero=0`、inactive-lane MERGE/ZERO 尚未编码。
+- 当前没有真实 `B.DATR` execution-mask 字段、PredicateCell `B.IOT` stream、snapshot/alias analysis 或 destination merge binding。
+- 该路径仅是 CUBE/M16/M32 GPR carrier 的最小 binding 骨架，不应宣称已经完成 PR #352 全部 predication contract。
+
+### 验证
+
+- 新增 `llvm/test/CodeGen/LinxV5/elementwise-mask-cube-matmul.ll`。
+- 实际反汇编确认 masked CUBE bundle 出现：
+  - `BSTART.CUBE TMATMUL`
+  - `B.FPATR`
+  - `B.IOT`
+  - `B.IOR [a2, a3], []`
+- element-wise 相关回归共 6/6 通过：原有 5 个测试加 masked CUBE B.IOR binding。
+- `-mcpu=janus` 未进入 `v.`/`l.` 或 `ri*`/`vt#`/`vu#`/`vm#`/`vn#` SIMT 路径。
+
+### 后续
+
+1. 将 mask binding 从“B.IOT 后追加 B.IOR”提升为规范要求的 bundle carrier snapshot/binding 顺序。
+2. 为 masked CUBE pseudo 增加 layout/shape contract，仅允许合法 CUBE_M16/M32。
+3. 接入 B.DATR `PredInv` 和 `Zero`，并明确 inactive-lane MERGE/ZERO destination 语义。
+4. 增加 PredicateCell carrier 与真实 `B.IOT` source stream。
+
+## 2026-09-27 — Provisional CUBE execution-mask B.DATR controls
+
+### 实现
+
+- 为 masked CUBE pseudo 增加 codegen-specific 的 `BDATR_EXEC_MASK` 指令变体，复用现有 `B.DATR` 编码格式，避免修改普通 `BDATR` 的既有 ABI。
+- `PredInv` 编码到 bit 14，`Zero` 编码到 bit 13，bit 12 保持为 0。
+- `PseudoMAMULB_Masked_SizeI` 的 MC 展开顺序现在为：
+  1. `BSTART.CUBE TMATMUL`
+  2. execution-mask `B.DATR`
+  3. `B.FPATR`
+  4. `B.IOT`
+  5. `B.IOR [mask_low, mask_high], []`
+- 当前根据静态 `M` 选择 provisional CUBE layout：`M=16` 使用 `CUBE_M16`，`M=32` 使用 `CUBE_M32`；`PredInv`/`Zero` 从 intrinsic 的编译期参数传入 machine pseudo。
+- `BDATR_EXEC_MASK` 已加入解码/打印表，避免目标反汇编显示为 `<unknown>`。
+
+### 验证
+
+- `ninja -C build llc -j4` 通过。
+- `ninja -C build llvm-objdump -j4` 通过。
+- `elementwise-mask-cube-matmul.ll` 通过，反汇编确认 `BSTART.CUBE -> B.DATR -> B.FPATR -> B.IOT -> B.IOR` 顺序。
+- element-wise 相关回归共 6/6 通过：framework、contract、logical intrinsics、provisional active mask、GPR packing、masked CUBE binding。
+- `-mcpu=janus` 输出未观察到 `v.`/`l.`、`ri*`、`vt#`、`vu#`、`vm#` 或 `vn#` SIMT 路径。
+
+### 当前边界
+
+- 这是 PR #352 的控制字段和 bundle 顺序骨架，不等于完整 predication 语义已经实现。
+- 尚未实现 inactive lane 的真实 MERGE/ZERO destination 行为；`Zero` 当前只完成字段传递和编码。
+- 尚未实现 `PredicateCell` carrier、mask snapshot/alias analysis、动态 shape legality，以及严格的 `CUBE_M16/CUBE_M32` layout/valid-shape 校验。
+- 当前 `B.IOR` 仍绑定两个 Predicate-GPR mask word，`B.IOT` 仍使用现有 `PE_MASK=1111`；后续应按 PR #352 将 carrier 与实际受支持的 Local CUBE TileOp schema 对齐。
+
+## 2026-09-27 — PR #352 GPR carrier legality and ExecMaskPresent
+
+### 实现
+
+- masked CUBE lowering 现在在 SelectionDAG 边界强制检查：
+  - `M` 必须是 `16` 或 `32`，对应 `CUBE_M16/CUBE_M32`；
+  - `N/K` 必须是正的编译期常量；
+  - `PredInv` 和 `Zero` 必须是 `0/1` 编译期常量；
+  - `PredInv/Zero` 显式降为 target immediate，避免在 machine pseudo 中退化成 GPR。
+- MC emitter 增加二次防御检查，拒绝非立即数或非法控制值。
+- `BDATR_EXEC_MASK` 的实际编码已验证：
+  - `PredInv` → bit 14；
+  - `Zero` → bit 13；
+  - bit 12 固定为 0。
+- 新增 `B_IOR_EXEC_MASK` 编码变体，复用 B.IOR 结构并将 PR #352 的 `ExecMaskPresent` 置于 bit 26；普通 `B_IO/B.IOR` 编码不变。
+- masked CUBE bundle 当前输出顺序为：
+  `BSTART.CUBE → B.DATR.EXEC_MASK → B.FPATR → B.IOT → B.IOR.EXEC_MASK`。
+
+### 测试
+
+- `elementwise-mask-cube-matmul.ll` 增加 `M=32`、`PredInv=1`、`Zero=1` 覆盖。
+- 新增 `elementwise-mask-cube-matmul-invalid.ll`，验证非法 `M=8` 在 lowering 阶段拒绝。
+- `ninja -C build llc llvm-objdump -j4` 通过。
+- element-wise 相关回归共 `7/7` 通过。
+- 实际反汇编确认：
+  - `B.DATR.EXEC_MASK CUBE_M16 ..., 0, 0`；
+  - `B.DATR.EXEC_MASK CUBE_M32 ..., 1, 1`；
+  - `B.IOR.EXEC_MASK [mask_low, mask_high, zero], [zero]`。
+
+### 当前边界
+
+- `B.IOR.EXEC_MASK` 已表达最终 GPR carrier 记录标志，但当前仍固定发两个 mask word；后续需要根据 `word_count` 选择一个或两个 word，并按完整 B.IOR source-role schema 处理余位。
+- 当前 masked intrinsic 没有显式 merge-base tile operand，因此 `Zero=0` 尚未实现真实 inactive-lane MERGE；`Zero=1` 也只是编码控制字段，尚未实现实际 zero destination semantics。
+- 尚未接入 PredicateCell carrier、snapshot/alias analysis，以及目标 operation 的完整 Local source schema。
+- 当前 shape 合法性已覆盖 `M16/M32` 和正维度，但还需要把 operand tile 的 layout/valid rows/valid columns/data type 与 PR #352 的 GPR carrier capacity 合同连接起来。
+
+## 2026-09-28 — TileOP API issue #235 与 element-if 对齐核查
+
+### Issue 判定
+
+- Issue：`LinxISA/Linx-TileOP-API#235`，标题为 `为 Local CUBE TileOp 增加 GPR / PredicateCell ExecutionMask API`。
+- Issue #235 明确以已合入 PTO-SPEC PR #352 的 Local CUBE ExecutionMask 为准，替代旧 RFC #228 中的 `B.IOR.P`、packed-i1 `MaskTile`、mask stack 等方案。
+- 该 issue 与当前 element-if 的底层需求一致：element-if 需要把逻辑 `<N x i1>` 条件转成显式 ExecutionMask，并在 masked operation 上表达 `PredInv`、`MERGE/ZERO`、GPR 或 PredicateCell carrier。
+- 但 #235 不是 element-if 前端语法、reconvergence 或 `parallel for` 编程模型；这些仍应在低层 carrier API 之上单独设计。
+
+### 与当前 LLVM element-wise 实现的对应关系
+
+- 已有逻辑 mask algebra、divergent branch/loop metadata、CUBE GPR low/high packing 和 masked CUBE pseudo，可以作为 #235 的 compiler-side prototype。
+- 当前已实现的 `B.DATR.EXEC_MASK`、`B.IOR.EXEC_MASK` 与 issue 要求的 `PredInv/Zero`、`ExecMaskPresent` 方向一致。
+- 当前实现仍不符合 #235 的完整 contract：
+  - GPR word count 仍固定为两个，没有按 operation dtype、CUBE layout、valid shape 和 `TPACK/TUNPACK` 坐标合同选择一或两个 word；
+  - `B.IOR.EXEC_MASK` 目前是后端专用变体，尚未完整处理最多两条连续 B.IOR、operation-owned GPR 输入跨记录及最终记录标志；
+  - 没有 PredicateCell carrier，也没有把 PredicateCell 作为 operation-owned Tile source 之后的最后一个逻辑 B.IOT source；
+  - 没有 mask snapshot/alias analysis；
+  - `Zero=0` 没有显式 merge-base tile，`Zero=1` 也尚未实现真实 inactive destination 更新；
+  - 尚未覆盖 #235 要求的 eligible operation closure，当前仅有 masked CUBE matmul prototype。
+
+### 实现路线结论
+
+1. 先在 TileOP API/LLVM lowering 之间定义强类型 ExecutionMask carrier：GPR one/two-word 与 PredicateCell 互斥，不能与 scalar、PE mask、operation predicate 混用。
+2. 把 operation-owned GPR/Tile operands 与 ExecutionMask carrier 分离，统一由 bundle helper 计算 B.IOR/B.IOT record 顺序和最终标志。
+3. 在静态 shape 可知时根据 PTO-SPEC carrier helper 计算 word count；不能用固定 32/64/128 lane 规则替代 dtype/layout/shape 合同。
+4. 先支持一个小的已验证 eligible CUBE operation 子集，再扩展到 #235 要求的 operation closure；RowMajor、Shared、CUBE_N8、TGATHER/TSCATTER/TTRI 等必须继续拒绝。
+5. 只有在低层 carrier、MERGE/ZERO、snapshot 和 fault suppression 语义稳定后，才把 element-if 前端 CFG/mask 生成接入这些 API。
+
+### 核查依据
+
+- Issue #235：`LinxISA/Linx-TileOP-API#235`。
+- PTO-SPEC PR #352 合并提交：`7b8b9a7987c42e7d96a8ba36002505258e0b6d4c`。
+- 本地规范文件：`/tmp/pr352-execution-mask.asl`、`/tmp/pr352-execution-mask-state.asl`、`/tmp/pr352-execution-mask-schema.asl`、`/tmp/pr352-B.DATR.asl`、`/tmp/pr352-B.IOR.asl`、`/tmp/pr352-B.IOT.asl`。
+
+## 2026-09-28 — Issue #235 第一阶段：GPR ExecutionMask + TADD 最小闭环
+
+### Issue 处理记录
+
+- 目标：先实现 `LinxISA/Linx-TileOP-API#235` 的低层 ExecutionMask carrier，为后续完整 element-if 前端提供稳定 bundle 合同。
+- 本阶段选择 Local `CUBE_M16/CUBE_M32` 的 TEPL `TADD` 作为首个 eligible operation 验证点。
+
+### 实现
+
+- LLVM MC 新增 PR #352 字段编码支持：
+  - 扩展 canonical `B.DATR`，编码 `PredInv` bit 14 与 `Zero` bit 13；
+  - 扩展 canonical `B.IOR [...], ExecMaskPresent`，编码 bit 26；
+  - 保持普通 `B.IOR` bit 26 为零，不新增 ISA mnemonic。
+- TileOP 新增 `common/execution_mask.hpp`：
+  - `predicate::InactivePolicy::{Merge,Zero}`；
+  - one-word/two-word `GPRExecutionMask`；
+  - `predicate::gpr<Policy, Invert>(...)` 构造接口。
+- `TADD` 新增强类型 GPR ExecutionMask overload，当前约束为静态 valid shape 的 Local `CUBE_M16/CUBE_M32`。
+- 已加入规范驱动的编译期 carrier 校验：非 8-bit CUBE 使用 one-word，8-bit CUBE 使用 two-word；valid rows/columns 受 layout/dtype field capacity 约束。
+- bundle 顺序为 `BSTART.TEPL -> B.DATR -> B.DIM -> B.IOT -> B.IOR(...ExecMaskPresent)`。
+- 文档已更新 `TADD.md` 与 `options.md`，明确该能力属于 PTO 0.59 draft，不修改正式版本号。
+
+### 验证
+
+- LLVM MC：`llvm/test/MC/LinxV5/execution-mask-carriers.s`，1/1 PASS。
+- TileOP 汇编回归：`test/tileop_api/verify_execution_mask_tadd.sh` PASS。
+- 最小 C++ 测例：`test/tileop_api/src/ExecutionMaskTAdd.cpp` 同时生成：
+  - one-word Merge：`B.DATR ... 0, 0` + `B.IOR [low,zero,zero], ExecMaskPresent`；
+  - two-word Zero+Invert：`B.DATR ... 1, 1` + `B.IOR [low,high,zero], ExecMaskPresent`。
+- TileOP contract：`python3 -m unittest test_v058_engine_contract`，56/56 PASS。
+- 修正后的最小测例使用合法坐标：FP32 `CUBE_M16` 的 2 列 one-word，以及 U8 `CUBE_M16` 的 8 列 two-word。
+
+### 尚未完成
+
+- `Merge` 当前通过 read/write destination operand表达编译器数据依赖，但还需按 PR #352 完成并验证真实 merge-base/snapshot/alias 语义。
+- 尚未实现 PredicateCell carrier、operation-owned GPR 拼接、多 record 最终标志规则和完整 eligible-operation closure。
+- 尚未把 LLVM logical element-if mask SSA 接到该 TileOP API；现有 masked `TMATMUL` 仍只是独立 prototype，不应视为 #235 最终 operation 支持。
+
+### 下一步顺序
+
+1. 抽取共享 masked-bundle helper，扩展同构 TEPL binary eligible operations。
+2. 按规范实现 dtype/layout/shape 驱动的 one/two-word 校验与 operation-owned GPR 顺序。
+3. 实现 PredicateCell 最后逻辑 `B.IOT` source、snapshot 与 carrier 互斥。
+4. 完成 MERGE/ZERO destination 和 fault/effect suppression 语义。
+5. 将 element-if 前端 mask SSA lowering 接入上述 carrier，并增加可编译最小 element-if 测例。
+
+## 2026-09-28 — Issue #235 第二阶段：同构 TEPL binary ExecutionMask 扩展
+
+### 实现
+
+- 抽取共享 `pto_execution_mask::emit_binary<Opcode>` emitter，统一生成：
+  `BSTART.TEPL -> B.DATR -> B.DIM -> B.IOT -> B.IOR [...], ExecMaskPresent`。
+- 首批接入 12 个 binary TEPL operation：
+  `TADD/TSUB/TMUL/TDIV/TREM/TAND/TOR/TXOR/TSHL/TSHR/TMAX/TMIN`。
+- `execution_mask.hpp` 增加规范驱动的静态检查：
+  - `CUBE_M16/M32` 与静态 valid shape；
+  - 非 8-bit CUBE 使用 one-word，8-bit CUBE 使用 two-word；
+  - valid rows/columns 受 layout/dtype field capacity 限制；
+  - carrier word count 必须与 tile dtype/layout 匹配。
+- 11 个 operation usage 页面及 `options.md` 已同步更新，明确为 PTO 0.59 draft。
+
+### 验证
+
+- `verify_execution_mask_tadd.sh` PASS，覆盖 one-word Merge、two-word U8 Zero+Invert、plain TADD，以及 11 个 binary opcode。
+- `python3 -m unittest test_v058_engine_contract`：56/56 PASS。
+- LLVM MC `execution-mask-carriers.s`：1/1 PASS。
+- 负向编译验证通过：FP32 two-word、U8 one-word、FP32 超 field-capacity columns 均被拒绝。
+
+### 当前边界
+
+- 仍未实现 PredicateCell carrier、operation-owned GPR 多 record 合同、snapshot/alias、真实 MERGE destination base 与 fault/effect suppression。
+- binary family 当前仅复用了 Local CUBE 静态 shape 的低层发射；不等同于完整 91-op closure。
+- 下一步优先实现 PredicateCell 最后 `B.IOT` source 与 carrier 互斥，再接入 LLVM element-if mask SSA lowering。
+
+## 2026-09-28 — Issue #235 第三阶段：PredicateCell carrier 与 element-if 前端现状
+
+### 实现
+
+- `include/common/execution_mask.hpp` 增加强类型 `predicate::PredicateCell<BasisTile>`，其底层为 canonical U8 Local CUBE carrier；普通 numeric U8 Tile 不能伪装成 PredicateCell。
+- 增加 `predicate::predicate_cell<Policy, Invert>(cell)`，与 GPR ExecutionMask 形成互斥的强类型 carrier API。
+- binary TEPL masked emitter 支持 PredicateCell：operation-owned sources 先编码，PredicateCell 作为最后一个逻辑 `B.IOT` source，随后写 destination；该路径不追加 `B.IOR`。
+- PredicateCell consumer 兼容性按 CUBE layout、`ValidRow`、`ValidCol` 判断，不要求 producer basis dtype 与 consumer dtype 相同，符合规范中 carrier 与 operation dtype 解耦的要求。
+- PredicateCell basis 限制为非 boxed、Local VEC、静态 valid shape 的 `CUBE_M16/CUBE_M32`。
+- `TCMP -> PredicateCell -> TADD/TAND` 最小链路已加入测试；同时覆盖跨 dtype consumer 和 `PredInv`。
+
+### 验证
+
+- `test/tileop_api/verify_execution_mask_tadd.sh`：PASS。
+- `cd /home/zhuwei/linx-BLK-build/src/Linx-TileOP-API/test && python3 -m unittest test_v058_engine_contract`：56/56 PASS。
+- LLVM element-wise mask 相关测试：5/5 PASS，包含 logical mask intrinsic algebra、GPR pack、elementwise 分支合同和 MC carrier 编码。
+- 编译器安装树已同步 `execution_mask.hpp`、`pto_tileop.hpp`、`template_asm.hpp`。
+
+### 重要边界
+
+- 当前 LLVM `LinxV5ElementwiseMask` 已接入 target pipeline，能将 element-wise mask intrinsic 降为逻辑 `<N x i1>` 运算、标记 divergent branch/loop，并选择 logical-i1、GPR-mask 或 mask-tile 模型；它还没有把 LLVM mask SSA 自动生成 TileOP C++ `ExecutionMask` 调用，也没有完成真实 PredicateCell/GPR carrier machine lowering。
+- `TCMPS` 现有实现仍发射保留 TEPL function code `45`，本次未把该独立问题混入 #235 回归；因此当前新增 PredicateCell 测试使用 `TCMP`。
+- `Merge` 仍只表达 compiler read/write dependency，真实 merge-base capture、snapshot、alias 以及 inactive lane fault/effect suppression 尚未完成。
+- 完整 91-op eligible closure、`TCVT`/`TSEL`/load-store/gather-scatter/CAS 等特殊 schema 尚未接入共享 masked-bundle helper。
+- 当前工作区包含用户既有 LLVM 原型和未跟踪文件；没有执行 reset、清理、commit、push 或覆盖无关改动。
+
+### 后续顺序
+
+1. 先实现 operation-level snapshot/alias 与显式 merge-base 合同。
+2. 抽取 PredicateCell/GPR 共用的 masked bundle schema，补 carrier 互斥和多 record 最终标志规则。
+3. 按规范逐族扩展 `TCVT`、`TSEL/TSELS`、`TLOAD/TSTORE`、`TGATHER/TSCATTER` 和特殊 atomic schema。
+4. 将 LLVM logical element-if mask SSA 接到真实 carrier lowering，补一个从 element-if IR 到可验证 `B.DATR`/`B.IOR` 或最后 PredicateCell `B.IOT` 的最小测例。
+
+## 2026-09-28 — Issue #238 P4 最小闭环：PredicateCell boolean element-if
+
+### 实现
+
+- 为静态 Local CUBE 域增加 masked `TEXPANDS` PredicateCell carrier overload：scalar 是
+  operation-owned GPR，PredicateCell 是最后逻辑 Tile source，ZERO/PredInv 由 B.DATR
+  表达。
+- 增加 masked `TCMPS` PredicateCell carrier overload：numeric source 在前，ExecutionMask
+  PredicateCell 是最后逻辑 source，结果发布为新的 canonical PredicateCell。
+- 新增 `exec::predicate_element_if(active, condition, then_fn, else_fn)`，按 RFC #238 的
+  合法两步序列生成：
+  - `then_tmp = TEXPANDS(U8 1, mask=condition, ZERO)`；
+  - `else_tmp = TEXPANDS(U8 1, mask=invert(condition), ZERO)`；
+  - `then_active = TCMPS.NE(then_tmp, 0, mask=active, ZERO)`；
+  - `else_active = TCMPS.NE(else_tmp, 0, mask=active, ZERO)`。
+- then/else callback 得到真实强类型 PredicateCell，可继续作为 binary TEPL ExecutionMask；
+  不依赖 PredicateCell any/all、GPR conversion 或硬件 mask stack。
+
+### 验证
+
+- 最小 C++ 测例 `execution_mask_predicate_element_if` 编译成功，汇编包含两条 masked
+  `TEXPANDS`、两条 masked `TCMPS`，以及 then=`TADD`、else=`TSUB` 的最后-source
+  PredicateCell binding。
+- `verify_execution_mask_tadd.sh`：PASS。
+- TileOP contract：56/56 PASS。
+- LLVM MC/element-wise focused tests：7/7 PASS，其中 `TCMPS` 和 `TEXPANDS` selector
+  object round-trip 已在重建当前 `llvm-mc`/`clang` 后验证。
+
+### 仍未完成
+
+- Clang `#pragma pto elementwise`、`TPARTELEMENT` AST/Sema 与自动 CFG-to-mask lowering 尚未
+  实现；当前入口是显式 TileOP API `exec::element_if` / `exec::predicate_element_if`。
+- 真实 MERGE hand/head、old destination snapshot/alias、post-RA verifier 尚未实现；公共
+  `exec::merge` 仍有意删除。
+- memory/atomic active-only fault/effect suppression、pointer mapping、动态循环退出和完整
+  eligible-operation closure 尚未完成，不能宣称整个 #238 P0-P6 已全部结束。
+
+## 2026-09-28 — LLVM semantic masked TADD 垂直切片
+
+### 实现
+
+- 新增 `llvm.linx.experimental.ew.tadd.masked` semantic intrinsic，明确携带
+  `rows/cols/dtype/layout/src0/src1/mask-low/mask-high/PredInv/Zero`，并保留
+  `IntrHasSideEffects`，避免 inactive source read、allocation/publication 和 carrier
+  binding 被错误优化掉。
+- 新增 `LinxV5ISD::EW_TADD_MASKED`、`PseudoTADD_Masked_SizeI` 及对应 SelectionDAG
+  lowering；固定尺寸和控制字段在 target lowering 阶段校验，当前实现支持 Local
+  `CUBE_M16` 风格域、两词 GPR carrier 和 ZERO policy。
+- 新增 TEPL MC 展开：
+  `BSTART.TEPL TADD -> B.DATR(execution controls) -> B.DIM -> B.IOT ->
+  B.IOR [low,high,zero], ExecMaskPresent`。
+- 补充 `getTileOpRegSize()` 对新 TEPL pseudo 的显式尺寸位置处理，避免 TReg-to-Offset
+  后处理误把 source tile 当作 tile size。
+- 新增 `llvm/test/CodeGen/LinxV5/elementwise-mask-tadd.ll` 最小 IR/object 回归。
+
+### 验证
+
+- `ninja -C build -j2 LLVMLinxV5CodeGen llc`：通过。
+- `llvm-lit` focused 7 tests：通过，包含新 TADD、logical mask、GPR pack、MC carrier
+  和 TCMPS/TEXPANDS 相关回归。
+- 新测例实际生成并反汇编确认：
+  `BSTART.TEPL TADD, FP32`、带 `PredInv/Zero` 的 `B.DATR`、`B.DIM`、双源 `B.IOT`
+  以及 `B.IOR [a2,a3,zero], ExecMaskPresent`。
+
+### 当前边界
+
+- 这条切片证明 LLVM semantic intrinsic 到真实 TEPL masked bundle 的链路可用，但还不
+  是完整 element-if 前端：尚未实现 Clang `#pragma pto elementwise`/`TPARTELEMENT`、
+  CFG 自动 active-mask SSA、通用 binary opcode intrinsic family 和 PredicateCell 的
+  LLVM machine carrier lowering。
+- `MERGE` hand/head/snapshot/alias、inactive memory/atomic fault/effect suppression、
+  动态循环退出和完整 eligible-operation closure 仍需独立实现；当前没有用 `+Tr` 或
+  opaque inline asm 冒充这些语义。
+- 工作区没有执行 reset、清理、commit、push 或覆盖用户既有未提交改动。
+
+## 2026-09-28 — C++ builtin → LLVM → LinxV5 object 端到端垂直切片
+
+### 实现
+
+- 新增 LinxV5 builtin `ew_tadd_masked(rows, cols, dtype, layout, out, lhs, rhs,
+  mask_low, mask_high, pred_inv, zero)`。
+- Clang CodeGen 将显式输出 tile、两个输入 tile 和双词 GPR execution mask 映射到
+  `llvm.linx.experimental.ew.tadd.masked`；调用返回的 vector 会写回显式 `out` lvalue。
+- Sema 校验参数数量、立即数字段、双词 mask 整数类型以及 `out/lhs/rhs` tile 类型一致性。
+- 修复参数数量诊断路径：此前直接使用 `err_typecheck_call_too_*_args` 时漏传调用类别会
+  触发 Clang diagnostic assertion；现改用统一 `checkArgCount` helper。
+- 新增正向和负向 Clang 测试：
+  `clang/test/LinxV5/elementwise-mask-tadd.cpp`、
+  `clang/test/LinxV5/elementwise-mask-tadd-sema.cpp`。
+
+### 端到端验证
+
+- C++ 源码成功生成 semantic intrinsic：
+  `llvm.linx.experimental.ew.tadd.masked.v128f32.v128f32.v128f32`。
+- C++ 源码成功生成 object，并反汇编确认：
+  `BSTART.TEPL TADD`、`B.DATR CUBE_M16 ... PredInv/Zero`、`B.DIM`、
+  `B.IOT`、`B.IOR [a2,a3,zero], ExecMaskPresent`。
+- Clang 新增正向/负向测试与既有 7 项 LLVM/MC 掩码回归合计 9/9 通过。
+
+### 当前边界
+
+- 当前已实现“显式 C++ masked TADD API → 可生成对应 LinxV5 object”的完整垂直切片。
+- 这仍不是普通 C++ `if` 自动变成 active-mask SSA；自动 `#pragma pto elementwise`/CFG
+  lowering、完整 TADD 之外的 semantic operation family、MERGE 和 memory/atomic effect
+  suppression 仍未完成。
+
+## 2026-09-29 Issue #112 处理记录：TRegToOffset 误杀已完成 B.ASSEMBLE parent 的窗口拷贝（已修复并推送 `3454566c`，issue 保持 open——剩余为架构边界）
+
+Issue：`LinxISA/llvm-project#112`，fa_lowp_algB（Algo B，Sq128/Skv8192/Tm128/Tk256）
+ICE：`cannot copy a live B.ASSEMBLE parent`（`LinxV5TRegToOffset` SlotCopy）。
+报告人 XrXie 9/27 handoff 已自行更正：仅 Algo B（ALGO_C=0）复现，Algo C 通过。
+
+### 根因（独立验证）
+
+- `af743c28`（9/24，toolchain-build#21）把所有含 B.ASSEMBLE 的 def 一律标
+  `IsAssembleParent` 不可拷贝；但 ISA 上只有**开放 generation**（INIT 发出、
+  LAST 未发）锁 parent 身份，LAST 之后 parent 是普通数据、轮转拷贝合法。
+- `-debug-only=linxv5-treg-to-offset` 确认报告的 ICE 点（bb.289，M 手 parent）
+  在闭合写手（`B.ASSEMBLE 0,1`）之后 1500+ 行——已完成装配、双消费者等待。
+
+### 修复（commit `3454566c`，LinxV5TRegToOffset.cpp）
+
+- 新增 `getAssembleControlBit`：解析 inline-asm 模板里 B.ASSEMBLE 后第 N 个
+  控制位（`${N:c}`/`%cN` 位置拼写；named `%c[...]` 返回 None 保守回退）；
+- `isAssembleParentDef`：仅 Last=0 的 def 标为开放（单 fragment INIT+LAST
+  同指令闭合的不再标记）；
+- `insertCopys`：迭代到 Last=1 写手时清除对应槽位保护，经 slot-status 链
+  （getInitStatus 整体复制 TRCopyRanges）传播给后继块。
+
+### 验证（fa_lowp_algB worktree feat/fa-lowp-algb-algc-handoff@331724c）
+
+- 矩阵：C=0 Tk128 ✓ / C=1 Tk128 ✓ / C=1 Tk256 ✓ / C=0 Tk256 仍 ICE（见下）；
+- 原 ICE 点 bb.289 从 fatal 变为成功插入 slot copy（debug 日志比对）；
+- #21 回归 `fa_lowp_ltile` Tk512（gist 原始 cpp/hpp 覆盖安装）：修复前后
+  产物逐字节一致，每 session parent ref 2→8 单调无回绕；
+- CodeGen/MC LinxV5 失败集 stash 对照逐项一致（20+9 个既有，零新增）。
+
+### 剩余阻塞（issue 保持 open 的原因，非编译器 bug）
+
+C=0 Tk256 修复后在**第二个位置**仍 fail-closed，且这次是正确拒绝：KV 循环
+第 2+ 轮的装配 session（INIT bb.314 → MIDDLE bb.322/331/340 → bb.345 窗口满，
+LAST 未到）需要轮转**开放中**的 parent——PseudoTCOPY=TMOV=新 tile generation，
+会破坏 ParentRef（#21 合同）。根因是循环携带活出（PV 累加器/分母等）压缩了
+U 手窗口。缓解方向（已写入 issue 回复）：① 内核/TileOP 缩短 session 跨度或
+两级装配（推荐）；② Clockhands 着色感知开放 parent 避让同 hand；③ ISA
+generation-aware relocation 扩展。
+
+### 已知预存洞（本轮未修，记录在案）
+
+`BuildLiveoutAndEraseFrom`（rolling liveout 路径）构造的新 TRCopyRange 不携带
+IsAssembleParent——开放 parent 经该路径的拷贝不会触发断言（静默风险）。
+#21 的 fa_lowp_ltile Tk512 当前产物实测无回绕，但该洞仍在，后续应把 parent
+标记沿 rolling 路径传递。
+
+### 环境备忘
+
+- fa_lowp_algB/fa_lowp_ltile 编译均经 `/tmp/itb101/wrap` wrapper（--target
+  + --sysroot + -resource-dir 指向旧工具链资源目录）；旧资源目录的 tileop-api
+  头已同步 origin/linx@771669f（0.58.7 对齐版）；
+- SuperNPUBench worktree：/tmp/itb112/snbench（feat/fa-lowp-algb-algc-handoff，
+  fa_lowp_ltile.cpp/hpp 已被 gist 原始版覆盖——该分支自己的版本有 TADD
+  prefix-view 重载不匹配问题）；TileOP worktree：/tmp/itb112/tileop、
+  /tmp/itb112/tileop-old（b2b16fa）；
+- 9/28 TEXPDIF 需求（issue #236）由他人实现合入（LLVM 6574dfe + TileOP
+  #239/#240）；9/24 后他人还在工作区加了 ExecutionMask/ISA207 相关未提交
+  改动（IntrinsicsLinx.td、ISelLowering 等），本轮未触碰。
+
+## 2026-09-28 — scalar-style elementwise 前端首条闭环
+
+### 已实现
+
+- 扩展 `#pragma linx` 解析与 AST 属性，支持 `#pragma linx elementwise`；该区域会给 LLVM 函数增加 `linx.elementwise` 属性，现有 LinxV5 elementwise mask pass 可识别该入口。
+- 修复旧 pragma 属性参数数组越界问题：`ParsePragmaLinx` 现在为属性参数提供完整槽位。
+- 对 elementwise 区域不再要求顶层语句必须是 compound statement；`#pragma linx elementwise` 可以直接修饰 `for`。
+- Clang CodeGen 新增严格 scalar-style loop matcher：支持固定完整 Tile、从 `i=0` 到静态 Tile lane 数、`++i`、单条
+  `out[i] = lhs[i] + rhs[i]`，当前实现限定 FP32 vector Tile。
+- 匹配成功后不再生成逐元素 `extractelement/insertelement` 循环，而是直接生成 semantic intrinsic：
+  `llvm.linx.experimental.ew.tadd.masked`，使用全 active GPR mask、ZERO policy，并设置
+  `linx.elementwise.lanes`。
+- 不满足已实现合同的 elementwise loop 不再静默落回普通 scalar loop；CodeGen 给出明确诊断
+  `cannot compile this unsupported Linx element-wise loop form yet`，避免后端对 divergent
+  vector element insertion 断言崩溃。
+
+### 源码示例
+
+```cpp
+using tile = float tile_size(128);
+
+void scalar_style_tadd(tile &out, const tile &lhs, const tile &rhs) {
+#pragma linx elementwise
+  for (unsigned i = 0; i < 128; ++i)
+    out[i] = lhs[i] + rhs[i];
+}
+```
+
+该源码生成 `v128f32` masked TADD，并实际生成 `BSTART.TEPL TADD`、`B.DATR CUBE_M16`、
+`B.DIM`、`B.IOT` 和 `B.IOR [a1,a1,zero], ExecMaskPresent`。
+
+### 测试
+
+- 新增 `clang/test/LinxV5/elementwise-scalar-tadd.cpp`：验证 scalar-style C++ → semantic
+  intrinsic → object/反汇编。
+- 新增 `clang/test/LinxV5/elementwise-scalar-if-diagnostic.cpp`：验证当前尚未完成的
+  `if/else` 形式产生确定性诊断，不进入普通 scalar backend，也不触发后端断言。
+- focused Clang/LLVM 回归：5/5 通过。
+
+### 当前边界
+
+- 这是 #228/#238 所要求的真正 scalar-style 前端的第一条可生成二进制路径，不再要求用户
+  显式调用 `blk_tload/ew_tadd_masked/blk_tstore`。
+- 当前只完成无条件 FP32 `TADD` 的固定完整 Tile loop；尚未完成 element-if 的 predicate
+  lowering、TCMP/TCMPS semantic intrinsic、TSUB/TSEL、合法 MERGE/defined-domain join、
+  PredicateCell carrier、gather/scatter 和 atomic effect suppression。
+- 曾验证带 `if` 的实验路径会落入未支持的 `v64/v128 vector insertelement` DAG；该路径已撤回，
+  改为明确诊断。后续必须先补齐合法 TCMP + carrier + masked operation family，再开放
+  `if/else`，不能用普通 vector select 或双 GPR 假装完成 #238。
+
+## 2026-09-29 Issue #112 收尾：开放 generation 的 parent 轮转默认放行（`b8f9218b8051`，issue 待用户模型确认后关闭）
+
+用户实测反馈：当前 SuperScalarModel 接受 TMOV 轮转后的 assemble parent
+（"开这个就没问题"）——即 af743c28 的"parent TMOV 必然破坏 assemble"假设
+对当前模型已不成立。复核 toolchain-build#21 原始失败 ELF 证实：#21 被
+拒绝的正是"m#16 饱和 → TMOV 轮转 → m#2 续写"形态，现模型已接受。
+
+### 修复（commit `b8f9218b8051`）
+
+- `SlotCopy` 断言改为受 `-linxv5-allow-live-assemble-parent-copy` 控制
+  （默认 **true** 放行；false 恢复 af743c28 fail-closed，供旧模型调试）。
+
+### 验证
+
+- fa_lowp_algB 四配置全编译通过（含此前失败 的 ALGO_C=0 Tk=256）；
+  该产物 64 个装配 session parent ref 全部 ≤10，无 16 饱和回绕；
+- fa_lowp_ltile Tk=512（#21）反汇编与此前逐指令一致（.o md5 差异仅为
+  协作方前端 WIP 影响的元数据段）；
+- CodeGen/MC 失败集与基线一致；期间出现的 2 个新失败
+  （v5-matmul-local-tile-result / v5-matrix-postprocess）经 stash 复核
+  在无本改动时同样失败，属工作区并行 ExecutionMask WIP（未提交的
+  Attr.td/BuiltinsLinxV5.def/ISelLowering 等 + 未跟踪 elementwise-mask-*
+  测试），与本修复无关。
+
+### 待办
+
+- 用户在模型环境跑数值/时序确认后关闭 issue #112（评论已发两条：
+  部分修复 + 最终收尾更正）；
+- 旧模型如需 fail-closed 用 `-mllvm -linxv5-allow-live-assemble-parent-copy=0`；
+- 既有预存洞不变：rolling liveout 路径（BuildLiveoutAndEraseFrom）的新
+  TRCopyRange 不携带 IsAssembleParent 标记。
+
+## 2026-09-29 — element-if PredicateCell compiler path continued
+
+### 本轮完成
+
+- 修正 masked TADD/TSUB 的 intrinsic overload 与 operand 契约：predicate 作为第三个 Tile carrier，后跟 `PredInv`、`Zero`，不再使用旧双 GPR mask。
+- 新增 `PRED_TILE_SRC`/`PRED_TILE_DST` register classes，并让 TCMP、masked TADD/TSUB、TSEL 的 MachineInstr operand 描述区分 PredicateCell 语义。
+- 修正 masked emitter 的 operand 偏移：普通源为 operand 8/9，predicate 为 operand 10，`PredInv`/`Zero` 为 11/12。
+- 修正 TSEL 的实际物理发布顺序：第一段绑定 `PredicateCell + then`，第二段绑定 `else -> destination`；demo 反汇编为 `TSEL ..., T#3, T#2, T#1`。
+- 修正 `B.DATR` bit12，当前 TADD/TSUB words 为 `0x00103fa3`/`0x00107fa3`。
+- 修正通用向量 load/store 的浮点数据类型推导；scalar-style FP32 element-if 的 TLOAD/TSTORE 使用 `FP32`，不再错误使用 `S64`。
+- 显式 `ew_tadd_masked`/`ew_tsub_masked` builtin 同步到 predicate-tile 参数契约；builtin 和 pragma 两条入口均可生成 object。
+- 普通无条件 elementwise TADD 的旧双 GPR lowering 已移除，未实现形式回退为明确 unsupported diagnostic，避免旧 intrinsic 崩溃。
+
+### 验证
+
+- `ninja -C build clang llc llvm-objdump` 通过。
+- `element-if-demo/elementwise_if_for.cpp` 可生成：
+  - `element-if-demo/elementwise_if_for.ll`
+  - `element-if-demo/elementwise_if_for.o`
+  - `element-if-demo/elementwise_if_for.dis`
+- demo 关键反汇编：TLOAD/TSTORE 为 FP32；TCMP 维度 `LB0=8, LB1=16`；TADD/TSUB 的 DATR words 含 bit12=1；TSEL 物理顺序为 predicate/then/else；无 `ExecMaskPresent`。
+- focused LLVM object checks：`elementwise-tcmp.ll`、`elementwise-tsel.ll`、`elementwise-mask-tadd.ll`、`elementwise-mask-tsub.ll` 均可编译并反汇编。
+- 显式 C++ builtin TADD/TSUB 测例均可编译并生成两段 `B.IOT`，无旧 `B.IOR ExecMaskPresent`。
+
+### 当前边界
+
+- 当前 IR intrinsic 的 predicate carrier 仍使用 LLVM vector overload 传递，后端通过 PredicateCell register class 和 tile binding 语义承载；尚未完成独立 LLVM opaque predicate type/verifier。
+- 宏 catalog 的公开 TADD/TSUB 仍是普通 TileOp 形式；masked path 是编译器内部 bundle expansion，不应伪造为新的公开 PTO macro form。
+- 尚未在 SuperScalarModel/gfrun 上完成数值、inactive-lane fault/status、nested-if/else 和 linked executable ELF 的端到端验收；这些需后续模型测例。
+- 工作区包含用户并行的未提交 ExecutionMask/Timg2Col 等修改，本轮未清理、未提交、未推送。

@@ -19,6 +19,7 @@ target triple = "linx64v5"
 ; CHECK-NOT: MOVR
 ; CHECK-NOT: ORI
 
+
 define void @shared_pe0_only(i1 %cond) {
 entry:
   br i1 %cond, label %publish, label %merge

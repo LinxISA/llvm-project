@@ -1,0 +1,62 @@
+body {
+  font-family: "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei",
+               "PingFang SC", "WenQuanYi Micro Hei", sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+  max-width: 900px;
+  margin: 2em auto;
+  padding: 0 1.5em;
+  color: #24292e;
+}
+h1 { font-size: 1.8em; border-bottom: 2px solid #333; padding-bottom: .3em; }
+h2 {
+  font-size: 1.4em;
+  border-bottom: 1px solid #888;
+  padding-bottom: .2em;
+  margin-top: 1.8em;
+  color: #1a1a1a;
+}
+h3 { font-size: 1.15em; margin-top: 1.2em; color: #333; }
+code, pre {
+  font-family: "JetBrains Mono", "Source Code Pro", "DejaVu Sans Mono",
+               "Consolas", monospace;
+}
+code {
+  background: #f6f8fa;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  color: #c7254e;
+}
+pre {
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
+  border-radius: 5px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+  line-height: 1.45;
+}
+pre code { background: none; color: inherit; padding: 0; font-size: 0.88em; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 0.92em;
+}
+th, td {
+  border: 1px solid #d0d7de;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: #f0f3f6; font-weight: 600; }
+tr:nth-child(even) { background: #fafbfc; }
+blockquote {
+  border-left: 4px solid #6a737d;
+  margin: 1em 0;
+  padding: 0.2em 1em;
+  color: #555;
+  background: #f6f8fa;
+}
+hr { border: none; border-top: 1px solid #d0d7de; margin: 1.8em 0; }
+strong { color: #1a1a1a; }

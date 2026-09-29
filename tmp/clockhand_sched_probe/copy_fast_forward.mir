@@ -1,0 +1,46 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=machine-scheduler -verify-machineinstrs=false -linxv5-enable-clock-hand-sched=false %s -o - | FileCheck %s --check-prefix=OFF
+# RUN: llc -mtriple=linx64v5 -run-pass=machine-scheduler -verify-machineinstrs=false -linxv5-enable-clock-hand-sched=true %s -o - | FileCheck %s --check-prefix=ON
+
+--- |
+  target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32-i64:64-i128:128-n64-S128"
+  target triple = "linx64v5-unknown-linux-musl"
+
+  define void @copy_fast_forward() #0 {
+    ret void
+  }
+
+  attributes #0 = { nounwind "target-features"="+simt,+relax" }
+...
+---
+name:            copy_fast_forward
+alignment:       2
+tracksRegLiveness: true
+legalized:       true
+regBankSelected: true
+selected:        true
+failedISel:      false
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%1' }
+registers:
+  - { id: 0, class: simtcgvl, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+body:             |
+  bb.0:
+    liveins: $simt_ri0
+
+    ; OFF-LABEL: name: copy_fast_forward
+    ; OFF: bb.0:
+    ; OFF-NEXT: %1:simtcgs = COPY $simt_ri0
+    ; OFF-NEXT: dead %0:simtcgvl = SIMT_MUL 0, $simt_lc1, 2, $simt_lc0, 2, implicit $simt_p
+    ; OFF-NEXT: dead %2:simtcgs = COPY %1
+    ; ON-LABEL: name: copy_fast_forward
+    ; ON: bb.0:
+    ; ON-NEXT: %1:simtcgs = COPY $simt_ri0
+    ; ON-NEXT: dead %2:simtcgs = COPY %1
+    ; ON-NEXT: dead %0:simtcgvl = SIMT_MUL 0, $simt_lc1, 2, $simt_lc0, 2, implicit $simt_p
+    %0:simtcgvl = SIMT_MUL 0, $simt_lc1, 2, $simt_lc0, 2, implicit $simt_p
+    %1:simtcgs = COPY $simt_ri0
+    %2:simtcgs = COPY %1
+    PseudoRET
+...

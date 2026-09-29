@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>blockc-painpoints.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> or <div class="page"></div> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="block-c-编程体验痛点与遗留问题开发人员参考">Block-C 编程体验痛点与遗留问题(开发人员参考)</h1>
+<blockquote>
+<p>调研基于 linx-llvm 编译器源码 + Linx-TileOP-API 头文件库 + SuperNPUBench 用法。
+每条问题格式:<strong>现象</strong> → <strong>原理</strong> → <strong>当前怎么写(规避)</strong>。
+所有问题有一条共同主线:目标地址空间 #6(<code>__vbuf__</code> / <code>addrspace(6)</code>,tile 缓冲区命名空间)。</p>
+</blockquote>
+<hr>
+<h2 id="主线地址空间-6-__vbuf__-的根本机制">主线:地址空间 6 (<code>__vbuf__</code>) 的根本机制</h2>
+<ul>
+<li><code>__vbuf__</code> 不是 clang 属性,而是 <code>linx_blkc.h:8</code> 的宏:<code>#define __vbuf__ __attribute__((address_space(6)))</code></li>
+<li><code>blkv_get_tile_ptr</code> 经 Sema(<code>SemaChecking.cpp:17965-17987</code>)重写返回类型为 <code>T addrspace(6)*</code></li>
+<li>后端靠地址空间区分 local/global 访问(<code>LinxV5InstrInfoSIMT.td:726-738</code>):
+<ul>
+<li><code>LoadAsLocal</code>:<code>getAddrSpace() == 6</code> → <code>v.lb/lw/ld.local</code>(tile 缓冲区本地访问)</li>
+<li><code>LoadAsGlobal</code>:<code>getAddrSpace() != 6</code> → 全局 load</li>
+</ul>
+</li>
+<li><code>LinxV5TargetMachine.cpp:142-149</code> <code>isNoopAddrSpaceCast</code> 无条件返回 <code>true</code>:6→0 的 addrspacecast 被当 no-op</li>
+</ul>
+<p>这条主线是问题 0、1、3、4 以及&quot;<code>__vbuf__</code> 丢失&quot;的共同根因。</p>
+<hr>
+<h2 id="问题-0cast-丢-__vbuf__-静默生成-global-load编译器不报错">问题 0:cast 丢 <code>__vbuf__</code> 静默生成 global load,编译器不报错</h2>
+<h3 id="现象">现象</h3>
+<p>SIMT <code>__vec__</code> kernel 里,从 tile 取指针后做 C 风格 cast,如果漏写 <code>__vbuf__</code>:</p>
+<pre class="hljs"><code><div>__vbuf__ <span class="hljs-type">int64_t</span>* keys_ptr = (__vbuf__ <span class="hljs-type">int64_t</span>*)<span class="hljs-built_in">blkv_get_tile_ptr</span>(query_keys); <span class="hljs-comment">// ✓ 正确</span>
+<span class="hljs-type">int64_t</span>* keys_ptr       = (<span class="hljs-type">int64_t</span>*)<span class="hljs-built_in">blkv_get_tile_ptr</span>(query_keys);             <span class="hljs-comment">// ✗ 漏 __vbuf__</span>
+</div></code></pre>
+<p>漏写时编译器<strong>静默接受</strong>,但生成的是 <strong>global load</strong>(<code>v.ld</code> 而非 <code>v.ld.local</code>),从错误的地址空间读 tile 数据,结果错误且极难排查。</p>
+<h3 id="原理">原理</h3>
+<ul>
+<li>clang 的地址空间 cast 检查在 <code>SemaCast.cpp:2548-2553</code>(<code>TryAddressSpaceCast</code>)和 <code>:2586-2600</code>(<code>checkAddressSpaceCast</code>)——<strong>两处都被 <code>if (OpenCL || SYCLIsDevice)</code> 门控</strong>,普通 C/C++ 直接 short-circuit 返回 <code>TC_NotApplicable</code>,不做任何检查</li>
+<li><code>DiagnoseCastQual</code>(<code>SemaCast.cpp:3203</code>)只看 cvr(const/volatile),注释明确说地址空间是 &quot;type identity&quot; 不管</li>
+<li>叠加 <code>isNoopAddrSpaceCast=true</code>,6→0 cast 是 no-op,ISel 的 <code>LoadAsGlobal</code> PatFrag 匹配,出 global load</li>
+<li>现状:无任何诊断。所有测试都显式写 <code>__vbuf__</code>,没有&quot;漏写报错&quot;的负测试</li>
+</ul>
+<h3 id="当前怎么写规避">当前怎么写(规避)</h3>
+<ul>
+<li><strong>每次 cast <code>blkv_get_tile_ptr(...)</code> 的结果,必须带 <code>__vbuf__</code></strong>:<code>(__vbuf__ T*)blkv_get_tile_ptr(tile)</code></li>
+<li>或用 <code>auto*</code>(auto 会保留 Sema 重写出的 AS6 限定符):<code>auto* p = blkv_get_tile_ptr(tile);</code>(但仍要确保后续 cast 不丢)</li>
+<li><strong>不要</strong>写成 <code>(T*)blkv_get_tile_ptr(...)</code> 或 <code>((T*)blkv_get_tile_ptr(...))</code></li>
+<li>tileop-api 内部统一用 <code>BLKC_ASSIGN_PTR</code> / <code>BLKC_ASSIGN_CAST</code> 宏(已硬编码 <code>__vbuf__ T*</code> 参数)</li>
+</ul>
+<h3 id="修复方向">修复方向</h3>
+<p>在 Sema 的 C-style cast 路径加 LinxV5 专属诊断:源类型地址空间为 6(tile buffer)、目标非 6 时发 error/warning。挂在 <code>checkAddressSpaceCast</code> 或 <code>SemaBuiltinBLKVGetTilePtr</code> 之后的 use 处。</p>
+<hr>
+<h2 id="问题-1低精度类型赋值初始化必须用专用-apiblkc_assign_elemoperator-不可用">问题 1:低精度类型赋值/初始化必须用专用 API(<code>blkc_assign_elem</code>),<code>operator=</code> 不可用</h2>
+<h3 id="现象-1">现象</h3>
+<p>常规类型(<code>float</code>/<code>int</code>)加载/存储用 <code>operator=</code> 即可:</p>
+<pre class="hljs"><code><div>tile_ptr[index] = src[idx_gm];   <span class="hljs-comment">// float/int OK</span>
+</div></code></pre>
+<p>但低精度类型(<code>__fp4_e1m2x2</code> / <code>__int4x2</code> / <code>__bf16x2</code> / <code>__fp16x2</code> 等)<code>operator=</code> 用不了,必须用专用 API:</p>
+<pre class="hljs"><code><div><span class="hljs-built_in">BLKC_ASSIGN_CAST</span>(dst_tile, idx, value);          <span class="hljs-comment">// tile 句柄版</span>
+<span class="hljs-built_in">BLKC_ASSIGN_PTR</span>(dst_ptr, idx, value);            <span class="hljs-comment">// 已有 __vbuf__ 指针版</span>
+<span class="hljs-built_in">blkc_assign_cast</span>(<span class="hljs-built_in">blkv_get_tile_ptr</span>(dst), idx, v); <span class="hljs-comment">// 直接调</span>
+</div></code></pre>
+<h3 id="原理-1">原理</h3>
+<ul>
+<li>低精度类型是 <code>linx_blkc.h</code> 里的 struct(包一个 <code>data</code> 成员),只定义了<strong>转换构造函数和转换 operator T()</strong>(<code>DEFINE_CAST</code>/<code>DEFINE_SIMPLE_CASTS</code> 宏,<code>linx_blkc.h:51-91</code>),<strong>没有用户定义 <code>operator=</code></strong></li>
+<li>隐式 copy-assign 是 raw 字节拷贝,对 sub-byte packed 类型不会生成 <code>v.cvt</code>,且在 <code>addrspace(6)</code> 上下文里 lowering 不对</li>
+<li>多个类型的 <code>DEFINE_SIMPLE_CASTS</code> 还被注释掉(<code>linx_blkc.h:205,217,230,244,256,292</code>),连转换路径都没有</li>
+<li><code>blkc_assign_elem</code>(<code>TCvt.hpp:20-27</code>)绕过 <code>operator=</code>,直接写 <code>ptr[idx].data = value.data</code>,且参数硬编码 <code>__vbuf__ T*</code></li>
+<li>负测试 <code>clang/test/LinxV5/blkv-e4m3-to-e5m2.cpp:7</code> 确认跨类型 <code>po[i] = pi[i]</code> 报 <code>no viable overloaded '='</code></li>
+<li>库内不一致:<code>TCopyIn.hpp</code>(load,<code>:31,57,83,97,109...</code>)和 <code>TCopyOut.hpp</code>(store,<code>:30,55,104...</code>)用 <code>operator=</code>(对低精度 dst 脆弱);<code>TCvt.hpp</code> 全用 <code>BLKC_ASSIGN_PTR</code>(<code>:101,132,162...</code>)</li>
+</ul>
+<h3 id="当前怎么写规避-1">当前怎么写(规避)</h3>
+<ul>
+<li>写 tile 元素赋值,低精度类型<strong>一律走 <code>BLKC_ASSIGN_*</code> 宏</strong>,不要用 <code>ptr[i] = value</code></li>
+<li><code>dst[i] = src[i]</code> 同类型也尽量避开(隐式 copy-assign 行为不对);跨类型必用 <code>BLKC_ASSIGN_CAST</code></li>
+<li>库开发者:新写 tile op 的 load/store/cvt kernel,统一用 <code>BLKC_ASSIGN_PTR/CAST</code>,不要直接 <code>=</code></li>
+</ul>
+<h3 id="修复方向-1">修复方向</h3>
+<p>(a) 给低精度 struct 加正确的 <code>operator=</code>(生成 <code>v.cvt</code>/正确宽度 store);(b) 统一 TCopyIn/TCopyOut 也走 <code>blkc_assign_*</code>;(c) 补定义 <code>BLKC_ASSIGN_CAST_COMMON</code> 或删除 <code>TCvt.hpp:69</code> 的引用(当前是潜在编译断裂)。</p>
+<hr>
+<h2 id="问题-2返回值版本-vs-输出参数版本-api-不一致">问题 2:返回值版本 vs 输出参数版本 API 不一致</h2>
+<h3 id="现象-2">现象</h3>
+<p>部分 block-compute API 有两个签名:返回值版用不了,只能用输出参数版:</p>
+<pre class="hljs"><code><div><span class="hljs-function">__bf16 <span class="hljs-title">blkv_bf16_fmax</span><span class="hljs-params">(<span class="hljs-type">const</span> __bf16&amp;, <span class="hljs-type">const</span> __bf16&amp;)</span></span>;              <span class="hljs-comment">// ✗ 用不了</span>
+<span class="hljs-function"><span class="hljs-type">void</span>  <span class="hljs-title">blkv_bf16_fmax</span><span class="hljs-params">(__bf16&amp; dst, <span class="hljs-type">const</span> __bf16&amp; l, <span class="hljs-type">const</span> __bf16&amp; r)</span></span>; <span class="hljs-comment">// ✓ 只能用这个</span>
+</div></code></pre>
+<h3 id="原理-2">原理</h3>
+<ul>
+<li><strong>头文件层</strong>(<code>template_asm.hpp:1309-1341</code>):宏其实<strong>同时生成两种形式</strong>——输出参数版 + 返回值版(返回值版内部调用输出参数版)。<code>blkv_bf16_fmax</code> 两版都在(<code>:1424-1437</code>)</li>
+<li><strong>clang builtin 层</strong>(<code>BuiltinsLinxV5.def:20-29</code>):只有<strong>一个名字、void 返回、variadic</strong>(<code>&quot;v.&quot;</code>),无 <code>blkv_bf16_*</code>,只有 <code>blkv_max/blkv_fexp</code> 等泛名</li>
+<li><strong>Sema 层</strong>(<code>SemaChecking.cpp:4574-4588</code> <code>CheckLinxV5BuiltinFPArith</code>):要求参数 <code>isRealFloatingType()</code>,而 <code>__bf16</code>(=<code>__blkc_bf16</code> struct)<strong>不是</strong> real floating——直接被拒(<code>err_linx_FPArith_invalid_type</code>)</li>
+<li><strong>CodeGen 层</strong>(<code>CGBuiltin.cpp:19320-19335</code>):<code>EmitLinxV5FPArith</code> 其实是<strong>返回值版</strong>(无 dst 参数),但只对 fp32 等真浮点生效</li>
+<li><strong>综合</strong>:fp32 可用 <code>blkv_fexp(x)</code> 返回值版;bf16 builtin 路径被 <code>isRealFloatingType</code> 拒,只能走头文件 inline-asm wrapper;返回值版虽存在但生成的临时 <code>__bf16</code> 不在 addrspace(6),流回 tile store 时又出问题,所以实际只能用输出参数版;bf16x2 同理</li>
+</ul>
+<h3 id="当前怎么写规避-2">当前怎么写(规避)</h3>
+<ul>
+<li>bf16/bf16x2 的 <code>fmax</code>/<code>fexp</code>/<code>fsqrt</code> 等:<strong>用输出参数版</strong> <code>blkv_bf16_fmax(dst, l, r)</code>,不要用返回值版</li>
+<li>fp32:<code>blkv_fexp(x)</code> 返回值版可用</li>
+<li>如需把结果存进 tile 元素,直接让 <code>dst</code> 是 tile 元素 lvalue,或先存局部再 <code>BLKC_ASSIGN_*</code></li>
+</ul>
+<h3 id="修复方向-2">修复方向</h3>
+<p>(a) 放宽 Sema 的 <code>isRealFloatingType</code> 判定,把 <code>__blkc_bf16</code> 等认作合法浮点;(b) 让 builtin 层支持低精度类型返回值版 CodeGen;(c) 头文件返回值版的临时对象地址空间问题单独修。</p>
+<hr>
+<h2 id="问题-3类型转换部分需显式指定类型linx_cvt_as__fp8_e4m3x2">问题 3:类型转换部分需显式指定类型(<code>linx_cvt_as&lt;__fp8_e4m3x2&gt;</code>)</h2>
+<h3 id="现象-3">现象</h3>
+<p>有的转换能从参数推导,有的必须显式指定:</p>
+<pre class="hljs"><code><div><span class="hljs-built_in">linx_cvt</span>(p_new_ptr[src_idx], src0);              <span class="hljs-comment">// ✓ bf16x2-&gt;hif4x2 可推导</span>
+<span class="hljs-built_in">linx_cvt_as</span>&lt;__fp8_e4m3x2&gt;(upd_max);              <span class="hljs-comment">// ✗ fp8 必须显式指定 Dst</span>
+</div></code></pre>
+<h3 id="原理-3">原理</h3>
+<ul>
+<li><code>linx_cvt(Dst&amp;, const Src&amp;)</code>(<code>template_asm.hpp:723</code>):<code>Dst</code>/<code>Src</code> <strong>可从参数推导</strong>——只要有匹配的特化</li>
+<li><code>linx_cvt_as&lt;Dst&gt;(const Src&amp;)</code>(<code>:1151-1163</code>):<code>Dst</code> <strong>不在函数参数里,不可推导</strong>——<strong>任何类型都必须显式</strong>,不是 fp8 特有</li>
+<li>fp8 额外摩擦:(i) <code>_as6</code>(addrspace 6)变体是<strong>手写固定签名重载</strong>(<code>:992-1132</code>),必须精确命名 <code>__fp8_e6m2x2_as6</code> 等;(ii) 部分 packed 类型(<code>__fp4_*</code>/<code>__int4x2</code>)的 <code>DEFINE_SIMPLE_CASTS</code> 被注释,隐式转换路径少,推导 fallback 少</li>
+<li><code>LINX_DELETE_PACKED_SRC_TO_NORMAL_DST</code>(<code>:855-865</code>)显式 delete 了某些 packed→normal 对</li>
+</ul>
+<h3 id="当前怎么写规避-3">当前怎么写(规避)</h3>
+<ul>
+<li>优先用<strong>两参数版</strong> <code>linx_cvt(dst, src)</code>,多数情况可推导(需 dst 是已类型化 lvalue)</li>
+<li><code>linx_cvt_as&lt;Dst&gt;(src)</code> 一律要写显式模板参数,这不是 bug 是签名决定</li>
+<li>涉及 <code>__vbuf__</code> 目标时,用对应的 <code>_as6</code> typedef(如 <code>__fp8_e6m2x2_as6</code>)</li>
+</ul>
+<h3 id="修复方向-3">修复方向</h3>
+<p>(a) 给 <code>linx_cvt_as</code> 加推导代理(通过 <code>Src</code> 反推,或提供 <code>linx_cvt_to&lt;Dst&gt;(src)</code> 统一显式接口);(b) 用 <code>if constexpr</code>+traits 把 <code>_as6</code> 手写重载改成泛型模板;(c) 补全被注释的转换。</p>
+<hr>
+<h2 id="问题-4不同数据类型-api-接口不一致缺少类型推导">问题 4:不同数据类型 API 接口不一致,缺少类型推导</h2>
+<h3 id="现象-4">现象</h3>
+<p>同一算子,不同类型名字不同,无泛型模板:</p>
+<pre class="hljs"><code><div><span class="hljs-built_in">blkv_fexp</span>(x);            <span class="hljs-comment">// fp32</span>
+<span class="hljs-built_in">blkv_bf16_fexp</span>(dst, src); <span class="hljs-comment">// bf16</span>
+<span class="hljs-built_in">blkv_bf16x2_fexp</span>(dst, src); <span class="hljs-comment">// bf16x2</span>
+<span class="hljs-comment">// fp8/fp4/int4/fp16 —— 完全没有 wrapper</span>
+</div></code></pre>
+<h3 id="原理-4">原理</h3>
+<ul>
+<li>ISA 助记符带类型后缀(<code>.bf</code>/<code>.bfx2</code>/<code>.fb</code>/<code>.fh</code>),<code>BLKV_BF16_EMIT_*</code>(<code>template_asm.hpp:1242-1268</code>)把后缀写死在 asm 串里</li>
+<li>每个类型的 <code>data</code> 成员宽度不同(char/short/int),asm 约束 <code>&quot;=vr&quot;</code> 需对应 LLVM 类型选寄存器类,<code>*_STORAGE</code> 宏(<code>linx_blkc.h</code>)逐类型展开</li>
+<li>所以 wrapper 用宏逐类型实例化(<code>BLKV_DEFINE_BF16_*</code> 只对 bf16/bf16x2 实例化),没有 <code>BLKV_DEFINE_FP8_*</code>/<code>FP4_*</code></li>
+<li>clang builtin 层只有一个泛名 <code>blkv_fexp</code>,LLVM intrinsic 按 arg 类型 overload,但 clang 名字固定</li>
+</ul>
+<h3 id="当前怎么写规避-4">当前怎么写(规避)</h3>
+<ul>
+<li>bf16/bf16x2:用对应的 <code>blkv_bf16_*</code> / <code>blkv_bf16x2_*</code></li>
+<li>fp8/fp4/int4/fp16:走 <code>linx_cvt</code> / <code>linx_cvt_as</code> 转换路径,或自己写 inline asm</li>
+<li>不要期待统一的 <code>blkv_fexp&lt;T&gt;</code></li>
+</ul>
+<h3 id="修复方向-4">修复方向</h3>
+<p><strong>可以用 <code>if constexpr</code>+<code>storage&lt;T&gt;</code> trait+类型→后缀映射写泛型 <code>blkv_fexp&lt;T&gt;</code></strong>(非 ISA 硬性要求,是当前设计选择);为 fp8/fp4/int4/fp16 补 wrapper。</p>
+<hr>
+<h2 id="问题-5复杂控制流嵌套循环中的-breakcontinue-支持不完善">问题 5:复杂控制流——嵌套循环中的 break/continue 支持不完善</h2>
+<h3 id="现象-5">现象</h3>
+<p><code>hashfind</code> 这类 <code>__mtc__</code> kernel 有<strong>嵌套循环</strong>(外层 <code>for idx += thread_num</code> + 内层 <code>for probe_cnt</code>),内层带 <code>break</code>:</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-type">void</span> __mtc__ <span class="hljs-title">hashfind</span><span class="hljs-params">(...)</span> </span>{
+  <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> idx = tid; idx &lt; num; idx += thread_num) {        <span class="hljs-comment">// 外层</span>
+    ...
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> probe_cnt = <span class="hljs-number">0</span>; probe_cnt &lt; max_probe; probe_cnt++) { <span class="hljs-comment">// 内层</span>
+      <span class="hljs-keyword">if</span> (curr_key == key_sentinel) { ...; <span class="hljs-keyword">break</span>; }
+      <span class="hljs-keyword">if</span> (curr_key == key) { ...; <span class="hljs-keyword">break</span>; }
+    }
+  }
+}
+</div></code></pre>
+<p>单层 break/continue 已修(commit f637af5),但<strong>嵌套场景未验证、spill 处理有缺口</strong>,可能出现静默 miscompile。</p>
+<h3 id="原理-5">原理</h3>
+<ul>
+<li><strong>AnnotateControlFlow(注释 pass)</strong>:<code>Stack</code> 是 LIFO,结构上<strong>能</strong>正确处理嵌套——外层 saved mask 压栈后,内层 push/pop 不破坏它;<code>phi.broken</code> 用 <code>LI-&gt;getLoopFor(BB)</code> 按当前 loop 作用域。<code>handleLoop</code>/<code>closeControlFlow</code> 对干净嵌套 for 不触发 assert/fatal。<strong>这一层 OK</strong></li>
+<li><strong>ISelLowering</strong>:<code>blkv_loop</code>/<code>blkv_if_break</code>/<code>blkv_end_cf</code> 都是 depth-agnostic,只读写 <code>SIMT_P</code> 和各自 <code>phi.broken</code> SSA。嵌套 = 两套独立 <code>phi.broken</code> + 两套 save/restore,SSA 链排序即正确。<strong>这一层 OK</strong></li>
+<li><strong>SIMTSpillFixup(缺口)</strong>:<code>fixupBlock</code> 是<strong>逐 MBB、只跟踪单个 <code>LastPBoundary</code></strong>(<code>LinxV5SIMTSpillFixup.cpp:110-119</code>)。没有&quot;mask 边界栈&quot;——嵌套循环体里,outer <code>blkv_loop</code> 写 P、inner <code>blkv_if</code>/<code>blkv_loop</code> 又写 P、inner <code>end_cf</code> 恢复、outer <code>end_cf</code> 恢复,fixup 只看到最后一个 P 写,会把 spill/reload 挪到&quot;最后一个边界&quot;前,可能<strong>跨过属于另一层 mask 区域的 <code>Copy2P</code>/<code>Copy2PTerm</code></strong>,导致 spill 在错误的 active mask 下执行。<code>getReasonBlocked</code>(<code>:85-106</code>)只查中间内存/clobber/same-FI,<strong>不查是否跨了第二个叠加 mask 边界</strong>。症状:<strong>静默 miscompile</strong>(不崩溃)</li>
+<li><strong>兜底</strong>:<code>-linxv5-simt-spill-save-restore-p</code>(<code>LinxV5RegisterInfo.cpp:37-40</code>,<strong>默认关</strong>)给每个 spill/reload 包 <code>CopyFromP</code>+<code>SIMT_ORI_SCAR -1</code>(P 置全 1)+<code>Copy2P</code>(恢复),使 spill 在任意嵌套 mask 下正确。代价:每次 spill/reload 多 3 条指令 + 共享 scratch <code>T4</code>(<code>:50</code>,递归 spill 展开时 reuse 无保护)</li>
+<li><strong>测试缺口</strong>:<code>llvm/test/CodeGen/LinxV5/Block-C/</code> 下<strong>所有</strong> SIMT break/continue/spill 测试都只有<strong>单个</strong> <code>!llvm.loop</code>,无嵌套 divergent loop 测试</li>
+</ul>
+<h3 id="当前怎么写规避-5">当前怎么写(规避)</h3>
+<ul>
+<li>嵌套 divergent loop + break/continue:<strong>加 <code>-mllvm -linxv5-simt-spill-save-restore-p=true</code></strong> 编译选项兜底(确保 spill 在任意 mask 下正确)</li>
+<li>或尽量避免 divergent loop 嵌套 divergent loop(把内层 break 改写成单层循环 + 显式状态变量)</li>
+<li>降低寄存器压力以减少 spill 发生</li>
+</ul>
+<h3 id="修复方向-5">修复方向</h3>
+<p>(a) 给 <code>LinxV5SIMTSpillFixup</code> 加<strong>per-block 边界栈</strong>,拒绝跨非栈顶边界的移动;(b) 或把 <code>-linxv5-simt-spill-save-restore-p</code> 设为 SIMT 默认(简单但费);(c) 加 <code>simt-nested-break.ll</code> 测试(hashfind 形状)+ <code>simt-nested-spill-boundary.mir</code> 回归保护。</p>
+<hr>
+<h2 id="问题-6simt-kernel-不支持返回值blkv_rdadd-结果无法回流-scalar-core">问题 6:SIMT kernel 不支持返回值(<code>blkv_rdadd</code> 结果无法回流 scalar core)</h2>
+<h3 id="现象-6">现象</h3>
+<p>想在 <code>__vec__</code> kernel 里 <code>return</code> 一个 vector reduce 结果给 scalar 调用方,支撑数据依赖的控制流:</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-type">int</span> __vec__ <span class="hljs-title">probe_step_impl</span><span class="hljs-params">(...)</span> </span>{
+  <span class="hljs-type">int64_t</span> not_found = (...) ? <span class="hljs-number">1</span> : <span class="hljs-number">0</span>;
+  <span class="hljs-type">int64_t</span> sum = <span class="hljs-built_in">blkv_rdadd</span>(not_found);
+  <span class="hljs-keyword">return</span> sum;   <span class="hljs-comment">// ✗ 返回值被静默丢弃,调用方拿不到</span>
+}
+...
+<span class="hljs-type">int</span> r = probe_step_impl&lt;&lt;&lt;...&gt;&gt;&gt;(...);  <span class="hljs-comment">// ✗ 不支持,表达式类型是 void</span>
+</div></code></pre>
+<h3 id="原理-6">原理</h3>
+<ul>
+<li><strong>硬件/后端层(已具备)</strong>:
+<ul>
+<li><code>blkv_rdadd</code> lower 到 <code>SIMT_RDADD</code>(<code>LinxV5InstrInfoSIMT.td:831-848</code>),Dst 寄存器类 <code>SIMTDstRegReduce</code> = <code>SIMT_DST_Scalar</code> = <code>SIMTCGSL</code> ⊇ <code>LTR/LUR</code> = <strong>T1..T4/U1..U4 标量核 GPR</strong>——reduce 结果<strong>本来就写到标量核可读的 GPR</strong></li>
+<li>scalar 侧读回:<code>int_linx_get_simt_ret</code>(<code>IntrinsicsLinx.td:40-42</code>)→ <code>lowerGetSIMTRet</code>(<code>LinxV5ISelLowering.cpp:1773-1781</code>)→ <code>CopyFromReg(getReduceDst(RetNo))</code>,目标 GPR <code>R2..R9</code>(<code>LinxV5RegisterInfo.cpp:75-82</code>,最多 4 个)。<strong>跨侧数据通路完整</strong></li>
+</ul>
+</li>
+<li><strong>Clang 前端 + vcall IR 契约(缺口所在)</strong>:
+<ul>
+<li><code>&lt;&lt;&lt;&gt;&gt;&gt;</code> 在 Sema 被重写成 builtin <code>__linx_vcall_par</code>(<code>SemaLinxBlockC.cpp:119</code>),该 builtin 声明 <code>&quot;v.&quot;</code>(<strong>void 返回</strong>,<code>Builtins.def:675</code>)——调用表达式类型恒为 void,<code>int r = foo&lt;&lt;&lt;...&gt;&gt;&gt;(...)</code> 直接类型错</li>
+<li>vcall intrinsic <code>int_linx_vcall_par</code> 的 RetTypes 是 <code>TileCallRetsBuilder&lt;onum&gt;</code> = <code>onum</code> 个 <code>llvm_anyvector_ty</code>(<strong>只 tile/vector 输出,无标量</strong>,<code>IntrinsicsLinx.td:136-158</code>),<code>onum</code> 只数 <code>__out__</code> tile 参数,不含 C 返回</li>
+<li>CodeGen <code>parseLinxVCallIntID/Params</code>(<code>CGBuiltin.cpp:686-761</code>)只从 <code>LinxBLKFuncOutAttr</code> tile 参数填 <code>Rets</code>,C 返回值**从不进 <code>Rets**</code>;<code>emitLinxVCallInt</code>(<code>:763-799</code>)只把 vcall ret 存到 <code>__out__</code> lvalue</li>
+<li>Sema <code>handleLinxBLKFuncAttr</code>(<code>SemaDeclAttr.cpp:8060-8075</code>)<strong>不检查返回类型</strong>,非 void <code>__vec__</code> 声明被接受(测试 <code>linx-single-layer.c:9,13</code> 证明默认模式接受 <code>__vec__ int</code>),但返回值被静默丢</li>
+<li><code>linx_get_simt_ret</code> 在 LLVM target 里有,<strong>但 clang 没 expose 成 builtin</strong>(Builtins.def/BuiltinsLinxV5.def 无条目,CGBuiltin 无 case),用户从 C 无法命名</li>
+</ul>
+</li>
+</ul>
+<h3 id="当前怎么写规避-6">当前怎么写(规避)</h3>
+<ul>
+<li><strong>不要用 <code>__vec__</code>/<code>__mtc__</code> kernel 的返回值</strong>——当前被丢弃</li>
+<li>要把 reduce 结果传给 scalar 调用方:<strong>用 <code>tile __out__</code> 参数</strong>承载结果(支持的 vcall 输出通道),scalar 侧从 tile 读</li>
+<li>或在 SIMT 区内直接 <code>blkv_rdadd</code>,scalar 侧通过其他已支持的机制读 GPR(目前无直接 builtin,需等 <code>linx_get_simt_ret</code> expose)</li>
+</ul>
+<h3 id="修复方向-6">修复方向</h3>
+<ol>
+<li><strong>Sema</strong>(<code>ActOnLinxBlockCCall</code>):根据被调函数返回类型,在调用侧分配结果 lvalue,传入 builtin</li>
+<li><strong>Builtin</strong>:<code>__linx_vcall_par</code> 加非 void 变体,或不走 void builtin、直接建 <code>llvm.linx.vcall.par.&lt;N&gt;d&lt;M&gt;u</code> 调用并把标量返回纳入 RetTypes</li>
+<li><strong>Intrinsic</strong>:<code>TileCallRetsBuilder</code> 增加标量返回槽,或调用侧 vcall 后发 <code>linx_get_simt_ret(&lt;ret index&gt;)</code>(目标 GPR 已是 R2..R9)</li>
+<li><strong>CodeGen</strong>:检测非 void <code>__vec__</code>/<code>__mtc__</code> 被调,vcall 后 emit <code>linx_get_simt_ret</code> 读回并绑定到调用方 lvalue(后端 <code>lowerGetSIMTRet</code>/<code>getReduceDst</code> 已支持)</li>
+<li><strong>kernel 侧</strong>:<code>return sum</code>(已是 <code>blkv_rdadd</code> 输出,已在 R2..R9)关联到该 GPR 槽</li>
+<li><strong>诊断(过渡期)</strong>:<code>handleLinxBLKFuncAttr</code> 对非 void 返回报错,提示用 <code>tile __out__</code> 或 <code>blkv_rdadd</code>+<code>linx_get_simt_ret</code>,避免静默丢</li>
+</ol>
+<hr>
+<h2 id="一句话总结给开发人员">一句话总结(给开发人员)</h2>
+<blockquote>
+<p><strong>当前 Block-C 语法上还没支持的写法,以及怎么规避:</strong></p>
+<ol>
+<li><strong><code>__vbuf__</code> 不能漏</strong>——cast <code>blkv_get_tile_ptr</code> 结果必须带 <code>__vbuf__</code>(漏了静默出 global load,编译器不报错)。</li>
+<li><strong>低精度类型不能用 <code>=</code> 赋值</strong>——<code>__fp4_*</code>/<code>__int4x2</code>/<code>__bf16x2</code> 等 tile 元素赋值必须用 <code>BLKC_ASSIGN_CAST</code>/<code>BLKC_ASSIGN_PTR</code>,不要写 <code>ptr[i]=value</code>。</li>
+<li><strong>bf16 算子只能用输出参数版</strong>——<code>blkv_bf16_fmax(dst,l,r)</code>,返回值版 <code>__bf16 r=blkv_bf16_fmax(l,r)</code> 用不了。</li>
+<li><strong><code>linx_cvt_as&lt;Dst&gt;</code> 必须显式指定目标类型</strong>——两参数 <code>linx_cvt(dst,src)</code> 能推导,单参数 <code>linx_cvt_as</code> 不行。</li>
+<li><strong>没有泛型 <code>blkv_fexp&lt;T&gt;</code></strong>——fp32 用 <code>blkv_fexp</code>,bf16 用 <code>blkv_bf16_fexp</code>,fp8/fp4/int4/fp16 无 wrapper,走 <code>linx_cvt</code>。</li>
+<li><strong>嵌套循环 break/continue 加兜底选项</strong>——divergent loop 套 divergent loop 时加 <code>-mllvm -linxv5-simt-spill-save-restore-p=true</code>,否则可能静默 miscompile。</li>
+<li><strong><code>__vec__</code>/<code>__mtc__</code> kernel 返回值被丢弃</strong>——不要 <code>return</code> 值给 scalar 调用方;reduce 结果走 <code>tile __out__</code> 参数传出。</li>
+</ol>
+</blockquote>
+<hr>
+<h2 id="遗留-bug-清单">遗留 bug 清单</h2>
+<ul>
+<li><code>TCvt.hpp:69</code> <code>BLKC_ASSIGN_CAST_COMMON</code> 引用但无定义(潜在编译断裂)</li>
+<li><code>__fp4_*</code>/<code>__int4x2</code>/<code>__fp16x2</code>/<code>__bf16x2</code> 的 <code>DEFINE_SIMPLE_CASTS</code> 被注释(<code>linx_blkc.h:205,217,230,244,256,292</code>)</li>
+<li>fp8/fp4/int4/fp16 无 <code>blkv_*_&lt;op&gt;</code> wrapper</li>
+<li><code>LinxV5TargetMachine::isNoopAddrSpaceCast</code> 无条件 true,放大了问题 0</li>
+<li><code>LinxV5SIMTSpillFixup</code> 无嵌套 mask 边界栈,嵌套 divergent loop spill 可能 miscompile(问题 5)</li>
+<li><code>__vec__</code>/<code>__mtc__</code> kernel 返回值静默丢弃,无诊断(问题 6);<code>linx_get_simt_ret</code> 未 expose 成 clang builtin</li>
+<li><code>-linxv5-simt-spill-save-restore-p</code> 默认关,共享 scratch T4 递归 reuse 无保护</li>
+</ul>
+<hr>
+<h2 id="三条系统修复主线">三条系统修复主线</h2>
+<ol>
+<li><strong><code>__vbuf__</code>/addrspace(6) 的诊断缺失</strong>(问题 0):cast 丢限定符静默出错,应加 Sema 诊断。最易踩、最难查,优先级最高。</li>
+<li><strong>低精度类型的 <code>operator=</code> 缺失</strong>(问题 1、2、3 共因):struct 没有正确 <code>operator=</code>,导致 TCopyIn/Out 用 <code>operator=</code> 脆弱、<code>blkc_assign_*</code> 硬编码 AS6、<code>linx_cvt</code> 手写 <code>_as6</code> 重载、返回值版临时对象地址空间错。统一修 <code>operator=</code> 能消解一大片。</li>
+<li><strong>API 泛型化不足</strong>(问题 2、3、4):类型特定名字 + 手写重载,可用 <code>if constexpr</code>+traits 统一,减少 <code>blkv_&lt;type&gt;_&lt;op&gt;</code> 爆炸和 <code>linx_cvt_as</code> 必须显式。</li>
+</ol>
+<p>另:⑤ 嵌套 spill 修边界栈/默认开 save-restore-p;⑥ vcall 契约加标量返回槽 + expose <code>linx_get_simt_ret</code>。</p>
+
+</body>
+</html>

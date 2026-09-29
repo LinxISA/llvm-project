@@ -1,0 +1,385 @@
+--- |
+  ; ModuleID = '<stdin>'
+  source_filename = "<stdin>"
+  target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
+  target triple = "linx64v5-unknown-linux-musl"
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define dso_local void @mul64(i64 noundef %a, i64 noundef %b, ptr %p) local_unnamed_addr #0 {
+  entry:
+    %mul = mul i64 %a, %b
+    store i64 %mul, ptr %p, align 8
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define dso_local void @mul32(i32 noundef %a, i32 noundef %b, ptr %p) local_unnamed_addr #0 {
+  entry:
+    %mul = mul i32 %a, %b
+    store i32 %mul, ptr %p, align 4
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define dso_local void @mul16(i16 noundef %a, i16 noundef %b, ptr %p) local_unnamed_addr #0 {
+  entry:
+    %mul = mul i16 %a, %b
+    store i16 %mul, ptr %p, align 2
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define dso_local void @mul8(i8 noundef %a, i8 noundef %b, ptr %p) local_unnamed_addr #0 {
+  entry:
+    %mul = mul i8 %a, %b
+    store i8 %mul, ptr %p, align 1
+    ret void
+  }
+  
+  ; Function Attrs: mustprogress nofree noinline norecurse nosync nounwind readnone willreturn
+  define dso_local void @vmul(ptr %p) local_unnamed_addr #0 {
+  entry:
+    %0 = tail call i16 @llvm.blkv.get.index.x()
+    %1 = tail call i16 @llvm.blkv.get.index.y()
+    %conv = zext i16 %0 to i64
+    %conv1 = zext i16 %1 to i64
+    %mul = mul nuw nsw i64 %conv1, %conv
+    store i64 %mul, ptr %p, align 8
+    ret void
+  }
+  
+  ; Function Attrs: nounwind readnone
+  declare i16 @llvm.blkv.get.index.x() #1
+  
+  ; Function Attrs: nounwind readnone
+  declare i16 @llvm.blkv.get.index.y() #1
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.if.i64(i1) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.flow.i64.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind readnone willreturn
+  declare i64 @llvm.blkv.if.break.i64(i1, i64) #3
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i1 @llvm.blkv.loop.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare void @llvm.blkv.end.cf.i64(i64) #2
+  
+  attributes #0 = { mustprogress nofree noinline norecurse nosync nounwind readnone willreturn "__vec__" "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+m,+relax" }
+  attributes #1 = { nounwind readnone }
+  attributes #2 = { convergent nounwind willreturn }
+  attributes #3 = { convergent nounwind readnone willreturn }
+
+...
+---
+name:            mul64
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgsl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgsl = SIMT_MUL_SCAR 0, $simt_ri0, 4, $simt_ri1, 4, implicit $simt_p
+    SIMT_SCAR_SD_GLOBAL %3, 4, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (store (s64) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            mul32
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgsl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgsl = SIMT_MUL_SCAR 1, $simt_ri0, 5, $simt_ri1, 5, implicit $simt_p
+    SIMT_SCAR_SW_GLOBAL %3, 5, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (store (s32) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            mul16
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgsl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgsl = SIMT_MUL_SCAR 2, $simt_ri0, 6, $simt_ri1, 6, implicit $simt_p
+    SIMT_SCAR_SH_GLOBAL %3, 6, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (store (s16) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            mul8
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgs, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgsl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+  - { reg: '$simt_ri1', virtual-reg: '%1' }
+  - { reg: '$simt_ri2', virtual-reg: '%2' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2
+  
+    %3:simtcgsl = SIMT_MUL_SCAR 3, $simt_ri0, 7, $simt_ri1, 7, implicit $simt_p
+    SIMT_SCAR_SB_GLOBAL %3, 7, $simt_ri2, 4, $r0, 4, 0, implicit $simt_p :: (store (s8) into %ir.p)
+    PseudoRET
+
+...
+---
+name:            vmul
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgv, preferred-register: '' }
+  - { id: 2, class: simtcgs, preferred-register: '' }
+  - { id: 3, class: simtcgvl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%0' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    liveins: $simt_ri0
+  
+    %3:simtcgvl = nuw nsw SIMT_MUL 0, $simt_lc1, 2, $simt_lc0, 2, implicit $simt_p
+    SIMT_SD_GLOBAL %3, 4, $simt_ri0, 4, $r0, 4, 0, implicit $simt_p :: (store (s64) into %ir.p)
+    PseudoRET
+
+...

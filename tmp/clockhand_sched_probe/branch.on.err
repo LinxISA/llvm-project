@@ -1,0 +1,32 @@
+llc: /home/zhuwei/llvm-15-analysis/llvm/include/llvm/IR/Function.h:760: llvm::Argument* llvm::Function::getArg(unsigned int) const: Assertion `i < NumArgs && "getArg() out of range!"' failed.
+PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
+Stack dump:
+0.	Program arguments: /home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc --march=linx64v5 -O2 -stop-after=machine-scheduler -linxv5-enable-clock-hand-sched=true -o tmp/clockhand_sched_probe/branch.on.mir
+1.	Running pass 'Function Pass Manager' on module '<stdin>'.
+2.	Running pass 'LinxV5 DAG->DAG Pattern Instruction Selection' on function '@_Z11test_branchu11matrix_typeILm16ELm16EfES_S_i'
+ #0 0x00006222b31a9708 PrintStackTraceSignalHandler(void*) Signals.cpp:0:0
+ #1 0x00006222b31a6afb SignalHandler(int) Signals.cpp:0:0
+ #2 0x000075529dc45330 (/lib/x86_64-linux-gnu/libc.so.6+0x45330)
+ #3 0x000075529dc9eb2c __pthread_kill_implementation ./nptl/pthread_kill.c:44:76
+ #4 0x000075529dc9eb2c __pthread_kill_internal ./nptl/pthread_kill.c:78:10
+ #5 0x000075529dc9eb2c pthread_kill ./nptl/pthread_kill.c:89:10
+ #6 0x000075529dc4527e raise ./signal/../sysdeps/posix/raise.c:27:6
+ #7 0x000075529dc288ff abort ./stdlib/abort.c:81:7
+ #8 0x000075529dc2881b _nl_load_domain ./intl/loadmsgcat.c:1177:9
+ #9 0x000075529dc3b517 (/lib/x86_64-linux-gnu/libc.so.6+0x3b517)
+#10 0x00006222b1e05be4 CC_LinxV5_SIMT(llvm::DataLayout const&, llvm::LinxV5ABI::ABI, unsigned int, llvm::MVT, llvm::MVT, llvm::CCValAssign::LocInfo, llvm::ISD::ArgFlagsTy, llvm::CCState&, bool, bool, llvm::Type*, llvm::LinxV5TargetLowering const&, llvm::Optional<unsigned int>, llvm::Function&) (.constprop.1) LinxV5ISelLowering.cpp:0:0
+#11 0x00006222b1e13fe8 llvm::LinxV5TargetLowering::analyzeInputArgs(llvm::MachineFunction&, llvm::CCState&, llvm::SmallVectorImpl<llvm::ISD::InputArg> const&, bool, bool) const (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0x488fe8)
+#12 0x00006222b1e16d4c llvm::LinxV5TargetLowering::LowerFormalArguments(llvm::SDValue, unsigned int, bool, llvm::SmallVectorImpl<llvm::ISD::InputArg> const&, llvm::SDLoc const&, llvm::SelectionDAG&, llvm::SmallVectorImpl<llvm::SDValue>&) const (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0x48bd4c)
+#13 0x00006222b2ec19d0 llvm::SelectionDAGISel::LowerArguments(llvm::Function const&) (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0x15369d0)
+#14 0x00006222b2f71faf llvm::SelectionDAGISel::SelectAllBasicBlocks(llvm::Function const&) (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0x15e6faf)
+#15 0x00006222b2f72d1f llvm::SelectionDAGISel::runOnMachineFunction(llvm::MachineFunction&) (.part.0) SelectionDAGISel.cpp:0:0
+#16 0x00006222b233f1dd llvm::MachineFunctionPass::runOnFunction(llvm::Function&) (.part.0) MachineFunctionPass.cpp:0:0
+#17 0x00006222b28795c1 llvm::FPPassManager::runOnFunction(llvm::Function&) (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0xeee5c1)
+#18 0x00006222b2879771 llvm::FPPassManager::runOnModule(llvm::Module&) (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0xeee771)
+#19 0x00006222b287a067 llvm::legacy::PassManagerImpl::run(llvm::Module&) (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0xeef067)
+#20 0x00006222b1d481a4 compileModule(char**, llvm::LLVMContext&) llc.cpp:0:0
+#21 0x00006222b1cdb537 main (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0x350537)
+#22 0x000075529dc2a1ca __libc_start_call_main ./csu/../sysdeps/nptl/libc_start_call_main.h:74:3
+#23 0x000075529dc2a28b call_init ./csu/../csu/libc-start.c:128:20
+#24 0x000075529dc2a28b __libc_start_main ./csu/../csu/libc-start.c:347:5
+#25 0x00006222b1d3eec5 _start (/home/zhuwei/linx-BLK-build/build/build-llvm-musl/bin/llc+0x3b3ec5)

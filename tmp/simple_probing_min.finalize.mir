@@ -1,0 +1,324 @@
+--- |
+  ; ModuleID = 'tmp/simple_probing_min.ll'
+  source_filename = "tmp/simple_probing_min.ll"
+  target datalayout = "e-m:e-p:64:64-i8:8:64-i16:16:64-i32:32:64-i64:64-i128:128-n64-S128"
+  target triple = "linx64v5-unknown-linux-musl"
+  
+  ; Function Attrs: mustprogress nofree noinline nounwind
+  define dso_local void @lookup_min(ptr noundef %slot, ptr noundef %keys, ptr nocapture noundef writeonly %values_output, i32 noundef %capacity, i32 noundef signext %num, i32 noundef signext %entry_size, i32 noundef signext %max_probe) local_unnamed_addr #0 {
+  entry:
+    %tid16 = tail call i16 @llvm.blkv.get.index.x()
+    %tid32 = zext i16 %tid16 to i32
+    %in_range = icmp slt i32 %tid32, %num
+    %0 = call { i1, i64 } @llvm.blkv.if.i64(i1 %in_range)
+    %1 = extractvalue { i1, i64 } %0, 0
+    %2 = extractvalue { i1, i64 } %0, 1
+    br i1 %1, label %if.then, label %exit
+  
+  if.then:                                          ; preds = %entry
+    %3 = tail call i16 @llvm.blkv.get.index.x()
+    %4 = zext i16 %3 to i64
+    %keyp = getelementptr inbounds i64, ptr %keys, i64 %4
+    %key = load volatile i64, ptr %keyp, align 8
+    %key32 = trunc i64 %key to i32
+    %h = shl i32 %key32, 3
+    %curr0 = urem i32 %h, %capacity
+    %has_probe = icmp sgt i32 %max_probe, 0
+    br i1 %has_probe, label %for.body.preheader, label %exit, !structurizecfg.uniform !0
+  
+  for.body.preheader:                               ; preds = %if.then
+    br label %for.body, !structurizecfg.uniform !0
+  
+  for.body:                                         ; preds = %for.inc, %for.body.preheader
+    %phi.broken = phi i64 [ %10, %for.inc ], [ 0, %for.body.preheader ]
+    %probe = phi i32 [ 0, %for.body.preheader ], [ %probe.inc, %for.inc ]
+    %curr_slot = phi i32 [ %curr0, %for.body.preheader ], [ %curr.next, %for.inc ]
+    %slot.off32 = mul i32 %curr_slot, %entry_size
+    %slot.off64 = zext i32 %slot.off32 to i64
+    %key.addr = getelementptr inbounds i8, ptr %slot, i64 %slot.off64
+    %curr_key = load volatile i64, ptr %key.addr, align 8
+    %found = icmp eq i64 %curr_key, %key
+    %5 = call { i1, i64 } @llvm.blkv.if.i64(i1 %found)
+    %6 = extractvalue { i1, i64 } %5, 0
+    %7 = extractvalue { i1, i64 } %5, 1
+    br i1 %6, label %found.then, label %for.inc
+  
+  found.then:                                       ; preds = %for.body
+    %8 = tail call i16 @llvm.blkv.get.index.x()
+    %9 = zext i16 %8 to i64
+    %value.addr.i8 = getelementptr inbounds i8, ptr %key.addr, i64 8
+    %curr_val = load volatile i32, ptr %value.addr.i8, align 4
+    %outp = getelementptr inbounds i32, ptr %values_output, i64 %9
+    store volatile i32 %curr_val, ptr %outp, align 4
+    br label %for.inc
+  
+  for.inc:                                          ; preds = %found.then, %for.body
+    %probe.base.phi1 = phi i32 [ %probe, %found.then ], [ %probe, %for.body ]
+    %probe.base.phi0 = phi i32 [ %max_probe, %found.then ], [ undef, %for.body ]
+    %merge = call i32 @llvm.blkv.merge.cf.i32(i32 %probe.base.phi0, i32 %probe.base.phi1)
+    call void @llvm.blkv.end.cf.i64(i64 %7)
+    %curr.add = add i32 %curr_slot, 1
+    %curr.next = urem i32 %curr.add, %capacity
+    %probe.inc = add i32 %merge, 1
+    %keep.going = icmp sge i32 %probe.inc, %max_probe
+    %10 = call i64 @llvm.blkv.if.break.i64(i1 %keep.going, i64 %phi.broken)
+    %11 = call i1 @llvm.blkv.loop.i64(i64 %10)
+    br i1 %11, label %Flow, label %for.body
+  
+  Flow:                                             ; preds = %for.inc
+    call void @llvm.blkv.end.cf.i64(i64 %10)
+    br label %exit
+  
+  exit:                                             ; preds = %entry, %Flow, %if.then
+    call void @llvm.blkv.end.cf.i64(i64 %2)
+    ret void
+  }
+  
+  ; Function Attrs: nounwind readnone
+  declare i16 @llvm.blkv.get.index.x() #1
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.if.i64(i1) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare { i1, i64 } @llvm.blkv.flow.i64.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i64 @llvm.blkv.if.break.i64(i1, i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i1 @llvm.blkv.loop.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare void @llvm.blkv.end.cf.i64(i64) #2
+  
+  ; Function Attrs: convergent nounwind willreturn
+  declare i32 @llvm.blkv.merge.cf.i32(i32, i32) #2
+  
+  attributes #0 = { mustprogress nofree noinline nounwind "__mtc__" "frame-pointer"="none" "min-legal-vector-width"="0" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+relax" }
+  attributes #1 = { nounwind readnone }
+  attributes #2 = { convergent nounwind willreturn }
+  
+  !0 = !{}
+
+...
+---
+name:            lookup_min
+alignment:       2
+exposesReturnsTwice: false
+legalized:       false
+regBankSelected: false
+selected:        false
+failedISel:      false
+tracksRegLiveness: true
+hasWinCFI:       false
+callsEHReturn:   false
+callsUnwindInit: false
+hasEHCatchret:   false
+hasEHScopes:     false
+hasEHFunclets:   false
+failsVerification: false
+tracksDebugUserValues: false
+registers:
+  - { id: 0, class: simtcgs, preferred-register: '' }
+  - { id: 1, class: simtcgv, preferred-register: '' }
+  - { id: 2, class: simtcgv, preferred-register: '' }
+  - { id: 3, class: simtcgs, preferred-register: '' }
+  - { id: 4, class: simtcgv, preferred-register: '' }
+  - { id: 5, class: simtcgv, preferred-register: '' }
+  - { id: 6, class: simtcgv, preferred-register: '' }
+  - { id: 7, class: simtcgs, preferred-register: '' }
+  - { id: 8, class: simtcgv, preferred-register: '' }
+  - { id: 9, class: simtcgs, preferred-register: '' }
+  - { id: 10, class: simtcgv, preferred-register: '' }
+  - { id: 11, class: simtcgv, preferred-register: '' }
+  - { id: 12, class: simtcgs, preferred-register: '' }
+  - { id: 13, class: simtcgs, preferred-register: '' }
+  - { id: 14, class: simtcgs, preferred-register: '' }
+  - { id: 15, class: simtcgs, preferred-register: '' }
+  - { id: 16, class: simtcgs, preferred-register: '' }
+  - { id: 17, class: simtcgs, preferred-register: '' }
+  - { id: 18, class: simtcgs, preferred-register: '' }
+  - { id: 19, class: simtcgs, preferred-register: '' }
+  - { id: 20, class: simtcgv, preferred-register: '' }
+  - { id: 21, class: simtcgvl, preferred-register: '' }
+  - { id: 22, class: simtcgvl, preferred-register: '' }
+  - { id: 23, class: simtcgsl, preferred-register: '' }
+  - { id: 24, class: simtcgsl, preferred-register: '' }
+  - { id: 25, class: cgsl, preferred-register: '' }
+  - { id: 26, class: simtcgvl, preferred-register: '' }
+  - { id: 27, class: simtcgvl, preferred-register: '' }
+  - { id: 28, class: simtcgvl, preferred-register: '' }
+  - { id: 29, class: simtcgvl, preferred-register: '' }
+  - { id: 30, class: cgsl, preferred-register: '' }
+  - { id: 31, class: simtcgs, preferred-register: '' }
+  - { id: 32, class: simtcgs, preferred-register: '' }
+  - { id: 33, class: simtcgs, preferred-register: '' }
+  - { id: 34, class: simtcgs, preferred-register: '' }
+  - { id: 35, class: simtcgs, preferred-register: '' }
+  - { id: 36, class: simtcgvl, preferred-register: '' }
+  - { id: 37, class: simtcgvl, preferred-register: '' }
+  - { id: 38, class: simtcgvl, preferred-register: '' }
+  - { id: 39, class: simtcgvl, preferred-register: '' }
+  - { id: 40, class: simtcgvl, preferred-register: '' }
+  - { id: 41, class: simtcgsl, preferred-register: '' }
+  - { id: 42, class: simtcgsl, preferred-register: '' }
+  - { id: 43, class: simtcgsl, preferred-register: '' }
+  - { id: 44, class: cgsl, preferred-register: '' }
+  - { id: 45, class: simtcgvl, preferred-register: '' }
+  - { id: 46, class: simtcgvl, preferred-register: '' }
+  - { id: 47, class: simtcgvl, preferred-register: '' }
+  - { id: 48, class: simtcgvl, preferred-register: '' }
+  - { id: 49, class: simtcgvl, preferred-register: '' }
+  - { id: 50, class: simtcgvl, preferred-register: '' }
+  - { id: 51, class: simtcgsl, preferred-register: '' }
+  - { id: 52, class: simtcgsl, preferred-register: '' }
+  - { id: 53, class: simtcgsl, preferred-register: '' }
+  - { id: 54, class: simtcgsl, preferred-register: '' }
+  - { id: 55, class: simtcgsl, preferred-register: '' }
+  - { id: 56, class: simtcgsl, preferred-register: '' }
+  - { id: 57, class: cgsl, preferred-register: '' }
+liveins:
+  - { reg: '$simt_ri0', virtual-reg: '%13' }
+  - { reg: '$simt_ri1', virtual-reg: '%14' }
+  - { reg: '$simt_ri2', virtual-reg: '%15' }
+  - { reg: '$simt_ri3', virtual-reg: '%16' }
+  - { reg: '$simt_ri4', virtual-reg: '%17' }
+  - { reg: '$simt_ri5', virtual-reg: '%18' }
+  - { reg: '$simt_ri6', virtual-reg: '%19' }
+frameInfo:
+  isFrameAddressTaken: false
+  isReturnAddressTaken: false
+  hasStackMap:     false
+  hasPatchPoint:   false
+  stackSize:       0
+  offsetAdjustment: 0
+  maxAlignment:    1
+  adjustsStack:    false
+  hasCalls:        false
+  stackProtector:  ''
+  functionContext: ''
+  maxCallFrameSize: 4294967295
+  cvBytesOfCalleeSavedRegisters: 0
+  hasOpaqueSPAdjustment: false
+  hasVAStart:      false
+  hasMustTailInVarArgFunc: false
+  hasTailCall:     false
+  localFrameSize:  0
+  savePoint:       ''
+  restorePoint:    ''
+fixedStack:      []
+stack:           []
+callSites:       []
+debugValueSubstitutions: []
+constants:       []
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x40000000), %bb.7(0x40000000)
+    liveins: $simt_ri0, $simt_ri1, $simt_ri2, $simt_ri3, $simt_ri4, $simt_ri5, $simt_ri6
+  
+    %19:simtcgs = COPY $simt_ri6
+    %18:simtcgs = COPY $simt_ri5
+    %17:simtcgs = COPY $simt_ri4
+    %16:simtcgs = COPY $simt_ri3
+    %15:simtcgs = COPY $simt_ri2
+    %14:simtcgs = COPY $simt_ri1
+    %13:simtcgs = COPY $simt_ri0
+    %20:simtcgv = COPY $simt_lc0
+    %21:simtcgvl = SIMT_ICVT_U162U32 1, %20, 2, 0, 0, implicit $simt_p
+    %22:simtcgvl = SIMT_CMP_LT 0, killed %21, 5, %17, 5, implicit $simt_p
+    %23:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    SIMT_CMP_NEI_P killed %22, 0, 0, implicit-def $simt_p, implicit $simt_p
+    %24:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    %0:simtcgs = COPY %23
+    %25:cgsl = SIMT_CMP_EQI_SCAR 0, killed %24, 4, 0, implicit $simt_p
+    BNE killed %25, $r0, %bb.7
+    J %bb.1
+  
+  bb.1.if.then:
+    successors: %bb.2(0x50000000), %bb.7(0x30000000)
+  
+    %26:simtcgvl = SIMT_Continuous_LD_GLOBAL 0, %14, 4, $r0, 4, 0, implicit $simt_p :: (volatile load (s64) from %ir.keyp)
+    %1:simtcgv = COPY %26
+    %27:simtcgvl = SIMT_ICVT_S642S32 1, %26, 4, 0, 0, implicit $simt_p
+    %28:simtcgvl = SIMT_SLLI 1, killed %27, 5, 3, implicit $simt_p
+    %29:simtcgvl = SIMT_REM 1, killed %28, 1, %16, 1, implicit $simt_p
+    %2:simtcgv = COPY %29
+    %30:cgsl = SIMT_CMP_LTI_SCAR 0, %19, 5, 1, implicit $simt_p
+    BNE killed %30, $r0, %bb.7
+    J %bb.2
+  
+  bb.2.for.body.preheader:
+    successors: %bb.3(0x80000000)
+  
+    %33:simtcgs = COPY $r0
+    %32:simtcgs = COPY %33
+    %34:simtcgs = COPY $r0
+    %31:simtcgs = COPY %34
+  
+  bb.3.for.body:
+    successors: %bb.4(0x40000000), %bb.5(0x40000000)
+  
+    %3:simtcgs = PHI %31, %bb.2, %12, %bb.5
+    %4:simtcgv = PHI %32, %bb.2, %11, %bb.5
+    %5:simtcgv = PHI %2, %bb.2, %10, %bb.5
+    %36:simtcgvl = SIMT_MUL 1, %5, 5, %18, 5, implicit $simt_p
+    %37:simtcgvl = SIMT_ICVT_U322U64 0, %36, 1, 0, 0, implicit $simt_p
+    %38:simtcgvl = SIMT_ADD 0, %13, 4, killed %37, 4, 0, 0, 0, implicit $simt_p
+    %6:simtcgv = COPY %38
+    %39:simtcgvl = SIMT_LD_GLOBAL 0, %13, 4, %36, 1, 0, implicit $simt_p :: (volatile load (s64) from %ir.key.addr)
+    %40:simtcgvl = SIMT_CMP_EQ 0, killed %39, 4, %1, 4, implicit $simt_p
+    %41:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    SIMT_CMP_NEI_P killed %40, 0, 0, implicit-def $simt_p, implicit $simt_p
+    %42:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    %43:simtcgsl = LinxV5ImplicitSDef 1, implicit $simt_p
+    %35:simtcgs = COPY %43
+    %7:simtcgs = COPY %41
+    %44:cgsl = SIMT_CMP_EQI_SCAR 0, killed %42, 4, 0, implicit $simt_p
+    BNE killed %44, $r0, %bb.5
+    J %bb.4
+  
+  bb.4.found.then:
+    successors: %bb.5(0x80000000)
+  
+    %45:simtcgvl = SIMT_LWI_GLOBAL 1, %6, 4, 2, implicit $simt_p :: (volatile load (s32) from %ir.value.addr.i8)
+    SIMT_Continuous_SW_GLOBAL killed %45, 5, %15, 4, $r0, 4, 0, implicit $simt_p :: (volatile store (s32) into %ir.outp)
+  
+  bb.5.for.inc:
+    successors: %bb.6(0x04000000), %bb.3(0x7c000000)
+  
+    %8:simtcgv = PHI %4, %bb.3, %4, %bb.4
+    %9:simtcgs = PHI %35, %bb.3, %19, %bb.4
+    %46:simtcgvl = SIMT_PSEL 1, $simt_p, 4, %8, 5, %9, 5, 0, implicit $simt_p
+    LinxV5PseudoCopy2PTerm %7, implicit-def dead $simt_p, implicit $simt_p
+    %47:simtcgvl = SIMT_ADDI 1, %5, 5, 1, implicit $simt_p
+    %48:simtcgvl = SIMT_REM 1, killed %47, 1, %16, 1, implicit $simt_p
+    %10:simtcgv = COPY %48
+    %49:simtcgvl = SIMT_ADDI 1, killed %46, 5, 1, implicit $simt_p
+    %11:simtcgv = COPY %49
+    %50:simtcgvl = SIMT_CMP_GE 0, %49, 5, %19, 5, implicit $simt_p
+    %51:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    SIMT_CMP_NEI_P killed %50, 0, 0, implicit-def $simt_p, implicit $simt_p
+    %52:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    LinxV5PseudoCopy2P killed %51, implicit-def dead $simt_p, implicit $simt_p
+    %53:simtcgsl = SIMT_OR_SCAR 0, killed %52, 4, %3, 4, 0, 0, implicit $simt_p
+    %12:simtcgs = COPY %53
+    %54:simtcgsl = SIMT_XORI_SCAR 0, %53, 4, -1, implicit $simt_p
+    %55:simtcgsl = LinxV5PseudoCopyFromP implicit $simt_p
+    %56:simtcgsl = SIMT_AND_SCAR 0, killed %54, 4, killed %55, 4, 0, 0, implicit $simt_p
+    LinxV5PseudoCopy2PTerm %56, implicit-def dead $simt_p, implicit $simt_p
+    %57:cgsl = SIMT_CMP_NEI_SCAR 0, %56, 4, 0, implicit $simt_p
+    BNE killed %57, $r0, %bb.3
+    J %bb.6
+  
+  bb.6.Flow:
+    successors: %bb.7(0x80000000)
+  
+    LinxV5PseudoCopy2PTerm %12, implicit-def dead $simt_p, implicit $simt_p
+  
+  bb.7.exit:
+    LinxV5PseudoCopy2PTerm %0, implicit-def dead $simt_p, implicit $simt_p
+    PseudoRET
+
+...

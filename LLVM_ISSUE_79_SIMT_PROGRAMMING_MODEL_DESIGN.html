@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>LLVM_ISSUE_79_SIMT_PROGRAMMING_MODEL_DESIGN.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> or <div class="page"></div> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="llvm-issue-79ptolinx-059-simt-编程模型与编译器实现设计">LLVM Issue #79：PTO/Linx 0.59 SIMT 编程模型与编译器实现设计</h1>
+<blockquote>
+<p>日期：2026-09-01<br>
+LLVM Issue：<a href="https://github.com/LinxISA/llvm-project/issues/79">https://github.com/LinxISA/llvm-project/issues/79</a><br>
+架构依赖：<a href="https://github.com/PTO-ISA/pto-spec/issues/189">https://github.com/PTO-ISA/pto-spec/issues/189</a><br>
+Issue 指定 LLVM 审计基线：<code>9fb4f7aa89ee22541bfae288e2085ada266ffd75</code><br>
+本次核对的 LLVM 主线：<code>linxisa/main@baef2b3a47a2162ef4e0542eb715562bfdbe7a6a</code><br>
+本次核对的 PTO-SPEC 主线：<code>e811355419182144784af802ff4c86d6a7014c70</code>，release <code>0.58.5</code><br>
+本次核对的 Linx ISA 主线：<code>5941d5456c2df5aa32fd4e24adaa56926b8f8dcb</code>，canonical profile <code>v0.58</code></p>
+</blockquote>
+<h2 id="1-文档目的">1. 文档目的</h2>
+<p>本文说明 LLVM Issue #79 的需求背景、现行编程模型、目标编程模型、对软件栈的冲击、编译器需要完成的工作，以及当前和目标汇编形态。</p>
+<p>Issue #79 不是增加一条 intrinsic 或修复一条指令编码，而是一次跨越 Clang、LLVM IR、MachineIR、Blockify、MC、对象格式和运行模型的 SIMT 编程模型升级。其目标是让开发者继续编写普通 C++ <code>for</code>、<code>if</code>、<code>else</code>、<code>break</code> 和 <code>continue</code>，由编译器自动构造 predicate、EXEC mask、重汇聚和 Tile region 操作。</p>
+<p>本文严格区分：</p>
+<ol>
+<li><strong>当前可用的 PTO/Linx 0.58 模型</strong>；</li>
+<li><strong>PTO-SPEC #189 提议但尚未冻结的 0.59 模型</strong>；</li>
+<li><strong>不依赖最终指令编码、现在即可开展的编译器工作</strong>；</li>
+<li><strong>必须等待 ISA 合同确定后才能完成的工作</strong>。</li>
+</ol>
+<p>本文中的 0.59 汇编均为结构示意，除非明确标记为现行 0.58 指令，否则不得作为已批准的编码或语义实现。</p>
+<h3 id="11-整体编译路线摘要">1.1 整体编译路线摘要</h3>
+<p>Issue #79 的整体路线可以概括为：开发者继续使用普通 C/C++ <code>for</code>、<code>if</code>、
+<code>else</code>、<code>break</code> 和 <code>continue</code> 描述逐元素计算；LLVM 首先通过 uniformity
+analysis 判断条件是 uniform 还是 varying，而不是先把所有 predicate 都转成
+标量。uniform 条件可以进入普通标量控制域，并在 ISA 合同正式批准后选择
+<code>B.Z</code>、<code>B.NZ</code> 或其最终替代分支形式；varying 条件必须保留为 predicate/EXEC
+mask，切换到 divergent SIMT lowering，由编译器维护 active mask、saved mask、
+<code>if/else/loop</code> 控制帧和 reconvergence 点。Vector 计算体按 element-wise 语义
+生成，由当前 EXEC mask 决定哪些 element 产生架构效果；TileOP API 不要求开发者
+手写 TileOP 级控制栈或复杂分支。<code>B.SUBVIEW</code>、<code>B.ASSEMBLE</code>、<code>TPARTVIEW</code>、
+<code>TileArray</code> 和 <code>TASSEMBLY</code> 只描述 parent Tile、fragment、source region 和
+destination assembly session 的数据关系，不承担控制流语义，但必须作为 typed
+Tile region/session SSA 保留到后端，使 SIMT kernel 可以在不同控制流路径中安全
+访问和组装 Tile 数据。</p>
+<p>整体流程如下：</p>
+<pre class="hljs"><code><div>普通 C/C++ element-wise 控制流
+    |
+    v
+UniformityAnalysis：区分 uniform / varying
+    |
+    +-- uniform condition
+    |      -&gt; 标量条件
+    |      -&gt; 普通 scalar CFG
+    |      -&gt; B.Z / B.NZ 或最终批准的替代形式
+    |
+    +-- varying condition
+           -&gt; predicate / condition mask
+           -&gt; then_mask = EXEC &amp; condition
+           -&gt; else_mask = EXEC &amp; ~condition
+           -&gt; compiler-side control frame
+           -&gt; divergent body + reconvergence
+    |
+    v
+在当前 EXEC 下生成 element-wise Vector 操作
+    |
+    v
+通过 Subview / TileArray / Assemble 管理 Tile region 和结果组装
+</div></code></pre>
+<p>其中最重要的边界是：</p>
+<ol>
+<li>
+<p><strong>不能先把 divergent predicate 压成单个标量。</strong> 这样会丢失各 element 的
+分支状态；只有被证明为 uniform 的条件才进入普通标量分支。</p>
+</li>
+<li>
+<p><strong><code>B.Z/B.NZ</code> 是 uniform scalar branch 的候选入口，不是 divergent mask
+控制本身。</strong> 截至本文基线，它们仍是 <code>reserved-in-pto</code>，这里只描述编译结构，
+不代表指令语义已经冻结。</p>
+</li>
+<li>
+<p><strong>divergent 控制由编译器维护，不暴露给 TileOP 开发者。</strong> 编译器需要跟踪：</p>
+<pre class="hljs"><code><div>ControlFrame {
+  saved_exec;
+  remaining_else_mask;
+  reconvergence_block;
+  loop_break_mask;
+  loop_continue_mask;
+}
+</div></code></pre>
+</li>
+<li>
+<p><strong>Tile region 与控制栈是正交机制。</strong> <code>Subview/TPARTVIEW</code> 负责读取 parent 的
+fragment，<code>TileArray/Assemble/TASSEMBLY</code> 负责构造 destination parent；它们
+不执行 <code>if/else</code>，但 region 的覆盖范围、生命周期、重叠关系和
+<code>INIT/MIDDLE/LAST</code> 必须由编译器验证和推导。</p>
+</li>
+<li>
+<p><strong>应移除的是字符串化 Vector/SIMT body，而不是所有 TileOP inline asm。</strong>
+<code>linx-vblock-body-asm</code>、body-local <code>ri/vt/vu/vm/vn</code> 和第二套 scalar-import
+namespace 应迁移到 typed IR/MachineIR；已经符合 ISA 的单条 Vector TileOP、
+Cube <code>TMATMUL/TGEMV/TCVT</code>、load/store 以及 region modifier inline asm 可以作为
+0.58 兼容路径继续保留，之后再逐步切换到正式 instruction selection。</p>
+</li>
+</ol>
+<h2 id="2-需求背景">2. 需求背景</h2>
+<h3 id="21-用户希望保留普通-c-控制流">2.1 用户希望保留普通 C++ 控制流</h3>
+<p>开发者期望编写普通的 element-wise C++：</p>
+<pre class="hljs"><code><div><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">piecewise</span><span class="hljs-params">(<span class="hljs-type">float</span> *out, <span class="hljs-type">const</span> <span class="hljs-type">float</span> *x, <span class="hljs-type">int</span> n)</span> </span>{
+  <span class="hljs-meta">#<span class="hljs-keyword">pragma</span> clang loop linx_simt(enable) linx_schedule(auto)</span>
+  <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) {
+    <span class="hljs-type">float</span> value = x[i];
+
+    <span class="hljs-keyword">if</span> (value &gt; <span class="hljs-number">0.0f</span>) {
+      <span class="hljs-keyword">if</span> (value &gt; <span class="hljs-number">10.0f</span>)
+        out[i] = value * <span class="hljs-number">2.0f</span>;
+      <span class="hljs-keyword">else</span>
+        out[i] = value + <span class="hljs-number">1.0f</span>;
+    } <span class="hljs-keyword">else</span> {
+      out[i] = -value;
+    }
+  }
+}
+</div></code></pre>
+<p>开发者不应该手写：</p>
+<ul>
+<li>predicate 寄存器编号；</li>
+<li>EXEC mask 更新；</li>
+<li>mask 保存和恢复；</li>
+<li>reconvergence label；</li>
+<li>控制栈 push/pop；</li>
+<li><code>B.Z</code> / <code>B.NZ</code>；</li>
+<li>body-local <code>ri/vt/vu/vm/vn</code> 寄存器；</li>
+<li>手工展开的 bundle 汇编。</li>
+</ul>
+<p>Clang 只表达用户意图，LLVM 在优化后判断循环是否适合 SIMT 化，以及应使用有序执行还是迭代并行执行。</p>
+<h3 id="22-tile-element-访问不能退化为普通标量地址访问">2.2 Tile element 访问不能退化为普通标量地址访问</h3>
+<p>Tile-view 编程希望具有类似下列源代码：</p>
+<pre class="hljs"><code><div><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">DstView</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">SrcView</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">tile_piecewise</span><span class="hljs-params">(DstView dst, SrcView src)</span> </span>{
+  <span class="hljs-meta">#<span class="hljs-keyword">pragma</span> clang loop linx_simt(enable) linx_schedule(auto)</span>
+  <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; src.<span class="hljs-built_in">size</span>(); ++i) {
+    <span class="hljs-keyword">auto</span> value = src[i];
+    <span class="hljs-keyword">if</span> (value &gt; <span class="hljs-number">0</span>)
+      dst[i] = value + <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">else</span>
+      dst[i] = -value;
+  }
+}
+</div></code></pre>
+<p>这里的 <code>src[i]</code> 和 <code>dst[i]</code> 不是普通可取地址的 C++ 引用，也不应被实现为 Local Tile 与 body-local vector register 之间的 <code>VLOAD/VSTORE</code> 搬运。它们应被编译器识别为：</p>
+<pre class="hljs"><code><div>父 Tile + 当前迭代对应的 region
+</div></code></pre>
+<p>源操作映射为 <code>B.SUBVIEW</code>，目标操作映射为 <code>B.ASSEMBLE</code>，中间值继续存在于顶层 Tile/region SSA 中。</p>
+<h3 id="23-为什么现有-058-路径不适合继续扩展">2.3 为什么现有 0.58 路径不适合继续扩展</h3>
+<p>当前 LLVM <code>LinxISA</code> 后端已经能识别部分 counted loop、affine memory、reduction、select 和结构化内部 CFG，也能处理一些简单 diamond。但其核心实现仍基于 0.58 的 body-local 执行模型：</p>
+<pre class="hljs"><code><div>普通 LLVM IR
+    |
+    v
+LinxISASIMTAutoVectorize
+    |
+    +-- 生成 linx-vblock-body-asm 字符串
+    +-- 生成 llvm.linx.vblock.launch
+    |
+    v
+PSEUDO_VBLOCK_LAUNCH
+    |
+    v
+LinxISABlockify
+    |
+    +-- BSTART.MSEQ / MPAR / VSEQ / VPAR
+    +-- B.TEXT
+    +-- B.IOR 导入 ri0..ri11
+    +-- body-local PSEUDO_V_* / v.* 指令
+    +-- BSTOP
+</div></code></pre>
+<p>这种模型存在以下根本限制：</p>
+<ul>
+<li>body 被序列化为字符串，后续 LLVM pass 看不到真实 CFG 和数据依赖；</li>
+<li><code>llvm.linx.vblock.launch</code> 提供第二套最多十二项的 <code>ri*</code> 标量导入命名空间；</li>
+<li><code>PSEUDO_V_*</code> 以立即数携带 body-local <code>ri/vt/vu/vm/vn</code> 编号；</li>
+<li>predicate、EXEC 和 reconvergence 没有完整的 typed IR/MachineIR 表示；</li>
+<li>Scheduler、Register Allocator 和 verifier 无法可靠跟踪控制 mask 的 use/def；</li>
+<li>Tile region 被迫通过复制或字符串汇编表达，不能与 LLVM #74 的 region/session 模型组合；</li>
+<li><code>MSEQ/MPAR/VSEQ/VPAR</code> 将 body 能力和执行顺序绑在同一个 header 选择中。</li>
+</ul>
+<p>Issue #79 要求删除这些架构假设，而不是在它们外面增加新的伪指令名称。</p>
+<h2 id="3-当前-ptolinx-058-编程模型">3. 当前 PTO/Linx 0.58 编程模型</h2>
+<h3 id="31-当前架构状态">3.1 当前架构状态</h3>
+<p>截至 2026-09-01：</p>
+<ul>
+<li>PTO-SPEC 正式发布身份仍是 <code>0.58.5</code>；</li>
+<li>Linx ISA canonical profile 仍是 <code>v0.58</code>；</li>
+<li><code>BSTART.MSEQ</code>、<code>BSTART.MPAR</code>、<code>BSTART.VSEQ</code> 和 <code>BSTART.VPAR</code> 属于当前/历史 scheduled body 模型；</li>
+<li>body 内使用统一 <code>lx64</code> 编码空间，但仍存在每 lane/body-local 的 <code>vt/vu/vm/vn</code> 以及导入的 <code>ri*</code>；</li>
+<li>当前架构 EXEC mask 为 <code>p</code>，当前说明使用 <code>V.CMP.* -&gt;p</code> 生成 mask；</li>
+<li><code>B.Z</code> 和 <code>B.NZ</code> 只有 PTO 保留编码，状态为 <code>reserved-in-pto</code>，不能视为正式、可移植的已定义指令。</li>
+</ul>
+<h3 id="32-当前编译器输入形式">3.2 当前编译器输入形式</h3>
+<p>当前主要入口是自动向量化识别的普通 LLVM loop，而不是完整的 C++ SIMT pragma 合同。<code>LinxISASIMTAutoVectorize.cpp</code> 根据循环和 body 特征选择生成 scheduled body。</p>
+<p>已有实现可以覆盖：</p>
+<ul>
+<li>canonical counted loop；</li>
+<li>部分 affine load/store；</li>
+<li>部分整数和浮点算术；</li>
+<li>select；</li>
+<li>简单 reduction；</li>
+<li>简单 if-converted diamond；</li>
+<li>部分嵌套 mask branch 测试。</li>
+</ul>
+<p>但复杂 grouped divergence 会遇到类似：</p>
+<pre class="hljs"><code><div>grouped_layout_requires_exec_mask_save_restore
+</div></code></pre>
+<p>这表明当前编译器缺少完整的 mask save/restore 和 reconvergence 表示。</p>
+<h3 id="33-当前-058-汇编形态">3.3 当前 0.58 汇编形态</h3>
+<p>以下是当前模型的结构示意，不代表某个具体测试的逐字反汇编：</p>
+<pre class="hljs"><code><div>BSTART.MSEQ ...              # 或 MPAR/VSEQ/VPAR
+B.TEXT ...
+B.IOR a0, -&gt;ri0              # 导入第二层 scalar namespace
+B.IOR a1, -&gt;ri1
+C.B.DIMI ..., -&gt;lb0
+C.B.DIMI ..., -&gt;lb1
+
+v.lw.brg [ri0, lc0.uh&lt;&lt;2, 0], -&gt;vt.w
+v.flt vt#1.sw, ..., -&gt;p
+B.Z .Lelse                   # 当前仍不能作为已冻结的 0.59 合同
+v.fadd vt#1.sw, ..., -&gt;vu.w
+v.sw.brg vu#1.uw, [ri1, lc0.uh&lt;&lt;2, 0]
+...
+C.BSTOP
+</div></code></pre>
+<p>这个模型中的 <code>ri</code>、<code>vt</code>、<code>vu</code> 和 <code>p</code> 属于 scheduled body 内部状态。Issue #79 的 0.59 目标明确要求不再保留第二套 body-local V/scalar-import 寄存器层级。</p>
+<h2 id="4-目标-ptolinx-059-编程模型">4. 目标 PTO/Linx 0.59 编程模型</h2>
+<h3 id="41-单一架构寄存器层级">4.1 单一架构寄存器层级</h3>
+<p>目标模型只保留一套架构状态：</p>
+<pre class="hljs"><code><div>Main GPR
+Predicate P0..P7
+Local Tile
+Shared Tile
+Tile region / generation state
+Execution-instance EXEC / reconvergence state
+</div></code></pre>
+<p>不再存在：</p>
+<pre class="hljs"><code><div>ri0..ri11
+vt/vu/vm/vn body-local register IDs
+body-local scalar-import namespace
+linx-vblock-body-asm 字符串 body
+</div></code></pre>
+<p>Uniform 值与 varying 值的归属如下：</p>
+<table>
+<thead>
+<tr>
+<th>源语言值</th>
+<th>编译器分类</th>
+<th>目标表示</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>循环外不变整数/指针</td>
+<td>Uniform numeric</td>
+<td>Main GPR</td>
+</tr>
+<tr>
+<td>Uniform 条件</td>
+<td>Uniform boolean</td>
+<td>普通 scalar CFG/GPR 条件</td>
+</tr>
+<tr>
+<td>每元素数值</td>
+<td>Varying numeric</td>
+<td>Tile/region SSA</td>
+</tr>
+<tr>
+<td>每元素条件</td>
+<td>Varying boolean</td>
+<td>PRED32 / EXEC mask</td>
+</tr>
+<tr>
+<td><code>TCMP</code> 产生的 packed predicate Tile</td>
+<td>Tile data</td>
+<td>不能隐式当作 P1..P7/EXEC</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-执行顺序与-body-能力解耦">4.2 执行顺序与 body 能力解耦</h3>
+<p>0.59 提案使用正交的执行顺序标记：</p>
+<pre class="hljs"><code><div>B.SEQ
+B.PAR
+</div></code></pre>
+<p>而不是继续使用 <code>MSEQ/MPAR/VSEQ/VPAR</code> 同时表达 body 类别和顺序。</p>
+<h4 id="bseq"><code>B.SEQ</code></h4>
+<p><code>B.SEQ</code> 是保守、有序的执行模式：</p>
+<ul>
+<li>迭代按架构规定顺序提交；</li>
+<li>允许 main GPR 写入；</li>
+<li>允许 loop-carried scalar recurrence；</li>
+<li>允许在不破坏 Tile view 和 precise fault 的前提下进行 scalar lowering；</li>
+<li>divergent branch 仍必须具有合法的 EXEC 和 reconvergence 状态。</li>
+</ul>
+<h4 id="bpar"><code>B.PAR</code></h4>
+<p><code>B.PAR</code> 是经证明可以并行的执行模式：</p>
+<ul>
+<li>完整 body 不得写普通 main GPR；</li>
+<li>动态上不执行的 GPR 写路径也必须在预检中拒绝；</li>
+<li>GPR 读取使用 region-entry snapshot；</li>
+<li>varying numeric 不能临时落入普通 GPR；</li>
+<li>destination region 必须证明不重叠；</li>
+<li>普通 loop-carried recurrence 不合法；</li>
+<li>未定义的 call、volatile、atomic、alias 或 predicate spill 必须拒绝。</li>
+</ul>
+<p>默认策略：</p>
+<pre class="hljs"><code><div>linx_schedule(auto) -&gt; 证明 PAR 合法才选 B.PAR，否则 B.SEQ/标量回退
+linx_schedule(seq)  -&gt; 请求 B.SEQ
+linx_schedule(par)  -&gt; 必须证明合法，否则稳定诊断
+</div></code></pre>
+<h3 id="43-predicateexec-和重汇聚">4.3 Predicate、EXEC 和重汇聚</h3>
+<p>LLVM IR 保留正常 SSA CFG。目标 pass 根据 uniformity 与 CFG 结构插入控制流 marker，而不是让用户显式管理 mask。</p>
+<p>概念控制帧：</p>
+<pre class="hljs"><code><div>ControlFrame {
+  saved_exec;
+  remaining_else_mask;
+  reconvergence_block;
+  loop_break_mask;
+  loop_continue_mask;
+}
+</div></code></pre>
+<p>一个 varying <code>if/else</code> 的概念语义为：</p>
+<pre class="hljs"><code><div>entry_exec = EXEC
+then_exec  = entry_exec &amp; condition_mask
+else_exec  = entry_exec &amp; ~condition_mask
+
+在 then_exec 非零时执行 then
+在 else_exec 非零时执行 else
+在 join 处恢复 surviving mask
+</div></code></pre>
+<p><code>break</code> 和 <code>continue</code> 不能简单恢复入口 mask，而必须更新 loop live mask、broken mask 和 continue mask。</p>
+<h3 id="44-direct-tile-region">4.4 Direct Tile region</h3>
+<p>Tile-view 循环中的第 <code>i</code> 个 fragment 由迭代坐标计算：</p>
+<pre class="hljs"><code><div>offset = base_offset + LinearIterationID(LC) * fragment_size
+</div></code></pre>
+<p>源读取：</p>
+<pre class="hljs"><code><div>Parent Tile + B.SUBVIEW(offset, fragment size)
+</div></code></pre>
+<p>目标写入：</p>
+<pre class="hljs"><code><div>Parent working generation + B.ASSEMBLE(offset, parent size, INIT/LAST)
+</div></code></pre>
+<p>要求：</p>
+<ul>
+<li>modifier 必须紧邻其拥有的 binder；</li>
+<li>source snapshot 先于 destination publication；</li>
+<li>同一个 parent 的 destination fragment 进入同一个 assembly session/generation；</li>
+<li><code>INIT</code> 初始化 parent generation；</li>
+<li><code>LAST</code> 结束并发布完整 parent；</li>
+<li><code>B.PAR</code> 下默认要求 fragment 互不重叠；</li>
+<li>fault、replay、rollback、coverage 和 publication 服从 PTO generation 合同。</li>
+</ul>
+<h2 id="5-对软件栈的冲击">5. 对软件栈的冲击</h2>
+<h3 id="51-clang-前端">5.1 Clang 前端</h3>
+<p>需要增加或正式化 loop hint：</p>
+<pre class="hljs"><code><div>linx_simt(enable | disable)
+linx_schedule(auto | seq | par)
+</div></code></pre>
+<p>前端职责仅限：</p>
+<ul>
+<li>保留普通 C++ CFG；</li>
+<li>检查 pragma 拼写和组合；</li>
+<li>生成 loop metadata；</li>
+<li>对明显不支持的 non-addressable Tile element escape 报错。</li>
+</ul>
+<p>前端不能声明某个 loop 已经 <code>B.PAR</code> 合法，最终合法性必须在优化后的 LLVM IR 上证明。</p>
+<h3 id="52-llvm-ir-与-analysis">5.2 LLVM IR 与 Analysis</h3>
+<p>需要：</p>
+<ul>
+<li>使用 <code>UniformityAnalysis</code> 区分 uniform/varying；</li>
+<li>使用 <code>DominatorTree</code>、<code>PostDominatorTree</code> 和 <code>LoopInfo</code> 寻找 reconvergence；</li>
+<li>增加 <code>LinxSIMTControlFlow</code> pass；</li>
+<li>保持普通 SSA PHI；</li>
+<li>插入 IF/ELSE/IF_BREAK/LOOP/END_CF target marker；</li>
+<li>增加 convergence/noduplicate 约束，禁止跨 mask transition 克隆、推测、CSE 或 sinking；</li>
+<li>保持 Tile parent、region 和 generation/session 的 typed SSA。</li>
+</ul>
+<p>临时 target intrinsic 可采用 Issue #79 提议的结构：</p>
+<pre class="hljs"><code><div><span class="hljs-keyword">declare</span> {<span class="hljs-type">i1</span><span class="hljs-punctuation">,</span> <span class="hljs-type">i32</span>} <span class="hljs-title">@llvm.linx.simt.if</span>(<span class="hljs-type">i32</span> <span class="hljs-variable">%condition_mask</span>)
+<span class="hljs-keyword">declare</span> {<span class="hljs-type">i1</span><span class="hljs-punctuation">,</span> <span class="hljs-type">i32</span>} <span class="hljs-title">@llvm.linx.simt.else</span>(<span class="hljs-type">i32</span> <span class="hljs-variable">%saved_mask</span>)
+<span class="hljs-keyword">declare</span> <span class="hljs-type">i32</span>       <span class="hljs-title">@llvm.linx.simt.if.break</span>(<span class="hljs-type">i32</span> <span class="hljs-variable">%condition_mask</span><span class="hljs-punctuation">,</span>
+                                           <span class="hljs-type">i32</span> <span class="hljs-variable">%broken_mask</span>)
+<span class="hljs-keyword">declare</span> <span class="hljs-type">i1</span>        <span class="hljs-title">@llvm.linx.simt.loop</span>(<span class="hljs-type">i32</span> <span class="hljs-variable">%broken_mask</span>)
+<span class="hljs-keyword">declare</span> <span class="hljs-type">void</span>      <span class="hljs-title">@llvm.linx.simt.end.cf</span>(<span class="hljs-type">i32</span> <span class="hljs-variable">%saved_mask</span>)
+</div></code></pre>
+<p>这些 intrinsic 仅是编译器内部 marker，不代表一一对应的物理指令。</p>
+<h3 id="53-machineir-与寄存器分配">5.3 MachineIR 与寄存器分配</h3>
+<p>需要增加：</p>
+<ul>
+<li><code>PRED32</code> register class/bank；</li>
+<li>P0 all-active 常量约束；</li>
+<li>P1..P7 分配；</li>
+<li>explicit EXEC uses/defs；</li>
+<li>IF/ELSE/END_CF/LOOP pseudos；</li>
+<li>Tile parent/region operands；</li>
+<li>assembly-session operands；</li>
+<li>predicate pressure 和嵌套深度检查；</li>
+<li>无合法 spill carrier 时 fail closed。</li>
+</ul>
+<p>必须删除 0.59 输出中的：</p>
+<ul>
+<li>body-local <code>ri/vt/vu/vm/vn</code> immediate ID；</li>
+<li><code>PSEUDO_V_*</code> 作为第二层寄存器机器模型；</li>
+<li>VLOAD/VSTORE 形式的 Tile bridge。</li>
+</ul>
+<h3 id="54-instruction-selection-与-blockify">5.4 Instruction Selection 与 Blockify</h3>
+<p>ISel 应把 Tile 算术降低到 typed <code>PSEUDO_TILEOP_*</code>，而不是提前序列化汇编。</p>
+<p>Blockify 最终负责：</p>
+<ol>
+<li>发射一个 0.59 scheduled-region header；</li>
+<li>发射 <code>B.TEXT</code>；</li>
+<li>发射经 ISA 批准的 <code>B.SEQ</code> 或 <code>B.PAR</code>；</li>
+<li>发射 dimensions；</li>
+<li>绑定 main GPR、predicate、Local Tile、Shared Tile 和 region/session；</li>
+<li>展开 TileOp bundle；</li>
+<li>将 <code>B.SUBVIEW</code> / <code>B.ASSEMBLE</code> 放在对应 binder 旁边；</li>
+<li>发射显式 <code>BSTOP</code>，或使用下一条 <code>BSTART</code> 作为 bundle boundary；</li>
+<li>保留精确对象身份。</li>
+</ol>
+<h3 id="55-mc汇编器和反汇编器">5.5 MC、汇编器和反汇编器</h3>
+<p>需要支持两种视图：</p>
+<ul>
+<li>virtual TileOp assembly；</li>
+<li>physical bundle assembly。</li>
+</ul>
+<p>一个 virtual TileOp 必须确定性展开为一个 physical bundle。反汇编只有在物理 bundle 唯一、完整匹配 schema 时才能折叠为 virtual TileOp；以下情况必须打印 physical view：</p>
+<ul>
+<li>operand 多余或缺失；</li>
+<li>modifier 顺序错误；</li>
+<li>bundle 边界不唯一；</li>
+<li>bundle 从外部 label 进入；</li>
+<li>schema 匹配存在歧义；</li>
+<li>显式默认值与省略默认值不等价。</li>
+</ul>
+<h3 id="56-对象格式linker-与运行模型">5.6 对象格式、Linker 与运行模型</h3>
+<p>0.59 是硬架构边界：</p>
+<ul>
+<li>0.58 object 与 0.59 object 不应混链；</li>
+<li><code>.note.pto.isa</code> 必须携带精确身份；</li>
+<li>Linker 必须拒绝不一致的 PTO identity；</li>
+<li>QEMU、functional model、RTL/cycle model 必须执行同一对象；</li>
+<li>fault/restart context 必须保存 EXEC、predicate、control-stack、range 和 generation 状态；</li>
+<li><code>B.PAR</code> 必须定义内存副作用、冲突和 fault arbitration；</li>
+<li>assembly publication 必须具有原子 parent 可见性。</li>
+</ul>
+<h3 id="57-tileop-api">5.7 TileOP API</h3>
+<p>TileOP 需要：</p>
+<ul>
+<li>提供 non-addressable Tile element/region view；</li>
+<li>保持普通 C++ <code>for/if</code> body；</li>
+<li>将 <code>TPARTVIEW</code>/range view 映射到 compiler-recognized region SSA；</li>
+<li>将 <code>TASSEMBLY</code>/destination slots 映射到 assembly session；</li>
+<li>不要求用户指定 predicate、EXEC 或物理寄存器编号；</li>
+<li>不使用 inline assembly 隐藏需要 LLVM 分析的控制流；</li>
+<li>对固定 TileOp bundle 可继续使用生成的低层 carrier，但控制流和 region 生命周期必须由编译器看见。</li>
+</ul>
+<h2 id="6-编译器实现方案">6. 编译器实现方案</h2>
+<h3 id="61-阶段一清理-typed-body">6.1 阶段一：清理 typed body</h3>
+<p>目标是替换：</p>
+<pre class="hljs"><code><div>linx-vblock-body-asm
+llvm.linx.vblock.launch 的十二个 ri* slots
+PSEUDO_V_* immediate register IDs
+</div></code></pre>
+<p>保留真实 LLVM CFG 和 MachineBasicBlocks。第一阶段可以继续发射 0.58 backend 形式用于兼容测试，但内部表示必须不再依赖字符串。</p>
+<p>建议新增/重构：</p>
+<pre class="hljs"><code><div>llvm/lib/Target/LinxISA/LinxISASIMTBody.cpp
+llvm/lib/Target/LinxISA/LinxISASIMTBody.h
+llvm/lib/Target/LinxISA/LinxISASIMTBodyVerifier.cpp
+</div></code></pre>
+<p>也可以在现有 <code>LinxISASIMTAutoVectorize.cpp</code> 中先抽离数据结构，再逐步拆文件，避免一次性大重写。</p>
+<h3 id="62-阶段二simt-控制流标注">6.2 阶段二：SIMT 控制流标注</h3>
+<p>新增 <code>LinxSIMTControlFlow</code>：</p>
+<ol>
+<li>找到已选择的 SIMT loop；</li>
+<li>运行 UniformityAnalysis；</li>
+<li>保留 uniform branch；</li>
+<li>对 varying branch 找唯一 reconvergence；</li>
+<li>插入 IF/ELSE/END_CF marker；</li>
+<li>对 loop exit 插入 IF_BREAK/LOOP marker；</li>
+<li>对 irreducible CFG、多个不明确 join 和异常边拒绝；</li>
+<li>标记 convergence boundary，防止后续 pass 非法移动。</li>
+</ol>
+<p>可以参考 AMDGPU <code>SIAnnotateControlFlow.cpp</code> 的算法结构，但不能复制 AMD wave64、SGPR 或具体指令语义。</p>
+<h3 id="63-阶段三predicateexec-machineir">6.3 阶段三：Predicate/EXEC MachineIR</h3>
+<p>定义逻辑层伪指令，例如：</p>
+<pre class="hljs"><code><div>PSEUDO_SIMT_IF
+PSEUDO_SIMT_ELSE
+PSEUDO_SIMT_END_CF
+PSEUDO_SIMT_IF_BREAK
+PSEUDO_SIMT_LOOP
+PSEUDO_SIMT_BRANCH_ZERO
+PSEUDO_SIMT_BRANCH_NONZERO
+</div></code></pre>
+<p>每条伪指令必须显式声明：</p>
+<ul>
+<li>predicate input/output；</li>
+<li>implicit EXEC use/def；</li>
+<li>control side effect；</li>
+<li>convergent/barrier 属性；</li>
+<li>branch target；</li>
+<li>saved mask live range。</li>
+</ul>
+<p>在 ISA 合同冻结前，这些伪指令不得绑定自创的物理 encoding。</p>
+<h3 id="64-阶段四tile-region-lowering">6.4 阶段四：Tile region lowering</h3>
+<p>复用 LLVM #74 的 region/session 思路，不建立第二套表示。</p>
+<p>建议内部值：</p>
+<pre class="hljs"><code><div>TileParentValue
+TileSubviewValue(parent, offset, size)
+TileAssemblySession(parent, parent_size)
+TileAssemblySlot(session, offset, fragment_size, init, last)
+</div></code></pre>
+<p>ISel 输出应能表达：</p>
+<pre class="hljs"><code><div>PSEUDO_TILE_SUBVIEW parent, base, offset, size
+PSEUDO_TILEOP_TADD dst_region, src_region_a, src_region_b
+PSEUDO_TILE_ASSEMBLE session, dst_region, base, offset, parent_size, init, last
+</div></code></pre>
+<p>Blockify 再将 region modifier 放到 binder 旁边。</p>
+<h3 id="65-阶段五bseq--bpar-分析">6.5 阶段五：<code>B.SEQ</code> / <code>B.PAR</code> 分析</h3>
+<p>建立 whole-body effect summary：</p>
+<pre class="hljs"><code><div>WritesMainGPR
+ReadsMainGPR
+HasLoopCarriedRecurrence
+HasUnknownCall
+HasVolatile
+HasAtomic
+HasUnknownAlias
+HasOverlappingDestinationRegion
+HasPredicateSpill
+HasIrreducibleCFG
+HasUnsupportedFaultingEffect
+</div></code></pre>
+<p>选择逻辑：</p>
+<pre class="hljs"><code><div>if policy == seq:
+  select SEQ if SIMT lowering is otherwise legal
+
+if policy == par:
+  require complete PAR proof, otherwise diagnose
+
+if policy == auto:
+  select PAR only with complete proof
+  otherwise select SEQ
+  otherwise leave scalar
+</div></code></pre>
+<p>必须产生结构化 optimization remarks，说明：</p>
+<ul>
+<li>为什么选择 PAR；</li>
+<li>为什么回退 SEQ；</li>
+<li>哪条指令或哪类 effect 阻止 PAR；</li>
+<li>是否因为目标 ISA 身份缺少必要控制指令而放弃 lowering。</li>
+</ul>
+<h3 id="66-阶段六mc-与发布闭环">6.6 阶段六：MC 与发布闭环</h3>
+<p>等待 PTO-SPEC #189 和 Linx ISA 0.59 冻结后：</p>
+<ul>
+<li>增加真实 <code>B.SEQ</code> / <code>B.PAR</code>；</li>
+<li>增加真实 <code>B.Z</code> / <code>B.NZ</code> 或最终批准的替代形式；</li>
+<li>增加 EXEC save/update/restore carrier；</li>
+<li>增加 reconvergence carrier；</li>
+<li>更新 Blockify expansion；</li>
+<li>更新 assembler/disassembler；</li>
+<li>更新 object note 和 linker identity check；</li>
+<li>更新 QEMU、模型和 release pins；</li>
+<li>删除 0.59 lane 中旧的 MSEQ/MPAR/VSEQ/VPAR 和 body-local V 假设。</li>
+</ul>
+<h2 id="7-汇编设计">7. 汇编设计</h2>
+<h2 id="71-现行-058-汇编">7.1 现行 0.58 汇编</h2>
+<p>现行 0.58 仍使用 scheduled body header 与 body-local 指令。结构上类似：</p>
+<pre class="hljs"><code><div>BSTART.MSEQ ...
+B.TEXT ...
+B.IOR a0, -&gt;ri0
+B.IOR a1, -&gt;ri1
+C.B.DIMI 32, -&gt;lb0
+C.B.DIMI 1,  -&gt;lb1
+
+v.lw.brg [ri0, lc0.uh&lt;&lt;2, 0], -&gt;vt.w
+v.flt vt#1.sw, zero, -&gt;p
+v.csel p, vt#1.sw, ..., -&gt;vu.w
+v.sw.brg vu#1.uw, [ri1, lc0.uh&lt;&lt;2, 0]
+C.BSTOP
+</div></code></pre>
+<p>这是当前软件栈可以识别的旧模型，不是 Issue #79 的最终目标。</p>
+<h2 id="72-目标-059-物理结构示意">7.2 目标 0.59 物理结构示意</h2>
+<p>PTO-SPEC #189 期望的结构大致为：</p>
+<pre class="hljs"><code><div>BSTART.&lt;scheduled-region&gt; ...       # 最终 header 名称/编码待 ISA 冻结
+B.TEXT ...
+B.SEQ                              # 或 B.PAR；编码和位置待冻结
+B.DIM ..., -&gt;lb0
+B.DIM ..., -&gt;lb1
+
+# 直接绑定顶层 Tile/GPR/predicate，不导入 ri/vt/vu/vm/vn
+...
+BSTOP
+</div></code></pre>
+<p>需要强调：<code>B.SEQ</code> 和 <code>B.PAR</code> 当前尚无正式 0.59 encoding，以上只能作为目标结构。</p>
+<h2 id="73-source-subview-的目标-bundle">7.3 Source subview 的目标 bundle</h2>
+<p>假设一个 TileOp 从 parent Tile 中读取当前迭代的 fragment：</p>
+<pre class="hljs"><code><div>BSTART.VEC TADD, FP32
+B.DATR ...
+B.DIM ..., -&gt;lb0
+B.DIM ..., -&gt;lb1
+
+B.IOT t#parent_a, mask=1111
+B.SUBVIEW 0, base_a, offset_a_128B, fragment_size_code
+
+B.IOT t#parent_b, mask=1111
+B.SUBVIEW 0, base_b, offset_b_128B, fragment_size_code
+
+B.IOT mask=1111, last, -&gt;t#tmp&lt;fragment_size_code&gt;
+</div></code></pre>
+<p>这里沿用当前 0.58 <code>B.SUBVIEW</code> 已定义的核心概念：</p>
+<ul>
+<li><code>RegSrc/base</code> 和立即数 offset 共同确定 region 起点；</li>
+<li>offset 单位为 128 B；</li>
+<li>size code 表示 fragment 大小；</li>
+<li>modifier 紧邻它所修饰的 source binder。</li>
+</ul>
+<p>最终 0.59 是否调整顶层 Tile 拼写、binder 形式或字段位置，必须服从 PTO-SPEC #189 的最终合同。</p>
+<h2 id="74-destination-assemble-的目标-bundle">7.4 Destination assemble 的目标 bundle</h2>
+<p>将 fragment 写入 parent generation：</p>
+<pre class="hljs"><code><div>BSTART.VEC TADD, FP32
+B.DATR ...
+B.DIM ..., -&gt;lb0
+B.DIM ..., -&gt;lb1
+
+B.IOT t#src_a, mask=1111
+B.IOT t#src_b, mask=1111
+B.IOT mask=1111, last, -&gt;t#parent_working&lt;fragment_size_code&gt;
+B.ASSEMBLE INIT, LAST, base_dst, offset_dst_128B, parent_size_code
+</div></code></pre>
+<p>语义：</p>
+<ul>
+<li><code>INIT=1</code>：建立 parent working generation，并携带 parent size；</li>
+<li><code>INIT=0</code>：继续向已存在 generation 写 fragment；</li>
+<li><code>LAST=1</code>：结束本次 assembly session，并按合同发布 parent；</li>
+<li>offset 单位为 128 B；</li>
+<li><code>B.PAR</code> 下多个迭代的 destination fragment 默认必须不重叠；</li>
+<li>compiler 应推导 <code>INIT/LAST</code>，而不是要求普通 C++ 用户填写。</li>
+</ul>
+<h2 id="75-divergent-branch-的目标结构示意">7.5 Divergent branch 的目标结构示意</h2>
+<p>Issue #79 给出的逻辑结构可表达为：</p>
+<pre class="hljs"><code><div>P.CMP ... -&gt;P1               # 比较指令名称待 ISA 冻结
+EXEC.SAVE.AND P1 -&gt;P2        # EXEC carrier 待 ISA 冻结
+B.Z .Lelse                   # 当前仅 reserved-in-pto
+
+# then body
+...
+
+EXEC.ELSE P2                 # 待 ISA 冻结
+B.Z .Ljoin
+
+.Lelse:
+# else body
+...
+
+.Ljoin:
+EXEC.RESTORE P2              # 待 ISA 冻结
+</div></code></pre>
+<p>这些名称仅说明编译器需要的语义操作：</p>
+<ol>
+<li>产生 predicate；</li>
+<li>保存入口 EXEC；</li>
+<li>切换 then mask；</li>
+<li>测试是否有 active instance；</li>
+<li>切换 else mask；</li>
+<li>在 join 恢复 surviving mask。</li>
+</ol>
+<p>当前不能直接实现这些物理指令，因为以下内容尚未确定：</p>
+<ul>
+<li>predicate compare mnemonic；</li>
+<li>EXEC 宽度与物理载体；</li>
+<li>save/and/else/restore 的指令形式；</li>
+<li><code>B.Z/B.NZ</code> 测试的对象；</li>
+<li>reconvergence stack 的架构状态；</li>
+<li>fault/restart 时的保存恢复行为。</li>
+</ul>
+<h2 id="76-virtual-tileop-汇编">7.6 Virtual TileOp 汇编</h2>
+<p>目标工具链还需要允许开发者或生成器书写单条 virtual TileOp，例如概念上的：</p>
+<pre class="hljs"><code><div>TADD dst, src_a, src_b, schedule=par, subview_a=..., assemble_dst=...
+</div></code></pre>
+<p>assembler 根据生成的 TileOp schema 将其唯一展开成一个 physical bundle。具体 public syntax 尚未冻结，不应由 LLVM 单独决定。</p>
+<p>需要满足：</p>
+<ul>
+<li>一个 virtual TileOp 对应一个 physical bundle；</li>
+<li>virtual assembler 与 compiler pseudo expansion 生成完全相同的字节；</li>
+<li>disassembler 只折叠唯一、完整、无歧义的 bundle；</li>
+<li>malformed 或 externally entered bundle 保留 physical view；</li>
+<li>omitted default 与 explicit zero 的规则必须由 schema 明确定义。</li>
+</ul>
+<h2 id="8-当前-isa-缺口">8. 当前 ISA 缺口</h2>
+<h3 id="81-已存在可先接入">8.1 已存在，可先接入</h3>
+<p>以下物理基础已经存在：</p>
+<ul>
+<li><code>B.SUBVIEW</code>；</li>
+<li><code>B.ASSEMBLE</code>；</li>
+<li><code>INIT/LAST</code>；</li>
+<li>128 B offset 单位；</li>
+<li>Tile size code；</li>
+<li>assembler/parser/disassembler 的基础实现；</li>
+<li>MC 正向、反向和非法编码测试。</li>
+</ul>
+<p>因此 Tile region typed lowering、modifier 邻接、range 验证和 assembly session 分析可以先做。</p>
+<h3 id="82-旧模型存在但-059-语义不同">8.2 旧模型存在，但 0.59 语义不同</h3>
+<p>以下形式在 0.58 中存在或被保留：</p>
+<pre class="hljs"><code><div>BSTART.MSEQ
+BSTART.MPAR
+BSTART.VSEQ
+BSTART.VPAR
+</div></code></pre>
+<p>它们不能直接被解释为 0.59 的 <code>B.SEQ/B.PAR</code>。0.59 要求执行顺序标记与 body capability 解耦，并删除第二层 V/scalar-import 状态。</p>
+<h3 id="83-尚未成为正式-isa">8.3 尚未成为正式 ISA</h3>
+<p>当前缺少最终合同：</p>
+<ul>
+<li><code>B.SEQ</code>；</li>
+<li><code>B.PAR</code>；</li>
+<li><code>B.Z</code>；</li>
+<li><code>B.NZ</code>；</li>
+<li>P0..P7 的完整写入与保留规则；</li>
+<li>EXEC save/update/restore；</li>
+<li>reconvergence/control-stack 操作；</li>
+<li>predicate spill/fill carrier；</li>
+<li><code>B.PAR</code> 的 memory/fault arbitration；</li>
+<li>0.59 object identity；</li>
+<li>virtual TileOp 的最终 grammar 和默认反汇编视图。</li>
+</ul>
+<p><code>B.Z</code> 和 <code>B.NZ</code> 当前仅为 <code>reserved-in-pto</code>，不能因为已有 reservation encoding 就认为语义已经批准。</p>
+<h2 id="9-可以立即实施与必须等待的边界">9. 可以立即实施与必须等待的边界</h2>
+<h3 id="91-可以立即实施">9.1 可以立即实施</h3>
+<ul>
+<li>清理 <code>linx-vblock-body-asm</code>；</li>
+<li>建立 typed body IR/MIR；</li>
+<li>引入 UniformityAnalysis；</li>
+<li>建立控制帧和 target marker；</li>
+<li>保留普通 SSA CFG 与 PHI；</li>
+<li>建立 <code>PRED32</code> 虚拟 register bank；</li>
+<li>建立显式 EXEC use/def 的 MachineIR 伪指令；</li>
+<li>建立 Tile parent/region/session SSA；</li>
+<li>接入现有 <code>B.SUBVIEW/B.ASSEMBLE</code>；</li>
+<li>实现 range、coverage、INIT/LAST 推导和重叠检查；</li>
+<li>实现 <code>B.PAR</code> whole-body legality analysis；</li>
+<li>实现 diagnostics 和 optimization remarks；</li>
+<li>在没有目标 ISA 支持时 fail closed；</li>
+<li>保留现有 0.58 回归测试作为兼容 lane。</li>
+</ul>
+<h3 id="92-必须等待-isa-冻结">9.2 必须等待 ISA 冻结</h3>
+<ul>
+<li>真实 <code>B.SEQ/B.PAR</code> 编码；</li>
+<li>真实 <code>B.Z/B.NZ</code> 语义和编码；</li>
+<li>EXEC 的物理寄存器和位宽；</li>
+<li>mask save/restore；</li>
+<li>reconvergence 指令和控制栈；</li>
+<li>predicate spill/fill；</li>
+<li><code>B.PAR</code> 普通 predicate 写入规则；</li>
+<li>precise fault/restart 状态；</li>
+<li>0.59 object note 和 linker identity；</li>
+<li>virtual TileOp 最终汇编语法；</li>
+<li>模型、QEMU、RTL/cycle 的 release closure。</li>
+</ul>
+<h2 id="10-建议测试矩阵">10. 建议测试矩阵</h2>
+<h3 id="101-clang">10.1 Clang</h3>
+<ul>
+<li>pointer loop 与 Tile-view loop 使用相同 <code>for/if</code> body；</li>
+<li>simple、nested、empty-arm diamond；</li>
+<li>uniform 与 varying condition；</li>
+<li><code>break</code>、<code>continue</code> 和 tail mask；</li>
+<li><code>auto</code>、<code>seq</code>、合法 <code>par</code>、非法 <code>par</code>；</li>
+<li>non-addressable Tile element 取地址/escape 诊断。</li>
+</ul>
+<h3 id="102-llvm-ir-与-analysis">10.2 LLVM IR 与 Analysis</h3>
+<ul>
+<li>UniformityAnalysis 分类；</li>
+<li>IF/ELSE/END_CF marker 插入；</li>
+<li>IF_BREAK/LOOP mask progression；</li>
+<li>reconvergence PHI；</li>
+<li>early-exit live mask；</li>
+<li>convergence boundary 防止非法优化；</li>
+<li>irreducible CFG 和控制栈深度负面测试；</li>
+<li>0.59 lane 不再出现 <code>linx-vblock-body-asm</code>。</li>
+</ul>
+<h3 id="103-mir-与-codegen">10.3 MIR 与 CodeGen</h3>
+<ul>
+<li>P0 常量；</li>
+<li>P1..P7 分配；</li>
+<li>nested predicate liveness；</li>
+<li>EXEC 显式 use/def；</li>
+<li>predicate pressure fail closed；</li>
+<li>不出现 body-local <code>ri/vt/vu/vm/vn</code>；</li>
+<li><code>B.PAR</code> GPR write rejection；</li>
+<li>direct Tile subview/assemble operand；</li>
+<li>TSEL if-conversion 与真实 divergent branch；</li>
+<li>typed TileOp pseudo expansion。</li>
+</ul>
+<h3 id="104-mc对象与运行时">10.4 MC、对象与运行时</h3>
+<ul>
+<li>每种新物理形式的 parser/disassembler；</li>
+<li>linx32/linx64；</li>
+<li>virtual/physical round trip；</li>
+<li><code>BSTOP</code> 和 next-<code>BSTART</code> boundary；</li>
+<li><code>.note.pto.isa</code>；</li>
+<li>0.58/0.59 混链拒绝；</li>
+<li>inactive instance 无副作用；</li>
+<li><code>B.SEQ</code> ordered recurrence；</li>
+<li><code>B.PAR</code> scheduling-independent result；</li>
+<li>then/else/loop/reconvergence fault/restart；</li>
+<li>同一 ELF 的 QEMU、functional、RTL/cycle 对比。</li>
+</ul>
+<h2 id="11-实施顺序建议">11. 实施顺序建议</h2>
+<p>建议拆成以下可评审提交：</p>
+<ol>
+<li><strong>Typed body representation</strong>：去字符串化，但不改变现有输出；</li>
+<li><strong>SIMT loop metadata</strong>：Clang pragma 与 IR metadata；</li>
+<li><strong>Uniformity and structurization</strong>：只做分析和 remark；</li>
+<li><strong>Control-flow target markers</strong>：增加 intrinsic/pseudo，不绑定物理编码；</li>
+<li><strong>Tile region SSA</strong>：连接 LLVM #74；</li>
+<li><strong>Subview/assemble CodeGen</strong>：复用已存在的物理 modifier；</li>
+<li><strong>PAR legality verifier</strong>：实现 whole-body effect summary；</li>
+<li><strong>Predicate virtual bank</strong>：PRED32、EXEC dependency 和压力检查；</li>
+<li><strong>Accepted ISA lowering</strong>：等 PTO-SPEC #189 冻结后加入真实指令；</li>
+<li><strong>MC/object/runtime closure</strong>：完成 0.59 发布链路。</li>
+</ol>
+<p>每个阶段都应保持：</p>
+<ul>
+<li>0.58 legacy lane 可测试；</li>
+<li>0.59 experimental lane 不猜测物理语义；</li>
+<li>缺少目标 ISA capability 时明确拒绝；</li>
+<li>不用 inline assembly 绕过 LLVM 对控制流、predicate 和 region 的分析。</li>
+</ul>
+<h2 id="12-最终结论">12. 最终结论</h2>
+<p>Issue #79 的目标合理，并且是从 0.58 body-local V 模型迁移到统一 0.59 SIMT 模型所必需的编译器重构。</p>
+<p>当前可以先完成 typed IR/MachineIR、uniformity、控制流 marker、Tile region、<code>B.SUBVIEW/B.ASSEMBLE</code> 接入、<code>B.PAR</code> 合法性分析和诊断。当前不能完成最终物理 lowering，因为 PTO-SPEC #189 尚未冻结 <code>B.SEQ/B.PAR</code>、<code>B.Z/B.NZ</code>、predicate/EXEC、reconvergence、fault/restart 和 0.59 object identity。</p>
+<p>实施原则应是：</p>
+<blockquote>
+<p>先让编译器正确理解程序语义和依赖，再等待 ISA 给出物理承载；不得为了提前出汇编而恢复 body 字符串、暴露寄存器编号，或自行定义保留指令的语义。</p>
+</blockquote>
+
+</body>
+</html>
