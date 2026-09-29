@@ -4571,6 +4571,52 @@ bool Sema::CheckLinxV5BuiltinBLKACCCVT(CallExpr *TheCall) {
   return false;
 }
 
+bool Sema::CheckLinxV5BuiltinElementwiseTAddMasked(CallExpr *TheCall) {
+  if (checkArgCount(*this, TheCall, 10))
+    return true;
+
+  for (unsigned Index : {0u, 1u, 2u, 3u, 8u, 9u}) {
+    Expr *Arg = TheCall->getArg(Index);
+    if (!Arg->getType()->isIntegerType() ||
+        !Arg->isIntegerConstantExpr(Context))
+      return Diag(Arg->getBeginLoc(), diag::err_linx_builtin_requires_imm)
+             << Arg->getSourceRange();
+  }
+  QualType TileType = TheCall->getArg(4)->getType().getCanonicalType();
+  for (unsigned Index : {5u, 6u, 7u}) {
+    QualType SourceType =
+        TheCall->getArg(Index)->getType().getCanonicalType();
+    if (SourceType != TileType)
+      return Diag(TheCall->getArg(Index)->getBeginLoc(),
+                  diag::err_linx_builtin_type_mismatch)
+             << TileType << SourceType;
+  }
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinElementwiseTSubMasked(CallExpr *TheCall) {
+  if (checkArgCount(*this, TheCall, 10))
+    return true;
+
+  for (unsigned Index : {0u, 1u, 2u, 3u, 8u, 9u}) {
+    Expr *Arg = TheCall->getArg(Index);
+    if (!Arg->getType()->isIntegerType() ||
+        !Arg->isIntegerConstantExpr(Context))
+      return Diag(Arg->getBeginLoc(), diag::err_linx_builtin_requires_imm)
+             << Arg->getSourceRange();
+  }
+  QualType TileType = TheCall->getArg(4)->getType().getCanonicalType();
+  for (unsigned Index : {5u, 6u, 7u}) {
+    QualType SourceType =
+        TheCall->getArg(Index)->getType().getCanonicalType();
+    if (SourceType != TileType)
+      return Diag(TheCall->getArg(Index)->getBeginLoc(),
+                  diag::err_linx_builtin_type_mismatch)
+             << TileType << SourceType;
+  }
+  return false;
+}
+
 bool Sema::CheckLinxV5BuiltinFPArith(CallExpr *TheCall) {
   if (TheCall->getNumArgs() != 1) {
     return Diag(TheCall->getEndLoc(), diag::err_typecheck_call_too_many_args)
@@ -4653,6 +4699,10 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
     return CheckLinxV5BuiltinBLKMXCall(TheCall);
   case LinxV5::BIblk_acccvt:
     return CheckLinxV5BuiltinBLKACCCVT(TheCall);
+  case LinxV5::BIew_tadd_masked:
+    return CheckLinxV5BuiltinElementwiseTAddMasked(TheCall);
+  case LinxV5::BIew_tsub_masked:
+    return CheckLinxV5BuiltinElementwiseTSubMasked(TheCall);
   case LinxV5::BIblkv_fabs:
   case LinxV5::BIblkv_fsqrt:
   case LinxV5::BIblkv_fexp:

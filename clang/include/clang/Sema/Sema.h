@@ -13142,6 +13142,8 @@ private:
   bool CheckLinxV5BuiltinBLKCall(CallExpr *TheCall);
   bool CheckLinxV5BuiltinBLKMXCall(CallExpr *TheCall);
   bool CheckLinxV5BuiltinBLKACCCVT(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinElementwiseTAddMasked(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinElementwiseTSubMasked(CallExpr *TheCall);
   bool CheckLinxV5BuiltinFPArith(CallExpr *TheCall);
   bool CheckLinxV5BuiltinSHFL(CallExpr *TheCall);
   bool CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,

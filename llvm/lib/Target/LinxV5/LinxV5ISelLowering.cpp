@@ -378,6 +378,12 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::VCALL)
     MAKE_CASE(LinxV5ISD::MCALL)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL)
+    MAKE_CASE(LinxV5ISD::BLK_MATMUL_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_TADD_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_TSUB_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_TCMP)
+    MAKE_CASE(LinxV5ISD::EW_TSEL)
+    MAKE_CASE(LinxV5ISD::EW_TEXPANDS)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_AC)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMXB)
@@ -910,8 +916,20 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerShuffle(LinxV5ISD::SHFLIDX, DL, Op.getOperand(0), Op, DAG);
     case Intrinsic::linx_shuffle_bfly:
       return lowerShuffle(LinxV5ISD::SHFLXOR, DL, Op.getOperand(0), Op, DAG);
-    case Intrinsic::linx_blk_matmul:
+case Intrinsic::linx_blk_matmul:
       return lowerTemplateBLK(LinxV5ISD::BLK_MATMUL, DL, Op, 2, DAG);
+    case Intrinsic::linx_experimental_ew_cube_matmul_masked:
+      return lowerTemplateBLKMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tadd_masked:
+      return lowerElementwiseTAddMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tsub_masked:
+      return lowerElementwiseTSubMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tcmp:
+      return lowerElementwiseTCmp(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tsel:
+      return lowerElementwiseTSel(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_texpands:
+      return lowerElementwiseTExpands(DL, Op, DAG);
     case Intrinsic::linx_blk_matmul_shared:
       return lowerTemplateBLKShared(DL, Op, DAG);
     case Intrinsic::linx_blk_matmul_ac:
@@ -1305,6 +1323,225 @@ SDValue LinxV5TargetLowering::lowerTemplateBLK(unsigned Opcode, SDLoc &DL,
   return VCall;
 }
 
+SDValue LinxV5TargetLowering::lowerTemplateBLKMasked(SDLoc &DL, SDValue Op,
+                                                     SelectionDAG &DAG) const {
+  // PR #352 execution masks are currently defined only for Local CUBE_M16 and
+  // CUBE_M32. Keep the contract explicit at the intrinsic boundary so an
+  // arbitrary element-wise call cannot silently become a malformed bundle.
+  uint64_t DimM = getV5ConstantOperand(Op.getOperand(2), "masked CUBE M",
+                                       32, false);
+  uint64_t DimN = getV5ConstantOperand(Op.getOperand(3), "masked CUBE N",
+                                       0xffff, false);
+  uint64_t DimK = getV5ConstantOperand(Op.getOperand(4), "masked CUBE K",
+                                       0xffff, false);
+  if (DimM != 16 && DimM != 32)
+    report_fatal_error("masked CUBE execution mask requires M=16 or M=32");
+  if (DimN == 0 || DimK == 0)
+    report_fatal_error("masked CUBE execution mask requires positive N and K");
+
+  getV5ConstantOperand(Op.getOperand(11), "masked CUBE PredInv", 1);
+  getV5ConstantOperand(Op.getOperand(12), "masked CUBE Zero", 1);
+
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  Ops.push_back(Op.getOperand(2));
+  Ops.push_back(Op.getOperand(3));
+  Ops.push_back(Op.getOperand(4));
+
+  for (unsigned Index : {5u, 6u}) {
+    unsigned Type = getV5ConstantOperand(Op.getOperand(Index),
+                                          "masked CUBE data type", 31);
+    Ops.push_back(DAG.getTargetConstant(Type, DL, MVT::i64));
+  }
+
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(Op.getOperand(9));
+  Ops.push_back(Op.getOperand(10));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(11), "masked CUBE PredInv", 1),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(12), "masked CUBE Zero", 1),
+      DL, MVT::i64));
+  Ops.push_back(Op.getOperand(0));
+  return DAG.getNode(LinxV5ISD::BLK_MATMUL_MASKED, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTAddMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "masked TADD rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "masked TADD cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "masked TADD data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "masked TADD layout", 31);
+  getV5ConstantOperand(Op.getOperand(9), "masked TADD PredInv", 1);
+  getV5ConstantOperand(Op.getOperand(10), "masked TADD Zero", 1);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {2u, 3u}) {
+    if (isa<ConstantSDNode>(Op.getOperand(Index))) {
+      Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+      Ops.push_back(DAG.getTargetConstant(
+          cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+          MVT::i64));
+    } else {
+      Ops.push_back(Op.getOperand(Index));
+      Ops.push_back(DAG.getTargetConstant(0, DL, MVT::i64));
+    }
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "masked TADD data type", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(5), "masked TADD layout", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(9), "masked TADD PredInv", 1),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(10), "masked TADD Zero", 1),
+      DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_TADD_MASKED, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTSubMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "masked TSUB rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "masked TSUB cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "masked TSUB data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "masked TSUB layout", 31);
+  getV5ConstantOperand(Op.getOperand(9), "masked TSUB PredInv", 1);
+  getV5ConstantOperand(Op.getOperand(10), "masked TSUB Zero", 1);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {2u, 3u}) {
+    if (isa<ConstantSDNode>(Op.getOperand(Index))) {
+      Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+      Ops.push_back(DAG.getTargetConstant(
+          cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+          MVT::i64));
+    } else {
+      Ops.push_back(Op.getOperand(Index));
+      Ops.push_back(DAG.getTargetConstant(0, DL, MVT::i64));
+    }
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "masked TSUB data type", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(5), "masked TSUB layout", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(9), "masked TSUB PredInv", 1),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(10), "masked TSUB Zero", 1),
+      DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_TSUB_MASKED, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "TCMP rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "TCMP cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "TCMP data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "TCMP layout", 31);
+  getV5ConstantOperand(Op.getOperand(8), "TCMP mode", 7);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {2u, 3u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "TCMP data type", 31), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      LinxV5Op::ArgFormat::NORM, DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(8), "TCMP mode", 7), DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_TCMP, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTSel(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "TSEL rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "TSEL cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "TSEL data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "TSEL layout", 31);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {2u, 3u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "TSEL data type", 31), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(5), "TSEL layout", 31), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  return DAG.getNode(LinxV5ISD::EW_TSEL, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTExpands(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "TEXPANDS rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "TEXPANDS cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "TEXPANDS data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "TEXPANDS layout", 31);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {2u, 3u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "TEXPANDS data type", 31), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(5), "TEXPANDS layout", 31), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  return DAG.getNode(LinxV5ISD::EW_TEXPANDS, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
 /// Intrinsic Ops for blk_matmul_shared:
 /// (0)Chain; (1)IntNo; (2,3,4): Dimensions;
 /// (5): Tile Element Type A; (6): Tile Element Type B;
@@ -1510,15 +1747,26 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     SDValue ColValue = DAG.getTargetConstant(ColValid, DL, MVT::i64);
     Ops.push_back(ColValue); // Dim-Z
 
+    unsigned DataType = LinxV5Op::DataType::S64;
+    if (VT.getVectorElementType() == MVT::f32)
+      DataType = LinxV5Op::DataType::FP32;
+    else if (VT.getVectorElementType() == MVT::f16)
+      DataType = LinxV5Op::DataType::FP16;
     SDValue DataTypeValue =
-        DAG.getTargetConstant(LinxV5Op::DataType::S64, DL, MVT::i64);
+        DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType
     unsigned TileSize = calculateVCallSizeMask(VT);
     SDValue SizeValue = DAG.getTargetConstant(TileSize, DL, MVT::i64);
     Ops.push_back(SizeValue);
 
-    Ops.push_back(
-        DAG.getTargetConstant(LinxV5Op::ArgFormat::NORM, DL, MVT::i64));
+    const bool Elementwise =
+        DAG.getMachineFunction().getFunction().hasFnAttribute(
+            "linx.elementwise");
+    const unsigned Layout =
+        Elementwise && VT.getVectorElementType() == MVT::f32
+            ? LinxV5Op::ArgFormat::ND2M16
+            : LinxV5Op::ArgFormat::NORM;
+    Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
     Ops.push_back(
         DAG.getTargetConstant(LinxV5Op::PadValue::Zero, DL, MVT::i64));
 
@@ -1552,12 +1800,23 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
     SDValue ColValue = DAG.getTargetConstant(ColValid, DL, MVT::i64);
     Ops.push_back(ColValue); // Dim-Z
 
+    unsigned DataType = LinxV5Op::DataType::S64;
+    if (MemVT.getVectorElementType() == MVT::f32)
+      DataType = LinxV5Op::DataType::FP32;
+    else if (MemVT.getVectorElementType() == MVT::f16)
+      DataType = LinxV5Op::DataType::FP16;
     SDValue DataTypeValue =
-        DAG.getTargetConstant(LinxV5Op::DataType::S64, DL, MVT::i64);
+        DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType
 
-    Ops.push_back(
-        DAG.getTargetConstant(LinxV5Op::ArgFormat::NORM, DL, MVT::i64));
+    const bool Elementwise =
+        DAG.getMachineFunction().getFunction().hasFnAttribute(
+            "linx.elementwise");
+    const unsigned Layout =
+        Elementwise && MemVT.getVectorElementType() == MVT::f32
+            ? LinxV5Op::ArgFormat::M162ND
+            : LinxV5Op::ArgFormat::NORM;
+    Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
 
     Ops.push_back(ST->getBasePtr());
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));

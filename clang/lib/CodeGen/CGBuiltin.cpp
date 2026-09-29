@@ -19437,6 +19437,60 @@ llvm::Value *CodeGenFunction::EmitLinxV5ACCCVT(const CallExpr *E) {
     return Call;
 }
 
+// ew_tadd_masked(rows, cols, dtype, layout, out, lhs, rhs,
+//                 predicate, pred_inv, zero)
+llvm::Value *
+CodeGenFunction::EmitLinxV5ElementwiseTAddMasked(const CallExpr *E) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned Index : {0u, 1u, 2u, 3u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+
+  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  Args.push_back(EmitScalarExpr(E->getArg(6)));
+  Args.push_back(EmitScalarExpr(E->getArg(7)));
+  for (unsigned Index : {8u, 9u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+
+  SmallVector<llvm::Type *> OverloadTypes;
+  OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
+  llvm::Function *F = CGM.getIntrinsic(
+      Intrinsic::linx_experimental_ew_tadd_masked, OverloadTypes);
+  Value *Call = Builder.CreateCall(F, Args, "");
+  EmitStoreOfScalar(Call, EmitLValue(E->getArg(4)));
+  return Call;
+}
+
+llvm::Value *
+CodeGenFunction::EmitLinxV5ElementwiseTSubMasked(const CallExpr *E) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned Index : {0u, 1u, 2u, 3u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+
+  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  Args.push_back(EmitScalarExpr(E->getArg(6)));
+  Args.push_back(EmitScalarExpr(E->getArg(7)));
+  for (unsigned Index : {8u, 9u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+
+  SmallVector<llvm::Type *> OverloadTypes;
+  OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
+  llvm::Function *F = CGM.getIntrinsic(
+      Intrinsic::linx_experimental_ew_tsub_masked, OverloadTypes);
+  Value *Call = Builder.CreateCall(F, Args, "");
+  EmitStoreOfScalar(Call, EmitLValue(E->getArg(4)));
+  return Call;
+}
+
 Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
                                               const CallExpr *E,
                                               ReturnValueSlot ReturnValue) {
@@ -19511,6 +19565,10 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
       return EmitLinxV5TStore(E);
   case LinxV5::BIblk_acccvt:
       return EmitLinxV5ACCCVT(E);
+  case LinxV5::BIew_tadd_masked:
+      return EmitLinxV5ElementwiseTAddMasked(E);
+  case LinxV5::BIew_tsub_masked:
+      return EmitLinxV5ElementwiseTSubMasked(E);
   }
 }
 

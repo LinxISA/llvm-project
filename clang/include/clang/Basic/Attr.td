@@ -3637,12 +3637,13 @@ def Linx : Attr {
   let Spellings = [Pragma<"", "linx">];
 
   let Args = [EnumArgument<"Option", "OptionType",
-                          ["block"],
-                          ["Block"]>];
+                          ["block", "elementwise"],
+                          ["Block", "Elementwise"]>];
   let AdditionalMembers = [{
   static const char *getOptionName(int Option) {
     switch(Option) {
     case Block: return "block";
+    case Elementwise: return "elementwise";
     }
     llvm_unreachable("Unhandled Linx option.");
   }

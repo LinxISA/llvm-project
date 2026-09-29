@@ -42,3 +42,8 @@ BUILTIN(blk_matmulmxb_ac, "v.", "nt")
 BUILTIN(blk_tload, "v.", "nt")
 BUILTIN(blk_tstore, "v.", "nt")
 BUILTIN(blk_acccvt, "v.", "nt")
+
+// Experimental element-wise semantic operation.  The destination Tile is an
+// explicit output argument, matching the existing blk_* C++ source ABI.
+BUILTIN(ew_tadd_masked, "v.", "nt")
+BUILTIN(ew_tsub_masked, "v.", "nt")

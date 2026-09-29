@@ -38,6 +38,9 @@ FunctionPass *createLinxV5ISelDag(LinxV5TargetMachine &TM);
 FunctionPass *createLinxV5AnnotateControlFlowPass();
 void initializeLinxV5AnnotateControlFlowPass(PassRegistry &);
 
+FunctionPass *createLinxV5ElementwiseMaskPass();
+void initializeLinxV5ElementwiseMaskPass(PassRegistry &);
+
 FunctionPass *createLinxV5CanonicalizeBlockPass(bool dupConstOnly = false);
 void initializeLinxV5CanonicalizeBlockPass(PassRegistry &);
 

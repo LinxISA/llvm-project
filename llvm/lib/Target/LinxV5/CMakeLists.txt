@@ -46,6 +46,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5SIMTSpillFixup.cpp
   LinxV5StackSizeFixup.cpp
   LinxV5AnnotateControlFlow.cpp
+  LinxV5ElementwiseMask.cpp
   LinxV5TargetTransformInfo.cpp
   LinxV5BaseInfo.cpp
   LinxV5RebindGetTilePTR.cpp

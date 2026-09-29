@@ -2080,6 +2080,10 @@ OperandMatchResultTy LinxV5AsmParser::tryParseToken(OperandVector &Operands) {
       Operands.push_back(LinxV5Operand::createToken("sp", S));
       Operands.push_back(LinxV5Operand::createToken("!", S));
       return MatchOperand_Success;
+    } else if (getTok().getIdentifier().equals_insensitive("ExecMaskPresent")) {
+      getLexer().Lex();
+      Operands.push_back(LinxV5Operand::createToken("ExecMaskPresent", S));
+      return MatchOperand_Success;
     } else if (getTok().getIdentifier().upper() == "FALL") {
       getLexer().Lex();
       Operands.push_back(LinxV5Operand::createToken("FALL", S));

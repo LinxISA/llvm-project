@@ -22,6 +22,46 @@ def int_linx_get_sysreg : DefaultAttrsIntrinsic<[llvm_i64_ty],
 def int_linx_get_thread_id : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 def int_linx_get_thread_idx : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 
+// Logical element-wise masks. These intrinsics describe frontend mask SSA and
+// are canonicalized to ordinary LLVM vector operations before instruction
+// selection. They do not imply the Linx SIMT register file or execution model.
+def int_linx_experimental_ew_mask_splat :
+    DefaultAttrsIntrinsic<[llvm_anyvector_ty], [llvm_i1_ty],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_and :
+    DefaultAttrsIntrinsic<[llvm_anyvector_ty],
+                          [LLVMMatchType<0>, LLVMMatchType<0>],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_andnot :
+    DefaultAttrsIntrinsic<[llvm_anyvector_ty],
+                          [LLVMMatchType<0>, LLVMMatchType<0>],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_or :
+    DefaultAttrsIntrinsic<[llvm_anyvector_ty],
+                          [LLVMMatchType<0>, LLVMMatchType<0>],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_select :
+    DefaultAttrsIntrinsic<[llvm_anyvector_ty],
+                          [LLVMMatchType<0>, LLVMMatchType<0>,
+                           llvm_anyvector_ty],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_any :
+    DefaultAttrsIntrinsic<[llvm_i1_ty], [llvm_anyvector_ty],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_all :
+    DefaultAttrsIntrinsic<[llvm_i1_ty], [llvm_anyvector_ty],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_pack_gpr_low :
+    DefaultAttrsIntrinsic<[llvm_i64_ty],
+                          [llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty,
+                           llvm_i1_ty],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+def int_linx_experimental_ew_mask_pack_gpr_high :
+    DefaultAttrsIntrinsic<[llvm_i64_ty],
+                          [llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty,
+                           llvm_i1_ty],
+                          [IntrNoMem, IntrSpeculatable, IntrWillReturn]>;
+
 def int_linx_v5_gmov : Intrinsic<[llvm_anyvector_ty],
     [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, LLVMMatchType<0>],
     [IntrHasSideEffects]>;
@@ -119,8 +159,55 @@ def int_linx_blk_matmulmxb : Intrinsic<[llvm_anyvector_ty],
                                        [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                                         llvm_i64_ty, llvm_i64_ty,
                                         llvm_anyvector_ty, llvm_anyvector_ty,
-                                        llvm_anyvector_ty],
-                                       [IntrHasSideEffects]>;
+                                     llvm_anyvector_ty],
+                                    [IntrHasSideEffects]>;
+
+// Experimental CUBE execution-mask carrier path. The two i64 operands are
+// Predicate-GPR low/high words; physical B.IOR binding is performed by the
+// LinxV5 MC expansion and is intentionally separate from ordinary matmul.
+def int_linx_experimental_ew_cube_matmul_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_anyvector_ty, llvm_anyvector_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+// Element-wise binary operation with a PredicateCell execution-mask carrier.
+// The predicate tile is an additional Tile source; PredInv and Zero are the
+// immediate semantic controls owned by B.DATR.
+def int_linx_experimental_ew_tadd_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty,
+               llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tsub_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty,
+               llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+// TCMP returns a logical predicate vector. The LinxV5 backend materializes
+// it as a PredicateCell/PredicateTile according to the selected shape.
+def int_linx_experimental_ew_tcmp :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tsel :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_texpands :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyfloat_ty],
+              [IntrHasSideEffects]>;
 
 def int_linx_blk_matmulmx_ac : Intrinsic<[llvm_anyvector_ty],
                                          [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,

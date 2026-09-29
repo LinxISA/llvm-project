@@ -1266,7 +1266,7 @@ bool Parser::HandlePragmaLinx(LinxHint &Hint) {
   Hint.OptionLoc = IdentifierLoc::create(
       Actions.Context, Info->Option.getLocation(), OptionInfo);
 
-  if (!OptionInfo->isStr("block"))
+  if (!OptionInfo->isStr("block") && !OptionInfo->isStr("elementwise"))
     llvm::report_fatal_error("Error: Undefined option parameters for linx");
 
   ConsumeAnyToken(); // Consume the constant expression eof terminator.
@@ -1294,7 +1294,7 @@ void PragmaLinxHandler::HandlePragma(Preprocessor &PP,
   Token Option = Tok;
   IdentifierInfo *OptionInfo = Tok.getIdentifierInfo();
   bool OptionValid = llvm::StringSwitch<bool>(OptionInfo->getName())
-                           .Case("block", true)
+                           .Cases("block", "elementwise", true)
                            .Default(false);
   if (!OptionValid)
     llvm::report_fatal_error("Error: option not recognized for pragma linx");

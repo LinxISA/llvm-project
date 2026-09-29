@@ -79,6 +79,12 @@ enum NodeType : unsigned {
 
   // J-Core Template Block Inst
   BLK_MATMUL,
+  BLK_MATMUL_MASKED,
+  EW_TADD_MASKED,
+  EW_TSUB_MASKED,
+  EW_TCMP,
+  EW_TSEL,
+  EW_TEXPANDS,
   BLK_MATMUL_AC,
   BLK_MATMULMX,
   BLK_MATMULMXB,
@@ -289,6 +295,18 @@ private:
                               unsigned Opcode) const;
   SDValue lowerTemplateBLK(unsigned Opcode, SDLoc &DL, SDValue Op,
                            unsigned VUseNum, SelectionDAG &DAG) const;
+  SDValue lowerTemplateBLKMasked(SDLoc &DL, SDValue Op,
+                                 SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTAddMasked(SDLoc &DL, SDValue Op,
+                                     SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTSubMasked(SDLoc &DL, SDValue Op,
+                                     SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
+                               SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTSel(SDLoc &DL, SDValue Op,
+                               SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
+                                   SelectionDAG &DAG) const;
   SDValue lowerTemplateBLKMX(unsigned Opcode, SDLoc &DL, SDValue Op,
                              unsigned VUseNum, SelectionDAG &DAG) const;
   // v5: lower blk_matmul_shared. Like lowerTemplateBLK but pushes only the A

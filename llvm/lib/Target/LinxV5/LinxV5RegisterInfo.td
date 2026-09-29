@@ -502,6 +502,17 @@ def TILE_SRC : RegisterClass<"LinxV5", [vAny], 64, (add
   let isAllocatable = 0;
 }
 
+def PRED_TILE_SRC : RegisterClass<"LinxV5", [vAny], 64, (add
+  Tile_ABS,
+  (sequence "Tile_TOS%u", 1, 16),
+  (sequence "Tile_UOS%u", 1, 16),
+  (sequence "Tile_MOS%u", 1, 16),
+  (sequence "Tile_NOS%u", 1, 16)
+)> {
+  let Size = 64;
+  let isAllocatable = 0;
+}
+
 def TILE_SRC_MMA : RegisterClass<"LinxV5", [vAny], 64, (add
   // For RA
   Tile_ABS_CG,
@@ -521,6 +532,14 @@ def TILE_DST : RegisterClass<"LinxV5", [vAny], 64, (add
   // For MC
   Tile_T, Tile_U, Tile_M, Tile_N
 )>  {
+  let Size = 64;
+  let isAllocatable = 0;
+}
+
+def PRED_TILE_DST : RegisterClass<"LinxV5", [vAny], 64, (add
+  Tile_ABS,
+  Tile_T, Tile_U, Tile_M, Tile_N
+)> {
   let Size = 64;
   let isAllocatable = 0;
 }

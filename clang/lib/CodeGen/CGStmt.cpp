@@ -71,6 +71,12 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
   assert(S && "Null statement?");
   PGO.setCurrentStmt(S);
 
+  for (const Attr *Attr : Attrs) {
+    const auto *Linx = dyn_cast<LinxAttr>(Attr);
+    if (Linx && Linx->getOption() == LinxAttr::Elementwise)
+      CurFn->addFnAttr("linx.elementwise");
+  }
+
   // These statements have their own debug info handling.
   if (EmitSimpleStmt(S, Attrs))
     return;
@@ -170,7 +176,16 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
   case Stmt::IfStmtClass:      EmitIfStmt(cast<IfStmt>(*S));              break;
   case Stmt::WhileStmtClass:   EmitWhileStmt(cast<WhileStmt>(*S), Attrs); break;
   case Stmt::DoStmtClass:      EmitDoStmt(cast<DoStmt>(*S), Attrs);       break;
-  case Stmt::ForStmtClass:     EmitForStmt(cast<ForStmt>(*S), Attrs);     break;
+  case Stmt::ForStmtClass:
+    if (hasLinxAttr(Attrs) &&
+        getLinxOptionType(Attrs) == LinxAttr::Elementwise) {
+      if (EmitLinxElementwiseForStmt(cast<ForStmt>(*S)))
+        break;
+      ErrorUnsupported(S, "unsupported Linx element-wise loop form");
+      break;
+    }
+    EmitForStmt(cast<ForStmt>(*S), Attrs);
+    break;
 
   case Stmt::ReturnStmtClass:  EmitReturnStmt(cast<ReturnStmt>(*S));      break;
 
@@ -509,6 +524,8 @@ Address CodeGenFunction::EmitLinxCompoundStmt(const CompoundStmt &S, ArrayRef<co
   switch (getLinxOptionType(Attrs)) {
   case LinxAttr::Block:
     return EmitLinxHyperRegionStmt(S);
+  case LinxAttr::Elementwise:
+    return EmitCompoundStmt(S);
   default:
     llvm_unreachable("Unsupport option for Pragma Linx.");
   }
@@ -758,8 +775,9 @@ void CodeGenFunction::EmitAttributedStmt(const AttributedStmt &S) {
       alwaysinline = true;
       break;
     case attr::Linx:
-      assert(S.getSubStmt()->getStmtClass() == Expr::CompoundStmtClass &&
-		"For pragma linx, the top-level stmt of attritube must be CompoundStmt");
+      if (cast<LinxAttr>(A)->getOption() == LinxAttr::Block)
+        assert(isa<CompoundStmt>(S.getSubStmt()) &&
+               "#pragma linx block must precede a compound statement");
       break;
     case attr::MustTail:
       const Stmt *Sub = S.getSubStmt();
@@ -1060,6 +1078,219 @@ void CodeGenFunction::EmitDoStmt(const DoStmt &S,
   // emitting a branch, try to erase it.
   if (!EmitBoolCondBranch)
     SimplifyForwardingBlocks(LoopCond.getBlock());
+}
+
+static const Expr *ignoreElementwiseCasts(const Expr *E) {
+  return E ? E->IgnoreParenImpCasts() : nullptr;
+}
+
+static const DeclRefExpr *getElementwiseDeclRef(const Expr *E) {
+  return dyn_cast_or_null<DeclRefExpr>(ignoreElementwiseCasts(E));
+}
+
+static bool isElementwiseIndex(const Expr *E, const VarDecl *Index) {
+  const auto *Ref = getElementwiseDeclRef(E);
+  return Ref && Ref->getDecl() == Index;
+}
+
+static const ArraySubscriptExpr *getElementwiseSubscript(const Expr *E) {
+  return dyn_cast_or_null<ArraySubscriptExpr>(ignoreElementwiseCasts(E));
+}
+
+bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
+  const auto *Init = dyn_cast_or_null<DeclStmt>(S.getInit());
+  if (!Init || !Init->isSingleDecl())
+    return false;
+  const auto *Index = dyn_cast<VarDecl>(Init->getSingleDecl());
+  if (!Index || !Index->hasInit())
+    return false;
+  Expr::EvalResult InitValue;
+  if (!Index->getInit()->EvaluateAsInt(InitValue, getContext()) ||
+      !InitValue.Val.getInt().isZero())
+    return false;
+
+  const auto *Condition = dyn_cast_or_null<BinaryOperator>(S.getCond());
+  if (!Condition || Condition->getOpcode() != BO_LT ||
+      !isElementwiseIndex(Condition->getLHS(), Index))
+    return false;
+  Expr::EvalResult BoundValue;
+  if (!Condition->getRHS()->EvaluateAsInt(BoundValue, getContext()) ||
+      BoundValue.Val.getInt().getZExtValue() != 128)
+    return false;
+
+  const auto *Increment = dyn_cast_or_null<UnaryOperator>(S.getInc());
+  if (!Increment ||
+      (Increment->getOpcode() != UO_PreInc &&
+       Increment->getOpcode() != UO_PostInc) ||
+      !isElementwiseIndex(Increment->getSubExpr(), Index))
+    return false;
+
+  const Stmt *Body = S.getBody();
+  if (const auto *Compound = dyn_cast<CompoundStmt>(Body)) {
+    if (Compound->size() != 1)
+      return false;
+    Body = *Compound->body_begin();
+  }
+  const auto *Assignment = dyn_cast<BinaryOperator>(Body);
+  if (!Assignment || Assignment->getOpcode() != BO_Assign)
+    Assignment = nullptr;
+
+  auto GetSingleStmt = [](const Stmt *Statement) -> const Stmt * {
+    if (const auto *Compound = dyn_cast_or_null<CompoundStmt>(Statement)) {
+      if (Compound->size() != 1)
+        return nullptr;
+      return *Compound->body_begin();
+    }
+    return Statement;
+  };
+
+  if (const auto *If = dyn_cast_or_null<IfStmt>(Body)) {
+    const auto *Compare = dyn_cast<BinaryOperator>(
+        ignoreElementwiseCasts(If->getCond()));
+    const auto *CompareLHS = Compare
+                                 ? getElementwiseSubscript(Compare->getLHS())
+                                 : nullptr;
+    const auto *CompareRHS = Compare
+                                 ? dyn_cast<FloatingLiteral>(
+                                       ignoreElementwiseCasts(Compare->getRHS()))
+                                 : nullptr;
+    if (!Compare || Compare->getOpcode() != BO_GT || !CompareLHS ||
+        !CompareRHS || !CompareRHS->getValue().isZero() ||
+        !isElementwiseIndex(CompareLHS->getIdx(), Index))
+      return false;
+
+    const auto *ThenAssignment = dyn_cast<BinaryOperator>(
+        GetSingleStmt(If->getThen()));
+    const auto *ElseAssignment = dyn_cast<BinaryOperator>(
+        GetSingleStmt(If->getElse()));
+    if (!ThenAssignment || !ElseAssignment ||
+        ThenAssignment->getOpcode() != BO_Assign ||
+        ElseAssignment->getOpcode() != BO_Assign)
+      return false;
+
+    auto MatchBinaryAssignment = [&](const BinaryOperator *Store,
+                                     BinaryOperatorKind Opcode,
+                                     const ArraySubscriptExpr *&Output,
+                                     const ArraySubscriptExpr *&LHS,
+                                     const ArraySubscriptExpr *&RHS) {
+      Output = getElementwiseSubscript(Store->getLHS());
+      const auto *Value = dyn_cast<BinaryOperator>(
+          ignoreElementwiseCasts(Store->getRHS()));
+      if (!Output || !Value || Value->getOpcode() != Opcode ||
+          !isElementwiseIndex(Output->getIdx(), Index))
+        return false;
+      LHS = getElementwiseSubscript(Value->getLHS());
+      RHS = getElementwiseSubscript(Value->getRHS());
+      return LHS && RHS && isElementwiseIndex(LHS->getIdx(), Index) &&
+             isElementwiseIndex(RHS->getIdx(), Index);
+    };
+
+    const ArraySubscriptExpr *ThenOutput = nullptr;
+    const ArraySubscriptExpr *ThenLHS = nullptr;
+    const ArraySubscriptExpr *ThenRHS = nullptr;
+    const ArraySubscriptExpr *ElseOutput = nullptr;
+    const ArraySubscriptExpr *ElseLHS = nullptr;
+    const ArraySubscriptExpr *ElseRHS = nullptr;
+    if (!MatchBinaryAssignment(ThenAssignment, BO_Add, ThenOutput, ThenLHS,
+                               ThenRHS) ||
+        !MatchBinaryAssignment(ElseAssignment, BO_Sub, ElseOutput, ElseLHS,
+                               ElseRHS))
+      return false;
+
+    const Expr *OutputBase = ignoreElementwiseCasts(ThenOutput->getBase());
+    const Expr *LHSBase = ignoreElementwiseCasts(ThenLHS->getBase());
+    const Expr *RHSBase = ignoreElementwiseCasts(ThenRHS->getBase());
+    const Expr *CompareBase = ignoreElementwiseCasts(CompareLHS->getBase());
+    auto SameElementwiseBase = [](const Expr *A, const Expr *B) {
+      const auto *ADecl = getElementwiseDeclRef(A);
+      const auto *BDecl = getElementwiseDeclRef(B);
+      return ADecl && BDecl && ADecl->getDecl() == BDecl->getDecl();
+    };
+    if (!OutputBase || !LHSBase || !RHSBase || !CompareBase ||
+        !SameElementwiseBase(ElseOutput->getBase(), OutputBase) ||
+        !SameElementwiseBase(ElseLHS->getBase(), LHSBase) ||
+        !SameElementwiseBase(ElseRHS->getBase(), RHSBase) ||
+        !SameElementwiseBase(CompareBase, LHSBase))
+      return false;
+
+    QualType OutputCanonical =
+        OutputBase->getType().getCanonicalType().getUnqualifiedType();
+    QualType LHSCanonical =
+        LHSBase->getType().getCanonicalType().getUnqualifiedType();
+    QualType RHCanonical =
+        RHSBase->getType().getCanonicalType().getUnqualifiedType();
+    const auto *OutputTy = OutputCanonical->getAs<ExtVectorType>();
+    const auto *LHSTy = LHSCanonical->getAs<ExtVectorType>();
+    const auto *RHSTy = RHCanonical->getAs<ExtVectorType>();
+    uint64_t LaneCount = BoundValue.Val.getInt().getZExtValue();
+    if (!OutputTy || !LHSTy || !RHSTy ||
+        OutputTy->getNumElements() != LaneCount ||
+        OutputTy->getElementType() != getContext().FloatTy ||
+        OutputCanonical != LHSCanonical || OutputCanonical != RHCanonical)
+      return false;
+
+    LValue OutputLValue = EmitLValue(OutputBase);
+    llvm::Value *LHSValue = EmitLoadOfScalar(EmitLValue(LHSBase),
+                                             LHSBase->getExprLoc());
+    llvm::Value *RHSValue = EmitLoadOfScalar(EmitLValue(RHSBase),
+                                             RHSBase->getExprLoc());
+    llvm::Type *VectorTy = LHSValue->getType();
+    llvm::Function *Expand = CGM.getIntrinsic(
+        llvm::Intrinsic::linx_experimental_ew_texpands,
+        {VectorTy, Builder.getFloatTy()});
+    SmallVector<llvm::Value *, 5> ExpandArgs = {
+        Builder.getInt64(16), Builder.getInt64(LaneCount / 16),
+        Builder.getInt64(1), Builder.getInt64(31),
+        llvm::ConstantFP::get(Builder.getFloatTy(), 0.0)};
+    llvm::Value *Zero = Builder.CreateCall(
+        Expand, ExpandArgs, "linx.elementwise.zero");
+    llvm::Function *CompareIntrinsic = CGM.getIntrinsic(
+        llvm::Intrinsic::linx_experimental_ew_tcmp,
+        {VectorTy, VectorTy, VectorTy});
+    llvm::Value *Predicate = Builder.CreateCall(
+        CompareIntrinsic,
+        {Builder.getInt64(16), Builder.getInt64(LaneCount / 16),
+         Builder.getInt64(1), Builder.getInt64(31), LHSValue, Zero,
+         Builder.getInt64(3)},
+        "linx.elementwise.predicate");
+    auto EmitMasked = [&](llvm::Intrinsic::ID ID, llvm::Value *A,
+                          llvm::Value *B, llvm::Value *PredInv,
+                          const char *Name) {
+      llvm::Function *F = CGM.getIntrinsic(ID, {VectorTy, VectorTy, VectorTy, VectorTy});
+      return Builder.CreateCall(
+          F, {Builder.getInt64(16), Builder.getInt64(LaneCount / 16),
+              Builder.getInt64(1), Builder.getInt64(31), A, B, Predicate,
+              PredInv, Builder.getInt64(1)},
+          Name);
+    };
+    llvm::Value *ThenValue = EmitMasked(
+        llvm::Intrinsic::linx_experimental_ew_tadd_masked, LHSValue, RHSValue,
+        Builder.getInt64(0), "linx.elementwise.then");
+    llvm::Value *ElseValue = EmitMasked(
+        llvm::Intrinsic::linx_experimental_ew_tsub_masked, LHSValue, RHSValue,
+        Builder.getInt64(1), "linx.elementwise.else");
+    llvm::Function *SelectIntrinsic = CGM.getIntrinsic(
+        llvm::Intrinsic::linx_experimental_ew_tsel,
+        {VectorTy, VectorTy, VectorTy, VectorTy});
+    llvm::Value *Result = Builder.CreateCall(
+        SelectIntrinsic,
+        {Builder.getInt64(16), Builder.getInt64(LaneCount / 16),
+         Builder.getInt64(1), Builder.getInt64(31), Predicate, ThenValue,
+         ElseValue},
+        "linx.elementwise.if");
+    EmitStoreOfScalar(Result, OutputLValue);
+    CurFn->addFnAttr("linx.elementwise.lanes", llvm::utostr(LaneCount));
+    return true;
+  }
+
+  if (!Assignment)
+    return false;
+
+  // Plain elementwise arithmetic is intentionally left to the ordinary
+  // scalar loop lowering.  The masked intrinsic path is reserved for an
+  // element-if whose predicate is represented by a PredicateCell.
+  return false;
+
 }
 
 void CodeGenFunction::EmitForStmt(const ForStmt &S,

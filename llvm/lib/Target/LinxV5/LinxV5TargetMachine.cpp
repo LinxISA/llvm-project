@@ -56,6 +56,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5EmitHeaderPass(*PR);
   initializeLinxV5ExpandPseudoPass(*PR);
   initializeLinxV5AnnotateControlFlowPass(*PR);
+  initializeLinxV5ElementwiseMaskPass(*PR);
   initializeLinxV5RebindGetTilePTRPass(*PR);
   initializeLinxV5ConstantRegOptPass(*PR);
   initializeLinxV5SIMTSpillFixupPass(*PR);
@@ -178,6 +179,7 @@ public:
   void addPreRegAlloc() override;
   void addPostRegAlloc() override;
   bool addPostFastRegAllocRewrite() override;
+  void addFastRegAlloc() override;
   void addRightBeforeRegAlloc() override;
   void addMachinePasses() override;
   void addPostRewrite() override;
@@ -254,6 +256,7 @@ bool LinxV5PassConfig::addRegAssignAndRewriteOptimized() {
 }
 
 bool LinxV5PassConfig::addPreISel() {
+  addPass(createLinxV5ElementwiseMaskPass());
   addPass(createStructurizeCFGPass(true)); // true -> SkipUniformRegions
   addPass(createLinxV5AnnotateControlFlowPass());
   return true;
@@ -275,6 +278,13 @@ void LinxV5PassConfig::addPostRegAlloc() {}
 
 void LinxV5PassConfig::addPreRegAlloc() {
   addPass(createLinxV5CanonicalizeBlockPass());
+}
+
+void LinxV5PassConfig::addFastRegAlloc() {
+  addPass(&PHIEliminationID);
+  addPass(&TwoAddressInstructionPassID);
+  addPass(createLinxV5SharedCopyElimPass());
+  addRegAssignAndRewriteFast();
 }
 
 void LinxV5PassConfig::addRightBeforeRegAlloc() {

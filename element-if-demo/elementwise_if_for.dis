@@ -1,0 +1,53 @@
+
+element-if-demo/elementwise_if_for.o:	file format elf64-unknown
+
+Disassembly of section .text:
+
+0000000000000000 <_Z18elementwise_if_forRDv128_fRKS_S2_>:
+       0: 08011181             	BSTART.TLSU	TLOAD, FP32
+       4: 01f01b23             	B.DATR	ND2M16.normal, Zero
+       8: 103c                 	C.B.DIMI	64, 	->lb0
+       a: 903c                 	C.B.DIMI	64, 	->lb2
+       c: 0009ee13             	B.IOT	mask=1111, last, 	->t<512B>
+      10: 00018013             	B.IOR	[a1], []
+      14: 08011181             	BSTART.TLSU	TLOAD, FP32
+      18: 01f01b23             	B.DATR	ND2M16.normal, Zero
+      1c: 103c                 	C.B.DIMI	64, 	->lb0
+      1e: 903c                 	C.B.DIMI	64, 	->lb2
+      20: 0009ee93             	B.IOT	mask=1111, last, 	->u<512B>
+      24: 00020013             	B.IOR	[a2], []
+      28: 0800                 	C.BSTART.STD	
+      2a: 00000f87             	addtpc	0, 	->t
+      2e: 000c21a9             	lwi.u	[t#1, 0], 	->a1
+      32: 0bb19181 443c023c    	TEXPANDS          <Row=16, Col=8, FP32>, a1, ->M<512B>
+          ef13823c 80130009
+          0001
+      44: 08d19181             	BSTART.TEPL	TCMP, FP32
+      48: 60101023             	B.DATR	NORM.normal, FP32, Zero, GT
+      4c: 023c                 	C.B.DIMI	8, 	->lb0
+      4e: 443c                 	C.B.DIMI	16, 	->lb1
+      50: 8009cf13             	B.IOT	t#1, m#1, mask=1111, last, 	->m<512B>
+      54: 08019181             	BSTART.TEPL	TADD, FP32
+      58: 00103fa3             	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 0, 1
+      5c: 023c                 	C.B.DIMI	8, 	->lb0
+      5e: 443c                 	C.B.DIMI	16, 	->lb1
+      60: 40004e13             	B.IOT	t#1, u#1, mask=1111
+      64: 0209df93             	B.IOT	m#1, mask=1111, last, 	->n<512B>
+      68: 08119181             	BSTART.TEPL	TSUB, FP32
+      6c: 00107fa3             	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 1, 1
+      70: 023c                 	C.B.DIMI	8, 	->lb0
+      72: 443c                 	C.B.DIMI	16, 	->lb1
+      74: 40004e13             	B.IOT	t#1, u#1, mask=1111
+      78: 0209de13             	B.IOT	m#1, mask=1111, last, 	->t<512B>
+      7c: 09a19181 443c023c    	TSEL              <Row=16, Col=8, FP32>, M#1, N#1, T#1, ->T<512B>
+          4e13823c de13c200
+          0009
+      8e: 08111181             	BSTART.TLSU	TSTORE, FP32
+      92: 19f01ca3             	B.DATR	M162ND.normal, Null
+      96: 103c                 	C.B.DIMI	64, 	->lb0
+      98: 903c                 	C.B.DIMI	64, 	->lb2
+      9a: 00085e13             	B.IOT	t#1, mask=1111, last
+      9e: 00010013             	B.IOR	[a0], []
+      a2: 3800                 	C.BSTART.STD	RET
+      a4: 029c                 	c.setc.tgt	ra
+      a6: 0800                 	C.BSTART.STD	

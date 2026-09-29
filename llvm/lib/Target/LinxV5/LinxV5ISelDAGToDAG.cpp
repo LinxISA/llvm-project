@@ -446,6 +446,95 @@ void LinxV5DAGToDAGISel::selectTemplateBlock(SDLoc &DL, SDNode *Node,
                                            Node->getValueType(1), Ops));
 }
 
+static SDNode *selectTemplateBlockMasked(SDLoc &DL, SelectionDAG *DAG,
+                                          SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  auto SelectDim = [&](unsigned Index) {
+    if (isa<ConstantSDNode>(Node->getOperand(Index))) {
+      Ops.push_back(DAG->getRegister(LinxV5::R0, MVT::i64));
+      Ops.push_back(DAG->getTargetConstant(
+          cast<ConstantSDNode>(Node->getOperand(Index))->getZExtValue(), DL,
+          MVT::i64));
+    } else {
+      Ops.push_back(Node->getOperand(Index));
+      Ops.push_back(DAG->getTargetConstant(0, DL, MVT::i64));
+    }
+  };
+  SelectDim(1);
+  SelectDim(2);
+  SelectDim(3);
+  Ops.push_back(Node->getOperand(4));
+  Ops.push_back(Node->getOperand(5));
+  Ops.push_back(Node->getOperand(6));
+  Ops.push_back(Node->getOperand(7));
+  Ops.push_back(Node->getOperand(8));
+  Ops.push_back(Node->getOperand(9));
+  Ops.push_back(Node->getOperand(10));
+  Ops.push_back(Node->getOperand(11));
+  Ops.push_back(Node->getOperand(12));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseTAddMasked(SDLoc &DL, SelectionDAG *DAG,
+                                           SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Node->getOperand(1));
+  Ops.push_back(Node->getOperand(2));
+  Ops.push_back(Node->getOperand(3));
+  Ops.push_back(Node->getOperand(4));
+  for (unsigned Index = 5; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseTSubMasked(SDLoc &DL, SelectionDAG *DAG,
+                                           SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Node->getOperand(1));
+  Ops.push_back(Node->getOperand(2));
+  Ops.push_back(Node->getOperand(3));
+  Ops.push_back(Node->getOperand(4));
+  for (unsigned Index = 5; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseTCmp(SDLoc &DL, SelectionDAG *DAG,
+                                     SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseTSel(SDLoc &DL, SelectionDAG *DAG,
+                                     SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseTExpands(SDLoc &DL, SelectionDAG *DAG,
+                                         SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
 void LinxV5DAGToDAGISel::selectTemplateBlockMX(SDLoc &DL, SDNode *Node,
                                                unsigned Opc,
                                                unsigned TileUseNum) {
@@ -1109,6 +1198,37 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   }
   case LinxV5ISD::BLK_MATMUL: {
     selectTemplateBlock(DL, Node, LinxV5::PseudoMAMULB_SizeI, 2);
+    return;
+  }
+  case LinxV5ISD::BLK_MATMUL_MASKED: {
+    ReplaceNode(Node, selectTemplateBlockMasked(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMAMULB_Masked_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TADD_MASKED: {
+    ReplaceNode(Node, selectElementwiseTAddMasked(
+                          DL, CurDAG, Node, LinxV5::PseudoTADD_Masked_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TSUB_MASKED: {
+    ReplaceNode(Node, selectElementwiseTSubMasked(
+                          DL, CurDAG, Node, LinxV5::PseudoTSUB_Masked_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TCMP: {
+    ReplaceNode(Node, selectElementwiseTCmp(
+                          DL, CurDAG, Node, LinxV5::PseudoTCMP_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TSEL: {
+    ReplaceNode(Node, selectElementwiseTSel(
+                          DL, CurDAG, Node, LinxV5::PseudoTSEL_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TEXPANDS: {
+    ReplaceNode(Node, selectElementwiseTExpands(
+                          DL, CurDAG, Node, LinxV5::PseudoTEXPANDS_SizeI));
     return;
   }
   case LinxV5ISD::BLK_MATMUL_SHARED: {

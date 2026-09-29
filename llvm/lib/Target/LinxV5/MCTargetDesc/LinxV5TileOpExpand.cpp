@@ -295,6 +295,7 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
   //   Op9=TileSize, Op10=SrcTile0(A), Op11=SrcTile1(B).
   // Emit one B.IOT TwoSrc_Dst carrying both sources plus the ordinary dst.
   case LinxV5::PseudoMAMULB_SizeI:
+  case LinxV5::PseudoMAMULB_Masked_SizeI:
   case LinxV5::PseudoTGEMV_SizeI:
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
                         .addOperand(Inst.getOperand(0))             // DstTile
@@ -792,6 +793,7 @@ llvm::SmallVector<MCInst> getBIODFromInst(MCInst Inst, const MCInstrInfo &MII) {
 unsigned getPseudoTILEOpcode(unsigned Opcode) {
   static const llvm::DenseMap<unsigned, unsigned> PseudoToOpc = {
       {LinxV5::PseudoMAMULB_SizeI, LinxV5Op::TileOPCUBE::MAMULB},
+      {LinxV5::PseudoMAMULB_Masked_SizeI, LinxV5Op::TileOPCUBE::MAMULB},
       {LinxV5::PseudoMAMULB_SharedRight_SizeI, LinxV5Op::TileOPCUBE::MAMULB},
       {LinxV5::PseudoMAMULBAC_SizeI, LinxV5Op::TileOPCUBE::MAMULBAC},
       {LinxV5::PseudoMAMULBMX_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX},
@@ -832,6 +834,7 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
 bool isActiveMatrixPseudo(unsigned Opcode) {
   switch (Opcode) {
   case LinxV5::PseudoMAMULB_SizeI:
+  case LinxV5::PseudoMAMULB_Masked_SizeI:
   case LinxV5::PseudoMAMULB_SharedRight_SizeI:
   case LinxV5::PseudoMAMULBAC_SizeI:
   case LinxV5::PseudoMAMULBACC_SizeI:

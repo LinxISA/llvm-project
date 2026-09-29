@@ -3248,6 +3248,7 @@ public:
   void EmitDoStmt(const DoStmt &S, ArrayRef<const Attr *> Attrs = None);
   void EmitForStmt(const ForStmt &S,
                    ArrayRef<const Attr *> Attrs = None);
+  bool EmitLinxElementwiseForStmt(const ForStmt &S);
   void EmitReturnStmt(const ReturnStmt &S);
   void EmitDeclStmt(const DeclStmt &S);
   void EmitBreakStmt(const BreakStmt &S);
@@ -4264,6 +4265,8 @@ public:
   llvm::Value *EmitLinxV5TLoad(const CallExpr *E);
   llvm::Value *EmitLinxV5TStore(const CallExpr *E);
   llvm::Value *EmitLinxV5ACCCVT(const CallExpr *E);
+  llvm::Value *EmitLinxV5ElementwiseTAddMasked(const CallExpr *E);
+  llvm::Value *EmitLinxV5ElementwiseTSubMasked(const CallExpr *E);
   llvm::Value *EmitLinxV5FPArith(const CallExpr *E, llvm::Intrinsic::ID ID);
   llvm::Value *EmitLinxV5TwoSrcFloat(const CallExpr *E, llvm::Intrinsic::ID ID);
   llvm::Value *EmitLinxV5SHFL(const CallExpr *E, llvm::Intrinsic::ID ID);

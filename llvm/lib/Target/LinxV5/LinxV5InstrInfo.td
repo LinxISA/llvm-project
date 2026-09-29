@@ -34,6 +34,12 @@ def linxv5_mcall   : SDNode<"LinxV5ISD::MCALL", SDT_LinxV5Call, [SDNPHasChain, S
 //       (4)Tile Element Type-A, (5)Tile Element Type-B, (6)Tile Output Size
 //       (7)TileSrc0, (8)TileSrc1, (9)....
 def linxv5_blk_matmul   : SDNode<"LinxV5ISD::BLK_MATMUL", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_blk_matmul_masked : SDNode<"LinxV5ISD::BLK_MATMUL_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_tadd_masked : SDNode<"LinxV5ISD::EW_TADD_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_tsub_masked : SDNode<"LinxV5ISD::EW_TSUB_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_tcmp : SDNode<"LinxV5ISD::EW_TCMP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_tsel : SDNode<"LinxV5ISD::EW_TSEL", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_texpands : SDNode<"LinxV5ISD::EW_TEXPANDS", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_blk_matmul_ac   : SDNode<"LinxV5ISD::BLK_MATMUL_AC", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
 // Format of Template Block MX Instruction:
@@ -1663,6 +1669,46 @@ def BDATR : BlockModifierBase {
   let AsmString = "B.DATR\t$DataLayout$canon, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, #sat";
 }
 
+// CodeGen-only B.DATR form carrying the PR #352 ExecutionMask controls.
+// PredInv and Zero occupy bits 14 and 13; the public BDATR operand contract
+// remains unchanged until the assembler/disassembler surface is finalized.
+def BDATR_EXEC_MASK : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+  let OutOperandList = (outs );
+  let InOperandList =
+      (ins BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType,
+           PadValue:$PadValue, CmpMode:$CmpMode, RMode:$RMode, Sat:$sat,
+           ByteID:$ByteId, uimm1:$PredInv, uimm1:$Zero);
+
+  bits<5> DataLayout;
+  bits<3> CmpMode;
+  bits<2> PadValue;
+  bits<1> canon;
+  bits<5> SrcType;
+  bits<3> RMode;
+  bits<1> sat;
+  bits<2> ByteId;
+  bits<1> PredInv;
+  bits<1> Zero;
+  let Inst{31-29} = CmpMode;
+  let Inst{28-27} = PadValue;
+  let Inst{26} = sat;
+  let Inst{25} = canon;
+  let Inst{24-20} = SrcType;
+  let Inst{19-18} = ByteId;
+  let Inst{17-15} = RMode;
+  let Inst{14} = PredInv;
+  let Inst{13} = Zero;
+  let Inst{12} = 0b1;
+  let Inst{11-7} = DataLayout;
+  let Inst{6-4} = 0b010;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+  let AsmString = "B.DATR\t$DataLayout, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, $sat, $PredInv, $Zero";
+}
+
 // B.SUBVIEW / B.ASSEMBLE: PTO-ISA 0.58.4 range modifiers (ADR-0098,
 // pto-spec 564ac2d). Both are 32-bit block commands that attach to the
 // immediately preceding continuous B.IOT/B.IOS binder group.
@@ -1798,6 +1844,32 @@ def B_IO : BlockModifierBase {
   let Inst{3-1} = 0b001;
   let Inst{0} = 0b1;
   let AsmString = "B.IOR  [$RegSrc0,$RegSrc1,$RegSrc2],[$RegDst]";
+}
+
+// Final GPR ExecutionMask carrier record. Bit 26 is the PR #352
+// ExecMaskPresent marker; the ordinary B_IO form keeps this bit clear.
+def B_IOR_EXEC_MASK : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+  let isDisassembleOnly = 0;
+  let OutOperandList = (outs);
+  let InOperandList = (ins GPRSrc:$RegSrc0, GPRSrc:$RegSrc1, GPRSrc:$RegSrc2);
+
+  bits<5> RegSrc0;
+  bits<5> RegSrc1;
+  bits<5> RegSrc2;
+  let Inst{31-27} = RegSrc2;
+  let Inst{26} = 0b1;
+  let Inst{25} = 0b0;
+  let Inst{24-20} = RegSrc1;
+  let Inst{19-15} = RegSrc0;
+  let Inst{14-12} = 0b000;
+  let Inst{11-7} = 0b00000;
+  let Inst{6-4} = 0b001;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+  let AsmString = "B.IOR [$RegSrc0,$RegSrc1,$RegSrc2], ExecMaskPresent";
 }
 
 def B_IOD_Dst : LinxV5InstBase {
@@ -3040,6 +3112,11 @@ def TILE_Src_Reg : RegisterOperand<TILE_SRC> {
   let PrintMethod = "printTileSrcReg";
 }
 
+def PRED_TILE_Src_Reg : RegisterOperand<PRED_TILE_SRC> {
+  let ParserMatchClass = TileRegAsmOperand;
+  let PrintMethod = "printTileSrcReg";
+}
+
 def ACCTileRegAsmOperand : AsmOperandClass {
   let Name = "ACCTileReg";
   let ParserMethod = "parseTileReg";
@@ -3052,6 +3129,11 @@ def ACC_TILE_SRC : RegisterOperand<TILE_SRC_MMA> {
 }
 
 def TILE_DstWithArrow : RegisterOperand<TILE_DST> {
+  let ParserMatchClass = TileRegWithArrowAsmOperand;
+  let PrintMethod = "printTileDstReg";
+}
+
+def PRED_TILE_DstWithArrow : RegisterOperand<PRED_TILE_DST> {
   let ParserMatchClass = TileRegWithArrowAsmOperand;
   let PrintMethod = "printTileDstReg";
 }
@@ -3477,6 +3559,80 @@ class PseudoCUBE_MAMULB_Base_I<string TileOp> :
 }
 
 def PseudoMAMULB_SizeI : PseudoCUBE_MAMULB_Base_I<"TMATMUL">;
+
+class PseudoTEPL_TADD_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       PRED_TILE_Src_Reg:$MaskTile, uimm1:$PredInv, uimm1:$Zero)> {
+  let AsmString = "TADD.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+
+def PseudoTADD_Masked_SizeI : PseudoTEPL_TADD_Masked_Base;
+
+class PseudoTEPL_TSUB_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       PRED_TILE_Src_Reg:$MaskTile, uimm1:$PredInv, uimm1:$Zero)> {
+  let AsmString = "TSUB.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+
+def PseudoTSUB_Masked_SizeI : PseudoTEPL_TSUB_Masked_Base;
+
+class PseudoTEPL_TCMP_Base :
+  PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       CmpMode:$CmpMode)> {
+  let AsmString = "TCMP\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+
+def PseudoTCMP_SizeI : PseudoTEPL_TCMP_Base;
+
+class PseudoTEPL_TSEL_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       PRED_TILE_Src_Reg:$MaskTile, TILE_Src_Reg:$TrueTile,
+       TILE_Src_Reg:$FalseTile)> {
+  let AsmString = "TSEL\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $MaskTile, $TrueTile, $FalseTile, $DstTile$TileSize";
+}
+
+def PseudoTSEL_SizeI : PseudoTEPL_TSEL_Base;
+
+class PseudoTEPL_TEXPANDS_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, GPRSrc:$Scalar)> {
+  let AsmString = "TEXPANDS\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Scalar, $DstTile$TileSize";
+}
+
+def PseudoTEXPANDS_SizeI : PseudoTEPL_TEXPANDS_Base;
+
+class PseudoCUBE_MAMULB_Masked_Base_I<string TileOp> :
+  PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+  GPRSrc:$MaskLow, GPRSrc:$MaskHigh, uimm1:$PredInv, uimm1:$Zero)> {
+    let AsmString = TileOp # ".MASKED\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #
+                    "\t$SrcTile0, $SrcTile1, $DstTile$TileSize, $MaskLow, $MaskHigh";
+}
+
+def PseudoMAMULB_Masked_SizeI : PseudoCUBE_MAMULB_Masked_Base_I<"TMATMUL">;
 
 // v5: TMATMUL with a Shared Right operand. Same CUBE op (BSTART.CUBE TMATMUL)
 // but the Right tile is supplied by a B.IOS binder (SharedTID, S0..S63)
