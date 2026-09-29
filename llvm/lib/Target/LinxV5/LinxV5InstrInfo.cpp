@@ -795,9 +795,15 @@ void LinxV5::generateMatIntSeq(int64_t Val, LinxV5MatInt::InstSeq &Res,
       } else {
         generateInt32InstSeq(NewVal, Res);
       }
-      unsigned M = static_cast<unsigned>(SymmWidth) / 8;
+      // hl.bfi result[M+N-1:M] = right[N-1:0]: inserting the low SymmWidth
+      // bits into [2*SymmWidth-1:SymmWidth] completes the symmetric value,
+      // so M and N are both the bit width (issue #61 — SymmWidth/8 confused
+      // bits with bytes and the 3-bit M field could not even hold 16..32).
+      // selectImmSeq unpacks M from the low 6 bits and N from the rest,
+      // matching uimm6/uimm6_plus1 on the instruction.
+      unsigned M = static_cast<unsigned>(SymmWidth);
       unsigned N = static_cast<unsigned>(SymmWidth);
-      Res.push_back(LinxV5MatInt::Inst(LinxV5::HL_BFI, N + M));
+      Res.push_back(LinxV5MatInt::Inst(LinxV5::HL_BFI, (N << 6) | M));
       return;
     }
   }
