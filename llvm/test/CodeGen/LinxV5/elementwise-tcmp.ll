@@ -4,7 +4,9 @@
 ; CHECK-LABEL: <elementwise_tcmp>:
 ; CHECK: BSTART.TEPL TCMP, FP32
 ; CHECK: B.DATR NORM.normal, FP32, Zero, LT
-; CHECK: B.DIM
+; CHECK: C.B.DIMI 8
+; CHECK: C.B.DIMI 16
+; CHECK-NOT: C.B.DIMI 0
 ; CHECK: B.IOT
 
 define void @elementwise_tcmp(ptr %lhs_ptr, ptr %rhs_ptr) #0 {

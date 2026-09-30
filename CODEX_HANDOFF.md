@@ -12725,3 +12725,341 @@ conv2d 复验用 SuperNPUBench worktree /tmp/itb112/snbench-conv
   （TRegToOffset unrolled if-select ICE，需复现）、#70（indexed B.IOR
   裁定，等 ISA owner）、#52（dynamic_mx_quant 三项待重核，v.cvt 部分
   已被 #89 覆盖）。
+
+## 2026-09-30 Issue #115 disassembler TCVT cross-bundle B.ASSEMBLE
+
+### Issue / comment review
+
+- Issue: `LinxISA/llvm-project#115`, BF16 TCVT with legal cross-bundle `B.ASSEMBLE` is printed as a physical bundle while plain TCVT is folded as a TileOp macro.
+- The only current comment (`issuecomment-5890342786`) correctly identifies the behavior as a fail-closed disassembler coverage gap, not a BF16/e2m1x2 encoding or execution error.
+
+### Independent verification
+
+- LLVM `dev-llvm15_56` is at `61d4f98bb63f`; it already contains `ae7d91cd0018` (`[LinxV5] Harden B.ASSEMBLE macro round trips`) and the preceding Issue #112 parent-window fixes.
+- Latest ISA reference fetched: `pto-spec/main@53539ce34e103fc69b768a2ca67e34664f2e4c05`.
+- Normative `B.ASSEMBLE` contract applies the modifier only to the immediately preceding contiguous B.IOT/B.IOS group and carries phase/offset/writer fields; it does not provide a disassembler-visible cross-bundle generation linkage token. Guessing continuation ownership from register, offset, or writer size could merge unrelated generations.
+- Current tests explicitly cover the distinction: `pto-tileop-macro-tcvt-assemble.s` folds single-bundle INIT/MIDDLE/LAST forms and round-trips them; `pto-tileop-macro-assemble-cross-bundle.s` keeps a second BSTART continuation physical.
+
+### Validation
+
+After rebuilding MC/disassembler tools from the current source:
+
+- `pto-tileop-macro-tcvt-assemble.s`: passed.
+- `pto-tileop-macro-assemble-cross-bundle.s`: passed.
+- `v5-tcvt-bf16-e2m1x2.s`: passed.
+- `pto-tileop-macro-assemble-phases.s`: passed.
+- `v5-subview-assemble-boundaries.s`: passed.
+
+### Resolution
+
+- No source change is required for #115 at present. The current implementation is conservative and conforms to the available ISA information.
+- Issue reply published after independent verification: the mixed display is intentional fail-closed behavior; a future ISA/catalog generation-linkage contract could enable safe cross-bundle folding.
+- Current TileOP remote fetched at `12bd04888fd87d19ac4032b6348f942bb9cfadc2`; no TileOP change is needed.
+
+## 2026-09-30 监控报告处置（第二轮）：llvm-project 5 个未关闭 issue 复核（纯核实，零代码改动）
+
+来源：wangyuascend-spec/SuperScalarSkillsForOps open-issue monitor
+latest.md @ 2026-09-30 09:25 +08:00。5 个未关闭 = 昨日已确认开放的
+#64/#70/#60/#52 + 新报 #116（#61/#77/#89/#111/#115 已在前几轮核销）。
+三仓同步：llvm @ `61d4f98bb63f`（已最新）、pto-spec 已 pull、TileOP 本地
+与 origin/linx 分叉（本地领先 1 `ce8d316` 落后 9，含 docs 未提交改动，
+本轮未动）。
+
+### #116 FENCE.D.CORE4 / SYNCALL<core_scope>（真实实现任务，等规范同步）
+
+- 评论区三轮裁定已收敛（VV0003 2026-09-30 01:48/01:55 自我修正）：
+  v0.2 ISA 源（SuperScalarModel `archSpec/isa/isa_v0.2_new_tile_intrinsics_detail.md`
+  §2）已定义 SYNCALL<core_scope> 为 mapped 指令；LLVM 是真实后端实现任务。
+- 本轮核实：`LinxV5InstrInfo.td` FENCE_BASE 仍只有 fence.d/fence.i
+  （`[19:15]` 恒 0，无 FenceMode/core4 形态）；pto-spec 当前 checkout
+  `asl/scalar/sys/` 只有 FENCE.D.asl / FENCE.I.asl，无 SYNCALL normative
+  页——规范同步缺口 = PTO-ISA/pto-spec#360。
+- 待办：等 #360 落地后实施 MC encode/decode/print `FENCE.D.CORE4
+  pred,succ`（FenceMode=1，match 0x0000a02b）+ convergent side-effecting
+  intrinsic/builtin + `BSTART.SYS FALL` bundle。
+
+### #64 rms_norm_binary TMOV INVALID + static spill（编码侧根因仍在，已精确定位）
+
+- 关键区分（issue 正文没说透）：坏 TMOV（无 DATR/DIM、BSTART 空 dtype）
+  来自**编译器插入的 tile rename 拷贝**（`copyPhysReg` Tile_ABS_CG →
+  `PseudoTCOPY`），不是 TileOP 源码级 `TMOV`（后者在 origin/linx 已发
+  `BSTART.TLSU TMOV, <dtype>` + B.DIM lb0/lb1，符合 ASL）。
+- 根因定位：`AsmParser/LinxV5AsmParser.cpp:4497 emitTCOPY` 发射
+  `BSTART_TMA(EMPTY_DataType, TMOV)` + 仅 B.IOT；且 `PseudoTCOPY` 在
+  `MCTargetDesc/LinxV5TileOpExpand.cpp getBARGFromInst` 无 case → 永远
+  无 B.DATR/B.DIM。gfsim 解码 "TMOV … INVALID lb0/1/2:1" 与此吻合。
+- ASL 依据：pto-spec `asl/tile/layout-and-rearrangement/layout/TMOV.asl`
+  block_composition = `BSTART.TLSU TMOV, DataType` + **必选 B.DIM LB0**
+  （LB1/LB2 可选，B.DATR 可选零默认）→ 当前 EMPTY dtype + 无 DIM 的
+  编译器拷贝形态不合法。
+- 修复方向（中等）：emitTCOPY 补 dtype + B.DIM LB0，参考 emitEmptyTile
+  （issue #102，U8 + C_B_DIMI 1）先例；难点是 copyPhysReg 处无 dtype
+  信息，需要 tile vreg 侧携带/查询。
+- static spill S64 半边：`storeRegToStackSlot` 注释明确 "spill payload is
+  always encoded as S64/NORM; source tile datatype is intentionally
+  irrelevant"——编译器契约已固化 S64/NORM。#53（umbrella）2026-09-22 被
+  lvhao7896 关闭（零评论；SuperScalarModel 私有仓匿名 404，emulator 侧
+  是否已按字节宽度放宽无法核实）。若模型侧已接受，本半边可关。
+
+### #70 TSCATTER/TGATHER indexed B.IOR（ASL 裁定可下：非法定编码，可关票）
+
+- ASL 硬依据：pto-spec `asl/tile/irregular-and-complex/layout/TGATHER.asl`
+  与 `TSCATTER.asl` legality 原文 "**Exactly one terminating Local B.IOT
+  supplies one persistent value source, one persistent row-index source,
+  and one newly allocated destination; B.IOR and B.IOS are illegal**"；
+  exceptions 同列 B.IOR/B.IOS。
+- TileOP origin/linx 现状：TGATHER/TSCATHER 模板（template_asm.hpp
+  ~15245/15315）已发 `BSTART.TEPL 111/112, <dtype>` + B.DIM×3 +
+  two-source B.IOT（PR #106 `888e256`），与 ASL 绑定契约一致 →
+  matcher 拒绝 indexed `B.IOR [u#1],[]` 是正确 fail-closed，无需 LLVM
+  补 indexed 匹配。
+- 回复关票前注意：ASL block_composition 的 canonical 拼写是
+  `BSTART.SFU TGATHER/TSCATHER`，与 catalog record 的
+  command_mnemonic `BSTART.TEPL` 表述不一致（spec 内部矛盾）；建议先跑
+  issue 附的 test_tscatter.cpp 最小用例确认当前栈可编译，并顺带向 ISA
+  侧确认 SFU/TEPL 拼写归属。
+- 待办：3B 澄清回复 + 关票（需 GitHub token，本会话未提供）。
+
+### #60 TRegToOffset ICE unrolled if-select（当前 HEAD 仍复现，证据确凿）
+
+- 复现成功：`/tmp/itb112/i60.cpp`（issue 最小源码，昨轮已备）+
+  snbench worktree include；build `11ed64b`（与源 HEAD 61d4f98 之间
+  TRegToOffset 无改动）frontend abort exit 134：
+  `LinxV5TRegToOffset.cpp:1256 Assertion 'ResRegOp == CurRegOp && "Liveouts
+  sync-up error!"'`（issue 报 :1112，行号漂移、同一断言）。
+- 完整命令见 /tmp/i60-61dfbf.sh（clang 自动生成的 crash 附件）。
+- 根因方向：N≥5 路 `if (j==cid)` 钻石各前驱 live-out Treg 集合不一致，
+  `getLiveoutLimits` sync-up 断言崩。修复是独立工作包（liveout 合并
+  策略），本轮未动。
+
+### #52 dynamic_mx_quant 三缺陷（缺陷4已修；缺陷3有防御未除根；缺陷5待模型侧核实）
+
+- 缺陷 4（-O0 `loadRegFromStackSlot` 白名单缺 mixedgprnora）：**已修**。
+  当前白名单含 `MixedGPR` + `MixedGPRNoRA`（`LinxV5InstrInfo.cpp:701-708`）。
+- 缺陷 3（%Z 立即数被优化 pass 降级，`B.IOT ->u<>` unknown operand）：
+  `LinxV5AsmPrinter.cpp:176` 现对非立即数打印 "0B" 哨兵（注释明确引用
+  "->u<>" 症状），不再产生 unknown operand/空 box；但根因（INLINEASM
+  "i" 约束操作数被 pass 降级为 vreg）未见修复提交。需用
+  PTO-ISA/SuperNPUBench `feat/dmxq-rel0812` NONTAIL_OCP_FP4 -O2 复测
+  （本地 snbench worktree 无该分支）。
+- 缺陷 5（tile 参数 TSTORE/TLOAD S64 栈传参被 `ValidateLocalTlsu` 拒）：
+  与 #64 spill 半边同族；编译器侧契约已明确 S64/NORM intentional；
+  #53 已关（09-22，lvhao7896），emulator 侧现状无法匿名核实。
+
+### 环境备忘 / 待办
+
+- 本轮零代码改动、零 stash、零分支操作；无 issue 回复（无 token）。
+- SuperScalarModel 私有仓：匿名 API 404、本机无 clone；涉及模型侧核
+  实的项（#64 spill 半边、#52 缺陷5）需用户协助或 token。
+- 下一轮优先级建议：① #70 澄清关票（材料已齐）；② #60 ICE 修复
+  （复现材料已齐）；③ #64 emitTCOPY 补 dtype/DIM；④ #116 等
+  pto-spec#360。
+
+## 2026-09-30 监控报告处置（第二轮·修复）：#60 ICE 已修复，#64 判非编译器缺陷，#52d3 定案，#70 收尾
+
+用户指令：spill/SIMT/intrinsic 类暂不管（#116、#64 spill 半边、#52
+缺陷 5 跳过），修其余。本地提交两个，**未 push**（外部动作待确认）：
+`555a5db93b1b`（#60）、`a7e24594feef`（#64 测试）。
+
+### #60 修复（commit `555a5db93b1b`，本轮唯一代码修复）
+
+- 根因：unrolled if-select（`if (j==cid) TMOV(upd[j], cur)`，N≥5）各
+  臂的 liveout 队列在尾部对齐位置要求不同 tile →
+  `getLiveoutLimits` 断言 "Liveouts sync-up error!"（issue 报 :1112，
+  现移到 :1256 附近）。
+- 修复：冲突深度置无约束（NoRegister 气泡）+ 函数级
+  `SyncConflictRCs` 集合；Phase-2（reg→offset 重写）对冲突 RC 跳过
+  ——前驱窗口状态不一致时偏移会指错槽位，保绝对寄存器等价于既有
+  `!EnableReg2Offset` 支持模式；Phase-1 只插拷贝、处处容忍不一致，
+  不受影响。新增 STATISTIC NumSyncConflictRC。
+- 验证四件套：① i60.cpp（kN=6）干净编译，冲突检出 Tile_TR/Tile_UR
+  （`$tile_t2 vs $tile_t1`，各 4/2 处），仅这两类跳过重写；② kN=2
+  与修复前代码节字节一致（仅 .comment 版本戳 11ed64b→61d4f98 差
+  异，是重建后版本戳更新，非代码差异）；③ 回归测试
+  `issue-60-treg-liveout-sync-conflict.ll`（IR 取自 i60.cpp -emit-llvm）
+  双向验证：基线（HEAD 原版 llc）assert 崩、修复版 PASS；④
+  CodeGen/LinxV5 全套 25 个预存失败与基线逐项一致（element-if WIP
+  遗留），零新增。MC/LinxV5 的 8 个预存失败（elf-machine.s 为
+  ld.lld 不在 PATH 等环境问题）与本次无关。
+- 复现命令：/tmp/itb112/i60.cpp + snbench two-level include，旗标必须
+  带 one-level 那组 -mllvm（含 simt-clock-hand=true）。
+
+### #64 判定：编译器已合规，死锁根因在 gfsim 推断缺失（3B 澄清）
+
+- 事实链：编译器插入的 tile 拷贝（copyPhysReg→PseudoTCOPY→
+  emitTCOPY/expandPseudoTCOPY 两条路径）发射
+  `BSTART.TLSU TMOV, DTYPE_NONE`（code 31，编码 f8211181）+ 单条
+  B.IOT。pto-spec `asl/block/execution/BSTART.TMOV.asl` 自
+  **2026-08-12**（`4d115387b`，早于 issue 08-21）明确："code 31
+  DTYPE_NONE for source-descriptor inference；optional B.DATR
+  Layout；optional B.DIM shape"。
+- 实证：真实 rms_norm_binary kernel（wangyuascend-spec 分支
+  drop-rms-norm-binary-workspace，源已存 /tmp/rnb）当前栈编译通过，
+  **恰好 18 个 `BSTART.TLSU TMOV, DTYPE_NONE`**——与 issue "至少 18
+  处"吻合，即 issue 观察到的就是这个编码；gfrun PASS（issue 自证）
+  = 语义层接受推断形态；gfsim "INVALID" 死锁 = timing 层未实现
+  code-31 推断（SuperScalarModel#327 家族，模型仓私有无法本地核实）。
+- VV0003 09-09 评论"需编译器补 B.DATR NORM.normal"过度保守：BSTART
+  级契约 B.DATR optional，零值默认即 NORM。
+- LLVM 侧改动：仅补 MC 往返测试 `v5-tmov-dtype-none.s`
+  （`a7e24594feef`；TCOPY 宏/DTYPE_NONE bundle/FP32 具体形态三组
+  往返，全部 PASS）。
+- 待办：回复 #64（ASL 引用 + 18 处实证 + 模型侧归属）；顺带向 ISA
+  侧提 TMOV.asl（B.DIM LB0 无 optional 标注）与 BSTART.TMOV.asl
+  （"optional B.DIM shape"）的表述不一致。
+
+### #52 缺陷 3（%Z 降级）定案：当前栈不可复现，待 kernel 侧移植后复测
+
+- 原失败对象是 8 月的位置式操作数模板（TCVT_T `"%3/%0/%Z4"`）；当
+  前模板全命名式（488 处 B.DIM 全 `%[...]`，位置式 `B.DIM $N` 为
+  零）。
+- 唯一改写 INLINEASM 操作数的 pass（ExpandPseudoInsts
+  `foldInlineAsmDimConstants`，含 `ChangeToImmediate` 重写）只匹配
+  位置式拼写，对当前模板完全休眠——8 月的可疑机制已成死代码。
+- 合成探针（循环+运行期 tiling_info 维度+TCVT/TROWEXPANDMUL %Z 模
+  板，/tmp/zprobe.cpp）-O0/-O1/-O2 全干净，`<2KB>` 正确打印。
+- 原始 kernel 已取回（/tmp/dmxq，ziyang-cheng fork
+  feat/dmxq-rel0812 浅克隆），但 fp4 打包契约已变（TCVT
+  ValidRow/ValidCol static_assert 拒绝 fp32[32,64]→fp4[32,32]），
+  无法在当前 TileOP API 下编译——需 benchmark 侧移植后复测。
+- 打印器已有 "0B" 哨兵（不再 unknown operand/空 box 静默腐蚀）。
+- 缺陷 4 已修（白名单 MixedGPR/MixedGPRNoRA）；缺陷 5 spill 类按
+  用户指令跳过。
+
+### #70 收尾验证（材料齐备，可 3B 关票）
+
+- 最小用例（issue 原型 TSCATTER/TGATHER，/tmp/tscatter_probe.cpp）
+  当前栈干净编译；反汇编折叠宏
+  `TSCATTER <Row=1, Col=128, U32>, T#1, M#1, ->U<512B>`，全链无
+  indexed B.IOR。
+- ASL 依据：`asl/tile/irregular-and-complex/layout/TGATHER.asl`/
+  `TSCATTER.asl` legality："Exactly one terminating Local B.IOT
+  ...; **B.IOR and B.IOS are illegal**"。
+- 新发现（写入回复）：ASL block_composition 的 canonical 拼写
+  `BSTART.SFU TGATHER/TSCATHER` 汇编器不接受（td 无 BSTART_SFU）；
+  实现的是 catalog record 的 `BSTART.TEPL 111/112`（数字与符号名均
+  可汇编、可反汇编折叠宏）。spec 内部引擎名 vs carrier 家族名两种
+  拼写矛盾，需 ISA 侧裁定是否加 SFU 别名。
+
+### 环境备忘 / 待办
+
+- 复现材料均在 /tmp：itb112（i60+snbench）、dmxq、rnb、zprobe.cpp、
+  tscatter_probe.cpp。
+- build 已含修复（clang+llc 均重建）；llc 与 clang 是分开的目标，
+  改 pass 后两者都要 ninja。
+- 待用户：① 确认 push（2 commits）；② 提供 token 回复 #64（3B 澄
+  清）/ #70（3B 关票），可选顺带 #52 更新评论；③ #64/#70 回复文案
+  已具备全部证据，见本节。
+
+## 2026-09-30 第二轮收尾：push + issue 回复全部完成（#60/#64/#70 关闭，#52 更新）
+
+用户确认后已执行：
+
+- **push**：`555a5db93b1b`（#60 修复）+ `a7e24594feef`（#64 MC 测试）
+  已推 `linxisa/dev-llvm15_56`（61d4f98bb63f..a7e24594feef）。
+- **#60**：修复报告回复 [#issuecomment-5903568751]，已关闭（编译器
+  ICE 修复闭环）。
+- **#64**：3B 澄清回复 [#issuecomment-5903572920]，已关闭。要点：
+  code 31 DTYPE_NONE 是 08-12 起的规范推断形态、18 处实证、gfrun
+  PASS、死锁归 gfsim 缺推断（#327 家族）；附注向 ISA 侧提出
+  TMOV.asl 与 BSTART.TMOV.asl 的 B.DIM optional 表述不一致。
+- **#70**：3B 澄清回复 [#issuecomment-5903575867]，已关闭。要点：
+  ASL 明文 B.IOR/B.IOS 非法、two-source B.IOT 唯一合法、最小用例
+  当前栈编译实证；附注 BSTART.SFU vs BSTART.TEPL 拼写矛盾待 ISA
+  侧裁定。
+- **#52**：现状更新评论 [#issuecomment-5903578480]，**保持 open**
+  （缺陷 3 待 benchmark 侧把 dynamic_mx_quant 移植到当前 TileOP API
+  后复测；缺陷 4 已修、缺陷 5 维持 S64/NORM 契约结论）。
+
+### 监控报告处置总计（第二轮）
+
+- 修复+关闭：#60；澄清+关闭：#64、#70；更新评论保持 open：#52
+  （等 kernel 移植复测）；按用户指令跳过：#116（intrinsic，等
+  pto-spec#360）、spill 类（#64 static 半边、#52 缺陷 5）。
+- 至此 llvm-project 未关闭 issue 仅剩：#52（待复测）、#116（等规范）。
+
+### 工作区备忘
+
+- 本轮结束工作区仅 CODEX_HANDOFF.md 未提交（随惯例保持）；两个修
+  复 commit 已在远程。
+- TileOP 本地仓仍与 origin/linx 分叉（领先 1 落后 9 + docs 未提交），
+  本轮未动；下轮涉及 TileOP 编译验证前先处置。
+
+## 2026-09-30 第三轮：全量 open issue 清点，再关 3 个（#115/#93/#51）
+
+用户问"还有哪些可以关"，全量核对 llvm-project 14 个 open（关后剩
+11）后执行：
+
+### 已关闭（本轮）
+
+- **#115**（跨 block B.ASSEMBLE TCVT 反汇编折叠）：当天早前会话已
+  独立核实为合规 fail-closed 行为（回复已发布），本轮补关闭说明
+  [#issuecomment-5903705681] 并关闭——ISA generation-linkage 契约
+  落地前无法安全折叠，后续需求开新票。
+- **#93**（maintainer review PTO 0.58.6 TileOp macro assembly）：
+  PR #92 已于 09-15 合入（`73cbdf34fbd0`），后续 round-trip 补强亦
+  落地，review 诉求满足。[#issuecomment-5903706076]
+- **#51**（%Z "i" 立即数被优化 pass 降级——#52 缺陷 3 的 LLVM 侧
+  票）：按当天核实关闭——触发依赖 8 月位置式模板（现全命名式）；
+  唯一改写 INLINEASM 操作数的 `foldInlineAsmDimConstants` 只匹配位
+  置式拼写、已休眠；合成探针 -O0/-O1/-O2 干净；`8695977` 的 0B
+  哨兵保留为重开条件（kernel 移植复测再现即重开）。
+  [#issuecomment-5903706422]
+
+### 待用户拍板
+
+- **#112**（Tk=256 live B.ASSEMBLE parent 轮转 ICE）：修复已推
+  （`3454566c26d1` + `b8f9218b8051`）；09-28 评论记录"经用户在当前
+  SuperScalarModel 实测验证：内核编译且运行正确"，但 09-29 handoff
+  仍标"待用户模型确认后关闭"——需用户确认后关闭。
+
+### 保持 open 的理由（核实记录）
+
+- **#105**：**残留问题仍在**——`bundleHeadMayOmitLB0`
+  （LinxV5ExpandPseudoInsts.cpp:130）对所有 `BSTART.TLSU*` 头放行
+  LB0 折叠，但 GM atom/red（MGATHER.*/MSCATTER.*）需要显式 LB0=1
+  （XrXie 09-22 残留报告）。修复方向：按 TLSU 函数名细分（transport
+  TLOAD/TSTORE/TMOV/TPREFETCH 可省，atom/red 不可）。小改动，未做。
+- **#88**（.note.pto.isa）：未开工的独立工作包（VV0003 09-09 确认
+  全库无实现）。
+- **#109**（TROWEXPAND* SubTileView 源 codegen 崩）：本仓无修复提
+  交，0 评论，未核实。
+- **#73**（常量 DIM 立即数编码）：收益已在 TileOP 层交付、LLVM
+  intrinsic 层明确暂缓（VV0003 09-09 结论）——边界票，属 zhoubot
+  工作项，建议其确认后处置。
+- **#63/#37/#27**：无对应修复提交的多部头工作项（#27 实为 TileOP
+  仓诉求，TSLL/TSRL 移位量形状——TileOP 现有实现待核）。
+- **#116/#114/#110/#79/#74**：活跃 RFC/依赖（#116 等 pto-spec#360）。
+
+### llvm-project open 全景（本轮后 11 个）
+
+#116(等规范) #114(element-if demo) #112(待用户确认) #110/#79/#74
+(RFC) #109(待修) #105(残留 LB0) #88(未开工) #73(边界) #63(工作项)
+#52(等复测) #37(工作项) #27(TileOP 诉求)。
+
+## 2026-09-30 — LLVM #114 CUBE descriptor/DIM 修复
+
+### Issue 处理记录
+
+LLVM #114 最新复核指出，1240-byte element-if object 仍有两项编译器发射问题：CUBE TLOAD/TSTORE 把普通线性维度发成 LB0/LB2；TEXPANDS 零值 tile 缺少 CUBE_M16 layout。
+
+### 根因核实
+
+按当前 PTO-SPEC main `53539ce34e103fc69b768a2ca67e34664f2e4c05` 的 TLOAD/TSTORE CUBE contract，16x8 FP32 必须使用 `LB0=8`、`LB1=16` 并省略 LB2。TEXPANDS 的省略 DATR 默认是 RowMajor，CUBE_M16 必须显式发布 layout=31。PTO PR #341 未改变这两项合同。
+
+### 修复
+
+- elementwise FP32 vector load/store lowering 按 CUBE_M16 geometry 生成 `LB0=8`、`LB1=16`，不再将列数写入 LB2。
+- TEXPANDS MC expansion 显式发出 `B.DATR CUBE_M16, Null`，并省略 LB2。
+- 更新 Clang/LLVM CodeGen 回归检查。
+
+### 验证
+
+- `ninja -C build clang llc llvm-objdump` 通过。
+- `llvm-lit` focused 5 tests 全部通过：elementwise scalar-if、TCMP、TSEL、masked TADD、masked TSUB。
+- 新 object 关键形态：TLOAD `FP32, ND2M16`；TEXPANDS `CUBE_M16`；CUBE load/store 仅 LB0/LB1；TCMP/TADD/TSUB 为 LB0=8/LB1=16；TSTORE `FP32, M162ND`。
+- 当前临时 artifact SHA256：IR `310d4ca3ac491d20fb55b9824bd2c5c8f2a47cdeffa352e8f6d8552962837da6`，object `126badde88ab06f7cef41573efb37ca5fa2e1f47b1825d216cc70c32d5226292`，disassembly `0fd78c3e4e07e95a14227be5a6153f432ec89649e70ddfa0b8fb08a8a4314d58`。
+
+### 待办
+
+- 使用新版 ET_REL object 继续 SuperScalarModel/gfrun decode/binder 联调；linked ELF 和数值/状态验收仍未完成。

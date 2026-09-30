@@ -325,6 +325,20 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
         return;
       }
       if (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI) {
+        if (!MI.getOperand(6).isImm() || MI.getOperand(6).getImm() == 0)
+          report_fatal_error("elementwise TEXPANDS requires a CUBE layout");
+        writeBinaryCodes(
+            OS, Fixups, STI,
+            {MCInstBuilder(LinxV5::BDATR)
+                 .addOperand(MI.getOperand(6))
+                 .addOperand(MCOperand::createImm(0))
+                 .addOperand(MCOperand::createImm(31))
+                 .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Null))
+                 .addOperand(MCOperand::createImm(0))
+                 .addOperand(MCOperand::createImm(0))
+                 .addOperand(MCOperand::createImm(0))
+                 .addOperand(MCOperand::createImm(0))},
+            Dummy);
         writeBinaryCodes(
             OS, Fixups, STI,
             compressMCInstVec(
@@ -335,11 +349,7 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  MCInstBuilder(LinxV5::B_DIM)
                      .addOperand(MCOperand::createImm(1))
                      .addOperand(MI.getOperand(1))
-                     .addOperand(MI.getOperand(2)),
-                 MCInstBuilder(LinxV5::B_DIM)
-                     .addOperand(MCOperand::createImm(2))
-                     .addOperand(MCOperand::createReg(LinxV5::R0))
-                     .addOperand(MI.getOperand(4))},
+                     .addOperand(MI.getOperand(2))},
                 STI, Ctx),
             Dummy);
         writeBinaryCodes(

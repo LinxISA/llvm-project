@@ -4,6 +4,7 @@
 ; CHECK-LABEL: <elementwise_tsel>:
 ; CHECK: BSTART.TEPL TCMP, FP32
 ; CHECK: TSEL <Row=
+; CHECK-NOT: C.B.DIMI 0
 
 define void @elementwise_tsel(ptr %lhs_ptr, ptr %rhs_ptr) #0 {
 entry:

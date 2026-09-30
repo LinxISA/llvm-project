@@ -1740,12 +1740,16 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
   if (VT.isFixedLengthVector()) {
     SmallVector<SDValue> Ops;
     Ops.push_back(LD->getChain());
-    unsigned ColValid = VT.getFixedSizeInBits() / 64;
+    bool Elementwise =
+        DAG.getMachineFunction().getFunction().hasFnAttribute(
+            "linx.elementwise");
+    unsigned ColValid = Elementwise ? VT.getVectorNumElements() / 16
+                                    : VT.getFixedSizeInBits() / 64;
+    unsigned RowValid = Elementwise ? 16 : 1;
+    unsigned Col = Elementwise ? 1 : ColValid;
     Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
-    Ops.push_back(DAG.getTargetConstant(1, DL, MVT::i64)); // Dim-Y
-
-    SDValue ColValue = DAG.getTargetConstant(ColValid, DL, MVT::i64);
-    Ops.push_back(ColValue); // Dim-Z
+    Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
+    Ops.push_back(DAG.getTargetConstant(Col, DL, MVT::i64)); // Dim-Z
 
     unsigned DataType = LinxV5Op::DataType::S64;
     if (VT.getVectorElementType() == MVT::f32)
@@ -1759,9 +1763,6 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     SDValue SizeValue = DAG.getTargetConstant(TileSize, DL, MVT::i64);
     Ops.push_back(SizeValue);
 
-    const bool Elementwise =
-        DAG.getMachineFunction().getFunction().hasFnAttribute(
-            "linx.elementwise");
     const unsigned Layout =
         Elementwise && VT.getVectorElementType() == MVT::f32
             ? LinxV5Op::ArgFormat::ND2M16
@@ -1793,12 +1794,16 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
   if (ValueVT.isFixedLengthVector()) {
     SmallVector<SDValue> Ops;
     Ops.push_back(ST->getChain());
-    unsigned ColValid = MemVT.getFixedSizeInBits() / 64;
+    bool Elementwise =
+        DAG.getMachineFunction().getFunction().hasFnAttribute(
+            "linx.elementwise");
+    unsigned ColValid = Elementwise ? MemVT.getVectorNumElements() / 16
+                                    : MemVT.getFixedSizeInBits() / 64;
+    unsigned RowValid = Elementwise ? 16 : 1;
+    unsigned Col = Elementwise ? 1 : ColValid;
     Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
-    Ops.push_back(DAG.getTargetConstant(1, DL, MVT::i64)); // Dim-Y
-
-    SDValue ColValue = DAG.getTargetConstant(ColValid, DL, MVT::i64);
-    Ops.push_back(ColValue); // Dim-Z
+    Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
+    Ops.push_back(DAG.getTargetConstant(Col, DL, MVT::i64)); // Dim-Z
 
     unsigned DataType = LinxV5Op::DataType::S64;
     if (MemVT.getVectorElementType() == MVT::f32)
@@ -1809,9 +1814,6 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
         DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType
 
-    const bool Elementwise =
-        DAG.getMachineFunction().getFunction().hasFnAttribute(
-            "linx.elementwise");
     const unsigned Layout =
         Elementwise && MemVT.getVectorElementType() == MVT::f32
             ? LinxV5Op::ArgFormat::M162ND

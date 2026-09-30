@@ -9,7 +9,6 @@
 ; CHECK: B.DIM
 ; CHECK: B.IOT
 ; CHECK: B.IOT
-; CHECK: B.IOT
 ; CHECK-NOT: ExecMaskPresent
 
 define void @elementwise_masked_tadd(ptr %a_ptr, ptr %b_ptr) #0 {
