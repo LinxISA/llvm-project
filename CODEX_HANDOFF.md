@@ -13093,11 +13093,11 @@ LLVM #114 最新评论指出，`24f30af02af5` 生成的 element-if ET_REL object
 
 ### 工作区备忘
 
-- LLVM 分支 `dev-llvm15_56` 基于远端最新 `24f30af02af5`，本轮待提交 stride 修复、回归测试和刷新后的 demo artifact。
+- LLVM 分支 `dev-llvm15_56` 已推送 `70856b27ee79`；stride 修复、回归测试和刷新后的 demo artifact 均已在远端。
 - TileOP 本地仓仍处于 `fix/issue-111-timg2col-spart-inline`，有用户未提交改动且与 `origin/linx` 分叉；本轮未合并、未重置。
 
 ### 待办
 
-- 提交并推送 LLVM 修复。
-- 将新 commit、artifact 哈希和显式 stride 证据同步回复 LLVM #114。
+- ~~提交并推送 LLVM 修复。~~ 已完成，commit `70856b27ee79`。
+- ~~将新 commit、artifact 哈希和显式 stride 证据同步回复 LLVM #114。~~ 已完成，评论 `#issuecomment-5905347241`。
 - 继续等待模型对未修改传输字段的新 object 做原始机器码验证；linked ELF 和正式 PTO 0.59 验收仍独立跟踪。
