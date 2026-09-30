@@ -38,11 +38,11 @@ B.IOT t#1, u#2, mask=1111, last
 // DIS: {{^[[:space:]]*c: 00c10043[[:space:]]+B\.DIM[[:space:]]+a0, 12,[[:space:]]+->lb0$}}
 // DIS: {{^[[:space:]]*10: 00d19043[[:space:]]+B\.DIM[[:space:]]+a1, 13,[[:space:]]+->lb1$}}
 // DIS: {{^[[:space:]]*14: 00e22043[[:space:]]+B\.DIM[[:space:]]+a2, 14,[[:space:]]+->lb2$}}
-// DIS: {{^[[:space:]]*18: 00001e13[[:space:]]+B\.IOS[[:space:]]+S0, mask=1111$}}
+// DIS: {{^[[:space:]]*18: 04001e13[[:space:]]+B\.IOS[[:space:]]+S0, mask=1111$}}
 // DIS: {{^[[:space:]]*1c: 03f61a13[[:space:]]+B\.IOS[[:space:]]+mask=1100, ->S63<256KB>$}}
 // DIS: {{^[[:space:]]*20: 0008e013[[:space:]]+B\.IOT[[:space:]]+mask=0000, last,[[:space:]]+->t<128B>$}}
-// DIS: {{^[[:space:]]*24: 00085e13[[:space:]]+B\.IOT[[:space:]]+t#1, mask=1111, last$}}
-// DIS: {{^[[:space:]]*28: 44084e13[[:space:]]+B\.IOT[[:space:]]+t#1, u#2, mask=1111, last$}}
+// DIS: {{^[[:space:]]*24: 04085e13[[:space:]]+B\.IOT[[:space:]]+t#1, mask=1111, last$}}
+// DIS: {{^[[:space:]]*28: 44082e13[[:space:]]+B\.IOT[[:space:]]+t#1, u#2, mask=1111, last$}}
 
 // A single object also exercises the raw-byte column with 16-, 32-, 48-, and
 // 64-bit instructions. The B.IOS source and destination forms are included
@@ -57,8 +57,8 @@ hl.sb.pr a0, [a1, t#3.uw], ->u
 v.lwi.local [to3, lc0<<2, 1024], ->vt.w
 
 // DIS: {{^[[:space:]]*2c: 023c[[:space:]]+C\.B\.DIMI[[:space:]]+8,[[:space:]]+->lb0$}}
-// DIS: {{^[[:space:]]*2e: 00001013[[:space:]]+B\.IOS[[:space:]]+S0, mask=0000$}}
-// DIS: {{^[[:space:]]*32: 03f01813[[:space:]]+B\.IOS[[:space:]]+S63, mask=0001$}}
+// DIS: {{^[[:space:]]*2e: 04001013[[:space:]]+B\.IOS[[:space:]]+S0, mask=0000$}}
+// DIS: {{^[[:space:]]*32: 07f01813[[:space:]]+B\.IOS[[:space:]]+S63, mask=0001$}}
 // DIS: {{^[[:space:]]*36: 00009013[[:space:]]+B\.IOS[[:space:]]+mask=0000, ->S0<128B>$}}
 // DIS: {{^[[:space:]]*3a: 03f39813[[:space:]]+B\.IOS[[:space:]]+mask=0001, ->S63<8KB>$}}
 // DIS: {{^[[:space:]]*3e: 423c[[:space:]]+C\.B\.DIMI[[:space:]]+8,[[:space:]]+->lb1$}}

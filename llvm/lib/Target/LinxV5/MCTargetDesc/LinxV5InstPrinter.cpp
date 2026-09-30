@@ -500,7 +500,7 @@ void LinxV5InstPrinter::printSharedTID(const MCInst *MI, unsigned OpNo,
       MO.getExpr()->print(O, &MAI);
     return;
   }
-  O << "S" << Value;
+  O << "S" << (Value & 0x3f);
 }
 
 void LinxV5InstPrinter::printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
@@ -548,6 +548,8 @@ void LinxV5InstPrinter::printB_IOS(const MCInst *MI, const MCSubtargetInfo &STI,
   if (TSize == 0) {
     // source form
     printSharedTID(MI, 0, STI, O);
+    if ((MI->getOperand(0).getImm() & 0x40) == 0)
+      O << ".reuse";
     O << ", ";
     printPE_MASK(MI, 1, STI, O);
   } else {
