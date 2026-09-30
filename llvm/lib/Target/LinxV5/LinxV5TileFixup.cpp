@@ -65,6 +65,21 @@ public:
     return LinxV5::Tile_ABSRegClass.contains(Reg);
   }
 
+  bool isLocalTileCopy(const MachineInstr &MI) {
+    if (!MI.isCopy() || MI.getNumExplicitOperands() < 2 ||
+        !MI.getOperand(0).isReg() || !MI.getOperand(1).isReg())
+      return false;
+    const MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(1).getReg();
+    auto isLocal = [&MRI](Register Reg) {
+      if (Reg.isPhysical())
+        return LinxV5::Tile_ABSRegClass.contains(Reg);
+      return LinxV5::Tile_ABSRegClass.hasSubClassEq(MRI.getRegClass(Reg));
+    };
+    return isLocal(Dst) && isLocal(Src);
+  }
+
   bool DependTileRegs(const MachineInstr &MI) {
     if (LinxV5::isTileOp(MI))
       return true;
@@ -102,7 +117,7 @@ bool LinxV5TileFixup::Hoist(MachineBasicBlock &MBB) {
   auto Boundary = MBB.begin();
   for (auto MBBI = MBB.begin(), MBBE = MBB.end(); MBBI != MBBE;) {
     MachineInstr *MI = &*MBBI++;
-    if ((MI->isCopy() && isTileReg(MI->getOperand(0).getReg())) ||
+    if ((isLocalTileCopy(*MI)) ||
         MI->getOpcode() == LinxV5::PseudoTSpill ||
         MI->getOpcode() == LinxV5::PseudoTReload) {
       if (MI->getIterator() != Boundary) {

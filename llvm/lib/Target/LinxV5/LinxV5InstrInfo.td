@@ -2111,6 +2111,11 @@ def : InstAlias<"B.DATR $DataLayout$canon, $PadValue", (BDATR BArgFormat:$DataLa
 def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, 0, 0, 0, 0), 1>;
 def : InstAlias<"B.DATR $DataLayout$canon, $PadValue, $CmpMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, 31, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 2>;
 def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue, $CmpMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 1>;
+// Row-expansion uses the otherwise operation-default RMode field as the
+// compile-time byte offset of the broadcast element.  Keep this spelling
+// explicit so the API can select RMode without exposing the raw eight-field
+// instruction form to inline assembly.
+def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue, $CmpMode, $RMode", (BDATR BArgFormat:$DataLayout, 0, BstartDataType:$SrcType, PadValue:$PadValue, CmpMode:$CmpMode, RMode:$RMode, 0, 0), 1>;
 
 // PTO-ISA must-zero B.DATR forms (TMATMUL/TGEMV/TMOV datr_contract:
 // pad_union = must-zero). The pre-existing aliases hardcode

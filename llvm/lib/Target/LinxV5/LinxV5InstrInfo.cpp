@@ -192,6 +192,18 @@ bool LinxV5::isTileOp(const MachineInstr &MI) {
   return LinxV5II::isTileOp(TSFlags);
 }
 
+static bool isLocalTileReg(const MachineRegisterInfo &MRI, Register Reg) {
+  if (Reg.isPhysical())
+    return LinxV5::Tile_ABSRegClass.contains(Reg);
+  return LinxV5::Tile_ABSRegClass.hasSubClassEq(MRI.getRegClass(Reg));
+}
+
+static bool isSharedTileReg(const MachineRegisterInfo &MRI, Register Reg) {
+  if (Reg.isPhysical())
+    return LinxV5::Shared_ABSRegClass.contains(Reg);
+  return LinxV5::Shared_ABSRegClass.hasSubClassEq(MRI.getRegClass(Reg));
+}
+
 unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
   if (MI.getOpcode() == LinxV5::PseudoTCOPY) {
     return MI.getOperand(1).getImm();
@@ -568,6 +580,14 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   auto *TRI =
       MBB.getParent()->getSubtarget<LinxV5Subtarget>().getRegisterInfo();
   auto &MRI = MBB.getParent()->getRegInfo();
+  // Shared tile handles and Local tiles are different architectural register
+  // files.  A generic COPY between them must not be lowered to TCOPY/TMOV:
+  // those operations have Local tile operands only.  Shared<->Local transfers
+  // are represented by the explicit V5 shared intrinsics and their dedicated
+  // pseudos instead.
+  if ((isLocalTileReg(MRI, DstReg) && isSharedTileReg(MRI, SrcReg)) ||
+      (isSharedTileReg(MRI, DstReg) && isLocalTileReg(MRI, SrcReg)))
+    report_fatal_error("cannot copy between LinxV5 Local tiles and Shared tile handles");
   if (MBB.getParent()->getSubtarget<LinxV5Subtarget>().isSIMT()) {
     assert(!LinxV5::GRRegClass.contains(DstReg) && "must reduce inst!");
     assert(!(LinxV5::SIMTCGSLRegClass.contains(DstReg) &&
@@ -1203,6 +1223,28 @@ bool LinxV5InstrInfo::verifyInstruction(const MachineInstr &MI,
                                         StringRef &ErrInfo) const {
   const MCInstrInfo *MCII = STI.getInstrInfo();
   MCInstrDesc const &Desc = MCII->get(MI.getOpcode());
+
+  const MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
+  auto rejectCrossFileCopy = [&](Register Dst, Register Src) {
+    return (isLocalTileReg(MRI, Dst) && isSharedTileReg(MRI, Src)) ||
+           (isSharedTileReg(MRI, Dst) && isLocalTileReg(MRI, Src));
+  };
+  if (MI.isCopy() && MI.getNumExplicitOperands() >= 2 &&
+      MI.getOperand(0).isReg() && MI.getOperand(1).isReg() &&
+      rejectCrossFileCopy(MI.getOperand(0).getReg(),
+                          MI.getOperand(1).getReg())) {
+    ErrInfo = "copy between LinxV5 Local tile and Shared tile handle";
+    return false;
+  }
+  if (MI.getOpcode() == LinxV5::PseudoTCOPY &&
+      MI.getOperand(0).isReg() && MI.getOperand(2).isReg()) {
+    Register Dst = MI.getOperand(0).getReg();
+    Register Src = MI.getOperand(2).getReg();
+    if (!isLocalTileReg(MRI, Dst) || !isLocalTileReg(MRI, Src)) {
+      ErrInfo = "PseudoTCOPY requires Local tile source and destination";
+      return false;
+    }
+  }
 
   for (auto &OI : enumerate(Desc.operands())) {
     unsigned OpType = OI.value().OperandType;

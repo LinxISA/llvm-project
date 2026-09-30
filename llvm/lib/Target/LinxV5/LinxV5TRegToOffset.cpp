@@ -500,6 +500,15 @@ void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
       if (LinxV5::Tile_ABS_CGRegClass.contains(RegOp.Reg)) {
         unsigned RegSizeCode = RegOp.Size;
         unsigned RegSize = 1 << (RegSizeCode + 4);
+        // This pass creates PseudoTCOPY directly, bypassing
+        // LinxV5InstrInfo::copyPhysReg().  PseudoTCOPY is a Local-tile
+        // operation; Shared tile handles must only be moved by the explicit
+        // Shared transfer pseudos.  Keep this check next to the construction
+        // so a future register-class change cannot silently lower a
+        // Shared->Local copy to TCOPY/TMOV.
+        if (!LinxV5::Tile_ABSRegClass.contains(TR))
+          report_fatal_error(
+              "LinxV5 TRegToOffset attempted PseudoTCOPY with non-Local tile");
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoTCOPY))
             .addReg(TR, RegState::Define)
             .addImm(RegSizeCode)
