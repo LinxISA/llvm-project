@@ -1772,7 +1772,13 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
         DAG.getTargetConstant(LinxV5Op::PadValue::Zero, DL, MVT::i64));
 
     Ops.push_back(LD->getBasePtr());
-    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    SDValue RowStride = DAG.getRegister(LinxV5::R0, MVT::i64);
+    if (Elementwise) {
+      const unsigned ElementBytes =
+          VT.getVectorElementType().getStoreSize().getFixedValue();
+      RowStride = DAG.getConstant(ColValid * ElementBytes, DL, MVT::i64);
+    }
+    Ops.push_back(RowStride);
     SDValue VCall =
         DAG.getNode(LinxV5ISD::BLK_TLOAD, DL,
                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
@@ -1821,7 +1827,13 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
     Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
 
     Ops.push_back(ST->getBasePtr());
-    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    SDValue RowStride = DAG.getRegister(LinxV5::R0, MVT::i64);
+    if (Elementwise) {
+      const unsigned ElementBytes =
+          MemVT.getVectorElementType().getStoreSize().getFixedValue();
+      RowStride = DAG.getConstant(ColValid * ElementBytes, DL, MVT::i64);
+    }
+    Ops.push_back(RowStride);
     Ops.push_back(ST->getValue());
     SDValue VCall =
         DAG.getNode(LinxV5ISD::BLK_TSTORE, DL, DAG.getVTList(MVT::Other), Ops);

@@ -1,44 +1,46 @@
 
-/tmp/elementwise_if_for-new.o:	file format elf64-unknown
+element-if-demo/elementwise_if_for.o:	file format elf64-unknown
 
 Disassembly of section .text:
 
 0000000000000000 <_Z18elementwise_if_forRDv128_fRKS_S2_>:
-       0: 08011181 01f01b23    	TLOAD             <Row=16, ValidCol=8, FP32, ND2M16, Zero>, [base=a1], ->T<512B>
+       0: 0800                 	C.BSTART.STD	
+       2: 02000295             	addi	zero, 32, 	->a3
+       6: 08011181 01f01b23    	TLOAD             <Row=16, ValidCol=8, FP32, ND2M16, Zero>, [base=a1, stride=a3], ->T<512B>
           443c023c 0009ee13
-          00018013
-      14: 08011181 01f01b23    	TLOAD             <Row=16, ValidCol=8, FP32, ND2M16, Zero>, [base=a2], ->U<512B>
+          00518013
+      1a: 08011181 01f01b23    	TLOAD             <Row=16, ValidCol=8, FP32, ND2M16, Zero>, [base=a2, stride=a3], ->U<512B>
           443c023c 0009ee93
-          00020013
-      28: 0800                 	C.BSTART.STD	
-      2a: 00000f87             	addtpc	0, 	->t
-      2e: 000c21a9             	lwi.u	[t#1, 0], 	->a1
-      32: 0bb19181 19f01fa3    	TEXPANDS          <Row=16, Col=1, ValidCol=8, FP32, CUBE_M16>, a1, ->M<512B>
+          00520013
+      2e: 0800                 	C.BSTART.STD	
+      30: 00000f87             	addtpc	0, 	->t
+      34: 000c21a9             	lwi.u	[t#1, 0], 	->a1
+      38: 0bb19181 19f01fa3    	TEXPANDS          <Row=16, Col=1, ValidCol=8, FP32, CUBE_M16>, a1, ->M<512B>
           443c023c 0009ef13
           00018013
-      46: 08d19181             	BSTART.TEPL	TCMP, FP32
-      4a: 60101023             	B.DATR	NORM.normal, FP32, Zero, GT
-      4e: 023c                 	C.B.DIMI	8, 	->lb0
-      50: 443c                 	C.B.DIMI	16, 	->lb1
-      52: 8009cf13             	B.IOT	t#1, m#1, mask=1111, last, 	->m<512B>
-      56: 08019181             	BSTART.TEPL	TADD, FP32
-      5a: 00103fa3             	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 0, 1
-      5e: 023c                 	C.B.DIMI	8, 	->lb0
-      60: 443c                 	C.B.DIMI	16, 	->lb1
-      62: 40004e13             	B.IOT	t#1, u#1, mask=1111
-      66: 0209df93             	B.IOT	m#1, mask=1111, last, 	->n<512B>
-      6a: 08119181             	BSTART.TEPL	TSUB, FP32
-      6e: 00107fa3             	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 1, 1
-      72: 023c                 	C.B.DIMI	8, 	->lb0
-      74: 443c                 	C.B.DIMI	16, 	->lb1
-      76: 40004e13             	B.IOT	t#1, u#1, mask=1111
-      7a: 0209de13             	B.IOT	m#1, mask=1111, last, 	->t<512B>
-      7e: 09a19181 443c023c    	TSEL              <Row=16, Col=8, FP32>, M#1, N#1, T#1, ->T<512B>
+      4c: 08d19181             	BSTART.TEPL	TCMP, FP32
+      50: 60101023             	B.DATR	NORM.normal, FP32, Zero, GT
+      54: 023c                 	C.B.DIMI	8, 	->lb0
+      56: 443c                 	C.B.DIMI	16, 	->lb1
+      58: 8009cf13             	B.IOT	t#1, m#1, mask=1111, last, 	->m<512B>
+      5c: 08019181             	BSTART.TEPL	TADD, FP32
+      60: 00103fa3             	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 0, 1
+      64: 023c                 	C.B.DIMI	8, 	->lb0
+      66: 443c                 	C.B.DIMI	16, 	->lb1
+      68: 40004e13             	B.IOT	t#1, u#1, mask=1111
+      6c: 0209df93             	B.IOT	m#1, mask=1111, last, 	->n<512B>
+      70: 08119181             	BSTART.TEPL	TSUB, FP32
+      74: 00107fa3             	B.DATR	CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 1, 1
+      78: 023c                 	C.B.DIMI	8, 	->lb0
+      7a: 443c                 	C.B.DIMI	16, 	->lb1
+      7c: 40004e13             	B.IOT	t#1, u#1, mask=1111
+      80: 0209de13             	B.IOT	m#1, mask=1111, last, 	->t<512B>
+      84: 09a19181 443c023c    	TSEL              <Row=16, Col=8, FP32>, M#1, N#1, T#1, ->T<512B>
           4e13823c de13c200
           0009
-      90: 08111181 19f01ca3    	TSTORE            <Row=16, ValidCol=8, FP32, M162ND>, T#1, [base=a0]
+      96: 08111181 19f01ca3    	TSTORE            <Row=16, ValidCol=8, FP32, M162ND>, T#1, [base=a0, stride=a3]
           443c023c 00085e13
-          00010013
-      a4: 3800                 	C.BSTART.STD	RET
-      a6: 029c                 	c.setc.tgt	ra
-      a8: 0800                 	C.BSTART.STD	
+          00510013
+      aa: 3800                 	C.BSTART.STD	RET
+      ac: 029c                 	c.setc.tgt	ra
+      ae: 0800                 	C.BSTART.STD	

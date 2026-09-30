@@ -21,6 +21,8 @@ void scalar_style_element_if(tile &out, const tile &lhs, const tile &rhs) {
 // IR: call <128 x float> @llvm.linx.experimental.ew.tadd.masked
 // IR: call <128 x float> @llvm.linx.experimental.ew.tsub.masked
 // IR: call <128 x float> @llvm.linx.experimental.ew.tsel
+// OBJ: TLOAD{{.*}}[base=a1, stride=a3]
+// OBJ: TLOAD{{.*}}[base=a2, stride=a3]
 // OBJ: TEXPANDS
 // OBJ: CUBE_M16
 // OBJ: BSTART.TEPL TCMP, FP32
@@ -29,4 +31,4 @@ void scalar_style_element_if(tile &out, const tile &lhs, const tile &rhs) {
 // OBJ: BSTART.TEPL TADD, FP32
 // OBJ: BSTART.TEPL TSUB, FP32
 // OBJ: TSEL
-// OBJ: TSTORE{{.*}}M162ND
+// OBJ: TSTORE{{.*}}M162ND{{.*}}[base=a0, stride=a3]

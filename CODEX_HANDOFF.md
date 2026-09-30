@@ -13063,3 +13063,41 @@ LLVM #114 最新复核指出，1240-byte element-if object 仍有两项编译器
 ### 待办
 
 - 使用新版 ET_REL object 继续 SuperScalarModel/gfrun decode/binder 联调；linked ELF 和数值/状态验收仍未完成。
+
+## 2026-09-30 — LLVM #114 explicit CUBE row-stride 修复
+
+### Issue 处理记录
+
+LLVM #114 最新评论指出，`24f30af02af5` 生成的 element-if ET_REL object 虽已修复 CUBE 维度和 TEXPANDS layout，但三个显式 `B.IOR` binding 的 `source1` 为零，导致模型按 PTO-SPEC 合同把每行 stride 解释为 0：输入只重复加载第一行，输出只覆盖第一行。
+
+### 根因核实
+
+按 PTO-SPEC main `53539ce34e103fc69b768a2ca67e34664f2e4c05` 的 `asl/block/model/dispatch/tlsu-layout-conversion.asl`，只要 `B.IOR` binding 存在，`source1` 就是实际 `row_stride_bytes`；只有整个 binding 不存在时才采用 dense stride。16x8 FP32 elementwise CUBE 的 dense row stride 是 `8 * sizeof(float) = 32` 字节。
+
+### 修复
+
+- 修改 `llvm/lib/Target/LinxV5/LinxV5ISelLowering.cpp`：仅在 `linx.elementwise` 的 vector LOAD/STORE 路径中，根据有效列数和元素字节数生成显式 dense row stride 常量；普通 vector memory lowering 继续使用原有 `R0` 行为。
+- 新生成代码在函数入口发出 `addi zero, 32 -> a3`，三个传输 binding 变为：
+  - TLOAD lhs：`[base=a1, stride=a3]`
+  - TLOAD rhs：`[base=a2, stride=a3]`
+  - TSTORE out：`[base=a0, stride=a3]`
+- 保留已修复的 `ND2M16`、`M162ND`、`LB0=8`、`LB1=16`、无 `LB2` 和 `CUBE_M16`。
+- `clang/test/LinxV5/elementwise-scalar-if.cpp` 增加 stride 回归检查。
+
+### 验证
+
+- `ninja -C build clang llc llvm-objdump` 通过。
+- focused `llvm-lit` 5/5 通过：scalar-if、TCMP、TSEL、masked TADD、masked TSUB。
+- 新 artifact：object 1248 bytes；IR SHA256 `34839638f99fc0833c90c916e01b661393103095abaf6b5bc4d8d37bb7975eac`；object SHA256 `a1f0fed91082b262d01c0f87b8dbc90123a0bb7290d222a81975be86917e8a87`；disassembly SHA256 `9ce2ed298e796ad29ac4541a20fcbce93c26fe21c81ca47a6d6313780a87b0eb`。
+- 模型侧此前已证明仅把三个 stride transport 字段改为 `a3=32` 即可得到 128/128 golden；本轮尚未把该 ET_REL object 冒充为 linked ELF，也未声称完成通用 linker 或 PTO 0.59 identity 验收。
+
+### 工作区备忘
+
+- LLVM 分支 `dev-llvm15_56` 基于远端最新 `24f30af02af5`，本轮待提交 stride 修复、回归测试和刷新后的 demo artifact。
+- TileOP 本地仓仍处于 `fix/issue-111-timg2col-spart-inline`，有用户未提交改动且与 `origin/linx` 分叉；本轮未合并、未重置。
+
+### 待办
+
+- 提交并推送 LLVM 修复。
+- 将新 commit、artifact 哈希和显式 stride 证据同步回复 LLVM #114。
+- 继续等待模型对未修改传输字段的新 object 做原始机器码验证；linked ELF 和正式 PTO 0.59 验收仍独立跟踪。
