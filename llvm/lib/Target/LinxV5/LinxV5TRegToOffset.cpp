@@ -31,6 +31,8 @@ using namespace llvm;
 STATISTIC(NumCopy, "number copys inserted");
 STATISTIC(TileLongCopy, "Number jcore-tile long live range copys");
 STATISTIC(TileCFGCopy, "Number jcore-tile control flow copys");
+STATISTIC(NumSyncConflictRC,
+          "Number of regclass liveout sync conflicts (offset rewrite skipped)");
 
 // Issue #112: the window rotation TMOV-copies the oldest live tile when the
 // 16-slot relative window wraps, and an assembled parent whose generation is
@@ -144,6 +146,12 @@ private:
            DenseMap<const TargetRegisterClass *,
                     std::pair<DenseMap<Register, unsigned int>, int>>>
       RewriteTRDefInfo;
+  // Issue #60: register classes whose done-successor liveout queues cannot be
+  // tail-aligned unified (e.g. an unrolled if-select where each arm defines a
+  // different tile). Phase-1 copy insertion stays correct for them, but the
+  // Phase-2 offset rewrite assumes every predecessor leaves the window in the
+  // same state, so those classes keep absolute registers.
+  DenseSet<const TargetRegisterClass *> SyncConflictRCs;
 
   bool canSkipMI(MachineInstr &MI);
   bool isDistanceReg(Register Reg);
@@ -156,6 +164,7 @@ private:
     GlobalSyncupMap.clear();
     GlobalSlotsInfo.clear();
     RewriteTRDefInfo.clear();
+    SyncConflictRCs.clear();
   }
 
   // Phase-1
@@ -1237,6 +1246,9 @@ LinxV5TRegToOffsetOpt::getLiveoutLimits(MachineBasicBlock &MBB,
                         });
   unsigned MaxSize = GlobalSlotsInfo[MaxSizeMBB][RC].LiveOuts.size();
   Res.assign(MaxSize, LinxRegOp());
+  // Positions where the done successors demanded different registers at the
+  // same tail-aligned depth. No single window order satisfies all of them.
+  SmallVector<bool, 16> Blocked(MaxSize, false);
   bool HasLiveoutLimit = false;
   for (unsigned i = 0; i != MaxSize; ++i) {
     for (MachineBasicBlock *needSyncToMBB : needSyncToMBBs) {
@@ -1250,11 +1262,29 @@ LinxV5TRegToOffsetOpt::getLiveoutLimits(MachineBasicBlock &MBB,
         continue;
       if (!SuccLiveIns.count(CurRegOp.Reg))
         continue;
-      if (ResRegOp.Reg == LinxV5::NoRegister)
+      if (Blocked[MaxSize - 1 - i])
+        continue;
+      if (ResRegOp.Reg == LinxV5::NoRegister) {
         Res[MaxSize - 1 - i] = CurRegOp;
-      else
-        assert(ResRegOp == CurRegOp && "Liveouts sync-up error!");
-      HasLiveoutLimit = true;
+        HasLiveoutLimit = true;
+      } else if (ResRegOp == CurRegOp) {
+        HasLiveoutLimit = true;
+      } else {
+        // Issue #60: an unrolled if-select can leave a different tile
+        // live-out at the same tail-aligned queue depth per successor arm.
+        // Drop the constraint for this depth and mark the register class:
+        // Phase-1 only inserts copies, which stay correct, but Phase-2 must
+        // not rewrite this class to window offsets because predecessors now
+        // disagree on the window state.
+        LLVM_DEBUG(dbgs() << "liveout sync conflict at depth " << i << ": "
+                          << printReg(ResRegOp.Reg, TRI) << " vs "
+                          << printReg(CurRegOp.Reg, TRI) << " in "
+                          << TRI->getRegClassName(RC) << "\n");
+        Res[MaxSize - 1 - i] = LinxRegOp();
+        Blocked[MaxSize - 1 - i] = true;
+        if (SyncConflictRCs.insert(RC).second)
+          ++NumSyncConflictRC;
+      }
     }
   }
 
@@ -1394,6 +1424,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   TII = static_cast<const LinxV5InstrInfo *>(MF.getSubtarget().getInstrInfo());
   TRI = static_cast<const LinxV5RegisterInfo *>(MF.getSubtarget().getRegisterInfo());
   MRI = &MF.getRegInfo();
+  SyncConflictRCs.clear();
 
 #ifndef NDEBUG
   verifyGPR(MF);
@@ -1482,6 +1513,14 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
     const TargetRegisterClass *RC = RCInfo.first;
     DenseMap<Register, unsigned int> TRegIdx;
     unsigned CurIdx = 0;
+    if (SyncConflictRCs.count(RC)) {
+      // Issue #60: predecessors disagree on this class's window state; keep
+      // absolute registers instead of rewriting to window offsets.
+      LLVM_DEBUG(dbgs() << "skip rewrite for "
+                        << TRI->getRegClassName(RC)
+                        << ": liveout sync conflict\n");
+      continue;
+    }
     LLVM_DEBUG(dbgs() << "rewrite " << TRI->getRegClassName(RC) << " in "
                       << printMBBReference(MBB) << "\n");
     if (true) {
