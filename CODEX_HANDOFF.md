@@ -12642,3 +12642,86 @@ void scalar_style_tadd(tile &out, const tile &lhs, const tile &rhs) {
 - 宏 catalog 的公开 TADD/TSUB 仍是普通 TileOp 形式；masked path 是编译器内部 bundle expansion，不应伪造为新的公开 PTO macro form。
 - 尚未在 SuperScalarModel/gfrun 上完成数值、inactive-lane fault/status、nested-if/else 和 linked executable ELF 的端到端验收；这些需后续模型测例。
 - 工作区包含用户并行的未提交 ExecutionMask/Timg2Col 等修改，本轮未清理、未提交、未推送。
+
+## 2026-09-29 监控报告处置：llvm-project 未关闭 issue 批量核实（#77/#89/#111 已核销关闭）
+
+来源：wangyuascend-spec/SuperScalarSkillsForOps 的 open-issue monitor
+（latest.md @ 6a39fc2d，2026-09-29 15:46 +08:00）列出 LinxISA/llvm-project
+8 个未关闭 issue。逐个按 skill 核实：
+
+### 已核实修复并关闭（3 个）
+
+- **#77**（BLK_TSTORE v4i64/v2i64 Cannot select）：修复 `3682dca9`
+  （2026-09-09）。当前 HEAD 复验 `issue-77-merged-scalar-stores.ll` PASS。
+  关闭评论 [#issuecomment-5888156421]。
+- **#89**（bf16 CUBE matmul SIGABRT）：根因是标量 cast 走 `v.cvt.*`（非
+  CUBE 路径），修复 `10abd6ee`。当前 HEAD 复验：bf16/fp16 标量 cast 探针
+  `-mlxbc -O1` 编译通过、`v.cvt` 零出现。关闭评论
+  [#issuecomment-5888156691]。
+- **#111**（Shared MOVR 拒绝阻塞 conv2d_img2col_dyn）：根因是 TileOP
+  `TIMG2COL_SPART` 缺 `PTO_SHARED_INLINE`，Shared handle 走普通 ABI；修复
+  TileOP PR #233（`275d8e7` Shared slot API）+ PR #234（`b2b16fa`）。
+  复验：SuperNPUBench@5ee05ba `conv2d_img2col_dyn` 当前栈 `-O2` 编译产出
+  .o（仅本地 ld.lld e_machine 0xE9/0x105 环境差异）。关闭评论
+  [#issuecomment-5888157082]。
+
+### 确认仍开放（5 个）
+
+- **#61**（BFI 对称常量 M/N 打包错）：**已确认 bug 仍在**——
+  `LinxV5InstrInfo.cpp:798` `M = SymmWidth / 8`（bit 宽除以 8 当 byte），
+  `getSymmetricWidth` SWAR 本身没错；编码侧 `N + M` 与解码侧
+  `I.Imm & 0x7` 协议需对照 `selectImmSeq`/HL_BFI td 核实。小而自洽，
+  可直接修。0 评论。
+- **#60**（TRegToOffset ICE unrolled if-select）：无相关修复提交
+  （grep 无果）；0 评论。需复现（issue 用的 overlay `6369707` 头树）。
+- **#64**（rms_norm_binary TMOV INVALID + static spill）：评论区定期更新
+  （最近 2026-09-09）：①Local TMOV 补 B.DATR 仍未实施（PE4 死锁主因在
+  模型 #327，但编码侧补 B.DATR 仍是闭环项）；②static spill 部分
+  （`8695977` regclass 不对称、`553b080` spill size code）已修一半，
+  tile 跨函数仍存。依赖模型侧协同。
+- **#70**（TSCATTER/TGATHER indexed B.IOR 拒绝）：TileOP `888e256`
+  （PR #106）已改用 two-source B.IOT 绕开；待裁定项是 indexed B.IOR
+  是否进 ISA（需 owner 决策，2026-09-09 评论）。
+- **#52**（dynamic_mx_quant 3 缺陷）：0 评论。#89 已覆盖其 v.cvt 部分；
+  `-O0` 溢出/`layout_type_to_str` 崩溃/栈传参三项需逐条核（部分可能被
+  9 月 spill/regclass 修复顺带解决）。
+
+### 复验环境备忘
+
+conv2d 复验用 SuperNPUBench worktree /tmp/itb112/snbench-conv
+（origin/main@5ee05ba）；监控报告在 /tmp/itb112/monitor.md。
+
+## 2026-09-29 Issue #61 处理记录：HL_BFI 对称常量 M/N 打包错误（已修复并推送 `35e2231`，issue 已回复关闭）
+
+接监控报告处置（#77/#89/#111 之后）。#61：`generateMatIntSeq` 对称 64-bit
+常量路径 `M = SymmWidth / 8`（bit 当 byte）且 `Imm = N + M` 三位 M——16/24/32
+全装不下，所有 BFI 发射全错（实测 `0x0101010101010101` 被物化成
+`0x01010101`，ctzll SWAR 恒 0）。
+
+### 修复（commit `35e2231`，仅两个 cpp + 两个测试）
+
+- 编码侧 `LinxV5InstrInfo.cpp`：`M = N = SymmWidth`（bit 单位，语义是
+  `result[M+N-1:M] = right[N-1:0]` 插低半到 `[2W-1:W]`），打包
+  `(N << 6) | M`；
+- 解码侧 `LinxV5ISelDAGToDAG.cpp selectImmSeq`：`M = Imm & 0x3F,
+  N = Imm >> 6`（对齐 td 的 uimm6/uimm6_plus1）；
+- `bitextract.ll` 的 DAG 期望从旧错误输出（4,4 / 3,3）更新为
+  32,32 / 24,24；新增 `v5-bfi-symmetric-const.ll`（32/24/负对称）。
+- 注：`SymmWidth=16` 不可达（16 位周期必 32 位对称，从 32 起测即命中）。
+
+### 验证
+
+- issue 常量全部 `hl.bfi 32,32` / `24,24`，物化值正确；
+- 回归：CodeGen/LinxV5 失败集与基线逐项一致；期间出现的
+  stack-tload-tstore / elementwise-mask-tadd/tsub 新失败经 stash 复核在
+  无本改动时同样失败——属工作区并行 element-if WIP（11ed64b checkpoint
+  及未提交 Attr.td/BuiltinsLinxV5.def 等），与本修复无关；
+- 回复 [#issuecomment-5888535381]，issue 已关闭。
+
+### 监控报告处置总计（本轮）
+
+- 关闭 4 个：#77、#89、#111、#61（均有独立验证证据）；
+- 确认仍开放：#64（TMOV DATR + spill，依赖模型 #327 协同）、#60
+  （TRegToOffset unrolled if-select ICE，需复现）、#70（indexed B.IOR
+  裁定，等 ISA owner）、#52（dynamic_mx_quant 三项待重核，v.cvt 部分
+  已被 #89 覆盖）。
