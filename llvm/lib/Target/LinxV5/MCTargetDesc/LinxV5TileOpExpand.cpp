@@ -152,6 +152,18 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
             .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
             .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
     break;
+  case LinxV5::PseudoMGATHER_MASK_SizeI:
+    MCVec.push_back(
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
+            .addOperand(Inst.getOperand(6))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    break;
   }
   return MCVec;
 }
@@ -538,6 +550,29 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(8))            // TSize
                         .addOperand(MCOperand::createImm(1)));     // Last
     break;
+  case LinxV5::PseudoMGATHER_MASK_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(7))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(8)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(9)));
+    break;
+  case LinxV5::PseudoMSCATTER_MASK_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(0))
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(Inst.getOperand(7)));
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(8)));
+    break;
   }
   return McVec;
 }
@@ -626,6 +661,19 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(4)));
     break;
   }
+  case PseudoMGATHER_MASK_SizeI:
+  case PseudoMSCATTER_MASK_SizeI:
+    if (!isZeroRegAndOneImm(Inst, 1))
+      McVec.push_back(MCInstBuilder(LinxV5::B_DIM)
+                          .addOperand(MCOperand::createImm(0))
+                          .addOperand(Inst.getOperand(1))
+                          .addOperand(Inst.getOperand(2)));
+    if (!isZeroRegAndOneImm(Inst, 3))
+      McVec.push_back(MCInstBuilder(LinxV5::B_DIM)
+                          .addOperand(MCOperand::createImm(1))
+                          .addOperand(Inst.getOperand(3))
+                          .addOperand(Inst.getOperand(4)));
+    break;
   case PseudoTLOAD_noDsrc_noDdst:
   case PseudoTSTORE_noDsrc_noDdst:
   case PseudoTLOAD_noDsrc_Ddst:
@@ -699,6 +747,8 @@ llvm::SmallVector<MCInst> getBIORFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTSTORE_Dsrc_Ddst:
   case LinxV5::PseudoTSTORE_noDsrc_noDdst:
   case LinxV5::PseudoTSTORE_noDsrc_Ddst:
+  case LinxV5::PseudoMGATHER_MASK_SizeI:
+  case LinxV5::PseudoMSCATTER_MASK_SizeI:
     llvm::SmallVector<unsigned> GPRInList;
     for (int i = Inst.getNumOperands() - 1; i >= 0; i--) {
       auto CurMO = Inst.getOperand(i);
@@ -810,6 +860,8 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoTSTORE_Dsrc_noDdst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoTLOAD_Dsrc_Ddst, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_Dsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},
+      {LinxV5::PseudoMGATHER_MASK_SizeI, LinxV5Op::TileOPTMA::MGATHER_MASK},
+      {LinxV5::PseudoMSCATTER_MASK_SizeI, LinxV5Op::TileOPTMA::MSCATTER_MASK},
       {LinxV5::PseudoMAMULBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULB_ACC},
       {LinxV5::PseudoTGEMV_SizeI, LinxV5Op::TileOPCUBE::TGEMV},
       {LinxV5::PseudoTGEMV_BIAS_SizeI, LinxV5Op::TileOPCUBE::TGEMV_BIAS},

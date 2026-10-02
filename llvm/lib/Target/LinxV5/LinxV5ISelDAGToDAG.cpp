@@ -507,6 +507,33 @@ static SDNode *selectElementwiseTSubMasked(SDLoc &DL, SelectionDAG *DAG,
                              Node->getValueType(1), Ops);
 }
 
+static SDNode *selectElementwiseMGatherMasked(SDLoc &DL, SelectionDAG *DAG,
+                                              SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index <= 7; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(9)); // offsets
+  Ops.push_back(Node->getOperand(10)); // mask
+  Ops.push_back(Node->getOperand(8)); // base pointer
+  Ops.push_back(Node->getOperand(0)); // chain
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseMScatterMasked(SDLoc &DL, SelectionDAG *DAG,
+                                               SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Node->getOperand(8)); // source tile
+  for (unsigned Index = 1; Index <= 5; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(6)); // tile size
+  Ops.push_back(Node->getOperand(9)); // offsets
+  Ops.push_back(Node->getOperand(10)); // mask
+  Ops.push_back(Node->getOperand(7)); // base pointer
+  Ops.push_back(Node->getOperand(0)); // chain
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0), Ops);
+}
+
 static SDNode *selectElementwiseTCmp(SDLoc &DL, SelectionDAG *DAG,
                                      SDNode *Node, unsigned Opc) {
   SmallVector<SDValue> Ops;
@@ -1216,6 +1243,18 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   case LinxV5ISD::EW_TSUB_MASKED: {
     ReplaceNode(Node, selectElementwiseTSubMasked(
                           DL, CurDAG, Node, LinxV5::PseudoTSUB_Masked_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_MGATHER_MASKED: {
+    ReplaceNode(Node, selectElementwiseMGatherMasked(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMGATHER_MASK_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_MSCATTER_MASKED: {
+    ReplaceNode(Node, selectElementwiseMScatterMasked(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMSCATTER_MASK_SizeI));
     return;
   }
   case LinxV5ISD::EW_TCMP: {

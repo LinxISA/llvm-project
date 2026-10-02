@@ -381,6 +381,8 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TADD_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TSUB_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_MGATHER_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_MSCATTER_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TCMP)
     MAKE_CASE(LinxV5ISD::EW_TSEL)
     MAKE_CASE(LinxV5ISD::EW_TEXPANDS)
@@ -924,6 +926,10 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTAddMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsub_masked:
       return lowerElementwiseTSubMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mgather_masked:
+      return lowerElementwiseMGatherMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mscatter_masked:
+      return lowerElementwiseMScatterMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tcmp:
       return lowerElementwiseTCmp(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsel:
@@ -1423,7 +1429,8 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSubMasked(
   getV5ConstantOperand(Op.getOperand(10), "masked TSUB Zero", 1);
   SmallVector<SDValue> Ops;
   Ops.push_back(Op.getOperand(0));
-  for (unsigned Index : {2u, 3u}) {
+  // TLSU contract uses LB0=columns and LB1=rows.
+  for (unsigned Index : {3u, 2u}) {
     if (isa<ConstantSDNode>(Op.getOperand(Index))) {
       Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
       Ops.push_back(DAG.getTargetConstant(
@@ -1453,6 +1460,63 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSubMasked(
       DL, MVT::i64));
   return DAG.getNode(LinxV5ISD::EW_TSUB_MASKED, DL,
                      DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseMGatherMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "masked MGATHER rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "masked MGATHER cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "masked MGATHER data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "masked MGATHER pad", 3);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  // TLSU contract uses LB0=columns and LB1=rows.
+  for (unsigned Index : {3u, 2u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "masked MGATHER data type", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(5), "masked MGATHER pad", 3), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6)); // base pointer
+  Ops.push_back(Op.getOperand(7)); // logical element offsets
+  Ops.push_back(Op.getOperand(8)); // predicate tile
+  return DAG.getNode(LinxV5ISD::EW_MGATHER_MASKED, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseMScatterMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "masked MSCATTER rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "masked MSCATTER cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "masked MSCATTER data type", 31);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  // TLSU contract uses LB0=columns and LB1=rows.
+  for (unsigned Index : {3u, 2u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "masked MSCATTER data type", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getOperand(6).getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(5)); // base pointer
+  Ops.push_back(Op.getOperand(6)); // source tile
+  Ops.push_back(Op.getOperand(7)); // logical element offsets
+  Ops.push_back(Op.getOperand(8)); // predicate tile
+  return DAG.getNode(LinxV5ISD::EW_MSCATTER_MASKED, DL,
+                     DAG.getVTList(MVT::Other), Ops);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
@@ -1756,6 +1820,12 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
       DataType = LinxV5Op::DataType::FP32;
     else if (VT.getVectorElementType() == MVT::f16)
       DataType = LinxV5Op::DataType::FP16;
+    else if (VT.getVectorElementType() == MVT::i8)
+      DataType = LinxV5Op::DataType::U8;
+    else if (VT.getVectorElementType() == MVT::i16)
+      DataType = LinxV5Op::DataType::S16;
+    else if (VT.getVectorElementType() == MVT::i32)
+      DataType = LinxV5Op::DataType::S32;
     SDValue DataTypeValue =
         DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType
@@ -1816,6 +1886,12 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
       DataType = LinxV5Op::DataType::FP32;
     else if (MemVT.getVectorElementType() == MVT::f16)
       DataType = LinxV5Op::DataType::FP16;
+    else if (MemVT.getVectorElementType() == MVT::i8)
+      DataType = LinxV5Op::DataType::U8;
+    else if (MemVT.getVectorElementType() == MVT::i16)
+      DataType = LinxV5Op::DataType::S16;
+    else if (MemVT.getVectorElementType() == MVT::i32)
+      DataType = LinxV5Op::DataType::S32;
     SDValue DataTypeValue =
         DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType
@@ -1865,6 +1941,8 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerTileOpWithBody(DL, Op, 0, uNum, DAG, LinxV5ISD::MCALL);
   } else if (IntNo == Intrinsic::linx_blk_tstore) {
     return lowerTStore(LinxV5ISD::BLK_TSTORE, DL, Op, DAG);
+  } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_masked) {
+    return lowerElementwiseMScatterMasked(DL, Op, DAG);
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =

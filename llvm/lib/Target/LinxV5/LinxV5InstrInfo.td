@@ -3546,6 +3546,26 @@ def PseudoTSTORE_Dsrc_Ddst : PseudoMTClImpl<(outs),
     let AsmString = "TSTORE.$Layout\t<LB0: $RegM$immM, LB1: $RegN$immN, LB2: $RegK$immK, ${DataType}>, $SrcTile," #"\t[$List], ${DepSrc}, ->d";
 }
 
+// Element-wise indexed memory operations.  The offsets are logical element
+// indices at the intrinsic boundary and are carried as a tile source.  The
+// mask is a predicate tile and is emitted as the final B.IOT source.
+def PseudoMGATHER_MASK_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       PRED_TILE_Src_Reg:$MaskTile, GPRList:$List)> {
+  let AsmString = "MGATHER.MASK\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}, ${PadValue}>\t[$List], $OffsetTile, $MaskTile, $DstTile$TileSize";
+}
+
+def PseudoMSCATTER_MASK_SizeI : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       PRED_TILE_Src_Reg:$MaskTile,
+       GPRList:$List)> {
+  let AsmString = "MSCATTER.MASK\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, $MaskTile, [$List]";
+}
+
 // Cube Call
 class PseudoCCallImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
   let TOP = TileOp_CUBE;

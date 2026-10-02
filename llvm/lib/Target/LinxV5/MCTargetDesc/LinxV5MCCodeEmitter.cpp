@@ -779,10 +779,13 @@ void LinxV5MCCodeEmitter::expandPseudoTLoadStore(const MCInst &MI, raw_ostream &
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
   unsigned Dummy = 0;
+  const bool IndexedMasked =
+      MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI ||
+      MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI;
   // bstart.par
   writeBinaryCodes(OS, Fixups, STI,
                    {MCInstBuilder(LinxV5::BSTART_TMA)
-                        .addOperand(MI.getOperand(7))
+                        .addOperand(MI.getOperand(IndexedMasked ? 5 : 7))
                         .addOperand(MCOperand::createImm(
                             getPseudoTILEOpcode(MI.getOpcode())))},
                    Dummy);
@@ -796,7 +799,8 @@ void LinxV5MCCodeEmitter::expandPseudoTLoadStore(const MCInst &MI, raw_ostream &
   writeBinaryCodes(OS, Fixups, STI, getBIOTFromInst(MI, MCII), Dummy);
   // b.ior
   writeBinaryCodes(OS, Fixups, STI, getBIORFromInst(MI, MCII), Dummy);
-  // b.iod
+  // Masked indexed memory ops have no dependency binder.
+  if (!IndexedMasked)
     writeBinaryCodes(OS, Fixups, STI, getBIODFromInst(MI, MCII), Dummy);
 }
 

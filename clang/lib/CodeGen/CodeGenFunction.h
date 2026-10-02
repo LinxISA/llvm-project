@@ -4267,6 +4267,8 @@ public:
   llvm::Value *EmitLinxV5ACCCVT(const CallExpr *E);
   llvm::Value *EmitLinxV5ElementwiseTAddMasked(const CallExpr *E);
   llvm::Value *EmitLinxV5ElementwiseTSubMasked(const CallExpr *E);
+  llvm::Value *EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E);
+  llvm::Value *EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E);
   llvm::Value *EmitLinxV5FPArith(const CallExpr *E, llvm::Intrinsic::ID ID);
   llvm::Value *EmitLinxV5TwoSrcFloat(const CallExpr *E, llvm::Intrinsic::ID ID);
   llvm::Value *EmitLinxV5SHFL(const CallExpr *E, llvm::Intrinsic::ID ID);

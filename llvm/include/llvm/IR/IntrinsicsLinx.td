@@ -228,6 +228,21 @@ def int_linx_blk_tload : Intrinsic<[llvm_anyvector_ty], [llvm_i64_ty, llvm_i64_t
 
 def int_linx_blk_tstore : Intrinsic<[], [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty, llvm_i64_ty, llvm_anyvector_ty], [IntrHasSideEffects]>;
 
+// Element-wise indexed memory operations.  The index tile carries logical
+// element indices; the target lowering owns any encoding-specific address
+// conversion required by the selected TLSU operation.
+def int_linx_experimental_ew_mgather_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_masked :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_blk_acccvt : Intrinsic<[llvm_anyvector_ty], [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty], [IntrHasSideEffects]>;
 
 def int_linx_blkv_fabs : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrHasSideEffects]>;
