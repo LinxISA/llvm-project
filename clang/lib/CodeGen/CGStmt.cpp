@@ -1145,8 +1145,15 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
   };
 
   if (const auto *If = dyn_cast_or_null<IfStmt>(Body)) {
-    const auto *Compare = dyn_cast<BinaryOperator>(
-        ignoreElementwiseCasts(If->getCond()));
+    const Expr *ConditionExpr = ignoreElementwiseCasts(If->getCond());
+    bool InvertPredicate = false;
+    if (const auto *Not = dyn_cast_or_null<UnaryOperator>(ConditionExpr)) {
+      if (Not->getOpcode() != UO_LNot)
+        return false;
+      InvertPredicate = true;
+      ConditionExpr = ignoreElementwiseCasts(Not->getSubExpr());
+    }
+    const auto *Compare = dyn_cast<BinaryOperator>(ConditionExpr);
     const auto *CompareLHS = Compare
                                  ? getElementwiseSubscript(Compare->getLHS())
                                  : nullptr;
@@ -1154,7 +1161,19 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
                                  ? dyn_cast<FloatingLiteral>(
                                        ignoreElementwiseCasts(Compare->getRHS()))
                                  : nullptr;
-    if (!Compare || Compare->getOpcode() != BO_GT || !CompareLHS ||
+    unsigned CompareMode = 3; // LinxV5 CmpMode::GT.
+    if (Compare) {
+      switch (Compare->getOpcode()) {
+      case BO_EQ: CompareMode = 0; break; // EQ
+      case BO_NE: CompareMode = 1; break; // NE
+      case BO_LT: CompareMode = 2; break; // LT
+      case BO_GT: CompareMode = 3; break; // GT
+      case BO_LE: CompareMode = 4; break; // LE
+      case BO_GE: CompareMode = 5; break; // GE
+      default: return false;
+      }
+    }
+    if (!Compare || !CompareLHS ||
         !CompareRHS || !CompareRHS->getValue().isZero() ||
         !isElementwiseIndex(CompareLHS->getIdx(), Index))
       return false;
@@ -1251,7 +1270,7 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
         CompareIntrinsic,
         {Builder.getInt64(16), Builder.getInt64(LaneCount / 16),
          Builder.getInt64(1), Builder.getInt64(31), LHSValue, Zero,
-         Builder.getInt64(3)},
+         Builder.getInt64(CompareMode)},
         "linx.elementwise.predicate");
     auto EmitMasked = [&](llvm::Intrinsic::ID ID, llvm::Value *A,
                           llvm::Value *B, llvm::Value *PredInv,
@@ -1265,10 +1284,10 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
     };
     llvm::Value *ThenValue = EmitMasked(
         llvm::Intrinsic::linx_experimental_ew_tadd_masked, LHSValue, RHSValue,
-        Builder.getInt64(0), "linx.elementwise.then");
+        Builder.getInt64(InvertPredicate ? 1 : 0), "linx.elementwise.then");
     llvm::Value *ElseValue = EmitMasked(
         llvm::Intrinsic::linx_experimental_ew_tsub_masked, LHSValue, RHSValue,
-        Builder.getInt64(1), "linx.elementwise.else");
+        Builder.getInt64(InvertPredicate ? 0 : 1), "linx.elementwise.else");
     llvm::Function *SelectIntrinsic = CGM.getIntrinsic(
         llvm::Intrinsic::linx_experimental_ew_tsel,
         {VectorTy, VectorTy, VectorTy, VectorTy});
