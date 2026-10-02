@@ -258,7 +258,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
             {MCInstBuilder(LinxV5::BDATR)
                  .addOperand(MCOperand::createImm(0))
                  .addOperand(MCOperand::createImm(0))
-                 .addOperand(MI.getOperand(5))
+                 .addOperand(MCOperand::createImm(
+                     LinxV5Op::DataType::EMPTY_DataType))
                  .addOperand(MCOperand::createImm(0))
                  .addOperand(MI.getOperand(10))
                  .addOperand(MCOperand::createImm(0))
@@ -387,7 +388,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                          {MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
                               .addOperand(MI.getOperand(6))
                               .addOperand(MCOperand::createImm(0))
-                              .addOperand(MI.getOperand(5))
+                              .addOperand(MCOperand::createImm(
+                                  LinxV5Op::DataType::EMPTY_DataType))
                               .addOperand(MCOperand::createImm(0))
                               .addOperand(MCOperand::createImm(0))
                               .addOperand(MCOperand::createImm(0))
