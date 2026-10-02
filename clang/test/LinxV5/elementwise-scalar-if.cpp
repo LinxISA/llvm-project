@@ -26,9 +26,13 @@ void scalar_style_element_if(tile &out, const tile &lhs, const tile &rhs) {
 // OBJ: TEXPANDS
 // OBJ: CUBE_M16
 // OBJ: BSTART.TEPL TCMP, FP32
+// OBJ: B.DATR NORM.normal, DTYPE_NONE
 // OBJ: C.B.DIMI 8
 // OBJ: C.B.DIMI 16
+// OBJ: C.B.DIMI 8
 // OBJ: BSTART.TEPL TADD, FP32
+// OBJ: B.DATR CUBE_M16, DTYPE_NONE
 // OBJ: BSTART.TEPL TSUB, FP32
+// OBJ: B.DATR CUBE_M16, DTYPE_NONE
 // OBJ: TSEL
 // OBJ: TSTORE{{.*}}M162ND{{.*}}[base=a0, stride=a3]

@@ -250,6 +250,9 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                                 : 0))},
                        Dummy);
       if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+        if (!MI.getOperand(4).isImm())
+          report_fatal_error(
+              "elementwise TCMP requires a constant CUBE column dimension");
         writeBinaryCodes(
             OS, Fixups, STI,
             {MCInstBuilder(LinxV5::BDATR)
@@ -272,7 +275,15 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  MCInstBuilder(LinxV5::B_DIM)
                      .addOperand(MCOperand::createImm(1))
                      .addOperand(MI.getOperand(1))
-                     .addOperand(MI.getOperand(2))},
+                     .addOperand(MI.getOperand(2)),
+                 // TCMP compares CUBE sources, so LB2 is the physical CUBE
+                 // column count.  For the element-wise form this is the
+                 // constant logical column count; omitting it defaults to 1
+                 // and mismatches FP32 CUBE_M16 sources.
+                 MCInstBuilder(LinxV5::B_DIM)
+                     .addOperand(MCOperand::createImm(2))
+                     .addOperand(MCOperand::createReg(LinxV5::R0))
+                     .addOperand(MI.getOperand(4))},
                 STI, Ctx),
             Dummy);
         writeBinaryCodes(

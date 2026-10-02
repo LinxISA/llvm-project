@@ -1392,9 +1392,11 @@ SDValue LinxV5TargetLowering::lowerElementwiseTAddMasked(
       Ops.push_back(DAG.getTargetConstant(0, DL, MVT::i64));
     }
   }
+  // The operation's FP32 (or other concrete) type is carried by BSTART.
+  // The secondary B.DATR DataType field is not applicable to TADD and must
+  // use the PTO omission sentinel instead of repeating the operation type.
   Ops.push_back(DAG.getTargetConstant(
-      getV5ConstantOperand(Op.getOperand(4), "masked TADD data type", 31),
-      DL, MVT::i64));
+      LinxV5Op::DataType::EMPTY_DataType, DL, MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
       getV5ConstantOperand(Op.getOperand(5), "masked TADD layout", 31),
       DL, MVT::i64));
@@ -1434,9 +1436,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSubMasked(
       Ops.push_back(DAG.getTargetConstant(0, DL, MVT::i64));
     }
   }
+  // See the masked TADD lowering above: TSUB's secondary B.DATR DataType is
+  // DTYPE_NONE; the operation type remains in BSTART.
   Ops.push_back(DAG.getTargetConstant(
-      getV5ConstantOperand(Op.getOperand(4), "masked TSUB data type", 31),
-      DL, MVT::i64));
+      LinxV5Op::DataType::EMPTY_DataType, DL, MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
       getV5ConstantOperand(Op.getOperand(5), "masked TSUB layout", 31),
       DL, MVT::i64));
@@ -1470,9 +1473,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
         cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
         MVT::i64));
   }
+  // TCMP also has no applicable secondary B.DATR DataType.  Do not duplicate
+  // the source operation type in the descriptor.
   Ops.push_back(DAG.getTargetConstant(
-      getV5ConstantOperand(Op.getOperand(4), "TCMP data type", 31), DL,
-      MVT::i64));
+      LinxV5Op::DataType::EMPTY_DataType, DL, MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
       LinxV5Op::ArgFormat::NORM, DL,
       MVT::i64));
