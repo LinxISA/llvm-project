@@ -1019,6 +1019,9 @@ void LinxV5InstPrinter::printTileOPTMA(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPTMA::MGATHER_XOR:
     O << "MGATHER.XOR";
     break;
+  case LinxV5Op::TileOPTMA::MSCATTER_ADD:
+    O << "MSCATTER.ADD";
+    break;
   case LinxV5Op::TileOPTMA::TIMG2COL:
     O << "TIMG2COL";
     break;

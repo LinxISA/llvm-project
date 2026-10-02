@@ -782,10 +782,16 @@ void LinxV5MCCodeEmitter::expandPseudoTLoadStore(const MCInst &MI, raw_ostream &
   const bool IndexedMasked =
       MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI ||
       MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI;
+  const bool IndexedAtomic =
+      MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI ||
+      MI.getOpcode() == LinxV5::PseudoMSCATTER_ADD_SizeI;
   // bstart.par
   writeBinaryCodes(OS, Fixups, STI,
                    {MCInstBuilder(LinxV5::BSTART_TMA)
-                        .addOperand(MI.getOperand(IndexedMasked ? 5 : 7))
+                        // Masked and atomic indexed pseudos place the
+                        // BSTART data type at operand 5; ordinary TMA
+                        // pseudos carry it at operand 7.
+                        .addOperand(MI.getOperand((IndexedMasked || IndexedAtomic) ? 5 : 7))
                         .addOperand(MCOperand::createImm(
                             getPseudoTILEOpcode(MI.getOpcode())))},
                    Dummy);

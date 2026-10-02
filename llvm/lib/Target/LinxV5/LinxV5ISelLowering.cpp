@@ -383,6 +383,8 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_TSUB_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_MGATHER_ADD)
+    MAKE_CASE(LinxV5ISD::EW_MSCATTER_ADD)
     MAKE_CASE(LinxV5ISD::EW_TCMP)
     MAKE_CASE(LinxV5ISD::EW_TSEL)
     MAKE_CASE(LinxV5ISD::EW_TEXPANDS)
@@ -928,8 +930,12 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTSubMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mgather_masked:
       return lowerElementwiseMGatherMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mgather_add:
+      return lowerElementwiseMGatherAdd(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mscatter_masked:
       return lowerElementwiseMScatterMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mscatter_add:
+      return lowerElementwiseMScatterAdd(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tcmp:
       return lowerElementwiseTCmp(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsel:
@@ -1519,6 +1525,60 @@ SDValue LinxV5TargetLowering::lowerElementwiseMScatterMasked(
                      DAG.getVTList(MVT::Other), Ops);
 }
 
+SDValue LinxV5TargetLowering::lowerElementwiseMGatherAdd(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "MGATHER_ADD rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "MGATHER_ADD cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "MGATHER_ADD data type", 31);
+  getV5ConstantOperand(Op.getOperand(5), "MGATHER_ADD pad", 3);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {3u, 2u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "MGATHER_ADD data type", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(5), "MGATHER_ADD pad", 3), DL,
+      MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  return DAG.getNode(LinxV5ISD::EW_MGATHER_ADD, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseMScatterAdd(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  getV5ConstantOperand(Op.getOperand(2), "MSCATTER_ADD rows", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "MSCATTER_ADD cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(4), "MSCATTER_ADD data type", 31);
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {3u, 2u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(
+      getV5ConstantOperand(Op.getOperand(4), "MSCATTER_ADD data type", 31),
+      DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getOperand(6).getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(5));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  return DAG.getNode(LinxV5ISD::EW_MSCATTER_ADD, DL,
+                     DAG.getVTList(MVT::Other), Ops);
+}
+
 SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
     SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
   getV5ConstantOperand(Op.getOperand(2), "TCMP rows", 32, false);
@@ -1943,6 +2003,8 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerTStore(LinxV5ISD::BLK_TSTORE, DL, Op, DAG);
   } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_masked) {
     return lowerElementwiseMScatterMasked(DL, Op, DAG);
+  } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_add) {
+    return lowerElementwiseMScatterAdd(DL, Op, DAG);
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =

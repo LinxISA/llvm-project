@@ -19534,6 +19534,45 @@ CodeGenFunction::EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E) {
   return Builder.CreateCall(F, Args, "");
 }
 
+// ew_mgather_add(rows, cols, dtype, pad, out, base, indices, values)
+llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMGatherAdd(
+    const CallExpr *E) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned Index : {0u, 1u, 2u, 3u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  Args.push_back(EmitScalarExpr(E->getArg(6)));
+  Args.push_back(EmitScalarExpr(E->getArg(7)));
+  SmallVector<llvm::Type *> OverloadTypes;
+  OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
+  llvm::Function *F = CGM.getIntrinsic(
+      Intrinsic::linx_experimental_ew_mgather_add, OverloadTypes);
+  llvm::Value *Call = Builder.CreateCall(F, Args, "");
+  EmitStoreOfScalar(Call, EmitLValue(E->getArg(4)));
+  return Call;
+}
+
+// ew_mscatter_add(rows, cols, dtype, base, values, indices)
+llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMScatterAdd(
+    const CallExpr *E) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned Index : {0u, 1u, 2u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+  Args.push_back(EmitScalarExpr(E->getArg(3)));
+  Args.push_back(EmitScalarExpr(E->getArg(4)));
+  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  SmallVector<llvm::Type *> OverloadTypes;
+  OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
+  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+  llvm::Function *F = CGM.getIntrinsic(
+      Intrinsic::linx_experimental_ew_mscatter_add, OverloadTypes);
+  return Builder.CreateCall(F, Args, "");
+}
+
 Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
                                               const CallExpr *E,
                                               ReturnValueSlot ReturnValue) {
@@ -19615,7 +19654,11 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   case LinxV5::BIew_mgather_masked:
       return EmitLinxV5ElementwiseMGatherMasked(E);
   case LinxV5::BIew_mscatter_masked:
-      return EmitLinxV5ElementwiseMScatterMasked(E);
+    return EmitLinxV5ElementwiseMScatterMasked(E);
+  case LinxV5::BIew_mgather_add:
+    return EmitLinxV5ElementwiseMGatherAdd(E);
+  case LinxV5::BIew_mscatter_add:
+    return EmitLinxV5ElementwiseMScatterAdd(E);
   }
 }
 

@@ -84,6 +84,8 @@ enum NodeType : unsigned {
   EW_TSUB_MASKED,
   EW_MGATHER_MASKED,
   EW_MSCATTER_MASKED,
+  EW_MGATHER_ADD,
+  EW_MSCATTER_ADD,
   EW_TCMP,
   EW_TSEL,
   EW_TEXPANDS,
@@ -307,6 +309,10 @@ private:
                                          SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
+  SDValue lowerElementwiseMGatherAdd(SDLoc &DL, SDValue Op,
+                                     SelectionDAG &DAG) const;
+  SDValue lowerElementwiseMScatterAdd(SDLoc &DL, SDValue Op,
+                                      SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
                                SelectionDAG &DAG) const;
   SDValue lowerElementwiseTSel(SDLoc &DL, SDValue Op,

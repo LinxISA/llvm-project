@@ -164,6 +164,30 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
             .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
             .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
     break;
+  case LinxV5::PseudoMGATHER_ADD_SizeI:
+    MCVec.push_back(
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
+            .addOperand(Inst.getOperand(6))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    break;
+  case LinxV5::PseudoMSCATTER_ADD_SizeI:
+    MCVec.push_back(
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(0))
+            .addOperand(MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
+            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Null))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    break;
   }
   return MCVec;
 }
@@ -562,6 +586,22 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(MCOperand::createImm(1))
                         .addOperand(Inst.getOperand(9)));
     break;
+  case LinxV5::PseudoMGATHER_ADD_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(Inst.getOperand(7))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(8))
+                        .addOperand(Inst.getOperand(9)));
+    break;
+  case LinxV5::PseudoMSCATTER_ADD_SizeI:
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                        .addOperand(MCOperand::createImm(0b1111))
+                        .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(0))
+                        .addOperand(Inst.getOperand(7)));
+    break;
   case LinxV5::PseudoMSCATTER_MASK_SizeI:
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
                         .addOperand(MCOperand::createImm(0b1111))
@@ -663,6 +703,8 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
   }
   case PseudoMGATHER_MASK_SizeI:
   case PseudoMSCATTER_MASK_SizeI:
+  case PseudoMGATHER_ADD_SizeI:
+  case PseudoMSCATTER_ADD_SizeI:
     if (!isZeroRegAndOneImm(Inst, 1))
       McVec.push_back(MCInstBuilder(LinxV5::B_DIM)
                           .addOperand(MCOperand::createImm(0))
@@ -749,6 +791,8 @@ llvm::SmallVector<MCInst> getBIORFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTSTORE_noDsrc_Ddst:
   case LinxV5::PseudoMGATHER_MASK_SizeI:
   case LinxV5::PseudoMSCATTER_MASK_SizeI:
+  case LinxV5::PseudoMGATHER_ADD_SizeI:
+  case LinxV5::PseudoMSCATTER_ADD_SizeI:
     llvm::SmallVector<unsigned> GPRInList;
     for (int i = Inst.getNumOperands() - 1; i >= 0; i--) {
       auto CurMO = Inst.getOperand(i);
@@ -862,6 +906,8 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoTSTORE_Dsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoMGATHER_MASK_SizeI, LinxV5Op::TileOPTMA::MGATHER_MASK},
       {LinxV5::PseudoMSCATTER_MASK_SizeI, LinxV5Op::TileOPTMA::MSCATTER_MASK},
+      {LinxV5::PseudoMGATHER_ADD_SizeI, LinxV5Op::TileOPTMA::MGATHER_ADD},
+      {LinxV5::PseudoMSCATTER_ADD_SizeI, LinxV5Op::TileOPTMA::MSCATTER_ADD},
       {LinxV5::PseudoMAMULBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULB_ACC},
       {LinxV5::PseudoTGEMV_SizeI, LinxV5Op::TileOPCUBE::TGEMV},
       {LinxV5::PseudoTGEMV_BIAS_SizeI, LinxV5Op::TileOPCUBE::TGEMV_BIAS},

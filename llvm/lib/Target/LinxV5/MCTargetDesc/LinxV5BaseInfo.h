@@ -493,6 +493,7 @@ enum TileOPTMA {
   MGATHER_AND = 16,
   MGATHER_OR = 17,
   MGATHER_XOR = 18,
+  MSCATTER_ADD = 21,
   // PTO 0.58.6 TLSU Function 28: standalone BSTART.TIMG2COL carrier.
   TIMG2COL = 28,
   EMPTY_TileOPTMA

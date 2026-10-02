@@ -13146,6 +13146,8 @@ private:
   bool CheckLinxV5BuiltinElementwiseTSubMasked(CallExpr *TheCall);
   bool CheckLinxV5BuiltinElementwiseMGatherMasked(CallExpr *TheCall);
   bool CheckLinxV5BuiltinElementwiseMScatterMasked(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinElementwiseMGatherAdd(CallExpr *TheCall);
+  bool CheckLinxV5BuiltinElementwiseMScatterAdd(CallExpr *TheCall);
   bool CheckLinxV5BuiltinFPArith(CallExpr *TheCall);
   bool CheckLinxV5BuiltinSHFL(CallExpr *TheCall);
   bool CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,

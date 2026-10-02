@@ -4667,6 +4667,51 @@ bool Sema::CheckLinxV5BuiltinElementwiseMScatterMasked(CallExpr *TheCall) {
   return false;
 }
 
+bool Sema::CheckLinxV5BuiltinElementwiseMGatherAdd(CallExpr *TheCall) {
+  if (checkArgCount(*this, TheCall, 8)) return true;
+  for (unsigned Index : {0u, 1u, 2u, 3u}) {
+    Expr *Arg = TheCall->getArg(Index);
+    if (!Arg->getType()->isIntegerType() || !Arg->isIntegerConstantExpr(Context))
+      return Diag(Arg->getBeginLoc(), diag::err_linx_builtin_requires_imm)
+             << Arg->getSourceRange();
+  }
+  if (!TheCall->getArg(5)->getType()->isPointerType())
+    return Diag(TheCall->getArg(5)->getBeginLoc(),
+                diag::err_linx_builtin_type_mismatch)
+           << TheCall->getArg(4)->getType() << TheCall->getArg(5)->getType();
+  QualType TileType = TheCall->getArg(4)->getType().getCanonicalType();
+  for (unsigned Index : {6u, 7u}) {
+    if (!TheCall->getArg(Index)->getType()->isVectorType())
+      return Diag(TheCall->getArg(Index)->getBeginLoc(),
+                  diag::err_linx_builtin_type_mismatch)
+             << TileType << TheCall->getArg(Index)->getType();
+  }
+  TheCall->setType(TileType);
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinElementwiseMScatterAdd(CallExpr *TheCall) {
+  if (checkArgCount(*this, TheCall, 6)) return true;
+  for (unsigned Index : {0u, 1u, 2u}) {
+    Expr *Arg = TheCall->getArg(Index);
+    if (!Arg->getType()->isIntegerType() || !Arg->isIntegerConstantExpr(Context))
+      return Diag(Arg->getBeginLoc(), diag::err_linx_builtin_requires_imm)
+             << Arg->getSourceRange();
+  }
+  if (!TheCall->getArg(3)->getType()->isPointerType())
+    return Diag(TheCall->getArg(3)->getBeginLoc(),
+                diag::err_linx_builtin_type_mismatch)
+           << TheCall->getArg(4)->getType() << TheCall->getArg(3)->getType();
+  QualType TileType = TheCall->getArg(4)->getType().getCanonicalType();
+  for (unsigned Index : {4u, 5u}) {
+    if (!TheCall->getArg(Index)->getType()->isVectorType())
+      return Diag(TheCall->getArg(Index)->getBeginLoc(),
+                  diag::err_linx_builtin_type_mismatch)
+             << TileType << TheCall->getArg(Index)->getType();
+  }
+  return false;
+}
+
 bool Sema::CheckLinxV5BuiltinFPArith(CallExpr *TheCall) {
   if (TheCall->getNumArgs() != 1) {
     return Diag(TheCall->getEndLoc(), diag::err_typecheck_call_too_many_args)
@@ -4757,6 +4802,10 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
     return CheckLinxV5BuiltinElementwiseMGatherMasked(TheCall);
   case LinxV5::BIew_mscatter_masked:
     return CheckLinxV5BuiltinElementwiseMScatterMasked(TheCall);
+  case LinxV5::BIew_mgather_add:
+    return CheckLinxV5BuiltinElementwiseMGatherAdd(TheCall);
+  case LinxV5::BIew_mscatter_add:
+    return CheckLinxV5BuiltinElementwiseMScatterAdd(TheCall);
   case LinxV5::BIblkv_fabs:
   case LinxV5::BIblkv_fsqrt:
   case LinxV5::BIblkv_fexp:

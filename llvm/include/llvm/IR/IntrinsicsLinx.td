@@ -243,6 +243,21 @@ def int_linx_experimental_ew_mscatter_masked :
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
 
+// Element-wise indexed atomic add.  Indices are logical element indices;
+// the TLSU lowering scales them by the accessed element width.  MGATHER_ADD
+// returns the observed old value per lane, while MSCATTER_ADD only updates GM.
+def int_linx_experimental_ew_mgather_add :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_add :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_blk_acccvt : Intrinsic<[llvm_anyvector_ty], [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty], [IntrHasSideEffects]>;
 
 def int_linx_blkv_fabs : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrHasSideEffects]>;

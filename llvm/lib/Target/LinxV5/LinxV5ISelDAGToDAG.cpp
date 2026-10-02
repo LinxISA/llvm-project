@@ -534,6 +534,32 @@ static SDNode *selectElementwiseMScatterMasked(SDLoc &DL, SelectionDAG *DAG,
   return DAG->getMachineNode(Opc, DL, Node->getValueType(0), Ops);
 }
 
+static SDNode *selectElementwiseMGatherAdd(SDLoc &DL, SelectionDAG *DAG,
+                                           SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index <= 7; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(9));  // logical indices
+  Ops.push_back(Node->getOperand(10)); // add values
+  Ops.push_back(Node->getOperand(8));  // base pointer
+  Ops.push_back(Node->getOperand(0));  // chain
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseMScatterAdd(SDLoc &DL, SelectionDAG *DAG,
+                                            SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Node->getOperand(8)); // add values
+  for (unsigned Index = 1; Index <= 5; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(6)); // tile size
+  Ops.push_back(Node->getOperand(9)); // logical indices
+  Ops.push_back(Node->getOperand(7)); // base pointer
+  Ops.push_back(Node->getOperand(0)); // chain
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0), Ops);
+}
+
 static SDNode *selectElementwiseTCmp(SDLoc &DL, SelectionDAG *DAG,
                                      SDNode *Node, unsigned Opc) {
   SmallVector<SDValue> Ops;
@@ -1255,6 +1281,18 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
     ReplaceNode(Node, selectElementwiseMScatterMasked(
                           DL, CurDAG, Node,
                           LinxV5::PseudoMSCATTER_MASK_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_MGATHER_ADD: {
+    ReplaceNode(Node, selectElementwiseMGatherAdd(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMGATHER_ADD_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_MSCATTER_ADD: {
+    ReplaceNode(Node, selectElementwiseMScatterAdd(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMSCATTER_ADD_SizeI));
     return;
   }
   case LinxV5ISD::EW_TCMP: {

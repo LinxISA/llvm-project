@@ -2959,6 +2959,7 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
                .Case("mgather.and", TileOPTMA::MGATHER_AND)
                .Case("mgather.or", TileOPTMA::MGATHER_OR)
                .Case("mgather.xor", TileOPTMA::MGATHER_XOR)
+               .Case("mscatter.add", TileOPTMA::MSCATTER_ADD)
                // PTO 0.58.6 TLSU Function 28: standalone IMG2COL carrier.
                .Case("timg2col", TileOPTMA::TIMG2COL)
                .Default(TileOPTMA::EMPTY_TileOPTMA);

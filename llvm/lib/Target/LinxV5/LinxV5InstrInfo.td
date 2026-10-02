@@ -3566,6 +3566,22 @@ def PseudoMSCATTER_MASK_SizeI : PseudoMTClImpl<(outs),
   let AsmString = "MSCATTER.MASK\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, $MaskTile, [$List]";
 }
 
+def PseudoMGATHER_ADD_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       TILE_Src_Reg:$ValueTile, GPRList:$List)> {
+  let AsmString = "MGATHER.ADD\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}, ${PadValue}>\t[$List], $OffsetTile, $ValueTile, $DstTile$TileSize";
+}
+
+def PseudoMSCATTER_ADD_SizeI : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       GPRList:$List)> {
+  let AsmString = "MSCATTER.ADD\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, [$List]";
+}
+
 // Cube Call
 class PseudoCCallImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
   let TOP = TileOp_CUBE;
