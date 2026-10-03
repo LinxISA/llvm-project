@@ -526,7 +526,12 @@ enum TileOPCUBE {
   EMPTY_TileOPCUBE
 };
 
-enum TileOPTEPL { ESAVE = 0b1111110, ERCOV = 0b1111111, EMPTY_TileOPTEPL };
+enum TileOPTEPL {
+  TLEA = 0x02e,
+  ESAVE = 0b1111110,
+  ERCOV = 0b1111111,
+  EMPTY_TileOPTEPL
+};
 
 enum FenceFlag {
   FF_MEMW = 1 << 0,

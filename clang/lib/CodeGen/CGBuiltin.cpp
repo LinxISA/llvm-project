@@ -19491,6 +19491,68 @@ CodeGenFunction::EmitLinxV5ElementwiseTSubMasked(const CallExpr *E) {
   return Call;
 }
 
+llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseTLEA(const CallExpr *E) {
+  SmallVector<llvm::Value *> Args;
+  for (unsigned Index : {0u, 1u, 2u, 3u})
+    Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
+                                         Builder.getInt64Ty(), false));
+  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(6)),
+                                       Builder.getInt64Ty(), false));
+  llvm::Function *F = CGM.getIntrinsic(
+      Intrinsic::linx_experimental_ew_tlea,
+      {ConvertType(E->getArg(4)->getType()),
+       ConvertType(E->getArg(5)->getType())});
+  llvm::Value *Call = Builder.CreateCall(F, Args, "");
+  EmitStoreOfScalar(Call, EmitLValue(E->getArg(4)));
+  return Call;
+}
+
+llvm::Value *CodeGenFunction::EmitLinxV5TLEAForIndexedBuiltin(
+    const Expr *Indices, const Expr *TargetDataType, llvm::Value *Rows,
+    llvm::Value *Cols) {
+  const auto *IndexVector =
+      Indices->getType().getCanonicalType()->getAs<VectorType>();
+  if (!IndexVector)
+    CGM.ErrorUnsupported(Indices, "indexed Tile operation requires an index Tile");
+  QualType ElementType = IndexVector->getElementType();
+  unsigned ElementWidth = getContext().getTypeSize(ElementType);
+  if ((ElementWidth != 32 && ElementWidth != 64) ||
+      !ElementType->isIntegerType())
+    CGM.ErrorUnsupported(
+        Indices, "indexed Tile operation requires S32/U32/S64/U64 indices");
+  bool IsSigned = ElementType->isSignedIntegerType();
+  uint64_t IndexDataType =
+      ElementWidth == 32 ? (IsSigned ? 17 : 25) : (IsSigned ? 16 : 24);
+  Expr::EvalResult DataTypeValue;
+  if (!TargetDataType->EvaluateAsInt(DataTypeValue, getContext()))
+    CGM.ErrorUnsupported(TargetDataType,
+                         "indexed Tile target data type must be constant");
+  uint64_t DataType = DataTypeValue.Val.getInt().getZExtValue();
+  unsigned TargetElementBits = 0;
+  switch (DataType) {
+  case 0: case 16: case 24: TargetElementBits = 64; break;
+  case 1: case 2: case 3: case 17: case 25: TargetElementBits = 32; break;
+  case 4: case 5: case 18: case 26: TargetElementBits = 16; break;
+  case 6: case 7: case 8: case 9: case 10: case 13: case 15:
+  case 19: case 21: case 27: TargetElementBits = 8; break;
+  default:
+    CGM.ErrorUnsupported(TargetDataType,
+                         "indexed Tile target data type has no byte width");
+  }
+  llvm::Value *IndexValue = EmitScalarExpr(Indices);
+  llvm::Type *ResultType = llvm::FixedVectorType::get(
+      Builder.getInt64Ty(), IndexVector->getNumElements());
+  llvm::Function *TLEA = CGM.getIntrinsic(
+      Intrinsic::linx_experimental_ew_tlea,
+      {ResultType, IndexValue->getType()});
+  return Builder.CreateCall(
+      TLEA,
+      {Rows, Cols, Builder.getInt64(IndexDataType), Builder.getInt64(0),
+       IndexValue, Builder.getInt64(TargetElementBits)},
+      "linx.elementwise.byte.offsets");
+}
+
 // ew_mgather_masked(rows, cols, dtype, pad, out, base, offsets, mask)
 llvm::Value *
 CodeGenFunction::EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E) {
@@ -19499,12 +19561,14 @@ CodeGenFunction::EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E) {
     Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
                                          Builder.getInt64Ty(), false));
   Args.push_back(EmitScalarExpr(E->getArg(5)));
-  Args.push_back(EmitScalarExpr(E->getArg(6)));
+  llvm::Value *ByteOffsets = EmitLinxV5TLEAForIndexedBuiltin(
+      E->getArg(6), E->getArg(2), Args[0], Args[1]);
+  Args.push_back(ByteOffsets);
   Args.push_back(EmitScalarExpr(E->getArg(7)));
 
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
-  OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+  OverloadTypes.push_back(ByteOffsets->getType());
   OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
   llvm::Function *F = CGM.getIntrinsic(
       Intrinsic::linx_experimental_ew_mgather_masked, OverloadTypes);
@@ -19522,12 +19586,14 @@ CodeGenFunction::EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E) {
                                          Builder.getInt64Ty(), false));
   Args.push_back(EmitScalarExpr(E->getArg(3)));
   Args.push_back(EmitScalarExpr(E->getArg(4)));
-  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  llvm::Value *ByteOffsets = EmitLinxV5TLEAForIndexedBuiltin(
+      E->getArg(5), E->getArg(2), Args[0], Args[1]);
+  Args.push_back(ByteOffsets);
   Args.push_back(EmitScalarExpr(E->getArg(6)));
 
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
-  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+  OverloadTypes.push_back(ByteOffsets->getType());
   OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
   llvm::Function *F = CGM.getIntrinsic(
       Intrinsic::linx_experimental_ew_mscatter_masked, OverloadTypes);
@@ -19542,11 +19608,13 @@ llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMGatherAdd(
     Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
                                          Builder.getInt64Ty(), false));
   Args.push_back(EmitScalarExpr(E->getArg(5)));
-  Args.push_back(EmitScalarExpr(E->getArg(6)));
+  llvm::Value *ByteOffsets = EmitLinxV5TLEAForIndexedBuiltin(
+      E->getArg(6), E->getArg(2), Args[0], Args[1]);
+  Args.push_back(ByteOffsets);
   Args.push_back(EmitScalarExpr(E->getArg(7)));
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
-  OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
+  OverloadTypes.push_back(ByteOffsets->getType());
   OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
   llvm::Function *F = CGM.getIntrinsic(
       Intrinsic::linx_experimental_ew_mgather_add, OverloadTypes);
@@ -19564,10 +19632,12 @@ llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMScatterAdd(
                                          Builder.getInt64Ty(), false));
   Args.push_back(EmitScalarExpr(E->getArg(3)));
   Args.push_back(EmitScalarExpr(E->getArg(4)));
-  Args.push_back(EmitScalarExpr(E->getArg(5)));
+  llvm::Value *ByteOffsets = EmitLinxV5TLEAForIndexedBuiltin(
+      E->getArg(5), E->getArg(2), Args[0], Args[1]);
+  Args.push_back(ByteOffsets);
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
-  OverloadTypes.push_back(ConvertType(E->getArg(5)->getType()));
+  OverloadTypes.push_back(ByteOffsets->getType());
   llvm::Function *F = CGM.getIntrinsic(
       Intrinsic::linx_experimental_ew_mscatter_add, OverloadTypes);
   return Builder.CreateCall(F, Args, "");
@@ -19651,6 +19721,8 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
       return EmitLinxV5ElementwiseTAddMasked(E);
   case LinxV5::BIew_tsub_masked:
       return EmitLinxV5ElementwiseTSubMasked(E);
+  case LinxV5::BIew_tlea:
+      return EmitLinxV5ElementwiseTLEA(E);
   case LinxV5::BIew_mgather_masked:
       return EmitLinxV5ElementwiseMGatherMasked(E);
   case LinxV5::BIew_mscatter_masked:

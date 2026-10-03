@@ -1118,6 +1118,7 @@ static const std::unordered_map<unsigned, const char *> TileOpMap = {
     {0b0101011, "TMAXS"},
     {0b0101100, "TMINS"},
     {0b0101101, "TCMPS"},
+    {0b0101110, "TLEA"},
 
     {0b0111010, "TSELS"},
     {0b0111011, "TEXPANDS"},

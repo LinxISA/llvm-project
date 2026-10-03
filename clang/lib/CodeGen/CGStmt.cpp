@@ -1093,6 +1093,18 @@ static bool isElementwiseIndex(const Expr *E, const VarDecl *Index) {
   return Ref && Ref->getDecl() == Index;
 }
 
+static bool isElementwiseInvariantU32(const Expr *E, const VarDecl *Index,
+                                      ASTContext &Context) {
+  E = ignoreElementwiseCasts(E);
+  const auto *Ref = dyn_cast_or_null<DeclRefExpr>(E);
+  const auto *Variable = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+  QualType Type = E ? E->getType().getCanonicalType() : QualType();
+  return Variable && Variable != Index && !Type.isNull() &&
+         !Type.isVolatileQualified() &&
+         Type.getUnqualifiedType() == Context.UnsignedIntTy &&
+         !E->HasSideEffects(Context, /*IncludePossibleEffects=*/true);
+}
+
 static const ArraySubscriptExpr *getElementwiseSubscript(const Expr *E) {
   return dyn_cast_or_null<ArraySubscriptExpr>(ignoreElementwiseCasts(E));
 }
@@ -1115,7 +1127,8 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
     return false;
   Expr::EvalResult BoundValue;
   if (!Condition->getRHS()->EvaluateAsInt(BoundValue, getContext()) ||
-      BoundValue.Val.getInt().getZExtValue() != 128)
+      (BoundValue.Val.getInt().getZExtValue() != 32 &&
+       BoundValue.Val.getInt().getZExtValue() != 128))
     return false;
 
   const auto *Increment = dyn_cast_or_null<UnaryOperator>(S.getInc());
@@ -1145,6 +1158,158 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
   };
 
   if (const auto *If = dyn_cast_or_null<IfStmt>(Body)) {
+    // Native conditional U32 histogram update:
+    //   if (i < valid && keys[i] == selected)
+    //     old[i] = __atomic_fetch_add(&hist[index[i]], 1, relaxed);
+    //   else old[i] = 0;
+    // This lowers to TCI + two TCMPS GPR masks + TLEA + masked MGATHER.ADD.
+    auto MatchAtomicAssignment = [&](const Stmt *Statement,
+                                     const ArraySubscriptExpr *&Output,
+                                     const AtomicExpr *&Atomic) {
+      const auto *Store = dyn_cast_or_null<BinaryOperator>(
+          GetSingleStmt(Statement));
+      if (!Store || Store->getOpcode() != BO_Assign)
+        return false;
+      Output = getElementwiseSubscript(Store->getLHS());
+      Atomic = dyn_cast<AtomicExpr>(ignoreElementwiseCasts(Store->getRHS()));
+      return Output && isElementwiseIndex(Output->getIdx(), Index) && Atomic &&
+             Atomic->getOp() == AtomicExpr::AO__atomic_fetch_add;
+    };
+    const ArraySubscriptExpr *AtomicOutput = nullptr;
+    const AtomicExpr *Atomic = nullptr;
+    const auto *ElseStore = dyn_cast_or_null<BinaryOperator>(
+        GetSingleStmt(If->getElse()));
+    const auto *ConditionRoot = dyn_cast<BinaryOperator>(
+        ignoreElementwiseCasts(If->getCond()));
+    if (MatchAtomicAssignment(If->getThen(), AtomicOutput, Atomic) &&
+        ElseStore && ElseStore->getOpcode() == BO_Assign && ConditionRoot) {
+      const auto *Tail = dyn_cast<BinaryOperator>(
+          ignoreElementwiseCasts(
+              ConditionRoot->getOpcode() == BO_LAnd
+                  ? ConditionRoot->getLHS() : ConditionRoot));
+      const auto *KeyCmp = ConditionRoot->getOpcode() == BO_LAnd
+          ? dyn_cast<BinaryOperator>(
+                ignoreElementwiseCasts(ConditionRoot->getRHS()))
+          : nullptr;
+      const auto *High = KeyCmp
+          ? getElementwiseSubscript(KeyCmp->getLHS()) : nullptr;
+      const Expr *Selected = KeyCmp ? ignoreElementwiseCasts(KeyCmp->getRHS())
+                                    : nullptr;
+      const Expr *Valid = Tail ? ignoreElementwiseCasts(Tail->getRHS()) : nullptr;
+      const auto *ElseOutput = getElementwiseSubscript(ElseStore->getLHS());
+      Expr::EvalResult ElseZero;
+      const Expr *Ptr = ignoreElementwiseCasts(Atomic->getPtr());
+      const auto *Addr = dyn_cast_or_null<UnaryOperator>(Ptr);
+      const auto *HistAccess = Addr && Addr->getOpcode() == UO_AddrOf
+          ? getElementwiseSubscript(Addr->getSubExpr()) : nullptr;
+      const auto *Low = HistAccess
+          ? getElementwiseSubscript(HistAccess->getIdx()) : nullptr;
+      Expr::EvalResult AddOne;
+      Expr::EvalResult Order;
+      auto SameBase = [](const Expr *A, const Expr *B) {
+        const auto *AD = getElementwiseDeclRef(A);
+        const auto *BD = getElementwiseDeclRef(B);
+        return AD && BD && AD->getDecl() == BD->getDecl();
+      };
+      uint64_t LaneCount = BoundValue.Val.getInt().getZExtValue();
+      bool KeyPredicateLegal = !KeyCmp ||
+          (High && Selected && KeyCmp->getOpcode() == BO_EQ &&
+           isElementwiseIndex(High->getIdx(), Index) &&
+           isElementwiseInvariantU32(Selected, Index, getContext()));
+      QualType HistogramType = HistAccess
+          ? HistAccess->getBase()->getType().getCanonicalType() : QualType();
+      const auto *HistogramPointer = HistogramType.isNull()
+          ? nullptr : HistogramType->getAs<PointerType>();
+      QualType HistogramElement = HistogramPointer
+          ? HistogramPointer->getPointeeType().getCanonicalType() : QualType();
+      bool HistogramLegal = !HistogramElement.isNull() &&
+          !HistogramElement.isVolatileQualified() &&
+          HistogramElement.getUnqualifiedType() == getContext().UnsignedIntTy;
+      if (LaneCount == 32 && Tail && Tail->getOpcode() == BO_LT &&
+          isElementwiseIndex(Tail->getLHS(), Index) && KeyPredicateLegal &&
+          Valid && isElementwiseInvariantU32(Valid, Index, getContext()) &&
+          ElseOutput && isElementwiseIndex(ElseOutput->getIdx(), Index) &&
+          SameBase(ElseOutput->getBase(), AtomicOutput->getBase()) &&
+          ElseStore->getRHS()->EvaluateAsInt(ElseZero, getContext()) &&
+          ElseZero.Val.getInt().isZero() && Low &&
+          isElementwiseIndex(Low->getIdx(), Index) &&
+          Atomic->getVal1()->EvaluateAsInt(AddOne, getContext()) &&
+          AddOne.Val.getInt() == 1 &&
+          Atomic->getOrder()->EvaluateAsInt(Order, getContext()) &&
+          Order.Val.getInt().isZero() && HistogramLegal) {
+        const Expr *OutputBase = ignoreElementwiseCasts(AtomicOutput->getBase());
+        const Expr *LowBase = ignoreElementwiseCasts(Low->getBase());
+        const Expr *HighBase = High
+            ? ignoreElementwiseCasts(High->getBase()) : nullptr;
+        QualType OutputType = OutputBase->getType().getCanonicalType();
+        QualType LowType = LowBase->getType().getCanonicalType();
+        QualType HighType = HighBase
+            ? HighBase->getType().getCanonicalType() : LowType;
+        const auto *VecTy = OutputType->getAs<ExtVectorType>();
+        if (VecTy && VecTy->getNumElements() == 32 &&
+            VecTy->getElementType() == getContext().UnsignedIntTy &&
+            OutputType.getUnqualifiedType() == LowType.getUnqualifiedType() &&
+            OutputType.getUnqualifiedType() == HighType.getUnqualifiedType()) {
+          llvm::Value *LowValue = EmitLoadOfScalar(EmitLValue(LowBase),
+                                                   LowBase->getExprLoc());
+          llvm::Value *HighValue = HighBase
+              ? EmitLoadOfScalar(EmitLValue(HighBase), HighBase->getExprLoc())
+              : nullptr;
+          llvm::Type *VectorTy = LowValue->getType();
+          llvm::Value *Rows = Builder.getInt64(32);
+          llvm::Value *Cols = Builder.getInt64(1);
+          llvm::Value *U32 = Builder.getInt64(25);
+          llvm::Value *M32 = Builder.getInt64(29);
+          llvm::Function *TCI = CGM.getIntrinsic(
+              llvm::Intrinsic::linx_experimental_ew_tci, {VectorTy});
+          llvm::Value *Lanes = Builder.CreateCall(
+              TCI, {Rows, Cols, U32, M32, Builder.getInt64(0),
+                    Builder.getInt64(1ULL << 32)}, "linx.elementwise.lanes");
+          auto EmitCmp = [&](llvm::Value *Source, const Expr *Scalar,
+                             unsigned Mode, const char *Name) {
+            llvm::Value *S = Builder.CreateIntCast(
+                EmitScalarExpr(Scalar), Builder.getInt64Ty(), false);
+            llvm::Function *F = CGM.getIntrinsic(
+                llvm::Intrinsic::linx_experimental_ew_tcmps_gpr,
+                {VectorTy});
+            return Builder.CreateCall(
+                F, {Rows, Cols, U32, M32, Source, S,
+                    Builder.getInt64(Mode)}, Name);
+          };
+          llvm::Value *TailMask = EmitCmp(
+              Lanes, Valid, 2, "linx.elementwise.tail.mask");
+          llvm::Value *KeyMask = Builder.getInt64(~0ULL);
+          if (KeyCmp)
+            KeyMask = EmitCmp(HighValue, Selected, 0,
+                              "linx.elementwise.key.mask");
+          llvm::Value *Mask = Builder.CreateAnd(
+              TailMask, KeyMask, "linx.elementwise.atomic.mask");
+          llvm::Function *TLEA = CGM.getIntrinsic(
+              llvm::Intrinsic::linx_experimental_ew_tlea,
+              {llvm::FixedVectorType::get(Builder.getInt64Ty(), 32),
+               VectorTy});
+          llvm::Value *Offsets = Builder.CreateCall(
+              TLEA, {Rows, Cols, U32, M32, LowValue, Builder.getInt64(32)},
+              "linx.elementwise.byte.offsets");
+          llvm::Value *Ones = Builder.CreateCall(
+              TCI, {Rows, Cols, U32, M32, Builder.getInt64(1),
+                    Builder.getInt64(0)}, "linx.elementwise.atomic.ones");
+          llvm::Value *Base = EmitScalarExpr(HistAccess->getBase());
+          llvm::Function *Gather = CGM.getIntrinsic(
+              llvm::Intrinsic::linx_experimental_ew_mgather_add_masked,
+              {VectorTy, Offsets->getType(), VectorTy});
+          llvm::Value *Old = Builder.CreateCall(
+              Gather, {Rows, Cols, U32, Builder.getInt64(3), M32, Base,
+                       Offsets, Ones, Mask, Builder.getInt64(0),
+                       Builder.getInt64(0), Builder.getInt64(1)},
+              "linx.elementwise.atomic.old");
+          EmitStoreOfScalar(Old, EmitLValue(OutputBase));
+          CurFn->addFnAttr("linx.elementwise.lanes", "32");
+          return true;
+        }
+      }
+    }
+
     const Expr *ConditionExpr = ignoreElementwiseCasts(If->getCond());
     bool InvertPredicate = false;
     if (const auto *Not = dyn_cast_or_null<UnaryOperator>(ConditionExpr)) {

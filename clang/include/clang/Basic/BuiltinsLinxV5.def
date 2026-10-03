@@ -47,6 +47,7 @@ BUILTIN(blk_acccvt, "v.", "nt")
 // explicit output argument, matching the existing blk_* C++ source ABI.
 BUILTIN(ew_tadd_masked, "v.", "nt")
 BUILTIN(ew_tsub_masked, "v.", "nt")
+BUILTIN(ew_tlea, "v.", "nt")
 BUILTIN(ew_mgather_masked, "v.", "nt")
 BUILTIN(ew_mscatter_masked, "v.", "nt")
 BUILTIN(ew_mgather_add, "v.", "nt")

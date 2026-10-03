@@ -3546,9 +3546,9 @@ def PseudoTSTORE_Dsrc_Ddst : PseudoMTClImpl<(outs),
     let AsmString = "TSTORE.$Layout\t<LB0: $RegM$immM, LB1: $RegN$immN, LB2: $RegK$immK, ${DataType}>, $SrcTile," #"\t[$List], ${DepSrc}, ->d";
 }
 
-// Element-wise indexed memory operations.  The offsets are logical element
-// indices at the intrinsic boundary and are carried as a tile source.  The
-// mask is a predicate tile and is emitted as the final B.IOT source.
+// Element-wise indexed memory operations. Offsets are explicit U64/S64 byte
+// displacements produced by TLEA; TLSU performs no element-width scaling.
+// The mask is a predicate tile and is emitted as the final B.IOT source.
 def PseudoMGATHER_MASK_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
        BstartDataType:$DataType, PadValue:$PadValue,
@@ -3572,6 +3572,17 @@ def PseudoMGATHER_ADD_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
        TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
        TILE_Src_Reg:$ValueTile, GPRList:$List)> {
   let AsmString = "MGATHER.ADD\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}, ${PadValue}>\t[$List], $OffsetTile, $ValueTile, $DstTile$TileSize";
+}
+
+def PseudoMGATHER_ADD_Masked_SizeI : PseudoMTClImpl<
+  (outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       TILE_Src_Reg:$ValueTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       GPRSrc:$Base, uimm1:$PredInv, uimm1:$Zero)> {
+  let AsmString = "MGATHER.ADD.MASKED\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t[$Base], $OffsetTile, $ValueTile, $DstTile$TileSize";
 }
 
 def PseudoMSCATTER_ADD_SizeI : PseudoMTClImpl<(outs),
@@ -3626,6 +3637,38 @@ class PseudoTEPL_TSUB_Masked_Base :
 }
 
 def PseudoTSUB_Masked_SizeI : PseudoTEPL_TSUB_Masked_Base;
+
+class PseudoTEPL_TLEA_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$IndexTile,
+       GPRSrc:$ElementBits)> {
+  let AsmString = "TLEA\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $IndexTile, $ElementBits, $DstTile$TileSize";
+}
+
+def PseudoTLEA_SizeI : PseudoTEPL_TLEA_Base;
+
+class PseudoTEPL_TCI_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, GPRSrc:$Start, GPRSrc:$Step2D)> {
+  let AsmString = "TCI.EW\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Start, $Step2D, $DstTile$TileSize";
+}
+def PseudoTCI_EW_SizeI : PseudoTEPL_TCI_Base;
+
+class PseudoTEPL_TCMPS_GPR_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$Mask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile, GPRSrc:$Scalar, CmpMode:$CmpMode)> {
+  let AsmString = "TCMPS.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile, $Scalar, $Mask";
+}
+def PseudoTCMPS_GPR : PseudoTEPL_TCMPS_GPR_Base;
 
 class PseudoTEPL_TCMP_Base :
   PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),

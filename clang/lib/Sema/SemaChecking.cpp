@@ -4617,6 +4617,56 @@ bool Sema::CheckLinxV5BuiltinElementwiseTSubMasked(CallExpr *TheCall) {
   return false;
 }
 
+bool Sema::CheckLinxV5BuiltinElementwiseTLEA(CallExpr *TheCall) {
+  if (checkArgCount(*this, TheCall, 7))
+    return true;
+  for (unsigned Index : {0u, 1u, 2u, 3u, 6u}) {
+    Expr *Arg = TheCall->getArg(Index);
+    if (!Arg->getType()->isIntegerType() ||
+        !Arg->isIntegerConstantExpr(Context))
+      return Diag(Arg->getBeginLoc(), diag::err_linx_builtin_requires_imm)
+             << Arg->getSourceRange();
+  }
+  QualType DstType = TheCall->getArg(4)->getType().getCanonicalType();
+  QualType SrcType = TheCall->getArg(5)->getType().getCanonicalType();
+  const auto *DstVec = DstType->getAs<VectorType>();
+  const auto *SrcVec = SrcType->getAs<VectorType>();
+  if (!DstVec || !SrcVec || !DstVec->getElementType()->isIntegerType() ||
+      !SrcVec->getElementType()->isIntegerType() ||
+      Context.getTypeSize(DstVec->getElementType()) != 64 ||
+      (Context.getTypeSize(SrcVec->getElementType()) != 32 &&
+       Context.getTypeSize(SrcVec->getElementType()) != 64) ||
+      DstVec->getNumElements() != SrcVec->getNumElements())
+    return Diag(TheCall->getArg(5)->getBeginLoc(),
+                diag::err_linx_builtin_type_mismatch)
+           << DstType << SrcType;
+  const uint64_t SrcBits = Context.getTypeSize(SrcVec->getElementType());
+  const bool SrcSigned = SrcVec->getElementType()->isSignedIntegerType();
+  const uint64_t ExpectedDataType =
+      SrcBits == 32 ? (SrcSigned ? 17 : 25) : (SrcSigned ? 16 : 24);
+  const uint64_t DataType =
+      TheCall->getArg(2)->getIntegerConstantExpr(Context)->getZExtValue();
+  const uint64_t Layout =
+      TheCall->getArg(3)->getIntegerConstantExpr(Context)->getZExtValue();
+  const uint64_t Rows =
+      TheCall->getArg(0)->getIntegerConstantExpr(Context)->getZExtValue();
+  const uint64_t Cols =
+      TheCall->getArg(1)->getIntegerConstantExpr(Context)->getZExtValue();
+  const uint64_t ElementBits =
+      TheCall->getArg(6)->getIntegerConstantExpr(Context)->getZExtValue();
+  if (DataType != ExpectedDataType ||
+      SrcSigned != DstVec->getElementType()->isSignedIntegerType() ||
+      (Layout != 0 && Layout != 29) ||
+      Rows == 0 || Cols == 0 || Rows > UINT64_MAX / Cols ||
+      Rows * Cols != SrcVec->getNumElements() ||
+      (Layout == 29 && Rows != 32) ||
+      (ElementBits != 8 && ElementBits != 16 && ElementBits != 32 &&
+       ElementBits != 64))
+    return Diag(TheCall->getBeginLoc(), diag::err_linx_builtin_type_mismatch)
+           << DstType << SrcType;
+  return false;
+}
+
 bool Sema::CheckLinxV5BuiltinElementwiseMGatherMasked(CallExpr *TheCall) {
   if (checkArgCount(*this, TheCall, 8))
     return true;
@@ -4679,13 +4729,36 @@ bool Sema::CheckLinxV5BuiltinElementwiseMGatherAdd(CallExpr *TheCall) {
     return Diag(TheCall->getArg(5)->getBeginLoc(),
                 diag::err_linx_builtin_type_mismatch)
            << TheCall->getArg(4)->getType() << TheCall->getArg(5)->getType();
-  QualType TileType = TheCall->getArg(4)->getType().getCanonicalType();
-  for (unsigned Index : {6u, 7u}) {
-    if (!TheCall->getArg(Index)->getType()->isVectorType())
-      return Diag(TheCall->getArg(Index)->getBeginLoc(),
-                  diag::err_linx_builtin_type_mismatch)
-             << TileType << TheCall->getArg(Index)->getType();
-  }
+  QualType TileType = TheCall->getArg(4)->getType().getCanonicalType()
+                          .getUnqualifiedType();
+  QualType IndexType = TheCall->getArg(6)->getType().getCanonicalType();
+  QualType ValueType = TheCall->getArg(7)->getType().getCanonicalType()
+                           .getUnqualifiedType();
+  const auto *TileVec = TileType->getAs<VectorType>();
+  const auto *IndexVec = IndexType->getAs<VectorType>();
+  const auto *ValueVec = ValueType->getAs<VectorType>();
+  QualType PointerElement = TheCall->getArg(5)->getType()
+      ->getPointeeType().getCanonicalType();
+  const uint64_t Rows =
+      TheCall->getArg(0)->getIntegerConstantExpr(Context)->getZExtValue();
+  const uint64_t Cols =
+      TheCall->getArg(1)->getIntegerConstantExpr(Context)->getZExtValue();
+  const uint64_t DataType =
+      TheCall->getArg(2)->getIntegerConstantExpr(Context)->getZExtValue();
+  if (!TileVec || !IndexVec || !ValueVec || DataType != 25 ||
+      TileType != ValueType ||
+      TileVec->getElementType().getCanonicalType().getUnqualifiedType() !=
+          Context.UnsignedIntTy ||
+      !IndexVec->getElementType()->isIntegerType() ||
+      (Context.getTypeSize(IndexVec->getElementType()) != 32 &&
+       Context.getTypeSize(IndexVec->getElementType()) != 64) ||
+      TileVec->getNumElements() != IndexVec->getNumElements() ||
+      Rows == 0 || Cols == 0 || Rows > UINT64_MAX / Cols ||
+      Rows * Cols != TileVec->getNumElements() ||
+      PointerElement.isVolatileQualified() ||
+      PointerElement.getUnqualifiedType() != Context.UnsignedIntTy)
+    return Diag(TheCall->getBeginLoc(), diag::err_linx_builtin_type_mismatch)
+           << TileType << ValueType;
   TheCall->setType(TileType);
   return false;
 }
@@ -4798,6 +4871,8 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
     return CheckLinxV5BuiltinElementwiseTAddMasked(TheCall);
   case LinxV5::BIew_tsub_masked:
     return CheckLinxV5BuiltinElementwiseTSubMasked(TheCall);
+  case LinxV5::BIew_tlea:
+    return CheckLinxV5BuiltinElementwiseTLEA(TheCall);
   case LinxV5::BIew_mgather_masked:
     return CheckLinxV5BuiltinElementwiseMGatherMasked(TheCall);
   case LinxV5::BIew_mscatter_masked:

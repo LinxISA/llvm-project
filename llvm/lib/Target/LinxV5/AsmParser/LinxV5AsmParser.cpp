@@ -3087,6 +3087,7 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTEPL(OperandVector &Operands) {
                .Case("tmaxs", 43)
                .Case("tmins", 44)
                .Case("tcmps", 45)
+               .Case("tlea", TileOPTEPL::TLEA)
                .Case("tsels", 58)
                .Case("texpands", 59)
                .Case("trowsum", 64)

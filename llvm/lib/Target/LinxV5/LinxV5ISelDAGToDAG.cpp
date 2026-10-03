@@ -507,6 +507,43 @@ static SDNode *selectElementwiseTSubMasked(SDLoc &DL, SelectionDAG *DAG,
                              Node->getValueType(1), Ops);
 }
 
+static SDNode *selectElementwiseTLEA(SDLoc &DL, SelectionDAG *DAG,
+                                     SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseSimple(SDLoc &DL, SelectionDAG *DAG,
+                                       SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index < Node->getNumOperands(); ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
+static SDNode *selectElementwiseMGatherAddMasked(
+    SDLoc &DL, SelectionDAG *DAG, SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index <= 8; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(10)); // byte offsets
+  Ops.push_back(Node->getOperand(11)); // add values
+  Ops.push_back(Node->getOperand(12)); // mask low
+  Ops.push_back(Node->getOperand(13)); // mask high
+  Ops.push_back(Node->getOperand(9));  // base pointer/GPR list
+  Ops.push_back(Node->getOperand(14)); // PredInv
+  Ops.push_back(Node->getOperand(15)); // Zero
+  Ops.push_back(Node->getOperand(0));
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
 static SDNode *selectElementwiseMGatherMasked(SDLoc &DL, SelectionDAG *DAG,
                                               SDNode *Node, unsigned Opc) {
   SmallVector<SDValue> Ops;
@@ -1271,6 +1308,21 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTSUB_Masked_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TLEA: {
+    ReplaceNode(Node, selectElementwiseTLEA(
+                          DL, CurDAG, Node, LinxV5::PseudoTLEA_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TCI: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTCI_EW_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TCMPS_GPR: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTCMPS_GPR));
+    return;
+  }
   case LinxV5ISD::EW_MGATHER_MASKED: {
     ReplaceNode(Node, selectElementwiseMGatherMasked(
                           DL, CurDAG, Node,
@@ -1287,6 +1339,12 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
     ReplaceNode(Node, selectElementwiseMGatherAdd(
                           DL, CurDAG, Node,
                           LinxV5::PseudoMGATHER_ADD_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_MGATHER_ADD_MASKED: {
+    ReplaceNode(Node, selectElementwiseMGatherAddMasked(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMGATHER_ADD_Masked_SizeI));
     return;
   }
   case LinxV5ISD::EW_MSCATTER_ADD: {

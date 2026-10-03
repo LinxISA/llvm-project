@@ -4267,6 +4267,11 @@ public:
   llvm::Value *EmitLinxV5ACCCVT(const CallExpr *E);
   llvm::Value *EmitLinxV5ElementwiseTAddMasked(const CallExpr *E);
   llvm::Value *EmitLinxV5ElementwiseTSubMasked(const CallExpr *E);
+  llvm::Value *EmitLinxV5ElementwiseTLEA(const CallExpr *E);
+  llvm::Value *EmitLinxV5TLEAForIndexedBuiltin(const Expr *Indices,
+                                                const Expr *TargetDataType,
+                                                llvm::Value *Rows,
+                                                llvm::Value *Cols);
   llvm::Value *EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E);
   llvm::Value *EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E);
   llvm::Value *EmitLinxV5ElementwiseMGatherAdd(const CallExpr *E);

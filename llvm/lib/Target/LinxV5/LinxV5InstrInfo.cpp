@@ -217,9 +217,19 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI) {
     return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoTLEA_SizeI) {
+    return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI) {
+    return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI) {
+    return MI.getOperand(6).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI) {
+    return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI) {
+    return MI.getOperand(8).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_ADD_SizeI) {
     return MI.getOperand(6).getImm();
   } else if (MI.isInlineAsm()) {
     LinxV5::SingleAsm SA = parseSingleAsm(&MI);

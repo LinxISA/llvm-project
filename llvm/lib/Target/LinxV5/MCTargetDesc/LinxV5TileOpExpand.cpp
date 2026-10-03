@@ -907,6 +907,8 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoMGATHER_MASK_SizeI, LinxV5Op::TileOPTMA::MGATHER_MASK},
       {LinxV5::PseudoMSCATTER_MASK_SizeI, LinxV5Op::TileOPTMA::MSCATTER_MASK},
       {LinxV5::PseudoMGATHER_ADD_SizeI, LinxV5Op::TileOPTMA::MGATHER_ADD},
+      {LinxV5::PseudoMGATHER_ADD_Masked_SizeI,
+       LinxV5Op::TileOPTMA::MGATHER_ADD},
       {LinxV5::PseudoMSCATTER_ADD_SizeI, LinxV5Op::TileOPTMA::MSCATTER_ADD},
       {LinxV5::PseudoMAMULBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULB_ACC},
       {LinxV5::PseudoTGEMV_SizeI, LinxV5Op::TileOPCUBE::TGEMV},

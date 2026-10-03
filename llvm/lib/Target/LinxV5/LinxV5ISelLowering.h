@@ -82,9 +82,13 @@ enum NodeType : unsigned {
   BLK_MATMUL_MASKED,
   EW_TADD_MASKED,
   EW_TSUB_MASKED,
+  EW_TLEA,
+  EW_TCI,
+  EW_TCMPS_GPR,
   EW_MGATHER_MASKED,
   EW_MSCATTER_MASKED,
   EW_MGATHER_ADD,
+  EW_MGATHER_ADD_MASKED,
   EW_MSCATTER_ADD,
   EW_TCMP,
   EW_TSEL,
@@ -305,12 +309,20 @@ private:
                                      SelectionDAG &DAG) const;
   SDValue lowerElementwiseTSubMasked(SDLoc &DL, SDValue Op,
                                      SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTLEA(SDLoc &DL, SDValue Op,
+                               SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCI(SDLoc &DL, SDValue Op,
+                              SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCMPSGPR(SDLoc &DL, SDValue Op,
+                                   SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherAdd(SDLoc &DL, SDValue Op,
                                      SelectionDAG &DAG) const;
+  SDValue lowerElementwiseMGatherAddMasked(SDLoc &DL, SDValue Op,
+                                           SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterAdd(SDLoc &DL, SDValue Op,
                                       SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op,

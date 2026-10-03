@@ -189,6 +189,26 @@ def int_linx_experimental_ew_tsub_masked :
                llvm_i64_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+// Extend S32/U32/S64/U64 logical element indices to the corresponding
+// S64/U64 representation, then scale by element_bits/8 modulo 2^64. The
+// result is a byte-displacement Tile; result and source types are distinct.
+def int_linx_experimental_ew_tlea :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tci :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tcmps_gpr :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 // TCMP returns a logical predicate vector. The LinxV5 backend materializes
 // it as a PredicateCell/PredicateTile according to the selected shape.
 def int_linx_experimental_ew_tcmp :
@@ -228,9 +248,9 @@ def int_linx_blk_tload : Intrinsic<[llvm_anyvector_ty], [llvm_i64_ty, llvm_i64_t
 
 def int_linx_blk_tstore : Intrinsic<[], [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty, llvm_i64_ty, llvm_anyvector_ty], [IntrHasSideEffects]>;
 
-// Element-wise indexed memory operations.  The index tile carries logical
-// element indices; the target lowering owns any encoding-specific address
-// conversion required by the selected TLSU operation.
+// Element-wise indexed memory operations. The offset Tile carries U64/S64
+// byte displacements. C-facing logical indices are converted by an explicit
+// TLEA intrinsic before reaching this ABI.
 def int_linx_experimental_ew_mgather_masked :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
@@ -243,14 +263,21 @@ def int_linx_experimental_ew_mscatter_masked :
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
 
-// Element-wise indexed atomic add.  Indices are logical element indices;
-// the TLSU lowering scales them by the accessed element width.  MGATHER_ADD
-// returns the observed old value per lane, while MSCATTER_ADD only updates GM.
+// Element-wise indexed atomic add. Indices are U64/S64 byte displacements;
+// the TLSU lowering performs no data-width scaling. MGATHER_ADD returns the
+// observed old value per lane, while MSCATTER_ADD only updates GM.
 def int_linx_experimental_ew_mgather_add :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mgather_add_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_experimental_ew_mscatter_add :
     Intrinsic<[],
