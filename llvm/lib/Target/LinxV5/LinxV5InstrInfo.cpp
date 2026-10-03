@@ -819,14 +819,15 @@ void LinxV5::generateMatIntSeq(int64_t Val, LinxV5MatInt::InstSeq &Res,
       } else {
         generateInt32InstSeq(NewVal, Res);
       }
-      // hl.bfi result[M+N-1:M] = right[N-1:0]: inserting the low SymmWidth
-      // bits into [2*SymmWidth-1:SymmWidth] completes the symmetric value,
-      // so M and N are both the bit width (issue #61 — SymmWidth/8 confused
-      // bits with bytes and the 3-bit M field could not even hold 16..32).
-      // selectImmSeq unpacks M from the low 6 bits and N from the rest,
-      // matching uimm6/uimm6_plus1 on the instruction.
+      // HL.BFI uses raw immr/imms semantics.  To insert SymmWidth bits at
+      // offset SymmWidth, encode immr=SymmWidth and
+      // imms=2*SymmWidth-1.  The uimm6_plus1 TableGen operand takes imms+1,
+      // so the second assembly operand is 2*SymmWidth (16/32/64), not the
+      // field width itself.  Using SymmWidth for both operands gives the
+      // wrapping encoding and materializes the wrong constant in consumers
+      // that implement the canonical immr/imms contract.
       unsigned M = static_cast<unsigned>(SymmWidth);
-      unsigned N = static_cast<unsigned>(SymmWidth);
+      unsigned N = 2u * static_cast<unsigned>(SymmWidth);
       Res.push_back(LinxV5MatInt::Inst(LinxV5::HL_BFI, (N << 6) | M));
       return;
     }
