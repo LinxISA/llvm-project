@@ -1186,7 +1186,8 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
       Output = getElementwiseSubscript(Store->getLHS());
       Atomic = dyn_cast<AtomicExpr>(ignoreElementwiseCasts(Store->getRHS()));
       return Output && isElementwiseIndex(Output->getIdx(), Index) && Atomic &&
-             Atomic->getOp() == AtomicExpr::AO__atomic_fetch_add;
+             (Atomic->getOp() == AtomicExpr::AO__atomic_fetch_add ||
+              Atomic->getOp() == AtomicExpr::AO__c11_atomic_fetch_add);
     };
     const ArraySubscriptExpr *AtomicOutput = nullptr;
     const AtomicExpr *Atomic = nullptr;
@@ -1244,10 +1245,15 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
           ? nullptr : HistogramType->getAs<PointerType>();
       QualType HistogramElement = HistogramPointer
           ? HistogramPointer->getPointeeType().getCanonicalType() : QualType();
+      QualType HistogramValueType = HistogramElement;
+      if (!HistogramElement.isNull()) {
+        if (const auto *AtomicType = HistogramElement->getAs<clang::AtomicType>())
+          HistogramValueType = AtomicType->getValueType().getCanonicalType();
+      }
       bool HistogramLegal = !HistogramElement.isNull() &&
           isElementwiseSimpleCarrier(HistAccess->getBase(), false) &&
           !HistogramElement.isVolatileQualified() &&
-          HistogramElement.getUnqualifiedType() == getContext().UnsignedIntTy;
+          HistogramValueType.getUnqualifiedType() == getContext().UnsignedIntTy;
       if (LaneCount == 32 && Tail && Tail->getOpcode() == BO_LT &&
           isElementwiseIndex(Tail->getLHS(), Index) && KeyPredicateLegal &&
           Valid && isElementwiseInvariantU32(Valid, Index, getContext()) &&
