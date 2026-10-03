@@ -7,9 +7,11 @@
 
 #define __vbuf__ __attribute__((address_space(6)))
 
-#define __bf16 __blkc_bf16
 typedef _Float16 __half;
 typedef float __fp32;
+
+#ifdef __cplusplus
+#define __bf16 __blkc_bf16
 
 struct __fp8_base {
   char data;
@@ -568,4 +570,6 @@ public:
 #define __fp8_e5m2x2_STORAGE(d) ((d).data)
 };
 
-#endif
+#endif // __cplusplus
+
+#endif // __LINX_BLKC

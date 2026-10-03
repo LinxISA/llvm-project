@@ -1109,6 +1109,19 @@ static const ArraySubscriptExpr *getElementwiseSubscript(const Expr *E) {
   return dyn_cast_or_null<ArraySubscriptExpr>(ignoreElementwiseCasts(E));
 }
 
+static bool isElementwiseSimpleCarrier(const Expr *E, bool AllowDeref) {
+  E = ignoreElementwiseCasts(E);
+  if (AllowDeref) {
+    if (const auto *Pointer = dyn_cast_or_null<UnaryOperator>(E)) {
+      if (Pointer->getOpcode() != UO_Deref)
+        return false;
+      E = Pointer->getSubExpr();
+    }
+  }
+  const auto *Ref = getElementwiseDeclRef(E);
+  return Ref && !Ref->getType().isVolatileQualified();
+}
+
 bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
   const auto *Init = dyn_cast_or_null<DeclStmt>(S.getInit());
   if (!Init || !Init->isSingleDecl())
@@ -1207,6 +1220,15 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
       Expr::EvalResult AddOne;
       Expr::EvalResult Order;
       auto SameBase = [](const Expr *A, const Expr *B) {
+        const auto *APointer = dyn_cast_or_null<UnaryOperator>(
+            ignoreElementwiseCasts(A));
+        const auto *BPointer = dyn_cast_or_null<UnaryOperator>(
+            ignoreElementwiseCasts(B));
+        if (APointer && BPointer && APointer->getOpcode() == UO_Deref &&
+            BPointer->getOpcode() == UO_Deref) {
+          A = APointer->getSubExpr();
+          B = BPointer->getSubExpr();
+        }
         const auto *AD = getElementwiseDeclRef(A);
         const auto *BD = getElementwiseDeclRef(B);
         return AD && BD && AD->getDecl() == BD->getDecl();
@@ -1223,6 +1245,7 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
       QualType HistogramElement = HistogramPointer
           ? HistogramPointer->getPointeeType().getCanonicalType() : QualType();
       bool HistogramLegal = !HistogramElement.isNull() &&
+          isElementwiseSimpleCarrier(HistAccess->getBase(), false) &&
           !HistogramElement.isVolatileQualified() &&
           HistogramElement.getUnqualifiedType() == getContext().UnsignedIntTy;
       if (LaneCount == 32 && Tail && Tail->getOpcode() == BO_LT &&
@@ -1248,6 +1271,12 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
         const auto *VecTy = OutputType->getAs<ExtVectorType>();
         if (VecTy && VecTy->getNumElements() == 32 &&
             VecTy->getElementType() == getContext().UnsignedIntTy &&
+            !OutputType.isVolatileQualified() &&
+            !LowType.isVolatileQualified() &&
+            !HighType.isVolatileQualified() &&
+            isElementwiseSimpleCarrier(OutputBase, true) &&
+            isElementwiseSimpleCarrier(LowBase, true) &&
+            (!HighBase || isElementwiseSimpleCarrier(HighBase, true)) &&
             OutputType.getUnqualifiedType() == LowType.getUnqualifiedType() &&
             OutputType.getUnqualifiedType() == HighType.getUnqualifiedType()) {
           llvm::Value *LowValue = EmitLoadOfScalar(EmitLValue(LowBase),
