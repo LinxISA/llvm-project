@@ -527,6 +527,16 @@ enum TileOPCUBE {
 };
 
 enum TileOPTEPL {
+  TADD = 0x000,
+  TSUB = 0x001,
+  TMUL = 0x002,
+  TDIV = 0x003,
+  TREM = 0x004,
+  TAND = 0x006,
+  TOR = 0x007,
+  TXOR = 0x008,
+  TSHL = 0x009,
+  TSHR = 0x00a,
   TLEA = 0x02e,
   ESAVE = 0b1111110,
   ERCOV = 0b1111111,

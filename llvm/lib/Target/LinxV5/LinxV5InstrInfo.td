@@ -3638,6 +3638,20 @@ class PseudoTEPL_TSUB_Masked_Base :
 
 def PseudoTSUB_Masked_SizeI : PseudoTEPL_TSUB_Masked_Base;
 
+class PseudoTEPL_TBinary_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       TileOPTEPL:$Selector)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "EW.TBINARY\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $Selector, $DstTile$TileSize";
+}
+
+def PseudoTBinary_SizeI : PseudoTEPL_TBinary_Base;
+
 class PseudoTEPL_TLEA_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,

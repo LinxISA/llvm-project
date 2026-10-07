@@ -1308,6 +1308,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTSUB_Masked_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TBINARY: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTBinary_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_TLEA: {
     ReplaceNode(Node, selectElementwiseTLEA(
                           DL, CurDAG, Node, LinxV5::PseudoTLEA_SizeI));

@@ -189,6 +189,16 @@ def int_linx_experimental_ew_tsub_masked :
                llvm_i64_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+// Generic pure element-wise binary Tile expression. Opcode is a compiler IR
+// enum (add, sub, mul, div, rem, and, or, xor, shl, shr = 0..9), not the
+// sparse PTO TEPL selector encoding. The LinxV5 backend validates the complete
+// logical Tile description and maps the opcode to the architectural selector.
+def int_linx_experimental_ew_tbinary :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>],
+              [IntrHasSideEffects]>;
+
 // Extend S32/U32/S64/U64 logical element indices to the corresponding
 // S64/U64 representation, then scale by element_bits/8 modulo 2^64. The
 // result is a byte-displacement Tile; result and source types are distinct.

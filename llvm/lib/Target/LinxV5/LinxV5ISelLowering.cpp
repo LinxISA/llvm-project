@@ -381,6 +381,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TADD_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TSUB_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_TBINARY)
     MAKE_CASE(LinxV5ISD::EW_TLEA)
     MAKE_CASE(LinxV5ISD::EW_TCI)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR)
@@ -932,6 +933,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTAddMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsub_masked:
       return lowerElementwiseTSubMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tbinary:
+      return lowerElementwiseTBinary(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tlea:
       return lowerElementwiseTLEA(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tci:
@@ -1538,6 +1541,54 @@ SDValue LinxV5TargetLowering::lowerElementwiseTLEA(
   Ops.push_back(Op.getOperand(6));
   Ops.push_back(DAG.getConstant(ElementBits, DL, MVT::i64));
   return DAG.getNode(LinxV5ISD::EW_TLEA, DL,
+                     DAG.getVTList(ResultVT, MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  const uint64_t Rows =
+      getV5ConstantOperand(Op.getOperand(2), "element binary rows", 32, false);
+  const uint64_t Cols =
+      getV5ConstantOperand(Op.getOperand(3), "element binary columns", 32,
+                           false);
+  const uint64_t DataType = getV5ConstantOperand(
+      Op.getOperand(4), "element binary data type", 31);
+  const uint64_t Layout =
+      getV5ConstantOperand(Op.getOperand(5), "element binary layout", 31);
+  const uint64_t Opcode =
+      getV5ConstantOperand(Op.getOperand(6), "element binary opcode", 9);
+
+  EVT ResultVT = Op.getValueType();
+  EVT LHSVT = Op.getOperand(7).getValueType();
+  EVT RHSVT = Op.getOperand(8).getValueType();
+  if (Rows != 32 || Cols != 1 || DataType != LinxV5Op::DataType::U32 ||
+      Layout != 29 || ResultVT != MVT::v32i32 || LHSVT != ResultVT ||
+      RHSVT != ResultVT)
+    report_fatal_error(
+        "element binary currently requires U32 CUBE_M32 <32 x i32> Tiles");
+
+  static constexpr uint64_t PTOSelectors[] = {
+      LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,
+      LinxV5Op::TileOPTEPL::TMUL, LinxV5Op::TileOPTEPL::TDIV,
+      LinxV5Op::TileOPTEPL::TREM, LinxV5Op::TileOPTEPL::TAND,
+      LinxV5Op::TileOPTEPL::TOR,  LinxV5Op::TileOPTEPL::TXOR,
+      LinxV5Op::TileOPTEPL::TSHL, LinxV5Op::TileOPTEPL::TSHR};
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Op.getOperand(0));
+  for (unsigned Index : {2u, 3u}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(
+        cast<ConstantSDNode>(Op.getOperand(Index))->getZExtValue(), DL,
+        MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(DataType, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(calculateVCallSizeMask(ResultVT), DL,
+                                      MVT::i64));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(DAG.getTargetConstant(PTOSelectors[Opcode], DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_TBINARY, DL,
                      DAG.getVTList(ResultVT, MVT::Other), Ops);
 }
 
