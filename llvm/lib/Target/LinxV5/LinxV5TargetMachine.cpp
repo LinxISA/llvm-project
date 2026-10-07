@@ -27,7 +27,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Transforms/Scalar.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/Scalar.h"
@@ -57,6 +57,9 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5ExpandPseudoPass(*PR);
   initializeLinxV5AnnotateControlFlowPass(*PR);
   initializeLinxV5ElementwiseMaskPass(*PR);
+  initializeLinxV5ElementRegionPrepareLegacyPassPass(*PR);
+  initializeLinxV5ElementRegionLegacyPassPass(*PR);
+  initializeLinxV5ElementRegionVerifierLegacyPassPass(*PR);
   initializeLinxV5RebindGetTilePTRPass(*PR);
   initializeLinxV5ConstantRegOptPass(*PR);
   initializeLinxV5SIMTSpillFixupPass(*PR);
@@ -134,7 +137,8 @@ LinxV5TargetMachine::getSubtargetImpl(const Function &F) const {
 
 TargetTransformInfo
 LinxV5TargetMachine::getTargetTransformInfo(const Function &F) const {
-  if (F.getFnAttribute("__vec__").isValid() || F.getFnAttribute("__mtc__").isValid()) {
+  if (F.getFnAttribute("__vec__").isValid() ||
+      F.getFnAttribute("__mtc__").isValid()) {
     return TargetTransformInfo(LinxV5VecTTIImpl(this, F));
   } else {
     return TargetTransformInfo(LinxV5TTIImpl(this, F));
@@ -148,6 +152,39 @@ LinxV5TargetMachine::getTargetTransformInfo(const Function &F) const {
 bool LinxV5TargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
                                               unsigned DstAS) const {
   return true;
+}
+
+void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
+  PB.registerPipelineParsingCallback(
+      [](StringRef Name, FunctionPassManager &FPM,
+         ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "linx-v5-element-region-prepare") {
+          FPM.addPass(LinxV5ElementRegionPreparePass());
+          return true;
+        }
+        if (Name == "linx-v5-element-region") {
+          FPM.addPass(LinxV5ElementRegionPass());
+          return true;
+        }
+        if (Name == "linx-v5-element-region-promote") {
+          FPM.addPass(LinxV5ElementRegionPromotePass());
+          return true;
+        }
+        if (Name == "linx-v5-element-region-verify") {
+          FPM.addPass(LinxV5ElementRegionVerifierPass());
+          return true;
+        }
+        return false;
+      });
+  PB.registerOptimizerLastEPCallback(
+      [](ModulePassManager &MPM, OptimizationLevel) {
+        FunctionPassManager FPM;
+        FPM.addPass(LinxV5ElementRegionPreparePass());
+        FPM.addPass(LinxV5ElementRegionPromotePass());
+        FPM.addPass(LinxV5ElementRegionPass());
+        FPM.addPass(LinxV5ElementRegionVerifierPass());
+        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+      });
 }
 
 class LinxV5PassConfig : public TargetPassConfig {
@@ -193,6 +230,8 @@ TargetPassConfig *LinxV5TargetMachine::createPassConfig(PassManagerBase &PM) {
 }
 
 void LinxV5PassConfig::addIRPasses() {
+  addPass(createLinxV5ElementRegionPreparePass());
+  addPass(createLinxV5ElementRegionPass());
   addPass(createAtomicExpandPass());
   // Call SeparateConstOffsetFromGEP pass to extract constants within indices
   // and lower a GEP with multiple indices to either arithmetic operations or
@@ -256,6 +295,7 @@ bool LinxV5PassConfig::addRegAssignAndRewriteOptimized() {
 }
 
 bool LinxV5PassConfig::addPreISel() {
+  addPass(createLinxV5ElementRegionVerifierPass());
   addPass(createLinxV5ElementwiseMaskPass());
   addPass(createStructurizeCFGPass(true)); // true -> SkipUniformRegions
   addPass(createLinxV5AnnotateControlFlowPass());

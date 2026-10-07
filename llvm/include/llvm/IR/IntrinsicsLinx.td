@@ -11,6 +11,26 @@
 //===----------------------------------------------------------------------===//
 
 let TargetPrefix = "linx" in {
+
+// Marks a source `#pragma pto element for` loop until the required LinxV5
+// region compiler consumes it.  The metadata token is also carried by the
+// loop ID, allowing ordinary CFG canonicalization without relying on source
+// AST shape.  This intrinsic has no architectural execution semantics, but it
+// must survive generic DCE so a missed region can never silently scalarize.
+def int_linx_experimental_element_region :
+    Intrinsic<[], [llvm_metadata_ty],
+              [IntrHasSideEffects, IntrNoDuplicate]>;
+
+// Identity marker used only between frontend view discovery and the required
+// element-region pass. It carries no pointer operand, so ordinary promotion
+// can turn descriptor-backed carrier storage into SSA without losing the
+// logical view identity.
+def int_linx_experimental_element_view :
+    Intrinsic<[llvm_anyvector_ty],
+              [LLVMMatchType<0>, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty],
+              [IntrNoMem]>;
 def int_linx_hyper_region_start : Intrinsic<[], [llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_hyper_region_end : Intrinsic<[],[llvm_i64_ty], [IntrHasSideEffects]>;

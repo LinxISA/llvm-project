@@ -81,6 +81,9 @@ struct LoopAttributes {
 
   /// Value for whether the loop is required to make progress.
   bool MustProgress;
+
+  /// Identity shared with llvm.linx.experimental.element.region.
+  llvm::MDNode *LinxElementRegion = nullptr;
 };
 
 /// Information used when generating a structured loop.
@@ -284,6 +287,15 @@ public:
 
   /// Set no progress for the next loop pushed.
   void setMustProgress(bool P) { StagedAttrs.MustProgress = P; }
+
+  /// Mark the next loop as a required PTO element region.
+  void setLinxElementRegion(llvm::MDNode *Token) {
+    StagedAttrs.LinxElementRegion = Token;
+    StagedAttrs.VectorizeEnable = LoopAttributes::Disable;
+    StagedAttrs.UnrollEnable = LoopAttributes::Disable;
+    StagedAttrs.UnrollAndJamEnable = LoopAttributes::Disable;
+    StagedAttrs.DistributeEnable = LoopAttributes::Disable;
+  }
 
 private:
   /// Returns true if there is LoopInfo on the stack.

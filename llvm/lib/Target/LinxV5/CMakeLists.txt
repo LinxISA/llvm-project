@@ -47,6 +47,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5StackSizeFixup.cpp
   LinxV5AnnotateControlFlow.cpp
   LinxV5ElementwiseMask.cpp
+  LinxV5ElementRegion.cpp
   LinxV5TargetTransformInfo.cpp
   LinxV5BaseInfo.cpp
   LinxV5RebindGetTilePTR.cpp
@@ -64,7 +65,9 @@ add_llvm_target(LinxV5CodeGen
   SelectionDAG
   Support
   Target
+  TransformUtils
   GlobalISel
+  IPO
 
   ADD_TO_COMPONENT
   LinxV5

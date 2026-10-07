@@ -15,6 +15,7 @@
 #define LLVM_LIB_TARGET_LINXV4_LINXV5_H
 
 #include "MCTargetDesc/LinxV5BaseInfo.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -40,6 +41,36 @@ void initializeLinxV5AnnotateControlFlowPass(PassRegistry &);
 
 FunctionPass *createLinxV5ElementwiseMaskPass();
 void initializeLinxV5ElementwiseMaskPass(PassRegistry &);
+
+FunctionPass *createLinxV5ElementRegionPreparePass();
+FunctionPass *createLinxV5ElementRegionPass();
+FunctionPass *createLinxV5ElementRegionVerifierPass();
+void initializeLinxV5ElementRegionPrepareLegacyPassPass(PassRegistry &);
+void initializeLinxV5ElementRegionLegacyPassPass(PassRegistry &);
+void initializeLinxV5ElementRegionVerifierLegacyPassPass(PassRegistry &);
+
+struct LinxV5ElementRegionPreparePass
+    : PassInfoMixin<LinxV5ElementRegionPreparePass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5ElementRegionPromotePass
+    : PassInfoMixin<LinxV5ElementRegionPromotePass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5ElementRegionPass : PassInfoMixin<LinxV5ElementRegionPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5ElementRegionVerifierPass
+    : PassInfoMixin<LinxV5ElementRegionVerifierPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
 
 FunctionPass *createLinxV5CanonicalizeBlockPass(bool dupConstOnly = false);
 void initializeLinxV5CanonicalizeBlockPass(PassRegistry &);
@@ -111,7 +142,7 @@ FunctionPass *createLinxV5EmitHeaderPass();
 void initializeLinxV5EmitHeaderPass(PassRegistry &);
 
 FunctionPass *createLinxV5AnnotateControlFlowPass();
-void initializeLinxV5AnnotateControlFlowPass(PassRegistry&);
+void initializeLinxV5AnnotateControlFlowPass(PassRegistry &);
 extern char &LinxV5AnnotateControlFlowPassID;
 
 FunctionPass *createLinxV5RebindGetTilePTRPass();
@@ -119,5 +150,5 @@ void initializeLinxV5RebindGetTilePTRPass(PassRegistry &);
 
 FunctionPass *createLinxV5ConstantRegOptPass();
 void initializeLinxV5ConstantRegOptPass(PassRegistry &);
-}
+} // namespace llvm
 #endif

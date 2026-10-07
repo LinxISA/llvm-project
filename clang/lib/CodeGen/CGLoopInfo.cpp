@@ -432,6 +432,11 @@ MDNode *LoopInfo::createMetadata(
     LoopProperties.push_back(
         MDNode::get(Ctx, MDString::get(Ctx, "llvm.loop.mustprogress")));
 
+  if (Attrs.LinxElementRegion)
+    LoopProperties.push_back(MDNode::get(
+        Ctx, {MDString::get(Ctx, "llvm.loop.linx.pto.element.region"),
+              Attrs.LinxElementRegion}));
+
   assert(!!AccGroup == Attrs.IsParallel &&
          "There must be an access group iff the loop is parallel");
   if (Attrs.IsParallel) {
@@ -469,6 +474,7 @@ void LoopAttributes::clear() {
   PipelineDisabled = false;
   PipelineInitiationInterval = 0;
   MustProgress = false;
+  LinxElementRegion = nullptr;
 }
 
 LoopInfo::LoopInfo(BasicBlock *Header, const LoopAttributes &Attrs,
@@ -493,7 +499,7 @@ LoopInfo::LoopInfo(BasicBlock *Header, const LoopAttributes &Attrs,
       Attrs.UnrollEnable == LoopAttributes::Unspecified &&
       Attrs.UnrollAndJamEnable == LoopAttributes::Unspecified &&
       Attrs.DistributeEnable == LoopAttributes::Unspecified && !StartLoc &&
-      !EndLoc && !Attrs.MustProgress)
+      !EndLoc && !Attrs.MustProgress && !Attrs.LinxElementRegion)
     return;
 
   TempLoopID = MDNode::getTemporary(Header->getContext(), None);

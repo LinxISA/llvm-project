@@ -5206,7 +5206,34 @@ LValue CodeGenFunction::EmitCallExprLValue(const CallExpr *E) {
          "Can't have a scalar return unless the return type is a "
          "reference type!");
 
-  return MakeNaturalAlignPointeeAddrLValue(RV.getScalarVal(), E->getType());
+  llvm::Value *Pointer = RV.getScalarVal();
+  if (const FunctionDecl *Callee = E->getDirectCallee()) {
+    for (const auto *Annotation : Callee->specific_attrs<AnnotateAttr>()) {
+      StringRef Contract = Annotation->getAnnotation();
+      if (!Contract.startswith("pto.element.view:v1;"))
+        continue;
+
+      llvm::Type *OriginalType = Pointer->getType();
+      auto *OriginalPointerType = cast<llvm::PointerType>(OriginalType);
+      unsigned AddressSpace = OriginalPointerType->getAddressSpace();
+      llvm::PointerType *IntrinsicPointerType =
+          llvm::PointerType::getWithSamePointeeType(Int8PtrTy, AddressSpace);
+      llvm::Function *Intrinsic = CGM.getIntrinsic(
+          llvm::Intrinsic::ptr_annotation, IntrinsicPointerType);
+      llvm::Value *AnnotatedPointer = Pointer;
+      if (AnnotatedPointer->getType() != IntrinsicPointerType)
+        AnnotatedPointer =
+            Builder.CreateBitCast(AnnotatedPointer, IntrinsicPointerType);
+      AnnotatedPointer = EmitAnnotationCall(
+          Intrinsic, AnnotatedPointer, Contract, E->getExprLoc(), Annotation);
+      if (AnnotatedPointer->getType() != OriginalType)
+        AnnotatedPointer = Builder.CreateBitCast(AnnotatedPointer, OriginalType);
+      Pointer = AnnotatedPointer;
+      break;
+    }
+  }
+
+  return MakeNaturalAlignPointeeAddrLValue(Pointer, E->getType());
 }
 
 LValue CodeGenFunction::EmitVAArgExprLValue(const VAArgExpr *E) {
