@@ -239,6 +239,12 @@ struct PragmaLinxHandler : public PragmaHandler {
                     Token &Tok) override;
 };
 
+struct PragmaPtoHandler : public PragmaHandler {
+  PragmaPtoHandler() : PragmaHandler("pto") {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
+                    Token &Tok) override;
+};
+
 struct PragmaLoopHintHandler : public PragmaHandler {
   PragmaLoopHintHandler() : PragmaHandler("loop") {}
   void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
@@ -488,6 +494,9 @@ void Parser::initializePragmaHandlers() {
   LinxHandler = std::make_unique<PragmaLinxHandler>();
   PP.AddPragmaHandler(LinxHandler.get());
 
+  PtoHandler = std::make_unique<PragmaPtoHandler>();
+  PP.AddPragmaHandler(PtoHandler.get());
+
   NoUnrollHintHandler = std::make_unique<PragmaUnrollHintHandler>("nounroll");
   PP.AddPragmaHandler(NoUnrollHintHandler.get());
   PP.AddPragmaHandler("GCC", NoUnrollHintHandler.get());
@@ -622,6 +631,9 @@ void Parser::resetPragmaHandlers() {
 
   PP.RemovePragmaHandler(LinxHandler.get());
   LinxHandler.reset();
+
+  PP.RemovePragmaHandler(PtoHandler.get());
+  PtoHandler.reset();
 
   PP.RemovePragmaHandler(NoUnrollHintHandler.get());
   PP.RemovePragmaHandler("GCC", NoUnrollHintHandler.get());
@@ -1250,6 +1262,7 @@ namespace {
 struct PragmaLinxInfo {
   Token PragmaName;
   Token Option;
+  SourceLocation EndLoc;
 };
 } // end anonymous namespace
 
@@ -1271,8 +1284,7 @@ bool Parser::HandlePragmaLinx(LinxHint &Hint) {
 
   ConsumeAnyToken(); // Consume the constant expression eof terminator.
 
-  Hint.Range = SourceRange(Info->PragmaName.getLocation(),
-                           Info->Option.getLocation());
+  Hint.Range = SourceRange(Info->PragmaName.getLocation(), Info->EndLoc);
 
   return true;
 }
@@ -1293,21 +1305,92 @@ void PragmaLinxHandler::HandlePragma(Preprocessor &PP,
 
   Token Option = Tok;
   IdentifierInfo *OptionInfo = Tok.getIdentifierInfo();
-  bool OptionValid = llvm::StringSwitch<bool>(OptionInfo->getName())
-                           .Cases("block", "elementwise", true)
-                           .Default(false);
-  if (!OptionValid)
-    llvm::report_fatal_error("Error: option not recognized for pragma linx");
+  bool OptionValid = OptionInfo &&
+                     llvm::StringSwitch<bool>(OptionInfo->getName())
+                         .Cases("block", "elementwise", true)
+                         .Default(false);
+  if (!OptionValid) {
+    PP.Diag(Tok.getLocation(), diag::err_pragma_linx_expected_option);
+    if (Tok.isNot(tok::eod))
+      PP.DiscardUntilEndOfDirective();
+    return;
+  }
   PP.Lex(Tok);
+  if (Tok.isNot(tok::eod)) {
+    PP.Diag(Tok.getLocation(), diag::err_pragma_linx_extra_tokens)
+        << OptionInfo->getName();
+    PP.DiscardUntilEndOfDirective();
+    return;
+  }
   auto *Info = new (PP.getPreprocessorAllocator()) PragmaLinxInfo;
   Info->PragmaName = PragmaName;
   Info->Option = Option;
+  Info->EndLoc = Option.getLocation();
 
   auto TokenArray = std::make_unique<Token[]>(1);
   TokenArray[0].startToken();
   TokenArray[0].setKind(tok::annot_pragma_linx);
   TokenArray[0].setLocation(Introducer.Loc);
   TokenArray[0].setAnnotationEndLoc(PragmaName.getLocation());
+  TokenArray[0].setAnnotationValue(static_cast<void *>(Info));
+  PP.EnterTokenStream(std::move(TokenArray), 1,
+                      /*DisableMacroExpansion=*/false, /*IsReinject=*/false);
+}
+
+/// Handle the canonical element-wise PTO loop spelling:
+///
+///   #pragma pto element for
+///
+/// It intentionally lowers through the existing Linx statement attribute so
+/// both spellings reach the same semantic checks and code-generation path.
+void PragmaPtoHandler::HandlePragma(Preprocessor &PP,
+                                    PragmaIntroducer Introducer, Token &Tok) {
+  Token PragmaName = Tok;
+  assert(PragmaName.getIdentifierInfo()->getName() == "pto" &&
+         "incoming token after pragma must be pto");
+
+  PP.Lex(Tok);
+  Token Element = Tok;
+  if (!Element.getIdentifierInfo() ||
+      !Element.getIdentifierInfo()->isStr("element")) {
+    PP.Diag(Tok.getLocation(), diag::err_pragma_pto_expected_element);
+    if (Tok.isNot(tok::eod))
+      PP.DiscardUntilEndOfDirective();
+    return;
+  }
+
+  PP.Lex(Tok);
+  Token For = Tok;
+  if (For.isNot(tok::kw_for) &&
+      (!For.getIdentifierInfo() || !For.getIdentifierInfo()->isStr("for"))) {
+    PP.Diag(Tok.getLocation(), diag::err_pragma_pto_expected_for);
+    if (Tok.isNot(tok::eod))
+      PP.DiscardUntilEndOfDirective();
+    return;
+  }
+
+  PP.Lex(Tok);
+  if (Tok.isNot(tok::eod)) {
+    PP.Diag(Tok.getLocation(), diag::err_pragma_pto_extra_tokens);
+    PP.DiscardUntilEndOfDirective();
+    return;
+  }
+
+  // Normalize the public spelling to the existing internal attribute.  The
+  // source locations still cover the complete user-written PTO directive.
+  PragmaName.setIdentifierInfo(PP.getIdentifierInfo("linx"));
+  Element.setIdentifierInfo(PP.getIdentifierInfo("elementwise"));
+
+  auto *Info = new (PP.getPreprocessorAllocator()) PragmaLinxInfo;
+  Info->PragmaName = PragmaName;
+  Info->Option = Element;
+  Info->EndLoc = For.getLocation();
+
+  auto TokenArray = std::make_unique<Token[]>(1);
+  TokenArray[0].startToken();
+  TokenArray[0].setKind(tok::annot_pragma_linx);
+  TokenArray[0].setLocation(Introducer.Loc);
+  TokenArray[0].setAnnotationEndLoc(For.getLocation());
   TokenArray[0].setAnnotationValue(static_cast<void *>(Info));
   PP.EnterTokenStream(std::move(TokenArray), 1,
                       /*DisableMacroExpansion=*/false, /*IsReinject=*/false);

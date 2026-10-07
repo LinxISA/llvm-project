@@ -31,6 +31,17 @@ def err_asm_duplicate_qual : Error<"duplicate asm qualifier '%0'">;
 
 let CategoryName = "Parse Issue" in {
 
+def err_pragma_pto_expected_element : Error<
+  "expected 'element' after '#pragma pto'">;
+def err_pragma_pto_expected_for : Error<
+  "expected 'for' after '#pragma pto element'">;
+def err_pragma_pto_extra_tokens : Error<
+  "unexpected token after '#pragma pto element for'">;
+def err_pragma_linx_expected_option : Error<
+  "expected 'block' or 'elementwise' after '#pragma linx'">;
+def err_pragma_linx_extra_tokens : Error<
+  "unexpected token after '#pragma linx %0'">;
+
 def ext_empty_translation_unit : Extension<
   "ISO C requires a translation unit to contain at least one declaration">,
   InGroup<DiagGroup<"empty-translation-unit">>;

@@ -11668,6 +11668,8 @@ def err_cast_from_randomized_struct : Error<
   "casting from randomized structure pointer type %0 to %1">;
 
 // Linx extension
+def err_pragma_linx_elementwise_precedes_nonloop : Error<
+  "'#pragma pto element for' and '#pragma linx elementwise' must precede a for loop">;
 def err_linx_builtin_requires_imm : Error<
   "require a immediate number for register id.">;
 def err_typecheck_invalid_noalias_not_pointer : Error<

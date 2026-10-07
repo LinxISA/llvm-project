@@ -77,6 +77,11 @@ static Attr *handleLinxAttr(Sema &S, Stmt *St, const ParsedAttr &A,
   if (PragmaHyperRegion) {
     Option = LinxAttr::Block;
   } else if (OptionLoc->Ident->getName() == "elementwise") {
+    if (!isa<ForStmt>(St)) {
+      S.Diag(St->getBeginLoc(),
+             diag::err_pragma_linx_elementwise_precedes_nonloop);
+      return nullptr;
+    }
     Option = LinxAttr::Elementwise;
   } else {
     assert(0 && "Error: Unsupport pragma linx format!");
