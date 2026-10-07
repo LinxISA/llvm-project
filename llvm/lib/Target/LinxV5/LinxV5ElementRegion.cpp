@@ -47,6 +47,8 @@ constexpr StringLiteral ViewPrefix = "pto.element.view:v1;";
 constexpr StringLiteral U32M32View =
     "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32";
 constexpr StringLiteral RegionLoopMD = "llvm.loop.linx.pto.element.region";
+constexpr StringLiteral ScalarizedLaneZeroMD =
+    "linx.pto.element.scalarized_lane_zero";
 
 static bool diagnose(Function &F, const Instruction *I, const Twine &Message) {
   F.getContext().diagnose(
@@ -189,6 +191,34 @@ static bool prepareViews(Function &F) {
     if (!Plan.Accesses.empty() && !isa<AllocaInst>(Storage))
       diagnose(F, Annotation,
                "P1a accessed views require distinct local Tile storage");
+    if (!Plan.Accesses.empty()) {
+      auto *Alloca = cast<AllocaInst>(Storage);
+      auto *Count = dyn_cast<ConstantInt>(Alloca->getArraySize());
+      if (!Count) {
+        // The frontend's Tile storage is always a constant-sized alloca.
+        // Reject anything else rather than weakening the logical view range.
+        diagnose(F, Annotation,
+                 "logical view storage requires a constant object size");
+      }
+      APInt ObjectSize = Count->getValue().zextOrTrunc(128) *
+                         APInt(128, DL.getTypeAllocSize(
+                                        Alloca->getAllocatedType()));
+      if (ObjectSize.getActiveBits() > 64)
+        diagnose(F, Annotation,
+                 "logical view storage size exceeds the address model");
+      uint64_t ObjectBytes = ObjectSize.getZExtValue();
+      if (Plan.ByteOffset < 0 ||
+          static_cast<uint64_t>(Plan.ByteOffset) > ObjectBytes ||
+          ObjectBytes - static_cast<uint64_t>(Plan.ByteOffset) < 128)
+        diagnose(F, Annotation,
+                 "logical view requires a proved 128-byte backing range");
+      uint64_t Offset = static_cast<uint64_t>(Plan.ByteOffset);
+      uint64_t ViewAlignment =
+          commonAlignment(Alloca->getAlign(), Offset).value();
+      if (ViewAlignment < 32)
+        diagnose(F, Annotation,
+                 "logical view requires proved 32-byte alignment");
+    }
     for (Instruction *Access : Plan.Accesses) {
       Value *AccessPointer = isa<LoadInst>(Access)
                                  ? cast<LoadInst>(Access)->getPointerOperand()
@@ -220,10 +250,22 @@ static bool prepareViews(Function &F) {
         CarrierType = Load->getType();
       else
         CarrierType = cast<StoreInst>(Access)->getValueOperand()->getType();
-      if (CarrierType !=
-          FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32))
+      auto *ScalarLoad = dyn_cast<LoadInst>(Access);
+      bool IsScalarizedLaneZeroLoad =
+          ScalarLoad && CarrierType->isIntegerTy(32) &&
+          !ScalarLoad->isVolatile() && !ScalarLoad->isAtomic();
+      if (!IsScalarizedLaneZeroLoad &&
+          CarrierType !=
+              FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32)) {
+        std::string Detail;
+        raw_string_ostream OS(Detail);
+        CarrierType->print(OS);
+        OS << " in ";
+        Access->print(OS);
         diagnose(F, Access,
-                 "view access is not an exact <32 x i32> carrier");
+                 Twine("view access carrier is ") + OS.str() +
+                     "; expected exact <32 x i32>");
+      }
     }
     Plans.push_back(std::move(Plan));
   }
@@ -257,6 +299,32 @@ static bool prepareViews(Function &F) {
 
     for (Instruction *Access : Plan.Accesses) {
       if (auto *Load = dyn_cast<LoadInst>(Access)) {
+        if (Load->getType()->isIntegerTy(32)) {
+          IRBuilder<> LoadBuilder(Load->getNextNode());
+          auto *VectorTy =
+              FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32);
+          Function *TCI = Intrinsic::getDeclaration(
+              F.getParent(), Intrinsic::linx_experimental_ew_tci, {VectorTy});
+          Value *Scalar = LoadBuilder.CreateZExt(
+              Load, LoadBuilder.getInt64Ty(), "pto.element.lane.zero.scalar");
+          Value *Carrier = LoadBuilder.CreateCall(
+              TCI,
+              {LoadBuilder.getInt64(32), LoadBuilder.getInt64(1),
+               LoadBuilder.getInt64(25), LoadBuilder.getInt64(29), Scalar,
+               LoadBuilder.getInt64(0)},
+              "pto.element.scalarized.carrier");
+          CallInst *Marker = LoadBuilder.CreateCall(
+              View, BuildArgs(Carrier), "pto.element.view");
+          Marker->setMetadata(ScalarizedLaneZeroMD,
+                              MDNode::get(F.getContext(), {}));
+          Value *LaneZero = LoadBuilder.CreateExtractElement(
+              Marker, LoadBuilder.getInt32(0), "pto.element.lane.zero");
+          Load->replaceUsesWithIf(LaneZero, [&](Use &U) {
+            return U.getUser() != Scalar;
+          });
+          Changed = true;
+          continue;
+        }
         IRBuilder<> Builder(Load->getNextNode());
         CallInst *Marker =
             Builder.CreateCall(View, BuildArgs(Load), "pto.element.view");
@@ -286,6 +354,7 @@ struct ViewDescriptor {
   uint64_t StorageID = 0;
   int64_t Offset = 0;
   uint64_t Range = 0;
+  bool ScalarizedLaneZero = false;
 };
 
 static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
@@ -305,7 +374,8 @@ static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
     return None;
   return ViewDescriptor{Call, static_cast<uint64_t>(Fields[0]),
                         static_cast<uint64_t>(Fields[1]), Fields[2],
-                        static_cast<uint64_t>(Fields[3])};
+                        static_cast<uint64_t>(Fields[3]),
+                        Call->getMetadata(ScalarizedLaneZeroMD) != nullptr};
 }
 
 static MDNode *getElementRegionToken(const Loop &L) {
@@ -450,6 +520,8 @@ struct RegionPlan {
   CallInst *Sentinel = nullptr;
   PHINode *IV = nullptr;
   InsertElementInst *Publication = nullptr;
+  Value *PublishedElement = nullptr;
+  Value *PublicationIndex = nullptr;
   CallInst *OutputView = nullptr;
   PHINode *OutputPhi = nullptr;
   StoreInst *OutputStore = nullptr;
@@ -464,6 +536,21 @@ struct RegionPlan {
   Value *GatherValid = nullptr;
   Value *GatherOuterPredicate = nullptr;
   LoadInst *GatherLoad = nullptr;
+  bool IsRelaxedAtomicAdd = false;
+  AtomicRMWInst *AtomicAdd = nullptr;
+  CallInst *AtomicIndexView = nullptr;
+  CallInst *AtomicKeyView = nullptr;
+  Value *AtomicLane = nullptr;
+  Value *AtomicPublicationIndex = nullptr;
+  InsertElementInst *AtomicPublicationInsert = nullptr;
+  SmallVector<Instruction *, 8> AtomicPublicationScaffold;
+  LoadInst *AtomicScalarizedLaneZeroLoad = nullptr;
+  Value *AtomicScalarizedLaneZeroValue = nullptr;
+  Value *AtomicScalarizedLaneZeroCarrier = nullptr;
+  Value *AtomicBase = nullptr;
+  Value *AtomicValid = nullptr;
+  Value *AtomicSelected = nullptr;
+  SmallVector<Value *, 2> AtomicOuterPredicates;
 };
 
 static bool isStructuredTileConsumerCall(const CallBase &Call,
@@ -555,6 +642,294 @@ static bool sameElementIndex(Value *Index, PHINode *IV, ScalarEvolution &SE) {
   return SE.getSCEV(Index) == SE.getSCEV(IV);
 }
 
+static bool sameIntegerValue(Value *LHS, Value *RHS, ScalarEvolution &SE) {
+  auto *LC = dyn_cast<ConstantInt>(LHS);
+  auto *RC = dyn_cast<ConstantInt>(RHS);
+  if (LC && RC) {
+    unsigned Width = std::max(LC->getBitWidth(), RC->getBitWidth());
+    return LC->getValue().zextOrTrunc(Width) ==
+           RC->getValue().zextOrTrunc(Width);
+  }
+  return LHS->getType() == RHS->getType() && SE.getSCEV(LHS) == SE.getSCEV(RHS);
+}
+
+static bool isInvariantAtPreheader(Value *V, Loop &L, DominatorTree &DT) {
+  if (!L.isLoopInvariant(V))
+    return false;
+  auto *I = dyn_cast<Instruction>(V);
+  return !I || DT.dominates(I, L.getLoopPreheader()->getTerminator());
+}
+
+static bool collectAtomicPredicate(Function &F, Value *Condition,
+                                   RegionPlan &Plan, ScalarEvolution &SE,
+                                   DominatorTree &DT) {
+  if (auto *Select = dyn_cast<SelectInst>(Condition)) {
+    if (!Select->getType()->isIntegerTy(1) ||
+        !match(Select->getFalseValue(), m_Zero()) ||
+        !isInvariantAtPreheader(Select->getCondition(), *Plan.L, DT))
+      return diagnose(F, Select,
+                      "atomic active condition is not a proved conjunction");
+    Plan.AtomicOuterPredicates.push_back(Select->getCondition());
+    return collectAtomicPredicate(F, Select->getTrueValue(), Plan, SE, DT);
+  }
+  if (auto *And = dyn_cast<BinaryOperator>(Condition)) {
+    if (And->getOpcode() != Instruction::And ||
+        !And->getType()->isIntegerTy(1))
+      return diagnose(F, And,
+                      "atomic active condition is not a proved conjunction");
+    return collectAtomicPredicate(F, And->getOperand(0), Plan, SE, DT) &&
+           collectAtomicPredicate(F, And->getOperand(1), Plan, SE, DT);
+  }
+  if (Condition->getType()->isIntegerTy(1) &&
+      isInvariantAtPreheader(Condition, *Plan.L, DT)) {
+    Plan.AtomicOuterPredicates.push_back(Condition);
+    return true;
+  }
+  auto *Compare = dyn_cast<ICmpInst>(Condition);
+  if (!Compare)
+    return diagnose(F, dyn_cast<Instruction>(Condition),
+                    "atomic active condition is not an integer comparison");
+
+  if (Compare->getPredicate() == ICmpInst::ICMP_ULT &&
+      sameElementIndex(Compare->getOperand(0), Plan.IV, SE) &&
+      Compare->getOperand(1)->getType()->isIntegerTy(32) &&
+      isInvariantAtPreheader(Compare->getOperand(1), *Plan.L, DT)) {
+    if (Plan.AtomicValid)
+      return diagnose(F, Compare, "atomic region has multiple tail bounds");
+    Plan.AtomicValid = Compare->getOperand(1);
+    return true;
+  }
+
+  if (Compare->getPredicate() == ICmpInst::ICMP_EQ) {
+    Value *Element = Compare->getOperand(0);
+    Value *Selected = Compare->getOperand(1);
+    auto *Extract = dyn_cast<ExtractElementInst>(Element);
+    if (!Extract) {
+      std::swap(Element, Selected);
+      Extract = dyn_cast<ExtractElementInst>(Element);
+    }
+    auto KeyView =
+        Extract ? getViewDescriptor(Extract->getVectorOperand()) : None;
+    if (Extract && KeyView &&
+        sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
+        Selected->getType()->isIntegerTy(32) &&
+        isInvariantAtPreheader(Selected, *Plan.L, DT)) {
+      if (Plan.AtomicKeyView || Plan.AtomicSelected)
+        return diagnose(F, Compare,
+                        "atomic region has multiple element predicates");
+      Plan.AtomicKeyView = KeyView->Marker;
+      Plan.AtomicSelected = Selected;
+      return true;
+    }
+
+    Value *Lane = Compare->getOperand(0);
+    Value *SelectedLane = Compare->getOperand(1);
+    if (!sameElementIndex(Lane, Plan.IV, SE))
+      std::swap(Lane, SelectedLane);
+    if (sameElementIndex(Lane, Plan.IV, SE) &&
+        SelectedLane->getType()->isIntegerTy(32) &&
+        isInvariantAtPreheader(SelectedLane, *Plan.L, DT)) {
+      if (Plan.AtomicLane)
+        return diagnose(F, Compare,
+                        "atomic region has multiple lane predicates");
+      Plan.AtomicLane = SelectedLane;
+      return true;
+    }
+  }
+
+  return diagnose(F, Compare,
+                  "unsupported atomic predicate; expected element < valid, "
+                  "key[element] == selected, or an invariant boolean");
+}
+
+static bool planRelaxedAtomicAdd(
+                                 Function &F, BasicBlock *MergeBB,
+                                 ArrayRef<std::pair<Value *, BasicBlock *>> Results,
+                                 ArrayRef<AtomicRMWInst *> Atomics,
+                                 RegionPlan &Plan, ScalarEvolution &SE,
+                                 DominatorTree &DT, AAResults &AA,
+                                 MemorySSA &MSSA) {
+  if (Atomics.empty())
+    return true;
+  if (Atomics.size() != 1)
+    return diagnose(F, Atomics.front(),
+                    "element region requires exactly one atomic effect");
+
+  AtomicRMWInst *Atomic = Atomics.front();
+  if (Atomic->getOperation() != AtomicRMWInst::Add || Atomic->isVolatile() ||
+      Atomic->getOrdering() != AtomicOrdering::Monotonic ||
+      Atomic->getSyncScopeID() != SyncScope::System ||
+      !Atomic->getType()->isIntegerTy(32) ||
+      !match(Atomic->getValOperand(), m_SpecificInt(1)))
+    return diagnose(F, Atomic,
+                    "requires non-volatile system-scope monotonic atomic add "
+                    "of exact i32 value one");
+
+  bool HasAtomicIncoming = false;
+  for (const auto &Result : Results) {
+    Value *Incoming = Result.first;
+    if (Incoming == Atomic) {
+      HasAtomicIncoming = true;
+      if (Result.second != Atomic->getParent())
+        return diagnose(F, Atomic,
+                        "atomic result does not arrive from its effect block");
+      continue;
+    }
+    if (!match(Incoming, m_Zero()))
+      return diagnose(F, Atomic,
+                      "inactive atomic lanes must publish exact zero");
+  }
+  bool HasUnrelatedAtomicUse = false;
+  for (User *U : Atomic->users()) {
+    if (auto *Phi = dyn_cast<PHINode>(U))
+      if (Phi->getParent() == MergeBB)
+        continue;
+    if (U == Plan.AtomicPublicationInsert)
+      continue;
+    HasUnrelatedAtomicUse = true;
+    break;
+  }
+  if (!HasAtomicIncoming || HasUnrelatedAtomicUse)
+    return diagnose(F, Atomic,
+                    "atomic old value must feed only the element result merge");
+
+  auto *GEP = dyn_cast<GetElementPtrInst>(Atomic->getPointerOperand());
+  Value *ElementIndex = GEP && GEP->getNumIndices() == 1
+                            ? GEP->idx_begin()->get()
+                            : nullptr;
+  auto *Wide = dyn_cast_or_null<ZExtInst>(ElementIndex);
+  if (!Wide || !Wide->getSrcTy()->isIntegerTy(32) ||
+      !Wide->getDestTy()->isIntegerTy(64))
+    return diagnose(F, Atomic,
+                    "atomic address requires exact zext i32 element index");
+  auto *Extract = dyn_cast<ExtractElementInst>(Wide->getOperand(0));
+  auto IndexView =
+      Extract ? getViewDescriptor(Extract->getVectorOperand()) : None;
+  if (!GEP || !GEP->getSourceElementType()->isIntegerTy(32) || !Extract ||
+      !IndexView || !Extract->getIndexOperand()->getType()->isIntegerTy(32))
+    return diagnose(F, Atomic,
+                    "atomic address is not an exact U32 view indexed by the "
+                    "region element");
+  Value *Base = GEP->getPointerOperand();
+  if (!isInvariantAtPreheader(Base, *Plan.L, DT))
+    return diagnose(F, Atomic,
+                    "atomic base must be loop invariant and dominate the region");
+
+  BasicBlock *EffectBB = Atomic->getParent();
+  auto *EffectTerm = dyn_cast<BranchInst>(EffectBB->getTerminator());
+  if (!EffectTerm || EffectTerm->isConditional() ||
+      EffectTerm->getSuccessor(0) != MergeBB)
+    return diagnose(F, Atomic,
+                    "atomic effect block must branch directly to its result merge");
+
+  BasicBlock *Active = EffectBB;
+  auto IsInactiveBridge = [&](BasicBlock *BB) {
+    if (BB == MergeBB)
+      return true;
+    auto *Term = dyn_cast<BranchInst>(BB->getTerminator());
+    if (!Term || Term->isConditional() || Term->getSuccessor(0) != MergeBB)
+      return false;
+    for (Instruction &I : *BB) {
+      if (&I == Term || isa<DbgInfoIntrinsic>(I))
+        continue;
+      if (isIntrinsic(dyn_cast<CallInst>(&I),
+                      Intrinsic::linx_experimental_element_view) &&
+          I.use_empty())
+        continue;
+      if (is_contained(Plan.AtomicPublicationScaffold, &I))
+        continue;
+      if (!isSafeToSpeculativelyExecute(&I) || !I.use_empty())
+        return false;
+    }
+    return true;
+  };
+  while (Active != Plan.L->getHeader()) {
+    BasicBlock *PredicateBB = Active->getSinglePredecessor();
+    auto *Branch = PredicateBB
+                       ? dyn_cast<BranchInst>(PredicateBB->getTerminator())
+                       : nullptr;
+    if (!Branch || !Branch->isConditional() ||
+        Branch->getSuccessor(0) != Active ||
+        !IsInactiveBridge(Branch->getSuccessor(1)))
+      return diagnose(F, Atomic,
+                      "atomic active path is not a canonical CFG conjunction");
+    if (!collectAtomicPredicate(F, Branch->getCondition(), Plan, SE, DT))
+      return false;
+    Active = PredicateBB;
+  }
+  if (!Plan.AtomicValid && !Plan.AtomicLane)
+    return diagnose(F, Atomic,
+                    "atomic region requires a proved tail or exact lane mask");
+  if (!sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
+      (!Plan.AtomicLane ||
+       !sameIntegerValue(Extract->getIndexOperand(), Plan.AtomicLane, SE)))
+    return diagnose(F, Extract,
+                    "atomic index view is not selected by the current element");
+  if (IndexView->ScalarizedLaneZero &&
+      (!Plan.AtomicLane ||
+       !match(Plan.AtomicLane, m_SpecificInt(0)) ||
+       !match(Extract->getIndexOperand(), m_SpecificInt(0))))
+    return diagnose(F, Extract,
+                    "scalarized lane-zero view requires an exact active lane-zero proof");
+  if (IndexView->ScalarizedLaneZero) {
+    auto *TCI = dyn_cast<CallInst>(IndexView->Marker->getArgOperand(0));
+    auto *WideScalar = TCI &&
+                               isIntrinsic(TCI,
+                                           Intrinsic::linx_experimental_ew_tci)
+                           ? dyn_cast<ZExtInst>(TCI->getArgOperand(4))
+                           : nullptr;
+    Value *ScalarSource = WideScalar ? WideScalar->getOperand(0) : nullptr;
+    auto *ScalarLoad = dyn_cast_or_null<LoadInst>(ScalarSource);
+    if (ScalarLoad) {
+      Value *Pointer = ScalarLoad->getPointerOperand();
+      bool PointerReady = Plan.L->isLoopInvariant(Pointer);
+      if (auto *PointerI = dyn_cast<Instruction>(Pointer))
+        PointerReady &= DT.dominates(
+            PointerI, Plan.L->getLoopPreheader()->getTerminator());
+      MemoryAccess *Access = MSSA.getMemoryAccess(ScalarLoad);
+      MemoryAccess *Clobber =
+          Access ? MSSA.getWalker()->getClobberingMemoryAccess(Access) : nullptr;
+      if (ScalarLoad->isVolatile() || ScalarLoad->isAtomic() ||
+          !ScalarLoad->getType()->isIntegerTy(32) ||
+          !Plan.L->contains(ScalarLoad) || !PointerReady ||
+          !isa<AllocaInst>(getUnderlyingObject(Pointer)) || !Access ||
+          (Clobber && Plan.L->contains(Clobber->getBlock())) ||
+          AA.alias(MemoryLocation::get(ScalarLoad),
+                   MemoryLocation::get(Atomic)) != AliasResult::NoAlias)
+        return diagnose(F, ScalarLoad,
+                        "scalarized lane-zero load is not safe to hoist");
+      Plan.AtomicScalarizedLaneZeroLoad = ScalarLoad;
+    } else if (auto *ScalarExtract =
+                   dyn_cast_or_null<ExtractElementInst>(ScalarSource)) {
+      if (!match(ScalarExtract->getIndexOperand(), m_SpecificInt(0)) ||
+          !isInvariantAtPreheader(ScalarExtract->getVectorOperand(), *Plan.L,
+                                  DT))
+        return diagnose(F, ScalarExtract,
+                        "scalarized lane-zero value is not available at the region preheader");
+      Plan.AtomicScalarizedLaneZeroCarrier =
+          ScalarExtract->getVectorOperand();
+    } else if (!ScalarSource || !ScalarSource->getType()->isIntegerTy(32) ||
+               !isInvariantAtPreheader(ScalarSource, *Plan.L, DT)) {
+      return diagnose(F, IndexView->Marker,
+                      "scalarized lane-zero view does not preserve a safe i32 value");
+    }
+    Plan.AtomicScalarizedLaneZeroValue = ScalarSource;
+  }
+  if (Plan.AtomicPublicationIndex &&
+      !sameElementIndex(Plan.AtomicPublicationIndex, Plan.IV, SE) &&
+      (!Plan.AtomicLane ||
+       !sameIntegerValue(Plan.AtomicPublicationIndex, Plan.AtomicLane, SE)))
+    return diagnose(F, Plan.AtomicPublicationInsert,
+                    "constant atomic publication index does not match the "
+                    "proved active lane");
+
+  Plan.IsRelaxedAtomicAdd = true;
+  Plan.AtomicAdd = Atomic;
+  Plan.AtomicIndexView = IndexView->Marker;
+  Plan.AtomicBase = Base;
+  return true;
+}
+
 static bool validateTileExpression(Value *V, const RegionPlan &Plan,
                                    ScalarEvolution &SE, DominatorTree &DT,
                                    SmallPtrSetImpl<Value *> &Visited,
@@ -576,9 +951,19 @@ static bool validateTileExpression(Value *V, const RegionPlan &Plan,
   if (isa<CastInst>(V))
     return Fail();
   if (auto Descriptor = getViewDescriptor(V)) {
+    if (Descriptor->ScalarizedLaneZero &&
+        (!Plan.IsRelaxedAtomicAdd ||
+         Descriptor->Marker != Plan.AtomicIndexView))
+      return Fail();
     if (V->getType() !=
         FixedVectorType::get(Type::getInt32Ty(V->getContext()), 32))
       return Fail();
+    if (Descriptor->ScalarizedLaneZero) {
+      if (!Plan.AtomicScalarizedLaneZeroValue)
+        return Fail();
+      Inputs.push_back(*Descriptor);
+      return true;
+    }
     Value *Carrier = Descriptor->Marker->getArgOperand(0);
     if (auto *CarrierI = dyn_cast<Instruction>(Carrier)) {
       if (auto *Load = dyn_cast<LoadInst>(CarrierI)) {
@@ -666,22 +1051,40 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   SmallVector<CallInst *, 4> OutputViews;
   SmallVector<StoreInst *, 4> DescriptorStores;
   SmallVector<LoadInst *, 2> ScalarLoads;
+  SmallVector<AtomicRMWInst *, 2> AtomicAdds;
   for (BasicBlock *BB : L.blocks()) {
     for (Instruction &I : *BB) {
+      if (isa<InvokeInst>(I) || isa<CallBrInst>(I))
+        return diagnose(F, &I,
+                        "exceptional and indirect call terminators are "
+                        "unsupported in an element region");
       if (I.isTerminator() || isa<PHINode>(I) || isa<DbgInfoIntrinsic>(I))
         continue;
+      if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
+        AtomicAdds.push_back(Atomic);
+        if (!MSSA.getMemoryAccess(Atomic))
+          return diagnose(F, Atomic,
+                          "atomic effect lacks MemorySSA coverage");
+        continue;
+      }
       bool IsVolatileOrAtomic = false;
       if (auto *Load = dyn_cast<LoadInst>(&I))
         IsVolatileOrAtomic = Load->isVolatile() || Load->isAtomic();
       else if (auto *Store = dyn_cast<StoreInst>(&I))
         IsVolatileOrAtomic = Store->isVolatile() || Store->isAtomic();
       else
-        IsVolatileOrAtomic = isa<AtomicRMWInst>(I) ||
-                             isa<AtomicCmpXchgInst>(I) || isa<FenceInst>(I);
+        IsVolatileOrAtomic = isa<AtomicCmpXchgInst>(I) || isa<FenceInst>(I);
       if (IsVolatileOrAtomic)
         return diagnose(F, &I, "volatile and atomic effects are not in P1a");
       if (auto *Call = dyn_cast<CallInst>(&I)) {
-        if (!isIntrinsic(Call, Intrinsic::linx_experimental_element_view))
+        bool IsScalarizedCarrier =
+            isIntrinsic(Call, Intrinsic::linx_experimental_ew_tci) &&
+            llvm::all_of(Call->users(), [](User *U) {
+              auto Descriptor = getViewDescriptor(cast<Value>(U));
+              return Descriptor && Descriptor->ScalarizedLaneZero;
+            });
+        if (!isIntrinsic(Call, Intrinsic::linx_experimental_element_view) &&
+            !IsScalarizedCarrier)
           return diagnose(F, Call,
                           "calls are not in the P1a arithmetic region");
         if (isa<InsertElementInst>(Call->getArgOperand(0)))
@@ -696,6 +1099,25 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
               DescriptorAccess = true;
               break;
             }
+          if (!DescriptorAccess) {
+            for (User *U : Load->users()) {
+              auto *Cast = dyn_cast<ZExtInst>(U);
+              if (!Cast)
+                continue;
+              for (User *CastUser : Cast->users()) {
+                auto *TCI = dyn_cast<CallInst>(CastUser);
+                if (!isIntrinsic(TCI, Intrinsic::linx_experimental_ew_tci))
+                  continue;
+                for (User *TCIUser : TCI->users()) {
+                  auto Descriptor = getViewDescriptor(cast<Value>(TCIUser));
+                  if (Descriptor && Descriptor->ScalarizedLaneZero) {
+                    DescriptorAccess = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
           if (!DescriptorAccess && Load->getType()->isIntegerTy(32) &&
               !Load->isVolatile() && !Load->isAtomic()) {
             ScalarLoads.push_back(Load);
@@ -713,6 +1135,70 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
       }
     }
   }
+  PHINode *MergedCarrierPhi = nullptr;
+  SmallVector<std::pair<Value *, BasicBlock *>, 4> AtomicResults;
+  if (!AtomicAdds.empty()) {
+    SmallVector<CallInst *, 2> MergedPublications;
+    for (BasicBlock *BB : L.blocks()) {
+      for (Instruction &I : *BB) {
+        auto *Call = dyn_cast<CallInst>(&I);
+        if (!isIntrinsic(Call, Intrinsic::linx_experimental_element_view))
+          continue;
+        auto *CarrierPhi = dyn_cast<PHINode>(Call->getArgOperand(0));
+        if (!CarrierPhi || CarrierPhi->getParent() != Call->getParent())
+          continue;
+        bool AllInserted = llvm::all_of(
+            CarrierPhi->incoming_values(),
+            [](Value *V) { return isa<InsertElementInst>(V); });
+        if (AllInserted)
+          MergedPublications.push_back(Call);
+      }
+    }
+    if (MergedPublications.size() == 1) {
+      CallInst *MergedView = MergedPublications.front();
+      auto *CarrierPhi = cast<PHINode>(MergedView->getArgOperand(0));
+      Value *CommonCarrier = nullptr;
+      for (unsigned I = 0; I != CarrierPhi->getNumIncomingValues(); ++I) {
+        Value *Incoming = CarrierPhi->getIncomingValue(I);
+        auto *Insert = cast<InsertElementInst>(Incoming);
+        auto BaseView = getViewDescriptor(Insert->getOperand(0));
+        if (!BaseView)
+          return diagnose(F, Insert,
+                          "merged publication lacks exact input view metadata");
+        Value *Carrier = BaseView->Marker->getArgOperand(0);
+        if (CommonCarrier && Carrier != CommonCarrier)
+          return diagnose(F, Insert,
+                          "merged publication has different carrier bases");
+        CommonCarrier = Carrier;
+        Plan.AtomicPublicationScaffold.push_back(BaseView->Marker);
+        Plan.AtomicPublicationScaffold.push_back(Insert);
+        if (!sameElementIndex(Insert->getOperand(2), Plan.IV, SE) &&
+            !isa<ConstantInt>(Insert->getOperand(2)))
+          return diagnose(F, Insert,
+                          "merged publication index is not the current or a "
+                          "constant proved element");
+        Value *Element = Insert->getOperand(1);
+        if (Element != AtomicAdds.front() && !match(Element, m_Zero()))
+          return diagnose(F, Insert,
+                          "merged atomic publication has a nonzero alternate");
+        if (Element == AtomicAdds.front()) {
+          if (Plan.AtomicPublicationInsert)
+            return diagnose(F, Insert,
+                            "merged publication contains multiple atomic results");
+          Plan.AtomicPublicationInsert = Insert;
+          Plan.AtomicPublicationIndex = Insert->getOperand(2);
+        } else if (!sameElementIndex(Insert->getOperand(2), Plan.IV, SE)) {
+          return diagnose(F, Insert,
+                          "inactive merged publication must use the current element");
+        }
+        AtomicResults.push_back(
+            {Element, CarrierPhi->getIncomingBlock(I)});
+      }
+      MergedCarrierPhi = CarrierPhi;
+      OutputViews.clear();
+      OutputViews.push_back(MergedView);
+    }
+  }
   if (OutputViews.size() != 1)
     return diagnose(F, L.getHeader()->getTerminator(),
                     "P1a requires one complete carrier publication");
@@ -721,20 +1207,43 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   if (!Descriptor)
     return diagnose(F, Plan.OutputView,
                     "publication lacks exact U32/M32 view metadata");
-  Plan.Publication = cast<InsertElementInst>(Plan.OutputView->getArgOperand(0));
+  Plan.Publication =
+      dyn_cast<InsertElementInst>(Plan.OutputView->getArgOperand(0));
   Plan.OutputStorageID = Descriptor->StorageID;
   Plan.OutputOffset = Descriptor->Offset;
   Plan.OutputRange = Descriptor->Range;
-  if (!sameElementIndex(Plan.Publication->getOperand(2), Plan.IV, SE))
-    return diagnose(F, Plan.Publication,
-                    "publication index is not the region induction element");
+  if (Plan.Publication) {
+    Plan.PublishedElement = Plan.Publication->getOperand(1);
+    Plan.PublicationIndex = Plan.Publication->getOperand(2);
+    if (!sameElementIndex(Plan.PublicationIndex, Plan.IV, SE))
+      return diagnose(F, Plan.Publication,
+                      "publication index is not the region induction element");
+  } else if (MergedCarrierPhi) {
+    Plan.PublicationIndex = Plan.IV;
+  } else {
+    return diagnose(F, Plan.OutputView,
+                    "publication is not a proved element merge");
+  }
   if (!DT.dominates(Plan.OutputView, L.getLoopLatch()->getTerminator()))
     return diagnose(F, Plan.OutputView,
                     "publication must execute on every region iteration");
 
-  if (auto *Merge = dyn_cast<PHINode>(Plan.Publication->getOperand(1))) {
+  if (MergedCarrierPhi) {
+    if (!planRelaxedAtomicAdd(F, MergedCarrierPhi->getParent(), AtomicResults,
+                              AtomicAdds, Plan, SE, DT, AA, MSSA))
+      return false;
+    Plan.PublishedElement = Plan.AtomicAdd;
+  } else if (auto *Merge = dyn_cast<PHINode>(Plan.PublishedElement)) {
+    SmallVector<std::pair<Value *, BasicBlock *>, 4> Results;
+    for (unsigned I = 0; I != Merge->getNumIncomingValues(); ++I)
+      Results.push_back(
+          {Merge->getIncomingValue(I), Merge->getIncomingBlock(I)});
+    if (!planRelaxedAtomicAdd(F, Merge->getParent(), Results, AtomicAdds, Plan,
+                              SE, DT, AA, MSSA))
+      return false;
     if (Merge->getNumIncomingValues() == 2 &&
-        Merge->getParent() == Plan.Publication->getParent()) {
+        Merge->getParent() == Plan.Publication->getParent() &&
+        AtomicAdds.empty()) {
       LoadInst *Loaded = nullptr;
       BasicBlock *LoadIncoming = nullptr;
       bool HasZero = false;
@@ -828,6 +1337,9 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
       }
     }
   }
+  if (!AtomicAdds.empty() && !Plan.IsRelaxedAtomicAdd)
+    return diagnose(F, AtomicAdds.front(),
+                    "atomic effect is not the published element result");
   if (!ScalarLoads.empty() && !Plan.IsZeroElseGather)
     return diagnose(F, ScalarLoads.front(),
                     "P1b requires one proved zero-inactive gather diamond");
@@ -868,6 +1380,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
                MemoryLocation::get(Plan.OutputStore)) != AliasResult::NoAlias)
     return diagnose(F, Plan.GatherLoad,
                     "gather source may alias its Tile publication storage");
+  if (Plan.IsRelaxedAtomicAdd && Plan.OutputStore &&
+      AA.alias(MemoryLocation::get(Plan.AtomicAdd),
+               MemoryLocation::get(Plan.OutputStore)) != AliasResult::NoAlias)
+    return diagnose(F, Plan.AtomicAdd,
+                    "atomic target may alias its Tile publication storage");
   bool HasWholeCarrierConsumer = Plan.OutputStore != nullptr;
   SmallPtrSet<Value *, 8> ConsumerVisited;
   if (!validateExternalConsumers(F, Plan, Plan.OutputView, ConsumerVisited,
@@ -926,17 +1443,23 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   if (Plan.IsZeroElseGather) {
     ExpressionValid = validateTileExpression(
         Plan.GatherIndexView, Plan, SE, DT, Visited, Inputs, Rejected);
+  } else if (Plan.IsRelaxedAtomicAdd) {
+    ExpressionValid = validateTileExpression(
+        Plan.AtomicIndexView, Plan, SE, DT, Visited, Inputs, Rejected);
+    if (ExpressionValid && Plan.AtomicKeyView)
+      ExpressionValid = validateTileExpression(
+          Plan.AtomicKeyView, Plan, SE, DT, Visited, Inputs, Rejected);
   } else {
     ExpressionValid = validateTileExpression(
-        Plan.Publication->getOperand(1), Plan, SE, DT, Visited, Inputs,
-        Rejected);
+        Plan.PublishedElement, Plan, SE, DT, Visited, Inputs, Rejected);
   }
   if (!ExpressionValid) {
     std::string Detail;
     raw_string_ostream OS(Detail);
     if (Rejected)
       Rejected->printAsOperand(OS, /*PrintType=*/true);
-    return diagnose(F, Plan.Publication,
+    return diagnose(F, Plan.Publication ? cast<Instruction>(Plan.Publication)
+                                        : cast<Instruction>(Plan.OutputView),
                     Twine("unsupported scalar expression in P1a arithmetic region: ") +
                         OS.str());
   }
@@ -1176,11 +1699,113 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
            Plan.GatherBase, Offsets, Mask, Builder.getInt64(0),
            Builder.getInt64(0), Builder.getInt64(1)},
           "pto.gather.value");
+    } else if (Plan.IsRelaxedAtomicAdd) {
+      IRBuilder<> Builder(Plan.L->getLoopPreheader()->getTerminator());
+      Type *ValueTy = FixedVectorType::get(Builder.getInt32Ty(), 32);
+      Type *OffsetTy = FixedVectorType::get(Builder.getInt64Ty(), 32);
+      Function *TCI = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_tci, {ValueTy});
+      Value *Indices = nullptr;
+      if (Plan.AtomicScalarizedLaneZeroValue) {
+        if (Plan.AtomicScalarizedLaneZeroCarrier) {
+          Indices = Plan.AtomicScalarizedLaneZeroCarrier;
+        } else {
+          Value *ScalarValue = Plan.AtomicScalarizedLaneZeroValue;
+          if (Plan.AtomicScalarizedLaneZeroLoad)
+            ScalarValue = Builder.Insert(
+                Plan.AtomicScalarizedLaneZeroLoad->clone(),
+                "pto.atomic.lane.zero.load");
+          Value *Scalar =
+              Builder.CreateZExt(ScalarValue, Builder.getInt64Ty());
+          Indices = Builder.CreateCall(
+              TCI,
+              {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+               Builder.getInt64(29), Scalar, Builder.getInt64(0)},
+              "pto.atomic.lane.zero.indices");
+        }
+      } else {
+        Indices = Expressions.lower(Plan.AtomicIndexView);
+      }
+      Value *Lanes = Builder.CreateCall(
+          TCI,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Builder.getInt64(0),
+           Builder.getInt64(1ULL << 32)},
+          "pto.atomic.lanes");
+      Function *Compare = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_tcmps_gpr,
+          {ValueTy});
+      Value *Mask = nullptr;
+      if (Plan.AtomicValid) {
+        Value *Valid = Plan.AtomicValid;
+        if (!Valid->getType()->isIntegerTy(64))
+          Valid = Builder.CreateZExtOrTrunc(Valid, Builder.getInt64Ty());
+        Mask = Builder.CreateCall(
+            Compare,
+            {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+             Builder.getInt64(29), Lanes, Valid, Builder.getInt64(2)},
+            "pto.atomic.tail.mask");
+      }
+      if (Plan.AtomicLane) {
+        Value *Lane = Plan.AtomicLane;
+        if (!Lane->getType()->isIntegerTy(64))
+          Lane = Builder.CreateZExtOrTrunc(Lane, Builder.getInt64Ty());
+        Value *LaneMask = Builder.CreateCall(
+            Compare,
+            {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+             Builder.getInt64(29), Lanes, Lane, Builder.getInt64(0)},
+            "pto.atomic.lane.mask");
+        Mask = Mask ? Builder.CreateAnd(Mask, LaneMask,
+                                        "pto.atomic.active.mask")
+                    : LaneMask;
+      }
+      if (Plan.AtomicKeyView) {
+        Value *Keys = Expressions.lower(Plan.AtomicKeyView);
+        Value *Selected = Plan.AtomicSelected;
+        if (!Selected->getType()->isIntegerTy(64))
+          Selected =
+              Builder.CreateZExtOrTrunc(Selected, Builder.getInt64Ty());
+        Value *KeyMask = Builder.CreateCall(
+            Compare,
+            {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+             Builder.getInt64(29), Keys, Selected, Builder.getInt64(0)},
+            "pto.atomic.key.mask");
+        Mask = Mask ? Builder.CreateAnd(Mask, KeyMask,
+                                        "pto.atomic.active.mask")
+                    : KeyMask;
+      }
+      for (Value *Predicate : Plan.AtomicOuterPredicates)
+        Mask = Builder.CreateSelect(Predicate, Mask, Builder.getInt64(0),
+                                    "pto.atomic.outer.mask");
+      Function *TLEA = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_tlea,
+          {OffsetTy, ValueTy});
+      Value *Offsets = Builder.CreateCall(
+          TLEA,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Indices, Builder.getInt64(32)},
+          "pto.atomic.byte.offsets");
+      Value *Ones = Builder.CreateCall(
+          TCI,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Builder.getInt64(1), Builder.getInt64(0)},
+          "pto.atomic.ones");
+      Function *Atomic = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_mgather_add_masked,
+          {ValueTy, OffsetTy, ValueTy});
+      Result = Builder.CreateCall(
+          Atomic,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(3), Builder.getInt64(29), Plan.AtomicBase, Offsets,
+           Ones, Mask, Builder.getInt64(0), Builder.getInt64(0),
+           Builder.getInt64(1)},
+          "pto.atomic.old");
     } else {
-      Result = Expressions.lower(Plan.Publication->getOperand(1));
+      Result = Expressions.lower(Plan.PublishedElement);
     }
     if (!Result) {
-      diagnose(F, Plan.Publication,
+      diagnose(F, Plan.Publication ? cast<Instruction>(Plan.Publication)
+                                  : cast<Instruction>(Plan.OutputView),
                "unsupported scalar expression in P1a arithmetic region");
       return false;
     }
