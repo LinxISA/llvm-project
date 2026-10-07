@@ -25,6 +25,8 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Assumptions.h"
 #include "llvm/IR/DataLayout.h"
@@ -33,6 +35,7 @@
 #include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/SaveAndRestore.h"
+#include <functional>
 
 using namespace clang;
 using namespace CodeGen;
@@ -1099,7 +1102,8 @@ static bool isElementwiseInvariantU32(const Expr *E, const VarDecl *Index,
   const auto *Ref = dyn_cast_or_null<DeclRefExpr>(E);
   const auto *Variable = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
   QualType Type = E ? E->getType().getCanonicalType() : QualType();
-  return Variable && Variable != Index && !Type.isNull() &&
+  return Variable && Variable != Index && Variable->hasLocalStorage() &&
+         !Variable->getType()->isReferenceType() && !Type.isNull() &&
          !Type.isVolatileQualified() &&
          Type.getUnqualifiedType() == Context.UnsignedIntTy &&
          !E->HasSideEffects(Context, /*IncludePossibleEffects=*/true);
@@ -1153,9 +1157,8 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
 
   const Stmt *Body = S.getBody();
   if (const auto *Compound = dyn_cast<CompoundStmt>(Body)) {
-    if (Compound->size() != 1)
-      return false;
-    Body = *Compound->body_begin();
+    if (Compound->size() == 1)
+      Body = *Compound->body_begin();
   }
   const auto *Assignment = dyn_cast<BinaryOperator>(Body);
   if (!Assignment || Assignment->getOpcode() != BO_Assign)
@@ -1502,13 +1505,227 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
     return true;
   }
 
-  if (!Assignment)
+  // Plan pure U32 element expressions before emitting any IR. Scalar-shaped
+  // locals in this region represent whole-Tile SSA values, not per-element
+  // GPR state. The ordinary backend Tile register allocator owns allocation.
+  // Memory, calls, control flow and cross-element dependencies remain outside
+  // this pure-expression path and must reach a diagnosed, dedicated lowering.
+  if (BoundValue.Val.getInt().getZExtValue() != 32)
     return false;
-
-  // Plain elementwise arithmetic is intentionally left to the ordinary
-  // scalar loop lowering.  The masked intrinsic path is reserved for an
-  // element-if whose predicate is represented by a PredicateCell.
-  return false;
+  struct ElementExprNode {
+    enum Kind { Carrier, Uniform, Constant, ElementIndex, Binary } K;
+    const Expr *Source = nullptr;
+    uint32_t Value = 0;
+    unsigned Opcode = 0;
+    unsigned Left = 0;
+    unsigned Right = 0;
+  };
+  struct ElementExprStore {
+    const Expr *Carrier;
+    unsigned Value;
+  };
+  SmallVector<ElementExprNode, 16> Nodes;
+  SmallVector<ElementExprStore, 4> Stores;
+  llvm::DenseMap<const VarDecl *, unsigned> Locals;
+  llvm::SmallPtrSet<const VarDecl *, 8> RegionDeclarations;
+  auto IsU32 = [&](QualType Type) {
+    return !Type.isVolatileQualified() &&
+           Type.getCanonicalType().getUnqualifiedType() ==
+               getContext().UnsignedIntTy;
+  };
+  auto IsU32Carrier = [&](const Expr *Base) {
+    if (!Base || !isElementwiseSimpleCarrier(Base, true))
+      return false;
+    QualType Type = Base->getType();
+    const auto *Vector = Type->getAs<ExtVectorType>();
+    return !Type.isVolatileQualified() && Vector &&
+           Vector->getNumElements() == 32 && IsU32(Vector->getElementType());
+  };
+  auto AddNode = [&](ElementExprNode Node) {
+    unsigned ID = Nodes.size();
+    Nodes.push_back(Node);
+    return ID;
+  };
+  std::function<bool(const Expr *, unsigned &)> PlanExpression;
+  PlanExpression = [&](const Expr *Expression, unsigned &Result) -> bool {
+    const Expr *E = ignoreElementwiseCasts(Expression);
+    if (!E)
+      return false;
+    if (const auto *Literal = dyn_cast<IntegerLiteral>(E)) {
+      // Usual arithmetic conversion to U32 is valid for representable literals.
+      if (Literal->getValue().getActiveBits() > 32)
+        return false;
+      ElementExprNode N{ElementExprNode::Constant};
+      N.Value = Literal->getValue().getZExtValue();
+      Result = AddNode(N);
+      return true;
+    }
+    if (!IsU32(E->getType()))
+      return false;
+    if (const auto *Ref = dyn_cast<DeclRefExpr>(E)) {
+      const auto *Variable = dyn_cast<VarDecl>(Ref->getDecl());
+      if (!Variable)
+        return false;
+      auto Local = Locals.find(Variable);
+      if (Local != Locals.end()) {
+        Result = Local->second;
+        return true;
+      }
+      if (RegionDeclarations.count(Variable))
+        return false; // reading an uninitialized intermediate is unsupported
+      // A reference may alias an output element that changes in the scalar
+      // source loop; it is not a snapshot or a proven uniform value. Keep
+      // global/addressable aliases outside this plan until alias analysis can
+      // prove the broadcast preserves the original loop semantics.
+      if (Variable->getType()->isReferenceType() ||
+          !Variable->hasLocalStorage())
+        return false;
+      ElementExprNode N{Variable == Index ? ElementExprNode::ElementIndex
+                                         : ElementExprNode::Uniform};
+      N.Source = E;
+      Result = AddNode(N);
+      return true;
+    }
+    if (const auto *Element = dyn_cast<ArraySubscriptExpr>(E)) {
+      const Expr *Base = ignoreElementwiseCasts(Element->getBase());
+      if (!isElementwiseIndex(Element->getIdx(), Index) || !IsU32Carrier(Base))
+        return false;
+      ElementExprNode N{ElementExprNode::Carrier};
+      N.Source = Base;
+      Result = AddNode(N);
+      return true;
+    }
+    if (const auto *Unary = dyn_cast<UnaryOperator>(E)) {
+      if (Unary->getOpcode() != UO_Not && Unary->getOpcode() != UO_Minus &&
+          Unary->getOpcode() != UO_Plus)
+        return false;
+      unsigned Operand;
+      if (!PlanExpression(Unary->getSubExpr(), Operand))
+        return false;
+      if (Unary->getOpcode() == UO_Plus) {
+        Result = Operand;
+        return true;
+      }
+      ElementExprNode Constant{ElementExprNode::Constant};
+      Constant.Value = Unary->getOpcode() == UO_Not ? UINT32_MAX : 0;
+      unsigned C = AddNode(Constant);
+      ElementExprNode N{ElementExprNode::Binary};
+      N.Opcode = Unary->getOpcode() == UO_Not ? 7 : 1;
+      N.Left = C;
+      N.Right = Operand;
+      Result = AddNode(N);
+      return true;
+    }
+    const auto *Binary = dyn_cast<BinaryOperator>(E);
+    if (!Binary)
+      return false;
+    // Compiler-IR operation IDs. Physical selectors are chosen by the backend.
+    unsigned Opcode;
+    switch (Binary->getOpcode()) {
+    case BO_Add: Opcode = 0; break;
+    case BO_Sub: Opcode = 1; break;
+    case BO_Mul: Opcode = 2; break;
+    case BO_Div: Opcode = 3; break;
+    case BO_Rem: Opcode = 4; break;
+    case BO_And: Opcode = 5; break;
+    case BO_Or:  Opcode = 6; break;
+    case BO_Xor: Opcode = 7; break;
+    case BO_Shl: Opcode = 8; break;
+    case BO_Shr: Opcode = 9; break;
+    default: return false;
+    }
+    unsigned Left, Right;
+    if (!PlanExpression(Binary->getLHS(), Left) ||
+        !PlanExpression(Binary->getRHS(), Right))
+      return false;
+    ElementExprNode N{ElementExprNode::Binary};
+    N.Opcode = Opcode;
+    N.Left = Left;
+    N.Right = Right;
+    Result = AddNode(N);
+    return true;
+  };
+  SmallVector<const Stmt *, 4> Statements;
+  if (const auto *Compound = dyn_cast<CompoundStmt>(Body))
+    Statements.append(Compound->body_begin(), Compound->body_end());
+  else
+    Statements.push_back(Body);
+  for (const Stmt *Statement : Statements) {
+    if (const auto *Declaration = dyn_cast<DeclStmt>(Statement)) {
+      if (!Declaration->isSingleDecl())
+        return false;
+      const auto *Variable = dyn_cast<VarDecl>(Declaration->getSingleDecl());
+      if (!Variable || !IsU32(Variable->getType()) || !Variable->hasInit() ||
+          Variable->isStaticLocal())
+        return false;
+      RegionDeclarations.insert(Variable);
+      unsigned Value;
+      if (!PlanExpression(Variable->getInit(), Value))
+        return false;
+      Locals[Variable] = Value;
+      continue;
+    }
+    const auto *Store = dyn_cast<BinaryOperator>(Statement);
+    if (!Store || Store->getOpcode() != BO_Assign)
+      return false;
+    unsigned Value;
+    if (!PlanExpression(Store->getRHS(), Value))
+      return false;
+    if (const auto *Local = getElementwiseDeclRef(Store->getLHS())) {
+      const auto *Variable = dyn_cast<VarDecl>(Local->getDecl());
+      if (!Variable || !RegionDeclarations.count(Variable) ||
+          Variable->getType().isConstQualified())
+        return false;
+      Locals[Variable] = Value;
+      continue;
+    }
+    const auto *Element = getElementwiseSubscript(Store->getLHS());
+    const Expr *Base = Element ? ignoreElementwiseCasts(Element->getBase())
+                               : nullptr;
+    if (!Element || !isElementwiseIndex(Element->getIdx(), Index) ||
+        !IsU32Carrier(Base) || Base->getType().isConstQualified())
+      return false;
+    // One carrier publication per region keeps source snapshots and C++
+    // aliasing semantics explicit. Multiple stores require a sequential
+    // value/alias plan rather than relying on distinct AST expression nodes.
+    if (!Stores.empty())
+      return false;
+    Stores.push_back({Base, Value});
+  }
+  if (Stores.empty())
+    return false;
+  llvm::Type *VectorTy = llvm::FixedVectorType::get(Builder.getInt32Ty(), 32);
+  llvm::Function *TCI = CGM.getIntrinsic(
+      llvm::Intrinsic::linx_experimental_ew_tci, {VectorTy});
+  llvm::Function *TBinary = CGM.getIntrinsic(
+      llvm::Intrinsic::linx_experimental_ew_tbinary,
+      {VectorTy});
+  SmallVector<llvm::Value *, 16> Values;
+  for (const ElementExprNode &N : Nodes) {
+    llvm::Value *Value;
+    if (N.K == ElementExprNode::Carrier) {
+      Value = EmitLoadOfScalar(EmitLValue(N.Source), N.Source->getExprLoc());
+    } else if (N.K == ElementExprNode::Binary) {
+      Value = Builder.CreateCall(TBinary,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Builder.getInt64(N.Opcode),
+           Values[N.Left], Values[N.Right]}, "pto.element.intermediate");
+    } else {
+      llvm::Value *Start = N.K == ElementExprNode::Uniform
+          ? Builder.CreateZExt(EmitScalarExpr(N.Source), Builder.getInt64Ty())
+          : Builder.getInt64(N.K == ElementExprNode::Constant ? N.Value : 0);
+      Value = Builder.CreateCall(TCI,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Start,
+           Builder.getInt64(N.K == ElementExprNode::ElementIndex
+                                ? (1ULL << 32) : 0)}, "pto.element.value");
+    }
+    Values.push_back(Value);
+  }
+  for (const ElementExprStore &Store : Stores)
+    EmitStoreOfScalar(Values[Store.Value], EmitLValue(Store.Carrier));
+  CurFn->addFnAttr("linx.elementwise.lanes", "32");
+  return true;
 
 }
 
