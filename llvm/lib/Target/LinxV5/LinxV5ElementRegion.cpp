@@ -11,6 +11,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -18,6 +19,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -26,6 +28,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -34,6 +37,7 @@
 #include "llvm/Transforms/Utils/Mem2Reg.h"
 
 using namespace llvm;
+using namespace llvm::PatternMatch;
 
 #define DEBUG_TYPE "linx-v5-element-region"
 
@@ -117,6 +121,21 @@ static bool prepareViews(Function &F) {
   }
   if (Annotations.empty())
     return false;
+  bool HasElementRegion = false;
+  for (Instruction &I : instructions(F)) {
+    if (isIntrinsic(dyn_cast<CallInst>(&I),
+                    Intrinsic::linx_experimental_element_region)) {
+      HasElementRegion = true;
+      break;
+    }
+  }
+  if (!HasElementRegion) {
+    for (CallInst *Annotation : Annotations) {
+      Annotation->replaceAllUsesWith(Annotation->getArgOperand(0));
+      Annotation->eraseFromParent();
+    }
+    return true;
+  }
   if (F.hasFnAttribute(Attribute::OptimizeNone))
     return false;
 
@@ -439,13 +458,22 @@ struct RegionPlan {
   uint64_t OutputStorageID = 0;
   int64_t OutputOffset = 0;
   uint64_t OutputRange = 0;
+  bool IsZeroElseGather = false;
+  CallInst *GatherIndexView = nullptr;
+  Value *GatherBase = nullptr;
+  Value *GatherValid = nullptr;
+  Value *GatherOuterPredicate = nullptr;
+  LoadInst *GatherLoad = nullptr;
 };
 
-static bool isStructuredTileStoreCall(const CallBase &Call, Value *Carrier) {
+static bool isStructuredTileConsumerCall(const CallBase &Call,
+                                         Value *Carrier) {
   if (!Call.isInlineAsm())
     return false;
   const auto *Assembly = cast<InlineAsm>(Call.getCalledOperand());
-  if (!StringRef(Assembly->getAsmString()).contains("BSTART.TLSU TSTORE"))
+  StringRef Text(Assembly->getAsmString());
+  if (!Text.contains("BSTART.TLSU TSTORE") &&
+      !Text.contains("BSTART.TEPL 32,"))
     return false;
   for (const Use &Argument : Call.args())
     if (Argument.get() == Carrier &&
@@ -503,7 +531,7 @@ static bool validateExternalConsumers(Function &F, RegionPlan &Plan, Value *V,
           continue;
         }
       }
-      if (!isStructuredTileStoreCall(*Call, V))
+      if (!isStructuredTileConsumerCall(*Call, V))
         return diagnose(
             F, Call,
             Twine("unsupported external carrier call: ") +
@@ -610,7 +638,7 @@ static bool validateTileExpression(Value *V, const RegionPlan &Plan,
 
 static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
                        DominatorTree &DT, PostDominatorTree &PDT,
-                       MemorySSA &MSSA, RegionPlan &Plan) {
+                       AAResults &AA, MemorySSA &MSSA, RegionPlan &Plan) {
   (void)LI;
   (void)PDT;
   MDNode *Token = getElementRegionToken(L);
@@ -637,6 +665,7 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
 
   SmallVector<CallInst *, 4> OutputViews;
   SmallVector<StoreInst *, 4> DescriptorStores;
+  SmallVector<LoadInst *, 2> ScalarLoads;
   for (BasicBlock *BB : L.blocks()) {
     for (Instruction &I : *BB) {
       if (I.isTerminator() || isa<PHINode>(I) || isa<DbgInfoIntrinsic>(I))
@@ -667,6 +696,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
               DescriptorAccess = true;
               break;
             }
+          if (!DescriptorAccess && Load->getType()->isIntegerTy(32) &&
+              !Load->isVolatile() && !Load->isAtomic()) {
+            ScalarLoads.push_back(Load);
+            DescriptorAccess = true;
+          }
         } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
           DescriptorAccess =
               getViewDescriptor(Store->getValueOperand()).hasValue();
@@ -697,6 +731,106 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   if (!DT.dominates(Plan.OutputView, L.getLoopLatch()->getTerminator()))
     return diagnose(F, Plan.OutputView,
                     "publication must execute on every region iteration");
+
+  if (auto *Merge = dyn_cast<PHINode>(Plan.Publication->getOperand(1))) {
+    if (Merge->getNumIncomingValues() == 2 &&
+        Merge->getParent() == Plan.Publication->getParent()) {
+      LoadInst *Loaded = nullptr;
+      BasicBlock *LoadIncoming = nullptr;
+      bool HasZero = false;
+      for (unsigned I = 0; I != 2; ++I) {
+        Value *Incoming = Merge->getIncomingValue(I);
+        if (auto *C = dyn_cast<ConstantInt>(Incoming))
+          HasZero |= C->isZero();
+        if (auto *LI = dyn_cast<LoadInst>(Incoming)) {
+          Loaded = LI;
+          LoadIncoming = Merge->getIncomingBlock(I);
+        }
+      }
+      auto *GEP = Loaded
+                      ? dyn_cast<GetElementPtrInst>(Loaded->getPointerOperand())
+                      : nullptr;
+      Value *ElementIndex = GEP && GEP->getNumIndices() == 1
+                                ? GEP->idx_begin()->get()
+                                : nullptr;
+      if (auto *Cast = dyn_cast_or_null<ZExtInst>(ElementIndex)) {
+        if (Cast->getSrcTy()->isIntegerTy(32) &&
+            Cast->getDestTy()->isIntegerTy(64))
+          ElementIndex = Cast->getOperand(0);
+        else
+          ElementIndex = nullptr;
+      } else if (ElementIndex && !ElementIndex->getType()->isIntegerTy(32)) {
+        ElementIndex = nullptr;
+      }
+      auto *Extract = dyn_cast_or_null<ExtractElementInst>(ElementIndex);
+      auto IndexView = Extract
+                           ? getViewDescriptor(Extract->getVectorOperand())
+                           : None;
+      BasicBlock *BranchBlock =
+          LoadIncoming && LoadIncoming->getSinglePredecessor()
+              ? LoadIncoming->getSinglePredecessor()
+              : nullptr;
+      auto *Branch = BranchBlock
+                         ? dyn_cast<BranchInst>(BranchBlock->getTerminator())
+                         : nullptr;
+      Value *Condition = Branch && Branch->isConditional()
+                             ? Branch->getCondition()
+                             : nullptr;
+      Value *OuterPredicate = nullptr;
+      if (auto *Select = dyn_cast_or_null<SelectInst>(Condition)) {
+        if (match(Select->getFalseValue(), m_Zero())) {
+          OuterPredicate = Select->getCondition();
+          Condition = Select->getTrueValue();
+        }
+      }
+      auto *Compare = dyn_cast_or_null<ICmpInst>(Condition);
+      Value *Valid = nullptr;
+      if (Compare && Compare->getPredicate() == ICmpInst::ICMP_ULT) {
+        if (SE.getSCEV(Compare->getOperand(0)) == SE.getSCEV(Plan.IV))
+          Valid = Compare->getOperand(1);
+      }
+      Value *Base = GEP ? GEP->getPointerOperand() : nullptr;
+      const Value *Underlying = Base ? getUnderlyingObject(Base) : nullptr;
+      auto *BaseArgument = dyn_cast_or_null<Argument>(Underlying);
+      bool LoadArm = Branch && Branch->getSuccessor(0) == LoadIncoming;
+      bool MergeArm = Branch && Branch->getSuccessor(1) == Merge->getParent();
+      bool BaseReady = Base && L.isLoopInvariant(Base);
+      if (auto *BaseI = dyn_cast_or_null<Instruction>(Base))
+        BaseReady &= DT.dominates(
+            BaseI, L.getLoopPreheader()->getTerminator());
+      bool PredicateReady = !OuterPredicate || L.isLoopInvariant(OuterPredicate);
+      if (auto *PredicateI = dyn_cast_or_null<Instruction>(OuterPredicate))
+        PredicateReady &= DT.dominates(
+            PredicateI, L.getLoopPreheader()->getTerminator());
+      bool ClobberedInLoop = false;
+      if (Loaded) {
+        MemoryAccess *Access = MSSA.getMemoryAccess(Loaded);
+        MemoryAccess *Clobber =
+            Access ? MSSA.getWalker()->getClobberingMemoryAccess(Access)
+                   : nullptr;
+        if (auto *Def = dyn_cast_or_null<MemoryDef>(Clobber))
+          ClobberedInLoop = L.contains(Def->getBlock());
+      }
+      if (HasZero && Loaded && Extract && IndexView &&
+          sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
+          Valid && Valid->getType()->isIntegerTy(32) &&
+          L.isLoopInvariant(Valid) && PredicateReady && LoadArm && MergeArm &&
+          GEP->getSourceElementType()->isIntegerTy(32) && BaseReady &&
+          BaseArgument &&
+          !ClobberedInLoop && ScalarLoads.size() == 1 &&
+          ScalarLoads.front() == Loaded) {
+        Plan.IsZeroElseGather = true;
+        Plan.GatherIndexView = IndexView->Marker;
+        Plan.GatherBase = Base;
+        Plan.GatherValid = Valid;
+        Plan.GatherOuterPredicate = OuterPredicate;
+        Plan.GatherLoad = Loaded;
+      }
+    }
+  }
+  if (!ScalarLoads.empty() && !Plan.IsZeroElseGather)
+    return diagnose(F, ScalarLoads.front(),
+                    "P1b requires one proved zero-inactive gather diamond");
 
   for (PHINode &Phi : L.getHeader()->phis()) {
     int LatchIndex = Phi.getBasicBlockIndex(L.getLoopLatch());
@@ -729,6 +863,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
         return diagnose(F, Plan.OutputStore,
                         "publication pointer must dominate the element region");
   }
+  if (Plan.IsZeroElseGather && Plan.OutputStore &&
+      AA.alias(MemoryLocation::get(Plan.GatherLoad),
+               MemoryLocation::get(Plan.OutputStore)) != AliasResult::NoAlias)
+    return diagnose(F, Plan.GatherLoad,
+                    "gather source may alias its Tile publication storage");
   bool HasWholeCarrierConsumer = Plan.OutputStore != nullptr;
   SmallPtrSet<Value *, 8> ConsumerVisited;
   if (!validateExternalConsumers(F, Plan, Plan.OutputView, ConsumerVisited,
@@ -783,8 +922,16 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   SmallPtrSet<Value *, 32> Visited;
   SmallVector<ViewDescriptor, 4> Inputs;
   Value *Rejected = nullptr;
-  if (!validateTileExpression(Plan.Publication->getOperand(1), Plan, SE, DT,
-                              Visited, Inputs, Rejected)) {
+  bool ExpressionValid = true;
+  if (Plan.IsZeroElseGather) {
+    ExpressionValid = validateTileExpression(
+        Plan.GatherIndexView, Plan, SE, DT, Visited, Inputs, Rejected);
+  } else {
+    ExpressionValid = validateTileExpression(
+        Plan.Publication->getOperand(1), Plan, SE, DT, Visited, Inputs,
+        Rejected);
+  }
+  if (!ExpressionValid) {
     std::string Detail;
     raw_string_ostream OS(Detail);
     if (Rejected)
@@ -953,7 +1100,7 @@ public:
 
 static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
                          DominatorTree &DT, PostDominatorTree &PDT,
-                         MemorySSA &MSSA) {
+                         AAResults &AA, MemorySSA &MSSA) {
   SmallVector<Loop *, 8> Loops;
   std::function<void(Loop *)> Collect = [&](Loop *L) {
     for (Loop *Sub : *L)
@@ -975,14 +1122,63 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
   SmallVector<RegionPlan, 8> Plans;
   for (Loop *L : Loops) {
     RegionPlan Plan;
-    if (!planRegion(F, *L, LI, SE, DT, PDT, MSSA, Plan))
+    if (!planRegion(F, *L, LI, SE, DT, PDT, AA, MSSA, Plan))
       return false;
     Plans.push_back(Plan);
   }
 
   for (RegionPlan &Plan : Plans) {
     TileExpressionBuilder Expressions(F, Plan, SE, DT);
-    Value *Result = Expressions.lower(Plan.Publication->getOperand(1));
+    Value *Result = nullptr;
+    if (Plan.IsZeroElseGather) {
+      IRBuilder<> Builder(Plan.L->getLoopPreheader()->getTerminator());
+      Type *ValueTy = FixedVectorType::get(Builder.getInt32Ty(), 32);
+      Type *OffsetTy = FixedVectorType::get(Builder.getInt64Ty(), 32);
+      Value *Indices = Expressions.lower(Plan.GatherIndexView);
+      Function *TCI = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_tci, {ValueTy});
+      Value *Lanes = Builder.CreateCall(
+          TCI,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Builder.getInt64(0),
+           Builder.getInt64(1ULL << 32)},
+          "pto.gather.lanes");
+      Function *Compare = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_tcmps_gpr,
+          {ValueTy});
+      Value *Valid = Plan.GatherValid;
+      if (!Valid->getType()->isIntegerTy(64))
+        Valid = Builder.CreateZExtOrTrunc(Valid, Builder.getInt64Ty());
+      Value *Mask = Builder.CreateCall(
+          Compare,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Lanes, Valid, Builder.getInt64(2)},
+          "pto.gather.mask");
+      if (Plan.GatherOuterPredicate)
+        Mask = Builder.CreateSelect(Plan.GatherOuterPredicate, Mask,
+                                    Builder.getInt64(0),
+                                    "pto.gather.active.mask");
+      Function *TLEA = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_tlea,
+          {OffsetTy, ValueTy});
+      Value *Offsets = Builder.CreateCall(
+          TLEA,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(29), Indices, Builder.getInt64(32)},
+          "pto.gather.byte.offsets");
+      Function *Gather = Intrinsic::getDeclaration(
+          F.getParent(), Intrinsic::linx_experimental_ew_mgather_gpr_masked,
+          {ValueTy, OffsetTy});
+      Result = Builder.CreateCall(
+          Gather,
+          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
+           Builder.getInt64(0), Builder.getInt64(29), Builder.getInt64(24),
+           Plan.GatherBase, Offsets, Mask, Builder.getInt64(0),
+           Builder.getInt64(0), Builder.getInt64(1)},
+          "pto.gather.value");
+    } else {
+      Result = Expressions.lower(Plan.Publication->getOperand(1));
+    }
     if (!Result) {
       diagnose(F, Plan.Publication,
                "unsupported scalar expression in P1a arithmetic region");
@@ -1080,6 +1276,7 @@ public:
         getAnalysis<ScalarEvolutionWrapperPass>().getSE(),
         getAnalysis<DominatorTreeWrapperPass>().getDomTree(),
         getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree(),
+        getAnalysis<AAResultsWrapperPass>().getAAResults(),
         getAnalysis<MemorySSAWrapperPass>().getMSSA());
   }
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -1087,6 +1284,7 @@ public:
     AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<DominatorTreeWrapperPass>();
     AU.addRequired<PostDominatorTreeWrapperPass>();
+    AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<MemorySSAWrapperPass>();
   }
 };
@@ -1120,6 +1318,7 @@ INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(MemorySSAWrapperPass)
 INITIALIZE_PASS_END(LinxV5ElementRegionLegacyPass, "linx-v5-element-region",
                     "LinxV5 PTO element region compiler", false, false)
@@ -1178,6 +1377,7 @@ PreservedAnalyses LinxV5ElementRegionPass::run(Function &F,
                               AM.getResult<ScalarEvolutionAnalysis>(F),
                               AM.getResult<DominatorTreeAnalysis>(F),
                               AM.getResult<PostDominatorTreeAnalysis>(F),
+                              AM.getResult<AAManager>(F),
                               AM.getResult<MemorySSAAnalysis>(F).getMSSA());
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
