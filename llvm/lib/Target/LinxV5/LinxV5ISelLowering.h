@@ -86,6 +86,7 @@ enum NodeType : unsigned {
   EW_TLEA,
   EW_TCI,
   EW_TCMPS_GPR,
+  EW_MGATHER_GPR_MASKED,
   EW_MGATHER_MASKED,
   EW_MSCATTER_MASKED,
   EW_MGATHER_ADD,
@@ -318,6 +319,8 @@ private:
                               SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCMPSGPR(SDLoc &DL, SDValue Op,
                                    SelectionDAG &DAG) const;
+  SDValue lowerElementwiseMGatherGPRMasked(SDLoc &DL, SDValue Op,
+                                           SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterMasked(SDLoc &DL, SDValue Op,

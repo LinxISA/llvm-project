@@ -917,16 +917,47 @@ void LinxV5MCCodeEmitter::expandPseudoTLoadStore(const MCInst &MI, raw_ostream &
       MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI ||
       MI.getOpcode() == LinxV5::PseudoMSCATTER_ADD_SizeI ||
       MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI;
+  const bool OrdinaryGPRMasked =
+      MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI;
   // bstart.par
   writeBinaryCodes(OS, Fixups, STI,
                    {MCInstBuilder(LinxV5::BSTART_TMA)
                         // Masked and atomic indexed pseudos place the
                         // BSTART data type at operand 5; ordinary TMA
                         // pseudos carry it at operand 7.
-                        .addOperand(MI.getOperand((IndexedMasked || IndexedAtomic) ? 5 : 7))
+                        .addOperand(MI.getOperand(
+                            (IndexedMasked || IndexedAtomic ||
+                             OrdinaryGPRMasked)
+                                ? 5
+                                : 7))
                         .addOperand(MCOperand::createImm(
                             getPseudoTILEOpcode(MI.getOpcode())))},
                    Dummy);
+  if (OrdinaryGPRMasked) {
+    writeBinaryCodes(OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+             .addOperand(MI.getOperand(7)).addImm(0).addImm(31)
+             .addOperand(MI.getOperand(6)).addImm(0).addImm(0).addImm(0)
+             .addImm(0).addOperand(MI.getOperand(13))
+             .addOperand(MI.getOperand(14))}, Dummy);
+    writeBinaryCodes(OS, Fixups, STI,
+        compressMCInstVec(
+            {MCInstBuilder(LinxV5::B_DIM).addImm(0)
+                 .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2)),
+             MCInstBuilder(LinxV5::B_DIM).addImm(1)
+                 .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4))},
+            STI, Ctx), Dummy);
+    writeBinaryCodes(OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+             .addOperand(MI.getOperand(0)).addImm(0b1111)
+             .addOperand(MI.getOperand(8)).addImm(1)
+             .addOperand(MI.getOperand(9))}, Dummy);
+    writeBinaryCodes(OS, Fixups, STI,
+        {MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
+             .addOperand(MI.getOperand(12)).addOperand(MI.getOperand(10))
+             .addReg(LinxV5::R0)}, Dummy);
+    return;
+  }
   if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI) {
     writeBinaryCodes(OS, Fixups, STI,
         {MCInstBuilder(LinxV5::BDATR_EXEC_MASK)

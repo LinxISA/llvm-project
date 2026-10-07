@@ -225,6 +225,8 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI) {
     return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {
+    return MI.getOperand(8).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI) {
     return MI.getOperand(6).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI) {

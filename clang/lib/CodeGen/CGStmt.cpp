@@ -1126,6 +1126,24 @@ static bool isElementwiseSimpleCarrier(const Expr *E, bool AllowDeref) {
   return Ref && !Ref->getType().isVolatileQualified();
 }
 
+static bool hasElementwiseU32M32ViewContract(const DeclRefExpr *Ref) {
+  static constexpr llvm::StringLiteral Contract =
+      "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32";
+  const auto *Variable = Ref ? dyn_cast<VarDecl>(Ref->getDecl()) : nullptr;
+  if (!Variable || !Variable->hasLocalStorage())
+    return false;
+  const Expr *Initializer = Variable->getInit();
+  const auto *Call = dyn_cast_or_null<CallExpr>(
+      Initializer ? Initializer->IgnoreParenImpCasts() : nullptr);
+  const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
+  if (!Callee)
+    return false;
+  for (const auto *Annotation : Callee->specific_attrs<AnnotateAttr>())
+    if (Annotation->getAnnotation() == Contract)
+      return true;
+  return false;
+}
+
 bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
   const auto *Init = dyn_cast_or_null<DeclStmt>(S.getInit());
   if (!Init || !Init->isSingleDecl())
@@ -1160,6 +1178,14 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
     if (Compound->size() == 1)
       Body = *Compound->body_begin();
   }
+  if (const auto *If = dyn_cast_or_null<IfStmt>(Body)) {
+    // Every supported element-wise conditional is a pure predicate over
+    // already-existing values.  Reject C++17 init-statements and condition
+    // variables before any specialized path emits IR; both can hide calls or
+    // other scalar side effects that must retain ordinary C++ semantics.
+    if (If->getInit() || If->getConditionVariableDeclStmt())
+      return false;
+  }
   const auto *Assignment = dyn_cast<BinaryOperator>(Body);
   if (!Assignment || Assignment->getOpcode() != BO_Assign)
     Assignment = nullptr;
@@ -1172,6 +1198,137 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
     }
     return Statement;
   };
+
+  // Initial ordinary indexed-load profile:
+  //   out[element] = source[indices[element]];
+  // or the same load guarded by `element < valid` with an explicit zero else.
+  // Preflight the complete AST before emitting TCI/TLEA/MGATHER so an
+  // unsupported loop cannot leave partially emitted Tile IR behind.
+  {
+    const BinaryOperator *LoadStore = Assignment;
+    const Expr *Valid = nullptr;
+    const BinaryOperator *ElseStore = nullptr;
+    bool Conditional = false;
+    if (const auto *If = dyn_cast_or_null<IfStmt>(Body)) {
+      Conditional = true;
+      const auto *Tail = dyn_cast<BinaryOperator>(
+          ignoreElementwiseCasts(If->getCond()));
+      LoadStore = dyn_cast_or_null<BinaryOperator>(GetSingleStmt(If->getThen()));
+      ElseStore = dyn_cast_or_null<BinaryOperator>(GetSingleStmt(If->getElse()));
+      if (Tail && Tail->getOpcode() == BO_LT &&
+          isElementwiseIndex(Tail->getLHS(), Index))
+        Valid = ignoreElementwiseCasts(Tail->getRHS());
+    }
+
+    const auto *Output = LoadStore && LoadStore->getOpcode() == BO_Assign
+        ? getElementwiseSubscript(LoadStore->getLHS()) : nullptr;
+    const auto *SourceAccess = LoadStore && LoadStore->getOpcode() == BO_Assign
+        ? getElementwiseSubscript(LoadStore->getRHS()) : nullptr;
+    const auto *Indices = SourceAccess
+        ? getElementwiseSubscript(SourceAccess->getIdx()) : nullptr;
+    const Expr *OutputBase = Output
+        ? ignoreElementwiseCasts(Output->getBase()) : nullptr;
+    const Expr *IndicesBase = Indices
+        ? ignoreElementwiseCasts(Indices->getBase()) : nullptr;
+    const Expr *SourceBase = SourceAccess
+        ? ignoreElementwiseCasts(SourceAccess->getBase()) : nullptr;
+    const auto *OutputRef = getElementwiseDeclRef(OutputBase);
+    const auto *IndicesRef = getElementwiseDeclRef(IndicesBase);
+    const auto *SourceRef = getElementwiseDeclRef(SourceBase);
+    const auto *SourceParam = SourceRef
+        ? dyn_cast<ParmVarDecl>(SourceRef->getDecl()) : nullptr;
+    QualType SourceType = SourceParam
+        ? SourceParam->getType().getCanonicalType() : QualType();
+    const auto *SourcePointer = SourceType.isNull()
+        ? nullptr : SourceType->getAs<PointerType>();
+    QualType SourceElement = SourcePointer
+        ? SourcePointer->getPointeeType().getCanonicalType() : QualType();
+
+    auto IsExactU32Elements = [&](const Expr *Base) {
+      if (!Base || Base->getType().isVolatileQualified() ||
+          !isElementwiseSimpleCarrier(Base, true))
+        return false;
+      QualType Type = Base->getType().getCanonicalType().getUnqualifiedType();
+      const auto *Vector = Type->getAs<ExtVectorType>();
+      return Vector && Vector->getNumElements() == 32 &&
+             Vector->getElementType() == getContext().UnsignedIntTy;
+    };
+
+    bool ElseLegal = !Conditional;
+    if (Valid && ElseStore && ElseStore->getOpcode() == BO_Assign) {
+      const auto *ElseOutput = getElementwiseSubscript(ElseStore->getLHS());
+      const auto *ElseOutputRef = ElseOutput
+          ? getElementwiseDeclRef(ElseOutput->getBase()) : nullptr;
+      Expr::EvalResult ElseZero;
+      ElseLegal = ElseOutput && ElseOutputRef && OutputRef &&
+          ElseOutputRef->getDecl() == OutputRef->getDecl() &&
+          isElementwiseIndex(ElseOutput->getIdx(), Index) &&
+          ElseStore->getRHS()->EvaluateAsInt(ElseZero, getContext()) &&
+          ElseZero.Val.getInt().isZero();
+    }
+
+    if (BoundValue.Val.getInt().getZExtValue() == 32 && Output &&
+        SourceAccess && Indices && OutputRef && IndicesRef && SourceParam &&
+        OutputRef->getDecl() != IndicesRef->getDecl() &&
+        hasElementwiseU32M32ViewContract(OutputRef) &&
+        hasElementwiseU32M32ViewContract(IndicesRef) &&
+        SourceParam != OutputRef->getDecl() &&
+        SourceParam != IndicesRef->getDecl() &&
+        isElementwiseIndex(Output->getIdx(), Index) &&
+        isElementwiseIndex(Indices->getIdx(), Index) &&
+        IsExactU32Elements(OutputBase) && IsExactU32Elements(IndicesBase) &&
+        SourceType.isRestrictQualified() && !SourceType.isVolatileQualified() &&
+        SourcePointer &&
+        !SourceElement.isVolatileQualified() &&
+        SourceElement.getUnqualifiedType() == getContext().UnsignedIntTy &&
+        (!Conditional ||
+         (Valid && isElementwiseInvariantU32(Valid, Index, getContext()))) &&
+        ElseLegal) {
+      llvm::Value *IndicesValue = EmitLoadOfScalar(EmitLValue(IndicesBase),
+                                                   IndicesBase->getExprLoc());
+      llvm::Type *VectorTy = IndicesValue->getType();
+      llvm::Value *Rows = Builder.getInt64(32);
+      llvm::Value *Cols = Builder.getInt64(1);
+      llvm::Value *U32 = Builder.getInt64(25);
+      llvm::Value *U64 = Builder.getInt64(24);
+      llvm::Value *M32 = Builder.getInt64(29);
+      llvm::Value *Mask = Builder.getInt64((1ULL << 32) - 1);
+      if (Valid) {
+        llvm::Function *TCI = CGM.getIntrinsic(
+            llvm::Intrinsic::linx_experimental_ew_tci, {VectorTy});
+        llvm::Value *Lanes = Builder.CreateCall(
+            TCI, {Rows, Cols, U32, M32, Builder.getInt64(0),
+                  Builder.getInt64(1ULL << 32)},
+            "linx.elementwise.lanes");
+        llvm::Function *Cmp = CGM.getIntrinsic(
+            llvm::Intrinsic::linx_experimental_ew_tcmps_gpr, {VectorTy});
+        llvm::Value *Limit = Builder.CreateIntCast(
+            EmitScalarExpr(Valid), Builder.getInt64Ty(), false);
+        Mask = Builder.CreateCall(
+            Cmp, {Rows, Cols, U32, M32, Lanes, Limit,
+                  Builder.getInt64(2)},
+            "linx.elementwise.gather.mask");
+      }
+      llvm::Function *TLEA = CGM.getIntrinsic(
+          llvm::Intrinsic::linx_experimental_ew_tlea,
+          {llvm::FixedVectorType::get(Builder.getInt64Ty(), 32), VectorTy});
+      llvm::Value *Offsets = Builder.CreateCall(
+          TLEA, {Rows, Cols, U32, M32, IndicesValue, Builder.getInt64(32)},
+          "linx.elementwise.byte.offsets");
+      llvm::Value *Base = EmitScalarExpr(SourceBase);
+      llvm::Function *Gather = CGM.getIntrinsic(
+          llvm::Intrinsic::linx_experimental_ew_mgather_gpr_masked,
+          {VectorTy, Offsets->getType()});
+      llvm::Value *Loaded = Builder.CreateCall(
+          Gather, {Rows, Cols, U32, Builder.getInt64(0), M32, U64, Base,
+                   Offsets, Mask, Builder.getInt64(0), Builder.getInt64(0),
+                   Builder.getInt64(1)},
+          "linx.elementwise.gather");
+      EmitStoreOfScalar(Loaded, EmitLValue(OutputBase));
+      CurFn->addFnAttr("linx.elementwise.lanes", "32");
+      return true;
+    }
+  }
 
   if (const auto *If = dyn_cast_or_null<IfStmt>(Body)) {
     // Native conditional U32 histogram update:

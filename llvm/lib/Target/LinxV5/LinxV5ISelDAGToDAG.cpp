@@ -544,6 +544,22 @@ static SDNode *selectElementwiseMGatherAddMasked(
                              Node->getValueType(1), Ops);
 }
 
+static SDNode *selectElementwiseMGatherGPRMasked(
+    SDLoc &DL, SelectionDAG *DAG, SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  for (unsigned Index = 1; Index <= 8; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(10)); // byte offsets
+  Ops.push_back(Node->getOperand(11)); // mask low
+  Ops.push_back(Node->getOperand(12)); // mask high
+  Ops.push_back(Node->getOperand(9));  // base pointer
+  Ops.push_back(Node->getOperand(13)); // PredInv
+  Ops.push_back(Node->getOperand(14)); // Zero
+  Ops.push_back(Node->getOperand(0));  // chain
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
+                             Node->getValueType(1), Ops);
+}
+
 static SDNode *selectElementwiseMGatherMasked(SDLoc &DL, SelectionDAG *DAG,
                                               SDNode *Node, unsigned Opc) {
   SmallVector<SDValue> Ops;
@@ -1332,6 +1348,12 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
     ReplaceNode(Node, selectElementwiseMGatherMasked(
                           DL, CurDAG, Node,
                           LinxV5::PseudoMGATHER_MASK_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_MGATHER_GPR_MASKED: {
+    ReplaceNode(Node, selectElementwiseMGatherGPRMasked(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMGATHER_GPR_Masked_SizeI));
     return;
   }
   case LinxV5ISD::EW_MSCATTER_MASKED: {
