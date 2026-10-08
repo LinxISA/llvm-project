@@ -1,7 +1,7 @@
 // RUN: %clang++ --target=linx64v5 -mlxbc -O1 -Xclang -disable-llvm-passes -emit-llvm -S -o - %s | opt -mtriple=linx64v5 -passes='mem2reg,loop-simplify,loop-rotate,instcombine,lcssa,linx-v5-element-predication,verify' -verify-each -S | FileCheck %s
 // The pragma takes ordinary C++ through Clang CFG and standard LLVM passes.
 // Target Tile legalization is intentionally not part of this P2 IR test.
-void conditional(unsigned *__restrict output,
+extern "C" void conditional(unsigned *__restrict output,
                  const unsigned *__restrict input) {
 #pragma pto element for
   for (unsigned element = 0; element < 33; ++element) {

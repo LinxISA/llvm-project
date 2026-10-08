@@ -5,6 +5,7 @@ extern void three_way_phi(const int32_t *, int32_t *);
 extern void tail_33(const uint32_t *, uint32_t *, uint64_t, _Bool, uint32_t);
 extern void tail_129(const uint32_t *, uint32_t *, uint64_t, _Bool, uint32_t);
 extern void two_regions(int32_t *);
+extern void conditional(uint32_t *, const uint32_t *);
 
 int main(void) {
   int32_t values[4] = {-2, 0, 4, 25};
@@ -47,6 +48,27 @@ int main(void) {
   for (unsigned i = 0; i < 4; ++i)
     if (values[i] != expected_final[i])
       return 5;
+  for (unsigned i = 0; i < 129; ++i) {
+    input[i] = i % 7 == 0 ? 0 : i + 1;
+    output[i] = 0xdeadbeef;
+  }
+  // This function comes from Clang compiling the checked-in C++ pragma test,
+  // not the handcrafted IR fixtures above.
+  conditional(output, input);
+  for (unsigned i = 0; i < 129; ++i) {
+    uint32_t expected = 0xdeadbeef;
+    if (i < 33) {
+      uint32_t value = input[i];
+      if (value & 1)
+        expected = value + 3;
+      else if (value == 0)
+        expected = 7;
+      else
+        expected = 100 / value;
+    }
+    if (output[i] != expected)
+      return 6;
+  }
   puts("element predication host semantics: PASS");
   return 0;
 }

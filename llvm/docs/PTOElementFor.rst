@@ -91,5 +91,9 @@ ordinary C++ expressions.  A separate host semantic fixture can be run with::
 Only the disposable host-test copy removes the checked target sentinel and
 expands VP using LLVM's existing expansion pass.  Its independent scalar
 reference covers three-way PHI, 33/129 elements, inactive null addresses and
-zero divisors, and two successive regions.  This is generic IR semantic
+zero divisors, and two successive regions.  The runner also compiles the real
+C++ pragma fixture through Clang, normalizes its CFG with standard LLVM passes,
+and executes the widened conditional kernel against an independent reference.
+``--target-clang`` can override the ``clang++`` alongside the selected ``opt``.
+This is generic IR semantic
 evidence, not a PTO ELF, TileOp API, gfrun or gfsim validation claim.
