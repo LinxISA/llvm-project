@@ -28,6 +28,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Assumptions.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InlineAsm.h"
@@ -1652,6 +1653,34 @@ bool CodeGenFunction::EmitLinxElementwiseForStmt(const ForStmt &S) {
               TCI, {Rows, Cols, U32, M32, Builder.getInt64(1),
                     Builder.getInt64(0)}, "linx.elementwise.atomic.ones");
           llvm::Value *Base = EmitScalarExpr(HistAccess->getBase());
+          llvm::Value *OutputPointer =
+              EmitLValue(OutputBase).getAddress(*this).getPointer();
+          const auto *OutputRef = getElementwiseDeclRef(OutputBase);
+          if (OutputRef) {
+            const auto *OutputVar = dyn_cast<VarDecl>(OutputRef->getDecl());
+            const Expr *Initializer = OutputVar ? OutputVar->getInit() : nullptr;
+            const auto *ViewCall = dyn_cast_or_null<CallExpr>(
+                Initializer ? Initializer->IgnoreParenImpCasts() : nullptr);
+            const auto *Carrier = ViewCall && ViewCall->getNumArgs() == 1
+                                      ? dyn_cast<DeclRefExpr>(
+                                            ViewCall->getArg(0)
+                                                ->IgnoreParenImpCasts())
+                                      : nullptr;
+            if (Carrier)
+              OutputPointer =
+                  EmitLValue(Carrier).getAddress(*this).getPointer();
+          }
+          for (auto It = CurFn->begin(), E = CurFn->end(); It != E; ++It) {
+            for (auto InstIt = It->begin(); InstIt != It->end();) {
+              llvm::Instruction *Inst = &*InstIt++;
+              auto *Store = dyn_cast<llvm::StoreInst>(Inst);
+              if (!Store || Store->getPointerOperand() != OutputPointer)
+                continue;
+              auto *Zero = dyn_cast<llvm::Constant>(Store->getValueOperand());
+              if (Zero && Zero->isNullValue())
+                Store->eraseFromParent();
+            }
+          }
           llvm::Function *Gather = CGM.getIntrinsic(
               llvm::Intrinsic::linx_experimental_ew_mgather_add_masked,
               {VectorTy, Offsets->getType(), VectorTy});
