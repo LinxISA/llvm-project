@@ -154,3 +154,20 @@ models' raw low32 result helpers do not redefine source C++ signed overflow.
 F32 requires a separate exact TEXPANDS and native TNEG closure rather than
 reinterpret casts or `0.0 - x`. No application/configuration entry closes merely
 because a typed foundation example passes.
+
+## P0 history reconciliation (2026-10-08)
+
+The local `codex/pto-element-region-compiler` branch merged PR117 head
+`7be28644a0c937d05723a12127b73875e415311f` with a normal merge commit. The
+common ancestor was `34ade53ebfe81975a91512568e337bacb91ad27d`; the local
+pre-merge head was `9b43f05430eb757c1e14d6fe659fcfefee7a0206`.
+
+| Source | Kept | Reconciliation |
+| --- | --- | --- |
+| Local `9b43f054` | ordinary `EmitForStmt` region entry, typed view descriptors, S32 Tile SSA and diagnostics | authoritative for frontend entry and typed expression conflicts |
+| PR117 `7be28644` | `7a120731` multi-definition Tile CFG join fix, exceptional-control-flow rejection, block-name-independent tests and gather test hardening | merged without restoring `EmitLinxElementwiseForStmt` or its AST/body recognizers |
+| `dev-llvm15_56` `5c16f442` | comparison only | not merged; its only post-PR117 source change is the separate Local TMOV binder change in `LinxV5EmitHeader.cpp` |
+
+The reconciled tree must continue to satisfy both negative conditions:
+`CGStmt.cpp` contains no `EmitLinxElementwiseForStmt`, and marked loops always
+enter ordinary Clang CFG emission before the required LLVM region pass.

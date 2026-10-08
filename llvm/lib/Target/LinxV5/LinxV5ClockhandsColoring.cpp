@@ -534,6 +534,13 @@ bool LinxV5ClockhandsColoring::assignAccrosChain(
           continue;
         if (OriRCs.count(MRI->getRegClass(Reg)) == 0)
           continue;
+        // RegisterCoalescer may turn a Tile value crossing a CFG join into a
+        // non-SSA virtual register with multiple definitions. Clockhands
+        // assignment relies on a single defining value; leave such registers
+        // to the standard register allocator instead of replacing their
+        // register class here.
+        if (!MRI->hasOneDef(Reg))
+          continue;
         LiveInterval &LI = LIS->getInterval(Reg);
         if (LI.size() <= 1)
           continue;

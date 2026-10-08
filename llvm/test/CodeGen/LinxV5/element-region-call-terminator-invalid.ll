@@ -37,7 +37,7 @@ exit:
   ret <32 x i32> %published
 }
 
-; CHECK: PTO element region: exceptional and indirect call terminators are unsupported
+; CHECK: PTO element region: exceptional control flow is not supported in PTO element regions
 
 !0 = distinct !{}
 !1 = distinct !{!1, !2}

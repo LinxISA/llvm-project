@@ -36,7 +36,8 @@ void equivalent_gather(elements *output_pointer,
 // IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
 // IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
 // IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
-// IR: call void @llvm.linx.blk.tstore.v32i32{{.*}}i64 24,
+// IR-NOT: zeroinitializer
+// IR: store <32 x i32> {{%[^,]+}}, ptr
 
 // OBJ-LABEL: <{{.*}}equivalent_gather
 // OBJ: BSTART.TEPL TCMPS, U32
@@ -44,6 +45,6 @@ void equivalent_gather(elements *output_pointer,
 // OBJ: B.DATR CUBE_M32
 // OBJ: BSTART.TLSU MGATHER, U32
 // OBJ: B.DATR CUBE_M32
-// OBJ: BSTART.TLSU TSTORE, U32
-// OBJ: B.DATR M322ND
+// OBJ: BSTART.TLSU TSTORE, S32
+// OBJ: B.DATR NORM.normal, Null
 
