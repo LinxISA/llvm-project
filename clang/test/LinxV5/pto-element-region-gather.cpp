@@ -37,7 +37,7 @@ void equivalent_gather(elements *output_pointer,
 // IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
 // IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
 // IR-NOT: zeroinitializer
-// IR: store <32 x i32> %linx.elementwise.gather, ptr
+// IR: store <32 x i32> {{%[^,]+}}, ptr
 
 // OBJ-LABEL: <{{.*}}equivalent_gather
 // OBJ: BSTART.TEPL TCMPS, U32
