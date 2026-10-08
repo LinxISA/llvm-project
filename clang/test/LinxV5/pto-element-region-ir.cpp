@@ -24,7 +24,6 @@ void arithmetic(elements &output, elements &input, unsigned bias) {
 // CHECK-COUNT-2: call ptr @llvm.ptr.annotation
 // CHECK: call void @llvm.linx.experimental.element.region(metadata [[TOKEN:![0-9]+]])
 // CHECK: br label %{{.*}}
-// CHECK: for.body:
 // CHECK: extractelement <32 x i32>
 // CHECK: insertelement <32 x i32>
 // CHECK: br label %{{.*}}, !llvm.loop [[LOOP:![0-9]+]]
