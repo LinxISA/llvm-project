@@ -51,4 +51,4 @@ void rejected_shared_view(elements *sink, unsigned *scalar,
 #endif
 
 // POINTER: PTO element region: logical view pointer must remain exact
-// OUTSIDE: PTO element region: view access is not an exact <32 x i32> carrier
+// OUTSIDE: PTO element region: required region lowering did not complete
