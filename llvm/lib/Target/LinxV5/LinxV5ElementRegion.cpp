@@ -668,6 +668,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   SmallVector<LoadInst *, 2> ScalarLoads;
   for (BasicBlock *BB : L.blocks()) {
     for (Instruction &I : *BB) {
+      if (isa<InvokeInst>(I) || isa<CallBrInst>(I) ||
+          isa<LandingPadInst>(I) || isa<ResumeInst>(I))
+        return diagnose(F, &I,
+                        "exceptional control flow is not supported in PTO "
+                        "element regions");
       if (I.isTerminator() || isa<PHINode>(I) || isa<DbgInfoIntrinsic>(I))
         continue;
       bool IsVolatileOrAtomic = false;

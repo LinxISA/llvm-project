@@ -73,12 +73,13 @@ void wrong_view_marker(element_part &out_part, element_part &index_part,
 #endif
 
 #ifdef NO_RESTRICT
+// expected-no-diagnostics
 void no_restrict(element_part &out_part, element_part &index_part,
                  const unsigned int *source) {
   auto &out = element_view(out_part);
   auto &indices = element_view(index_part);
 #pragma pto element for
-  for (unsigned int e = 0; e < 32; ++e) // expected-error {{unsupported Linx element-wise loop form}}
+  for (unsigned int e = 0; e < 32; ++e)
     out[e] = source[indices[e]];
 }
 #endif
