@@ -171,3 +171,33 @@ pre-merge head was `9b43f05430eb757c1e14d6fe659fcfefee7a0206`.
 The reconciled tree must continue to satisfy both negative conditions:
 `CGStmt.cpp` contains no `EmitLinxElementwiseForStmt`, and marked loops always
 enter ordinary Clang CFG emission before the required LLVM region pass.
+
+## P1 frontend contract checkpoint (2026-10-08)
+
+Commit `9555b81055a47` records the source-level ordering and control boundary
+without adding an expression or kernel matcher. The user confirmed that
+different logical elements are unordered, while operations within one element
+retain source order. Clang emits two queryable loop properties:
+
+```text
+llvm.loop.linx.pto.element.inter_element_order = "unordered"
+llvm.loop.linx.pto.element.intra_element_order = "source"
+```
+
+The marked loop remains an ordinary `EmitForStmt` CFG with the existing region
+identity and sentinel. Sema rejects an outer-loop `break`, function `return`,
+and `goto` or labels that can cross the region boundary. It accepts outer-loop
+`continue`, nested loop/switch `break`, nested `continue`, and does not inspect
+nested lambda bodies as region control flow.
+
+Focused evidence:
+
+- `pto-element-control-flow.cpp` validates the accepted and rejected boundary.
+- `pto-element-order-metadata.cpp` checks the same raw metadata at O0, O2 and
+  O3 with LLVM optimization passes disabled.
+- `pto-element-for-invalid.c` and `pto-element-region-ir.cpp` remain passing.
+- `ninja -C build-tlea clang llc opt FileCheck -j8` passes with the P1 commit.
+
+This checkpoint proves frontend CFG and contract preservation. It does not
+claim complete O0 Tile lowering: typed Tile spill/reload remains a separate
+backend limitation.
