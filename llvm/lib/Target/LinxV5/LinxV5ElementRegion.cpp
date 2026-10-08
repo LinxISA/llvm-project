@@ -46,6 +46,24 @@ namespace {
 constexpr StringLiteral ViewPrefix = "pto.element.view:v1;";
 constexpr StringLiteral U32M32View =
     "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral S32M32View =
+    "pto.element.view:v1;dtype=s32;rows=32;cols=1;layout=cube_m32";
+
+struct ElementProfile {
+  Type *ScalarTy = nullptr;
+  FixedVectorType *VectorTy = nullptr;
+  uint64_t DataType = 25;
+  bool isSigned() const { return DataType == 17; }
+};
+
+static Optional<ElementProfile> integerProfile(uint64_t DataType,
+                                                LLVMContext &Context) {
+  if (DataType != 25 && DataType != 17)
+    return None;
+  Type *Scalar = Type::getInt32Ty(Context);
+  return ElementProfile{Scalar, FixedVectorType::get(Scalar, 32), DataType};
+}
+
 constexpr StringLiteral RegionLoopMD = "llvm.loop.linx.pto.element.region";
 constexpr StringLiteral ScalarizedLaneZeroMD =
     "linx.pto.element.scalarized_lane_zero";
@@ -148,6 +166,7 @@ static bool prepareViews(Function &F) {
     int64_t ByteOffset;
     uint64_t StorageID;
     uint64_t ViewID;
+    ElementProfile Profile;
     SmallVector<Instruction *, 8> Accesses;
   };
 
@@ -162,7 +181,11 @@ static bool prepareViews(Function &F) {
   for (CallInst *Annotation : Annotations) {
     StringRef Text;
     (void)getAnnotationString(*Annotation, Text);
-    if (Text != U32M32View)
+    Optional<ElementProfile> Profile =
+        Text == U32M32View ? integerProfile(25, F.getContext())
+                          : Text == S32M32View ? integerProfile(17, F.getContext())
+                                              : None;
+    if (!Profile)
       diagnose(F, Annotation,
                Twine("unsupported logical view contract '") + Text + "'");
 
@@ -180,7 +203,7 @@ static bool prepareViews(Function &F) {
       StorageID = NextStorageID++;
 
     PreparedView Plan{Annotation, AnnotatedPointer, Storage, ByteOffset,
-                      StorageID, NextViewID++, {}};
+                      StorageID, NextViewID++, *Profile, {}};
     SmallPtrSet<Value *, 16> Visited;
     Instruction *InvalidUse = nullptr;
     if (!collectPointerAccesses(Annotation, Plan.Accesses, Visited,
@@ -252,11 +275,10 @@ static bool prepareViews(Function &F) {
         CarrierType = cast<StoreInst>(Access)->getValueOperand()->getType();
       auto *ScalarLoad = dyn_cast<LoadInst>(Access);
       bool IsScalarizedLaneZeroLoad =
-          ScalarLoad && CarrierType->isIntegerTy(32) &&
+          Plan.Profile.DataType == 25 && ScalarLoad && CarrierType->isIntegerTy(32) &&
           !ScalarLoad->isVolatile() && !ScalarLoad->isAtomic();
       if (!IsScalarizedLaneZeroLoad &&
-          CarrierType !=
-              FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32)) {
+          CarrierType != Plan.Profile.VectorTy) {
         std::string Detail;
         raw_string_ostream OS(Detail);
         CarrierType->print(OS);
@@ -290,7 +312,7 @@ static bool prepareViews(Function &F) {
       Args.push_back(ConstantInt::get(I64, Plan.StorageID));
       Args.push_back(ConstantInt::getSigned(I64, Plan.ByteOffset));
       Args.push_back(ConstantInt::get(I64, 128));
-      Args.push_back(ConstantInt::get(I64, 25));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.DataType));
       Args.push_back(ConstantInt::get(I64, 32));
       Args.push_back(ConstantInt::get(I64, 1));
       Args.push_back(ConstantInt::get(I64, 29));
@@ -355,6 +377,7 @@ struct ViewDescriptor {
   int64_t Offset = 0;
   uint64_t Range = 0;
   bool ScalarizedLaneZero = false;
+  ElementProfile Profile;
 };
 
 static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
@@ -369,13 +392,16 @@ static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
       return None;
     Fields.push_back(C->getSExtValue());
   }
-  if (Fields[3] != 128 || Fields[4] != 25 || Fields[5] != 32 ||
-      Fields[6] != 1 || Fields[7] != 29)
+  auto Profile = integerProfile(Fields[4], V->getContext());
+  if (!Profile || Fields[3] != 128 || Fields[5] != 32 ||
+      Fields[6] != 1 || Fields[7] != 29 ||
+      V->getType() != Profile->VectorTy)
     return None;
   return ViewDescriptor{Call, static_cast<uint64_t>(Fields[0]),
                         static_cast<uint64_t>(Fields[1]), Fields[2],
                         static_cast<uint64_t>(Fields[3]),
-                        Call->getMetadata(ScalarizedLaneZeroMD) != nullptr};
+                        Call->getMetadata(ScalarizedLaneZeroMD) != nullptr,
+                        *Profile};
 }
 
 static MDNode *getElementRegionToken(const Loop &L) {
@@ -530,6 +556,7 @@ struct RegionPlan {
   uint64_t OutputStorageID = 0;
   int64_t OutputOffset = 0;
   uint64_t OutputRange = 0;
+  ElementProfile Profile;
   bool IsZeroElseGather = false;
   CallInst *GatherIndexView = nullptr;
   Value *GatherBase = nullptr;
@@ -710,7 +737,7 @@ static bool collectAtomicPredicate(Function &F, Value *Condition,
     }
     auto KeyView =
         Extract ? getViewDescriptor(Extract->getVectorOperand()) : None;
-    if (Extract && KeyView &&
+    if (Extract && KeyView && KeyView->Profile.DataType == 25 &&
         sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
         Selected->getType()->isIntegerTy(32) &&
         isInvariantAtPreheader(Selected, *Plan.L, DT)) {
@@ -951,6 +978,8 @@ static bool validateTileExpression(Value *V, const RegionPlan &Plan,
   if (isa<CastInst>(V))
     return Fail();
   if (auto Descriptor = getViewDescriptor(V)) {
+    if (Descriptor->Profile.DataType != Plan.Profile.DataType)
+      return Fail();
     if (Descriptor->ScalarizedLaneZero &&
         (!Plan.IsRelaxedAtomicAdd ||
          Descriptor->Marker != Plan.AtomicIndexView))
@@ -997,20 +1026,27 @@ static bool validateTileExpression(Value *V, const RegionPlan &Plan,
     case Instruction::Add:
     case Instruction::Sub:
     case Instruction::Mul:
+      break;
     case Instruction::UDiv:
     case Instruction::URem:
+      break;
+    case Instruction::SDiv:
+    case Instruction::SRem:
+    case Instruction::AShr:
+      break;
     case Instruction::And:
     case Instruction::Or:
     case Instruction::Xor:
     case Instruction::Shl:
     case Instruction::LShr:
-      return validateTileExpression(Binary->getOperand(0), Plan, SE, DT,
-                                    Visited, Inputs, Rejected) &&
-             validateTileExpression(Binary->getOperand(1), Plan, SE, DT,
-                                    Visited, Inputs, Rejected);
+      break;
     default:
       return Fail();
     }
+    return validateTileExpression(Binary->getOperand(0), Plan, SE, DT,
+                                  Visited, Inputs, Rejected) &&
+           validateTileExpression(Binary->getOperand(1), Plan, SE, DT,
+                                  Visited, Inputs, Rejected);
   }
   if (auto *I = dyn_cast<Instruction>(V)) {
     if (!Plan.L->contains(I) && I->getType()->isIntegerTy(32) &&
@@ -1209,6 +1245,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
                     "publication lacks exact U32/M32 view metadata");
   Plan.Publication =
       dyn_cast<InsertElementInst>(Plan.OutputView->getArgOperand(0));
+  Plan.Profile = Descriptor->Profile;
+  if ((!AtomicAdds.empty() || !ScalarLoads.empty()) &&
+      Plan.Profile.DataType != 25)
+    return diagnose(F, Plan.OutputView,
+                    "gather and atomic regions currently require U32 output views");
   Plan.OutputStorageID = Descriptor->StorageID;
   Plan.OutputOffset = Descriptor->Offset;
   Plan.OutputRange = Descriptor->Range;
@@ -1321,6 +1362,7 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
           ClobberedInLoop = L.contains(Def->getBlock());
       }
       if (HasZero && Loaded && Extract && IndexView &&
+          IndexView->Profile.DataType == 25 &&
           sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
           Valid && Valid->getType()->isIntegerTy(32) &&
           L.isLoopInvariant(Valid) && PredicateReady && LoadArm && MergeArm &&
@@ -1456,8 +1498,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   if (!ExpressionValid) {
     std::string Detail;
     raw_string_ostream OS(Detail);
-    if (Rejected)
+    if (Rejected) {
       Rejected->printAsOperand(OS, /*PrintType=*/true);
+      if (auto *RejectedI = dyn_cast<Instruction>(Rejected))
+        OS << " (" << RejectedI->getOpcodeName() << ")";
+    }
     return diagnose(F, Plan.Publication ? cast<Instruction>(Plan.Publication)
                                         : cast<Instruction>(Plan.OutputView),
                     Twine("unsupported scalar expression in P1a arithmetic region: ") +
@@ -1499,10 +1544,12 @@ class TileExpressionBuilder {
 
   Value *splat(Value *V) {
     if (!V->getType()->isIntegerTy(64))
-      V = Builder.CreateZExtOrTrunc(V, Builder.getInt64Ty());
+      V = Plan.Profile.isSigned()
+              ? Builder.CreateSExtOrTrunc(V, Builder.getInt64Ty())
+              : Builder.CreateZExtOrTrunc(V, Builder.getInt64Ty());
     return Builder.CreateCall(TCI,
                               {Builder.getInt64(32), Builder.getInt64(1),
-                               Builder.getInt64(25), Builder.getInt64(29), V,
+                               Builder.getInt64(Plan.Profile.DataType), Builder.getInt64(29), V,
                                Builder.getInt64(0)},
                               "pto.element.splat");
   }
@@ -1512,7 +1559,7 @@ public:
                         DominatorTree &DT)
       : Plan(Plan), SE(SE), DT(DT),
         Builder(Plan.L->getLoopPreheader()->getTerminator()) {
-    Type *VectorTy = FixedVectorType::get(Builder.getInt32Ty(), 32);
+    Type *VectorTy = Plan.Profile.VectorTy;
     TCI = Intrinsic::getDeclaration(
         F.getParent(), Intrinsic::linx_experimental_ew_tci, {VectorTy});
     TBinary = Intrinsic::getDeclaration(
@@ -1529,13 +1576,12 @@ public:
     if (V == Plan.IV) {
       Result = Builder.CreateCall(TCI,
                                   {Builder.getInt64(32), Builder.getInt64(1),
-                                   Builder.getInt64(25), Builder.getInt64(29),
+                                   Builder.getInt64(Plan.Profile.DataType), Builder.getInt64(29),
                                    Builder.getInt64(0),
                                    Builder.getInt64(1ULL << 32)},
                                   "pto.element.index");
     } else if (auto *C = dyn_cast<ConstantInt>(V)) {
-      Result = splat(ConstantInt::get(Builder.getInt64Ty(),
-                                      C->getValue().zextOrTrunc(64)));
+      Result = splat(C);
     } else if (auto Descriptor = getViewDescriptor(V)) {
       Value *Carrier = Descriptor->Marker->getArgOperand(0);
       if (auto *Load = dyn_cast<LoadInst>(Carrier)) {
@@ -1543,7 +1589,7 @@ public:
         Result = LoadBuilder.CreateCall(
             TLoad,
             {LoadBuilder.getInt64(1), LoadBuilder.getInt64(32),
-             LoadBuilder.getInt64(1), LoadBuilder.getInt64(25),
+             LoadBuilder.getInt64(1), LoadBuilder.getInt64(Plan.Profile.DataType),
              LoadBuilder.getInt64(0), LoadBuilder.getInt64(21),
              Load->getPointerOperand(), LoadBuilder.getInt64(4)},
             "pto.element.carrier");
@@ -1576,9 +1622,11 @@ public:
         Opcode = 2;
         break;
       case Instruction::UDiv:
+      case Instruction::SDiv:
         Opcode = 3;
         break;
       case Instruction::URem:
+      case Instruction::SRem:
         Opcode = 4;
         break;
       case Instruction::And:
@@ -1594,6 +1642,7 @@ public:
         Opcode = 8;
         break;
       case Instruction::LShr:
+      case Instruction::AShr:
         Opcode = 9;
         break;
       default:
@@ -1603,11 +1652,40 @@ public:
       Value *RHS = lower(Binary->getOperand(1));
       if (!LHS || !RHS)
         return nullptr;
-      Result = Builder.CreateCall(TBinary,
-                                  {Builder.getInt64(32), Builder.getInt64(1),
-                                   Builder.getInt64(25), Builder.getInt64(29),
-                                   Builder.getInt64(Opcode), LHS, RHS},
-                                  "pto.element.value");
+      uint64_t OperationDataType = Plan.Profile.DataType;
+      switch (Binary->getOpcode()) {
+      case Instruction::SDiv:
+      case Instruction::SRem:
+      case Instruction::AShr:
+        OperationDataType = 17;
+        break;
+      case Instruction::UDiv:
+      case Instruction::URem:
+      case Instruction::LShr:
+        OperationDataType = 25;
+        break;
+      default:
+        break;
+      }
+      // LLVM may legally change ashr to lshr when later uses discard sign
+      // bits. The IR opcode owns arithmetic signedness; the view owns storage.
+      auto EmitBinary = [&](unsigned Operation, Value *Left, Value *Right) {
+        return Builder.CreateCall(
+            TBinary,
+            {Builder.getInt64(32), Builder.getInt64(1),
+             Builder.getInt64(OperationDataType), Builder.getInt64(29),
+             Builder.getInt64(Operation), Left, Right},
+            "pto.element.value");
+      };
+      if (Binary->getOpcode() == Instruction::SRem) {
+        // C++/LLVM srem truncates toward zero; PTO TREM has divisor-sign
+        // floor modulo. Preserve source remainder through the truncating TDIV.
+        Value *Quotient = EmitBinary(3, LHS, RHS);
+        Value *Product = EmitBinary(2, Quotient, RHS);
+        Result = EmitBinary(1, LHS, Product);
+      } else {
+        Result = EmitBinary(Opcode, LHS, RHS);
+      }
     } else if (auto *I = dyn_cast<Instruction>(V)) {
       if (!Plan.L->contains(I) && DT.dominates(I, Builder.GetInsertBlock()) &&
           I->getType()->isIntegerTy(32))
@@ -1831,7 +1909,7 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
       StoreBuilder.CreateCall(
           TStore,
           {StoreBuilder.getInt64(1), StoreBuilder.getInt64(32),
-           StoreBuilder.getInt64(1), StoreBuilder.getInt64(25),
+           StoreBuilder.getInt64(1), StoreBuilder.getInt64(Plan.Profile.DataType),
            StoreBuilder.getInt64(24), Store->getPointerOperand(),
            StoreBuilder.getInt64(4), Result});
       Store->eraseFromParent();
@@ -1844,7 +1922,7 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
       Builder.CreateCall(
           TStore,
           {Builder.getInt64(1), Builder.getInt64(32), Builder.getInt64(1),
-           Builder.getInt64(25), Builder.getInt64(24),
+           Builder.getInt64(Plan.Profile.DataType), Builder.getInt64(24),
            Plan.OutputStore->getPointerOperand(), Builder.getInt64(4), Result});
     }
     Plan.Sentinel->eraseFromParent();

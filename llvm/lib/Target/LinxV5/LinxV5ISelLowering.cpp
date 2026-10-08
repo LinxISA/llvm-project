@@ -1564,11 +1564,13 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
   EVT ResultVT = Op.getValueType();
   EVT LHSVT = Op.getOperand(7).getValueType();
   EVT RHSVT = Op.getOperand(8).getValueType();
-  if (Rows != 32 || Cols != 1 || DataType != LinxV5Op::DataType::U32 ||
+  const bool IntegerProfile = DataType == LinxV5Op::DataType::U32 ||
+                              DataType == LinxV5Op::DataType::S32;
+  if (Rows != 32 || Cols != 1 || !IntegerProfile ||
       Layout != 29 || ResultVT != MVT::v32i32 || LHSVT != ResultVT ||
       RHSVT != ResultVT)
     report_fatal_error(
-        "element binary currently requires U32 CUBE_M32 <32 x i32> Tiles");
+        "element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles");
 
   static constexpr uint64_t PTOSelectors[] = {
       LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,

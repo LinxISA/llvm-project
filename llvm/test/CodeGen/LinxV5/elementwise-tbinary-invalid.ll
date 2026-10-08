@@ -6,9 +6,9 @@
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/dynamic-opcode.ll 2>&1 | FileCheck %s --check-prefix=DYNAMIC
 
 ; OPCODE: invalid LinxV5 element binary opcode operand
-; LAYOUT: element binary currently requires U32 CUBE_M32 <32 x i32> Tiles
-; SHAPE: element binary currently requires U32 CUBE_M32 <32 x i32> Tiles
-; DTYPE: element binary currently requires U32 CUBE_M32 <32 x i32> Tiles
+; LAYOUT: element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles
+; SHAPE: element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles
+; DTYPE: element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles
 ; DYNAMIC: LinxV5 element binary opcode operand must be a compile-time constant
 
 ;--- bad-opcode.ll
@@ -55,7 +55,7 @@ define void @bad_dtype(ptr %ap, ptr %bp, ptr %out) {
   %a = load <32 x i32>, ptr %ap
   %b = load <32 x i32>, ptr %bp
   %r = call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32(
-      i64 32, i64 1, i64 17, i64 29, i64 0,
+      i64 32, i64 1, i64 18, i64 29, i64 0,
       <32 x i32> %a, <32 x i32> %b)
   store <32 x i32> %r, ptr %out
   ret void

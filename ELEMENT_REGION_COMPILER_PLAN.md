@@ -130,3 +130,27 @@ case passes actual installed API compile/IR/disassembly/gfrun, and the same ELF 
 shape repair (queue1592/1592,A3=0). Fresh clean-head full harness is pending.
 Default model regression before lifetime repair
 is899/900; no full-completion claim is made.
+
+## Typed B32 continuation after checkpoint 697f17
+
+The next delivery extends the same region compiler to a true S32 profile before
+adding F32. View dtype remains explicit throughout preparation, expression
+validation, Tile SSA and ND2M32/M322ND transport. U32 gather/atomic eligibility
+must explicitly require U32 views; accepting another arithmetic dtype must not
+silently enable its memory or predicate profile.
+
+S32 scalar splats reuse typed TCI. Add/subtract/multiply and bitwise operations
+retain their LLVM bit semantics; signed division uses TDIV and arithmetic right
+shift uses TSHR under S32. Source C++ `srem` lowers to TDIV, TMUL, TSUB: PTO TREM
+has divisor-sign floor modulo, so it cannot implement source `%` directly.
+Mixed view profiles and unsupported casts/CFG remain diagnosed. Native backend
+validation must match dtype, v32i32, 32x1 geometry and M32 layout explicitly.
+
+Acceptance includes source/IR/object tests, negative dtype/profile combinations,
+a complete unchanged-size S32 TileOp/element/TileOp benchmark with independent
+signed division/remainder/shift goldens, and same-ELF gfrun/gfsim checks. Model
+numeric corrections are separately reviewed against owning ASL at cab1978;
+models' raw low32 result helpers do not redefine source C++ signed overflow.
+F32 requires a separate exact TEXPANDS and native TNEG closure rather than
+reinterpret casts or `0.0 - x`. No application/configuration entry closes merely
+because a typed foundation example passes.
