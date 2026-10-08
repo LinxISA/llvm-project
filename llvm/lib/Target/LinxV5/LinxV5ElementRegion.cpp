@@ -541,6 +541,286 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
   return Small ? Optional<uint64_t>(Small) : None;
 }
 
+// This stage widens ordinary scalar CFG, independently of the transitional
+// Tile publication/gather/atomic profiles below. All legality is checked before
+// mutation. It deliberately leaves the mandatory sentinel for target lowering.
+struct PredicatedRegion {
+  Loop *L;
+  PHINode *Induction;
+  unsigned Count;
+  SmallVector<BasicBlock *, 16> Order;
+};
+
+static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
+                            DominatorTree &DT, AAResults &AA,
+                            PredicatedRegion &Plan) {
+  auto Fail = [&](const Instruction *I, const Twine &Why) {
+    return diagnose(F, I, Twine("predication: ") + Why);
+  };
+  if (!L.isInnermost() || !L.getLoopPreheader() || !L.getLoopLatch() ||
+      !L.getExitBlock() || L.getExitingBlock() != L.getLoopLatch() ||
+      L.getExitBlock()->getSinglePredecessor() != L.getLoopLatch())
+    return Fail(L.getHeader()->getTerminator(),
+                "requires an innermost single-latch loop without early exits");
+  auto *Sentinel = findRegionSentinel(F, getElementRegionToken(L));
+  if (!Sentinel || !DT.dominates(Sentinel, L.getHeader()))
+    return Fail(L.getHeader()->getTerminator(),
+                "requires a dominating mandatory region sentinel");
+  Plan.L = &L;
+  Plan.Induction = findUnitInduction(L, SE);
+  Plan.Count = SE.getSmallConstantTripCount(&L);
+  // This is an implementation bound for the initial explicit IR stage, not an
+  // ISA shape restriction. Never substitute the old fixed 32-element profile.
+  if (!Plan.Induction || !Plan.Count || Plan.Count > 4096)
+    return Fail(L.getHeader()->getTerminator(),
+                "requires a proven 1..4096 trip count and zero-based unit induction");
+  for (PHINode &Phi : L.getHeader()->phis())
+    if (&Phi != Plan.Induction)
+      return Fail(&Phi, "loop-carried recurrences are not yet supported");
+
+  // Kahn order over one iteration, excluding only the proven latch backedge.
+  DenseMap<BasicBlock *, unsigned> Pending;
+  for (BasicBlock *BB : L.blocks()) {
+    if (!isa<BranchInst>(BB->getTerminator()))
+      return Fail(BB->getTerminator(), "unsupported control-flow terminator");
+    unsigned Count = 0;
+    for (BasicBlock *Pred : predecessors(BB))
+      if (L.contains(Pred) &&
+          !(Pred == L.getLoopLatch() && BB == L.getHeader()))
+        ++Count;
+    Pending[BB] = Count;
+  }
+  Plan.Order.push_back(L.getHeader());
+  for (unsigned I = 0; I < Plan.Order.size(); ++I) {
+    BasicBlock *BB = Plan.Order[I];
+    for (BasicBlock *Succ : successors(BB)) {
+      if (!L.contains(Succ) ||
+          (BB == L.getLoopLatch() && Succ == L.getHeader()))
+        continue;
+      if (--Pending[Succ] == 0)
+        Plan.Order.push_back(Succ);
+    }
+  }
+  if (Plan.Order.size() != L.getNumBlocks())
+    return Fail(L.getHeader()->getTerminator(),
+                "iteration CFG must be acyclic after removing its backedge");
+
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  SmallVector<Instruction *, 8> Memory;
+  for (BasicBlock *BB : Plan.Order) {
+    for (Instruction &I : *BB) {
+      if (I.isTerminator() || isa<DbgInfoIntrinsic>(I))
+        continue;
+      if (!I.getType()->isVoidTy() && !I.getType()->isIntegerTy() &&
+          !I.getType()->isPointerTy())
+        return Fail(&I, "requires scalar integer or pointer results");
+      for (User *U : I.users())
+        if (auto *UseI = dyn_cast<Instruction>(U))
+          if (!L.contains(UseI))
+            return Fail(&I, "scalar live-outs require a separate exit-value plan");
+      if (isa<PHINode>(I)) {
+        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy())
+          return Fail(&I, "PHI requires a scalar integer or pointer");
+        continue;
+      }
+      if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
+        if (!Binary->getType()->isIntegerTy() ||
+            VPIntrinsic::getForOpcode(Binary->getOpcode()) ==
+                Intrinsic::not_intrinsic)
+          return Fail(&I, "integer opcode has no VP lowering");
+        continue;
+      }
+      if (isa<ICmpInst>(I) || isa<SelectInst>(I)) {
+        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy())
+          return Fail(&I, "comparison/select requires scalar operands");
+        continue;
+      }
+      if (auto *Cast = dyn_cast<CastInst>(&I)) {
+        if (!Cast->getSrcTy()->isIntegerTy() ||
+            !Cast->getDestTy()->isIntegerTy())
+          return Fail(&I, "only integer casts are supported in this IR stage");
+        continue;
+      }
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        if (GEP->getNumIndices() != 1 ||
+            !GEP->getPointerOperandType()->isPointerTy() ||
+            !GEP->getSourceElementType()->isIntegerTy())
+          return Fail(&I, "requires a scalar integer-element GEP");
+        continue;
+      }
+      Value *Pointer = nullptr;
+      Type *AccessTy = nullptr;
+      if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        if (Load->isVolatile() || Load->isAtomic())
+          return Fail(&I, "volatile/atomic load needs effect legalization");
+        Pointer = Load->getPointerOperand();
+        AccessTy = Load->getType();
+      } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        if (Store->isVolatile() || Store->isAtomic())
+          return Fail(&I, "volatile/atomic store needs effect legalization");
+        Pointer = Store->getPointerOperand();
+        AccessTy = Store->getValueOperand()->getType();
+      } else {
+        return Fail(&I, "unsupported opcode or effect in generic IR stage");
+      }
+      if (!AccessTy->isIntegerTy())
+        return Fail(&I, "memory value must be a scalar integer");
+      // Start with independently indexed objects. This proof is stronger than
+      // unordered iteration: it excludes conflicting non-atomic memory effects.
+      const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Pointer));
+      const auto *Step = AR && AR->getLoop() == &L
+                             ? dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE))
+                             : nullptr;
+      if (!Step || Step->getAPInt() != DL.getTypeStoreSize(AccessTy))
+        return Fail(&I, "memory address is not a proven independent element stream");
+      Memory.push_back(&I);
+    }
+  }
+  for (unsigned I = 0; I < Memory.size(); ++I) {
+    for (unsigned J = I + 1; J < Memory.size(); ++J) {
+      if (isa<LoadInst>(Memory[I]) && isa<LoadInst>(Memory[J]))
+        continue;
+      MemoryLocation A = MemoryLocation::get(Memory[I]);
+      MemoryLocation B = MemoryLocation::get(Memory[J]);
+      // A scalar NoAlias answer for a[i] and a[i+1] is not a proof about
+      // different iterations. Ask about entire underlying objects instead.
+      MemoryLocation AObject(getUnderlyingObject(A.Ptr),
+                             LocationSize::beforeOrAfterPointer());
+      MemoryLocation BObject(getUnderlyingObject(B.Ptr),
+                             LocationSize::beforeOrAfterPointer());
+      if (AA.alias(AObject, BObject) != AliasResult::NoAlias &&
+          !(A.Size == B.Size &&
+            SE.getSCEV(const_cast<Value *>(A.Ptr)) ==
+                SE.getSCEV(const_cast<Value *>(B.Ptr))))
+        return Fail(Memory[J], "memory streams may overlap across elements");
+    }
+  }
+  return true;
+}
+
+static void emitPredication(Function &F, const PredicatedRegion &Plan,
+                            LoopInfo &LI, ScalarEvolution &SE,
+                            DominatorTree &DT) {
+  Loop &L = *Plan.L;
+  IRBuilder<> B(L.getLoopPreheader()->getTerminator());
+  auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.Count);
+  Value *False = Constant::getNullValue(MaskTy);
+  Value *True = Constant::getAllOnesValue(MaskTy);
+  Value *EVL = B.getInt32(Plan.Count);
+  DenseMap<Value *, Value *> Values;
+  // Successor index is part of identity: a conditional can have two edges to
+  // the same destination, and neither edge may be silently dropped.
+  DenseMap<std::pair<BasicBlock *, unsigned>, Value *> Edges;
+  SmallVector<Constant *, 32> Indices;
+  for (unsigned I = 0; I < Plan.Count; ++I)
+    Indices.push_back(ConstantInt::get(Plan.Induction->getType(), I));
+  Values[Plan.Induction] = ConstantVector::get(Indices);
+
+  auto Widen = [&](Value *V) -> Value * {
+    auto It = Values.find(V);
+    if (It != Values.end())
+      return It->second;
+    assert((!isa<Instruction>(V) || !L.contains(cast<Instruction>(V))) &&
+           "preflight and topological order must cover every operand");
+    Value *Wide = B.CreateVectorSplat(Plan.Count, V, "pto.uniform");
+    Values[V] = Wide;
+    return Wide;
+  };
+  auto EmitVP = [&](Intrinsic::ID ID, Type *Ty,
+                    ArrayRef<Value *> Args) -> CallInst * {
+    Function *Callee =
+        VPIntrinsic::getDeclarationForParams(F.getParent(), ID, Ty, Args);
+    return B.CreateCall(Callee, Args, Ty->isVoidTy() ? "" : "pto.vp");
+  };
+  auto EdgeFrom = [&](BasicBlock *Pred, BasicBlock *Dest) -> Value * {
+    Value *Mask = False;
+    auto *Term = Pred->getTerminator();
+    for (unsigned J = 0; J < Term->getNumSuccessors(); ++J)
+      if (Term->getSuccessor(J) == Dest) {
+        Value *Edge = Edges.lookup({Pred, J});
+        assert(Edge && "all predecessor edges must already be built");
+        Mask = B.CreateOr(Mask, Edge, "pto.edge.union");
+      }
+    return Mask;
+  };
+
+  for (BasicBlock *BB : Plan.Order) {
+    Value *Mask = BB == L.getHeader() ? True : False;
+    if (BB != L.getHeader())
+      for (BasicBlock *Pred : predecessors(BB))
+        Mask = B.CreateOr(Mask, EdgeFrom(Pred, BB), "pto.block.mask");
+    for (Instruction &I : *BB) {
+      if (&I == Plan.Induction || I.isTerminator() || isa<DbgInfoIntrinsic>(I))
+        continue;
+      B.SetCurrentDebugLocation(I.getDebugLoc());
+      Value *Result = nullptr;
+      Type *WideTy = I.getType()->isVoidTy()
+                         ? I.getType()
+                         : FixedVectorType::get(I.getType(), Plan.Count);
+      if (auto *Phi = dyn_cast<PHINode>(&I)) {
+        Result = PoisonValue::get(WideTy);
+        for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
+          Result = B.CreateSelect(
+              EdgeFrom(Phi->getIncomingBlock(J), BB),
+              Widen(Phi->getIncomingValue(J)), Result, "pto.phi");
+      } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
+        Result = EmitVP(VPIntrinsic::getForOpcode(Binary->getOpcode()), WideTy,
+                        {Widen(Binary->getOperand(0)), Widen(Binary->getOperand(1)),
+                         Mask, EVL});
+      } else if (auto *Compare = dyn_cast<ICmpInst>(&I)) {
+        Result = B.CreateICmp(Compare->getPredicate(),
+                              Widen(Compare->getOperand(0)),
+                              Widen(Compare->getOperand(1)), "pto.compare");
+      } else if (auto *Select = dyn_cast<SelectInst>(&I)) {
+        Result = B.CreateSelect(Widen(Select->getCondition()),
+                                Widen(Select->getTrueValue()),
+                                Widen(Select->getFalseValue()), "pto.select");
+      } else if (auto *Cast = dyn_cast<CastInst>(&I)) {
+        Result = B.CreateCast(Cast->getOpcode(), Widen(Cast->getOperand(0)),
+                              WideTy, "pto.cast");
+      } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        Result = B.CreateGEP(GEP->getSourceElementType(),
+                             Widen(GEP->getPointerOperand()),
+                             Widen(GEP->getOperand(1)), "pto.address");
+      } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        auto *Call = EmitVP(Intrinsic::vp_gather, WideTy,
+                            {Widen(Load->getPointerOperand()), Mask, EVL});
+        Call->addParamAttr(0, Attribute::getWithAlignment(F.getContext(),
+                                                        Load->getAlign()));
+        Result = Call;
+      } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        auto *Call = EmitVP(Intrinsic::vp_scatter, B.getVoidTy(),
+                            {Widen(Store->getValueOperand()),
+                             Widen(Store->getPointerOperand()), Mask, EVL});
+        Call->addParamAttr(1, Attribute::getWithAlignment(F.getContext(),
+                                                        Store->getAlign()));
+      } else {
+        llvm_unreachable("preflight must reject unsupported instructions");
+      }
+      if (Result)
+        Values[&I] = Result;
+    }
+    if (BB == L.getLoopLatch())
+      continue;
+    auto *Branch = cast<BranchInst>(BB->getTerminator());
+    for (unsigned J = 0; J < Branch->getNumSuccessors(); ++J) {
+      Value *Edge = Mask;
+      if (Branch->isConditional()) {
+        Value *Condition = Widen(Branch->getCondition());
+        if (J)
+          Condition = B.CreateNot(Condition, "pto.edge.not");
+        // As in LoopVectorize::createEdgeMask, and(false, poison) is poison;
+        // select suppresses a condition that was never evaluated by this element.
+        Edge = B.CreateSelect(Mask, Condition, False, "pto.edge.mask");
+      }
+      Edges[{BB, J}] = Edge;
+    }
+  }
+  // Effects now exist as ordered VP calls. No scalar live-outs were accepted.
+  // Keep the sentinel: this is generic IR, not yet legal PTO Machine IR.
+  deleteDeadLoop(&L, &DT, &SE, &LI);
+}
+
 struct RegionPlan {
   Loop *L = nullptr;
   CallInst *Sentinel = nullptr;
@@ -2090,4 +2370,31 @@ PreservedAnalyses
 LinxV5ElementRegionVerifierPass::run(Function &F, FunctionAnalysisManager &) {
   verifyNoResidualElementContracts(F);
   return PreservedAnalyses::all();
+}
+
+PreservedAnalyses
+LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
+  bool Changed = false;
+  for (;;) {
+    auto &LI = AM.getResult<LoopAnalysis>(F);
+    Loop *Selected = nullptr;
+    for (Loop *L : LI.getLoopsInPreorder())
+      if (getElementRegionToken(*L)) {
+        Selected = L;
+        break;
+      }
+    if (!Selected)
+      break;
+    auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+    auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+    PredicatedRegion Plan{};
+    if (!planPredication(F, *Selected, SE, DT, AM.getResult<AAManager>(F), Plan))
+      break;
+    emitPredication(F, Plan, LI, SE, DT);
+    // No analysis reference is reused after CFG deletion, including when there
+    // are several independent element regions in the same function.
+    AM.invalidate(F, PreservedAnalyses::none());
+    Changed = true;
+  }
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

@@ -162,6 +162,10 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           FPM.addPass(LinxV5ElementRegionPreparePass());
           return true;
         }
+        if (Name == "linx-v5-element-predication") {
+          FPM.addPass(LinxV5ElementPredicationPass());
+          return true;
+        }
         if (Name == "linx-v5-element-region") {
           FPM.addPass(LinxV5ElementRegionPass());
           return true;
