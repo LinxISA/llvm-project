@@ -143,7 +143,13 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
       if (MI.isDebugInstr() || MI.isCFIInstruction())
         continue;
       uint64_t TSFlags = MI.getDesc().TSFlags;
-      if (LinxV5II::isTileOp(TSFlags) || LinxV5II::isHeaderOnly(TSFlags)) {
+      // Shared transfers are expanded by the MC emitter into complete TLSU
+      // bundles, but their codegen-only pseudos do not carry TileOp flags.
+      // Isolate them just like ordinary Tile operations so a Local TCOPY/TMOV
+      // inserted by TRegToOffset cannot become part of the same final block.
+      if (LinxV5II::isTileOp(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
+          MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
+          MI.getOpcode() == LinxV5::PseudoV5SharedS2L) {
         if (MI.getIterator() == MBB->getLastNonDebugInstr()) {
           if (MI.getIterator() == MBB->getFirstNonDebugInstr())
             break;
@@ -156,6 +162,21 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
         break;
       }
     }
+  }
+}
+
+static void verifyTLSUBlockComposition(MachineFunction &MF) {
+  for (MachineBasicBlock &MBB : MF) {
+    bool HasLocalTMOV = false;
+    bool HasSharedBinder = false;
+    for (MachineInstr &MI : MBB) {
+      HasLocalTMOV |= MI.getOpcode() == LinxV5::PseudoTCOPY;
+      HasSharedBinder |= MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
+                         MI.getOpcode() == LinxV5::PseudoV5SharedS2L;
+    }
+    if (HasLocalTMOV && HasSharedBinder)
+      report_fatal_error(
+          "LinxV5 TLSU block contains Local TMOV and Shared tile binder");
   }
 }
 
@@ -304,6 +325,9 @@ static bool isMetaInstruction(const MachineInstr &MI) {
 static bool isTileBlockInstruction(const MachineInstr &MI) {
   uint64_t TSFlags = MI.getDesc().TSFlags;
   if (LinxV5II::isTileOp(TSFlags))
+    return true;
+  if (MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
+      MI.getOpcode() == LinxV5::PseudoV5SharedS2L)
     return true;
   if (!MI.isInlineAsm())
     return false;
@@ -769,6 +793,7 @@ bool LinxV5EmitHeader::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   instIsolate(MF);
+  verifyTLSUBlockComposition(MF);
 
   for (auto &MBB : make_early_inc_range(MF)) {
     splitMultiBranchBlock(MBB);
