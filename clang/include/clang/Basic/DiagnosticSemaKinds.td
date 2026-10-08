@@ -11670,6 +11670,9 @@ def err_cast_from_randomized_struct : Error<
 // Linx extension
 def err_pragma_linx_elementwise_precedes_nonloop : Error<
   "'#pragma pto element for' and '#pragma linx elementwise' must precede a for loop">;
+def err_pragma_linx_elementwise_control_flow : Error<
+  "%select{'break' exits|'return' exits|'goto' crosses into or out of|a label creates an entry into}0 a '#pragma pto element for' region; "
+  "%select{only break from a nested loop or switch is supported|function return is not supported|goto is not supported|labels are not supported}0">;
 def err_linx_builtin_requires_imm : Error<
   "require a immediate number for register id.">;
 def err_typecheck_invalid_noalias_not_pointer : Error<

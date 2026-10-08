@@ -432,10 +432,21 @@ MDNode *LoopInfo::createMetadata(
     LoopProperties.push_back(
         MDNode::get(Ctx, MDString::get(Ctx, "llvm.loop.mustprogress")));
 
-  if (Attrs.LinxElementRegion)
+  if (Attrs.LinxElementRegion) {
     LoopProperties.push_back(MDNode::get(
         Ctx, {MDString::get(Ctx, "llvm.loop.linx.pto.element.region"),
               Attrs.LinxElementRegion}));
+    LoopProperties.push_back(MDNode::get(
+        Ctx,
+        {MDString::get(
+             Ctx, "llvm.loop.linx.pto.element.inter_element_order"),
+         MDString::get(Ctx, "unordered")}));
+    LoopProperties.push_back(MDNode::get(
+        Ctx,
+        {MDString::get(
+             Ctx, "llvm.loop.linx.pto.element.intra_element_order"),
+         MDString::get(Ctx, "source")}));
+  }
 
   assert(!!AccGroup == Attrs.IsParallel &&
          "There must be an access group iff the loop is parallel");
