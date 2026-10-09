@@ -131,7 +131,15 @@ parseTileDstWithSize(LinxV5::SingleAsm &SA, MachineInstr *MI, const char *p) {
   if (*p != '>')
     return nullptr;
   SA.Defs.push_back(Dst);
-  SA.Sizes.push_back(Size->getImm());
+  // The <size> field is expected to bind an immediate TSize code ("i"
+  // constraint).  If it resolves to a register (or cannot be resolved) instead
+  // of an immediate -- e.g. a TileOP region row-expand whose "->dst<%Z>"
+  // selector points at the subview range-base GPR (issue #109) -- do not read
+  // it with getImm(): that aborts codegen here, in the TReg-to-Offset pass,
+  // long before the AsmPrinter's :Z handler can emit its "0B" sentinel.  Record
+  // an unknown size (0) and let downstream size resolution proceed, matching
+  // the v5 no-<size> fallback above and the AsmPrinter's parallel :Z guard.
+  SA.Sizes.push_back(Size && Size->isImm() ? Size->getImm() : 0);
   return p + 1;
 }
 
