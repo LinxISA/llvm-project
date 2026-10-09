@@ -97,3 +97,51 @@ and executes the widened conditional kernel against an independent reference.
 ``--target-clang`` can override the ``clang++`` alongside the selected ``opt``.
 This is generic IR semantic
 evidence, not a PTO ELF, TileOp API, gfrun or gfsim validation claim.
+
+Explicit masked Tile legalization
+---------------------------------
+
+The first physical legalization profile is enabled with
+``-mllvm -linxv5-enable-generic-element=true``.  It uses the generic CFG/VP
+pipeline followed by ``linx-v5-element-tile-legalize`` and the mandatory region
+verifier.  It does not fall back to the older publication/gather/atomic profile
+recognizer when an operation is unsupported.  This option remains off by
+default while broader shape, typed-view and control-flow support is developed.
+
+Current machine-code scope is 32 logical elements of i32 data, canonical
+independent element memory streams, and the reducible acyclic iteration CFG
+already accepted by the predicator.  The backend chooses M32 internally;
+source programs use ordinary element indices without naming layout or lanes.
+The usual Linx Tile register configuration is still required when generating
+objects, for example::
+
+  clang++ --target=linx64v5 -mlxbc -O2 \
+    -mllvm -linxv5-enable-generic-element=true \
+    -mllvm -enable-all-vector-as-tilereg=true -c kernel.cpp
+
+The legalizer maps logical masks to low 32 GPR bits.  Arithmetic and gathers
+produce fully defined Tiles using ZERO, and scatter suppresses inactive memory
+effects without setting the destination-only Zero control.  Multiway PHIs and
+selects use fully defined numeric inputs and GPR-predicate TSEL.  Signed divide
+and arithmetic shift select S32 operations; signed remainder expands through
+truncating division, multiply and subtract rather than PTO floor remainder.
+Stores select the exact physical source dtype, including direct S32 results.
+
+Vector GEPs retain one uniform base and an explicit element index.  TLEA scales
+the index to byte offsets exactly once.  Raw narrow GEP indices sign-extend;
+an explicit zext selects unsigned extension.  When required, a typed add-zero
+publishes the matching index backing dtype before TLEA.  Proven representable
+i64 constant indices may use an equivalent U32 index Tile, and identical byte
+offset streams are shared.  The source-level semantics do not change.
+
+The predicator attaches the original region token and domain to the IR it
+emits.  The legalizer preflights all token-owned regions before mutation,
+preserves memory-root order, and consumes each sentinel only after removing
+the complete owned VP/vector-pointer graph.  Missing ownership, escaping
+values, unsupported domains, partial EVL, effects or types receive diagnostics.
+Unmarked functions do not run the extra generic CFG canonicalization pipeline.
+
+This first executable profile operates on ordinary GM arrays.  It does not yet
+connect the public typed Tile element views to generic VP IR, support varying
+inner loops or general atomics, or close typed Tile spills at O0.  Existing
+typed Tile API tests and the generic GM-array tests are separate coverage lanes.

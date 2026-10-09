@@ -74,6 +74,18 @@ struct LinxV5ElementPredicationPass
   static bool isRequired() { return true; }
 };
 
+struct LinxV5ElementTileLegalizationPass
+    : PassInfoMixin<LinxV5ElementTileLegalizationPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5GenericElementPreparePass
+    : PassInfoMixin<LinxV5GenericElementPreparePass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
 struct LinxV5ElementRegionVerifierPass
     : PassInfoMixin<LinxV5ElementRegionVerifierPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

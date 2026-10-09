@@ -18,6 +18,7 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -35,6 +36,11 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Utils/LCSSA.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -65,6 +71,8 @@ static Optional<ElementProfile> integerProfile(uint64_t DataType,
 }
 
 constexpr StringLiteral RegionLoopMD = "llvm.loop.linx.pto.element.region";
+constexpr StringLiteral PredicatedOwnerMD = "linx.pto.element.vp.owner";
+constexpr StringLiteral PredicatedDomainMD = "linx.pto.element.vp.domain";
 constexpr StringLiteral ScalarizedLaneZeroMD =
     "linx.pto.element.scalarized_lane_zero";
 
@@ -702,6 +710,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                             LoopInfo &LI, ScalarEvolution &SE,
                             DominatorTree &DT) {
   Loop &L = *Plan.L;
+  Instruction *OldLast = L.getLoopPreheader()->getTerminator()->getPrevNode();
+  MDNode *Token = getElementRegionToken(L);
   IRBuilder<> B(L.getLoopPreheader()->getTerminator());
   auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.Count);
   Value *False = Constant::getNullValue(MaskTy);
@@ -818,8 +828,510 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   }
   // Effects now exist as ordered VP calls. No scalar live-outs were accepted.
   // Keep the sentinel: this is generic IR, not yet legal PTO Machine IR.
+  // Ownership survives loop deletion and does not rely on instruction names,
+  // function order, or recognizing a particular source expression.
+  for (Instruction *I = OldLast ? OldLast->getNextNode()
+                                : &L.getLoopPreheader()->front();
+       I != L.getLoopPreheader()->getTerminator(); I = I->getNextNode())
+    I->setMetadata(PredicatedOwnerMD, Token);
+  findRegionSentinel(F, Token)->setMetadata(
+      PredicatedDomainMD,
+      MDNode::get(F.getContext(), ConstantAsMetadata::get(B.getInt32(Plan.Count))));
   deleteDeadLoop(&L, &DT, &SE, &LI);
 }
+
+// The first physical profile uses 32 M32 rows and one column. Logical mask SSA
+// remains independent of this choice: it is mapped to low 32 GPR bits here, not
+// in Clang or the CFG predicator. Each new Tile definition is fully initialized
+// using ZERO, so unselected VP poison never violates TSEL source preflight.
+class ElementTileLegalizer {
+  Function &F;
+  SmallVector<Instruction *, 64> Owned;
+  SmallPtrSet<Instruction *, 32> OwnedSet;
+  SmallPtrSet<Value *, 32> Validated;
+  DenseMap<Value *, Value *> Data;
+  DenseMap<Value *, Value *> Masks;
+  DenseMap<Value *, uint64_t> PhysicalTypes;
+  DenseMap<std::pair<Value *, uint64_t>, Value *> RetypedIndices;
+  DenseMap<std::pair<Value *, uint64_t>, Value *> ByteOffsets;
+  IRBuilder<> B;
+
+  struct Address {
+    Value *Base;
+    Value *Offset;
+    uint64_t IndexType;
+  };
+  DenseMap<Value *, Address> Addresses;
+
+  bool fail(Value *V, const Twine &Why) {
+    return diagnose(F, dyn_cast<Instruction>(V),
+                    Twine("Tile legalization: ") + Why);
+  }
+
+  static Optional<unsigned> binaryOpcode(Intrinsic::ID ID) {
+    switch (ID) {
+    case Intrinsic::vp_add: return Instruction::Add;
+    case Intrinsic::vp_sub: return Instruction::Sub;
+    case Intrinsic::vp_mul: return Instruction::Mul;
+    case Intrinsic::vp_sdiv: return Instruction::SDiv;
+    case Intrinsic::vp_udiv: return Instruction::UDiv;
+    case Intrinsic::vp_srem: return Instruction::SRem;
+    case Intrinsic::vp_urem: return Instruction::URem;
+    case Intrinsic::vp_and: return Instruction::And;
+    case Intrinsic::vp_or: return Instruction::Or;
+    case Intrinsic::vp_xor: return Instruction::Xor;
+    case Intrinsic::vp_shl: return Instruction::Shl;
+    case Intrinsic::vp_lshr: return Instruction::LShr;
+    case Intrinsic::vp_ashr: return Instruction::AShr;
+    default: return None;
+    }
+  }
+
+  static bool isVector(Value *V, unsigned Width) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && Ty->getNumElements() == 32 &&
+           Ty->getElementType()->isIntegerTy(Width);
+  }
+
+  static bool constantProgression(Constant *C, APInt &Initial, APInt &Step) {
+    unsigned Width = C->getType()->getScalarSizeInBits();
+    if (Width != 32 && Width != 64)
+      return false;
+    auto *First = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(0u));
+    auto *Second = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(1u));
+    if (!First || !Second)
+      return false;
+    Initial = First->getValue();
+    Step = Second->getValue() - Initial;
+    if (!Step.isSignedIntN(32))
+      return false;
+    for (unsigned I = 0; I < 32; ++I) {
+      auto *Element = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(I));
+      if (!Element || Element->getValue() != Initial + Step * I)
+        return false;
+    }
+    return true;
+  }
+
+  bool validate(Value *V) {
+    if (!Validated.insert(V).second)
+      return true;
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    if (!Ty || Ty->getNumElements() != 32)
+      return fail(V, "requires 32-element fixed vectors");
+    if (auto *I = dyn_cast<Instruction>(V))
+      if (!OwnedSet.contains(I))
+        return fail(V, "vector producer is outside its token-owned region");
+
+    if (Value *Scalar = getSplatValue(V)) {
+      if (auto *I = dyn_cast<Instruction>(Scalar))
+        if (OwnedSet.contains(I))
+          return fail(V, "uniform source must be outside its predicated region");
+      Type *ST = Scalar->getType();
+      if (ST->isIntegerTy(1) || ST->isIntegerTy(32) || ST->isIntegerTy(64) ||
+          (ST->isPointerTy() && ST->getPointerAddressSpace() == 0))
+        return true;
+      return fail(V, "unsupported uniform element type");
+    }
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V))
+      return isVector(V, 1) || isVector(V, 32) || isVector(V, 64) ||
+             fail(V, "unsupported undefined element type");
+    if (auto *C = dyn_cast<Constant>(V)) {
+      if (isVector(V, 1)) {
+        for (unsigned I = 0; I < 32; ++I)
+          if (!isa_and_nonnull<ConstantInt>(C->getAggregateElement(I)))
+            return fail(V, "mask constant contains an unsupported element");
+        return true;
+      }
+      APInt Initial, Step;
+      return constantProgression(C, Initial, Step) ||
+             fail(V, "constant Tile requires a scalar splat or affine sequence");
+    }
+    if (auto *GEP = dyn_cast<GetElementPtrInst>(V)) {
+      Value *Base = getSplatValue(GEP->getPointerOperand());
+      if (!Base || !Base->getType()->isPointerTy() ||
+          Base->getType()->getPointerAddressSpace() != 0 ||
+          GEP->getNumIndices() != 1 ||
+          !GEP->getSourceElementType()->isIntegerTy(32) ||
+          (!isVector(GEP->getOperand(1), 32) &&
+           !isVector(GEP->getOperand(1), 64)))
+        return fail(V, "address requires one uniform base and one i32 element index");
+      if (auto *I = dyn_cast<Instruction>(Base))
+        if (OwnedSet.contains(I))
+          return fail(V, "address base must be uniform outside its region");
+      return validate(GEP->getOperand(1));
+    }
+    if (auto *Select = dyn_cast<SelectInst>(V)) {
+      if ((!isVector(V, 1) && !isVector(V, 32)) ||
+          !isVector(Select->getCondition(), 1))
+        return fail(V, "select requires an i1 mask and i1/i32 values");
+      return validate(Select->getCondition()) &&
+             validate(Select->getTrueValue()) && validate(Select->getFalseValue());
+    }
+    if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      if (!isVector(Cmp->getOperand(0), 32) &&
+          !(isVector(Cmp->getOperand(0), 64) &&
+            (getSplatValue(Cmp->getOperand(0)) ||
+             getSplatValue(Cmp->getOperand(1)))))
+        return fail(V, "comparison requires i32 Tiles or an i64 scalar operand");
+      return validate(Cmp->getOperand(0)) && validate(Cmp->getOperand(1));
+    }
+    if (auto *Cast = dyn_cast<CastInst>(V)) {
+      if ((Cast->getOpcode() != Instruction::ZExt &&
+           Cast->getOpcode() != Instruction::SExt) ||
+          !isVector(Cast->getOperand(0), 32) || !isVector(V, 64))
+        return fail(V, "only i32 to i64 index extension is supported");
+      return validate(Cast->getOperand(0));
+    }
+    if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      if (!isVector(V, 1) ||
+          (Binary->getOpcode() != Instruction::And &&
+           Binary->getOpcode() != Instruction::Or &&
+           Binary->getOpcode() != Instruction::Xor))
+        return fail(V, "non-VP data arithmetic is not supported");
+      return validate(Binary->getOperand(0)) && validate(Binary->getOperand(1));
+    }
+    if (auto *VP = dyn_cast<VPIntrinsic>(V))
+      return validateVP(*VP);
+    return fail(V, "unsupported vector operation");
+  }
+
+  bool validateVP(VPIntrinsic &VP) {
+    auto *EVL = dyn_cast<ConstantInt>(VP.getVectorLengthParam());
+    if (!EVL || !EVL->equalsInt(32) || !isVector(VP.getMaskParam(), 1))
+      return fail(&VP, "requires a 32-bit mask and constant EVL=32");
+    if (!validate(VP.getMaskParam()))
+      return false;
+    if (auto Op = binaryOpcode(VP.getIntrinsicID())) {
+      bool MaskLogic = isVector(&VP, 1) &&
+                       (*Op == Instruction::And || *Op == Instruction::Or ||
+                        *Op == Instruction::Xor);
+      if (!isVector(&VP, 32) && !MaskLogic)
+        return fail(&VP, "VP arithmetic requires i32 data");
+      return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
+    }
+    if (VP.getIntrinsicID() == Intrinsic::vp_gather) {
+      if (!isVector(&VP, 32))
+        return fail(&VP, "VP gather requires i32 data");
+      if (!isa<GetElementPtrInst>(VP.getArgOperand(0)))
+        return fail(&VP, "VP memory requires an explicit element GEP");
+      return validate(VP.getArgOperand(0));
+    }
+    if (VP.getIntrinsicID() == Intrinsic::vp_scatter) {
+      if (!isVector(VP.getArgOperand(0), 32))
+        return fail(&VP, "VP scatter requires i32 data");
+      if (!isa<GetElementPtrInst>(VP.getArgOperand(1)))
+        return fail(&VP, "VP memory requires an explicit element GEP");
+      return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
+    }
+    return fail(&VP, "unsupported VP effect or opcode");
+  }
+
+  Value *call(Intrinsic::ID ID, ArrayRef<Type *> Types,
+              ArrayRef<Value *> Args, const Twine &Name = "pto.tile") {
+    Function *Callee = Intrinsic::getDeclaration(F.getParent(), ID, Types);
+    CallInst *Result = B.CreateCall(
+        Callee, Args, Callee->getReturnType()->isVoidTy() ? "" : Name);
+    if (Result->getType()->isVectorTy()) {
+      uint64_t Type = cast<ConstantInt>(Args[2])->getZExtValue();
+      if (ID == Intrinsic::linx_experimental_ew_tlea)
+        Type = (Type == 17 || Type == 16) ? 16 : 24;
+      PhysicalTypes[Result] = Type;
+    }
+    return Result;
+  }
+
+  Value *splat(Value *Scalar, FixedVectorType *Ty, uint64_t Step = 0) {
+    // A scalar used only under an inactive edge may itself be poison. Choosing
+    // a defined representative keeps subsequent physical mask/Tile algebra
+    // from reintroducing poison into lanes excluded by an LLVM select.
+    Scalar = B.CreateFreeze(Scalar, "pto.uniform.defined");
+    Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
+    return call(Intrinsic::linx_experimental_ew_tci, {Ty},
+                {B.getInt64(32), B.getInt64(1),
+                 B.getInt64(Ty->getScalarSizeInBits() == 32 ? 25 : 24),
+                 B.getInt64(29), Scalar, B.getInt64(Step)});
+  }
+
+  Value *mask(Value *V) {
+    auto It = Masks.find(V);
+    if (It != Masks.end())
+      return It->second;
+    Value *R = nullptr;
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+      R = B.getInt64(0);
+    } else if (Value *Scalar = getSplatValue(V)) {
+      R = B.CreateSelect(B.CreateFreeze(Scalar), B.getInt64(0xffffffff),
+                          B.getInt64(0), "pto.mask.splat");
+    } else if (auto *C = dyn_cast<Constant>(V)) {
+      uint64_t Bits = 0;
+      for (unsigned I = 0; I < 32; ++I)
+        if (!cast<ConstantInt>(C->getAggregateElement(I))->isZero())
+          Bits |= uint64_t(1) << I;
+      R = B.getInt64(Bits);
+    } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+      Value *Condition = mask(Select->getCondition());
+      R = B.CreateOr(B.CreateAnd(Condition, mask(Select->getTrueValue())),
+                     B.CreateAnd(B.CreateXor(Condition, B.getInt64(0xffffffff)),
+                                 mask(Select->getFalseValue())), "pto.mask.select");
+    } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      R = B.CreateBinOp(Binary->getOpcode(), mask(Binary->getOperand(0)),
+                        mask(Binary->getOperand(1)), "pto.mask.logic");
+    } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      R = B.CreateBinOp(static_cast<Instruction::BinaryOps>(
+                            *binaryOpcode(VP->getIntrinsicID())),
+                        mask(VP->getArgOperand(0)), mask(VP->getArgOperand(1)),
+                        "pto.mask.logic");
+      R = B.CreateAnd(R, activeMask(*VP));
+    } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      Value *L = Cmp->getOperand(0), *RHS = Cmp->getOperand(1);
+      auto Pred = Cmp->getPredicate();
+      if (getSplatValue(L) && !getSplatValue(RHS)) {
+        std::swap(L, RHS);
+        Pred = ICmpInst::getSwappedPredicate(Pred);
+      }
+      unsigned Width = L->getType()->getScalarSizeInBits();
+      uint64_t DType = Width == 32 ? (ICmpInst::isSigned(Pred) ? 17 : 25)
+                                    : (ICmpInst::isSigned(Pred) ? 16 : 24);
+      uint64_t Selector = 0;
+      switch (Pred) {
+      case ICmpInst::ICMP_EQ: Selector = 0; break;
+      case ICmpInst::ICMP_NE: Selector = 1; break;
+      case ICmpInst::ICMP_SLT: case ICmpInst::ICMP_ULT: Selector = 2; break;
+      case ICmpInst::ICMP_SGT: case ICmpInst::ICMP_UGT: Selector = 3; break;
+      case ICmpInst::ICMP_SLE: case ICmpInst::ICMP_ULE: Selector = 4; break;
+      case ICmpInst::ICMP_SGE: case ICmpInst::ICMP_UGE: Selector = 5; break;
+      default: llvm_unreachable("integer comparison preflight");
+      }
+      if (Value *Scalar = getSplatValue(RHS)) {
+        Scalar = B.CreateFreeze(Scalar);
+        Scalar = ICmpInst::isSigned(Pred)
+                     ? B.CreateSExtOrTrunc(Scalar, B.getInt64Ty())
+                     : B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
+        R = call(Intrinsic::linx_experimental_ew_tcmps_gpr, {L->getType()},
+                  {B.getInt64(32), B.getInt64(1), B.getInt64(DType),
+                   B.getInt64(29), value(L), Scalar, B.getInt64(Selector)},
+                  "pto.mask.compare");
+      } else {
+        R = call(Intrinsic::linx_experimental_ew_tcmp_gpr, {L->getType()},
+                  {B.getInt64(32), B.getInt64(1), B.getInt64(DType),
+                   B.getInt64(29), value(L), value(RHS), B.getInt64(Selector)},
+                  "pto.mask.compare");
+      }
+    } else {
+      llvm_unreachable("mask preflight");
+    }
+    R = B.CreateAnd(R, B.getInt64(0xffffffff), "pto.mask.low32");
+    return Masks[V] = R;
+  }
+
+  Value *activeMask(VPIntrinsic &VP) {
+    uint64_t N = cast<ConstantInt>(VP.getVectorLengthParam())->getZExtValue();
+    return B.CreateAnd(mask(VP.getMaskParam()), B.getInt64((uint64_t(1) << N) - 1));
+  }
+
+  Value *binary(unsigned Op, Value *L, Value *R, Value *Active) {
+    unsigned Code = 0;
+    uint64_t DType = 25;
+    switch (Op) {
+    case Instruction::Add: Code = 0; break;
+    case Instruction::Sub: Code = 1; break;
+    case Instruction::Mul: Code = 2; break;
+    case Instruction::SDiv: DType = 17; LLVM_FALLTHROUGH;
+    case Instruction::UDiv: Code = 3; break;
+    case Instruction::URem: Code = 4; break;
+    case Instruction::And: Code = 5; break;
+    case Instruction::Or: Code = 6; break;
+    case Instruction::Xor: Code = 7; break;
+    case Instruction::Shl: Code = 8; break;
+    case Instruction::AShr: DType = 17; LLVM_FALLTHROUGH;
+    case Instruction::LShr: Code = 9; break;
+    case Instruction::SRem: {
+      Value *Q = binary(Instruction::SDiv, L, R, Active);
+      Value *Product = binary(Instruction::Mul, Q, R, Active);
+      return binary(Instruction::Sub, L, Product, Active);
+    }
+    default: llvm_unreachable("binary preflight");
+    }
+    return call(Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
+                {B.getInt64(32), B.getInt64(1), B.getInt64(DType),
+                 B.getInt64(29), B.getInt64(Code), L, R, Active,
+                 B.getInt64(0), B.getInt64(0), B.getInt64(1)});
+  }
+
+  Address address(Value *V) {
+    auto It = Addresses.find(V);
+    if (It != Addresses.end())
+      return It->second;
+    auto *GEP = cast<GetElementPtrInst>(V);
+    Value *Index = GEP->getOperand(1);
+    // LLVM GEP sign-extends a narrow raw index to the pointer index width.
+    // Only an explicit zext establishes the alternative unsigned semantics.
+    uint64_t IndexType = isVector(Index, 32) ? 16 : 24;
+    uint64_t SourceType = isVector(Index, 32) ? 17 : 24;
+    if (auto *Cast = dyn_cast<CastInst>(Index)) {
+      SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
+      IndexType = SourceType == 17 ? 16 : 24;
+      Index = Cast->getOperand(0);
+    }
+    // LLVM pointer indices are often widened induction constants. Narrow only
+    // when every value is provably representable without changing GEP semantics.
+    if (isVector(Index, 64)) {
+      if (auto *C = dyn_cast<Constant>(Index)) {
+        SmallVector<Constant *, 32> Narrow;
+        for (unsigned I = 0; I < 32; ++I) {
+          auto *Element = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(I));
+          if (!Element || !Element->getValue().isIntN(32)) {
+            Narrow.clear();
+            break;
+          }
+          Narrow.push_back(B.getInt32(Element->getZExtValue()));
+        }
+        if (Narrow.size() == 32) {
+          Index = ConstantVector::get(Narrow);
+          SourceType = 25;
+          IndexType = 24;
+        }
+      }
+    }
+    Type *OffsetTy = FixedVectorType::get(B.getInt64Ty(), 32);
+    auto Key = std::make_pair(Index, SourceType);
+    Value *Offset = ByteOffsets.lookup(Key);
+    if (!Offset) {
+      Value *Source = indexSource(value(Index), SourceType);
+      Offset = call(Intrinsic::linx_experimental_ew_tlea,
+                    {OffsetTy, Index->getType()},
+                    {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
+                     B.getInt64(29), Source, B.getInt64(32)}, "pto.byte.offsets");
+      ByteOffsets[Key] = Offset;
+    }
+    Address A{B.CreateFreeze(getSplatValue(GEP->getPointerOperand())),
+              Offset, IndexType};
+    Addresses.insert({V, A});
+    return A;
+  }
+
+  Value *indexSource(Value *Tile, uint64_t RequiredType) {
+    if (PhysicalTypes.lookup(Tile) == RequiredType)
+      return Tile;
+    auto Key = std::make_pair(Tile, RequiredType);
+    if (Value *Existing = RetypedIndices.lookup(Key))
+      return Existing;
+    // TLEA requires source operation/backing type equality, unlike the
+    // width-compatible arithmetic inputs. A typed add of zero preserves bits
+    // and publishes the required S32/U32 descriptor before extending it.
+    assert((RequiredType == 17 || RequiredType == 25) &&
+           "only narrow index retyping is admitted");
+    Value *Zero = value(Constant::getNullValue(Tile->getType()));
+    Value *Result = call(
+        Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Tile->getType()},
+        {B.getInt64(32), B.getInt64(1), B.getInt64(RequiredType), B.getInt64(29),
+         B.getInt64(0), Tile, Zero, B.getInt64(0xffffffff), B.getInt64(0),
+         B.getInt64(0), B.getInt64(1)}, "pto.index.typed");
+    RetypedIndices[Key] = Result;
+    return Result;
+  }
+
+  Value *value(Value *V) {
+    auto It = Data.find(V);
+    if (It != Data.end())
+      return It->second;
+    auto *Ty = cast<FixedVectorType>(V->getType());
+    Value *R = nullptr;
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+      R = splat(ConstantInt::get(Ty->getElementType(), 0), Ty);
+    } else if (Value *Scalar = getSplatValue(V)) {
+      R = splat(Scalar, Ty);
+    } else if (auto *C = dyn_cast<Constant>(V)) {
+      APInt Initial, Step;
+      bool OK = constantProgression(C, Initial, Step);
+      assert(OK && "constant progression preflight");
+      (void)OK;
+      R = splat(ConstantInt::get(Ty->getElementType(), Initial), Ty,
+                 uint64_t(uint32_t(Step.getSExtValue())) << 32);
+    } else if (auto *Cast = dyn_cast<CastInst>(V)) {
+      Value *Source = Cast->getOperand(0);
+      uint64_t SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
+      R = call(Intrinsic::linx_experimental_ew_tlea, {Ty, Source->getType()},
+                 {B.getInt64(32), B.getInt64(1),
+                  B.getInt64(SourceType), B.getInt64(29),
+                  indexSource(value(Source), SourceType), B.getInt64(8)});
+    } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+      R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
+                 {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(29),
+                  mask(Select->getCondition()), B.getInt64(0),
+                  value(Select->getTrueValue()), value(Select->getFalseValue())});
+    } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
+        Address A = address(VP->getArgOperand(0));
+        R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
+                   {Ty, A.Offset->getType()},
+                   {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(0),
+                    B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset,
+                    activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(1)});
+      } else {
+        R = binary(*binaryOpcode(VP->getIntrinsicID()), value(VP->getArgOperand(0)),
+                     value(VP->getArgOperand(1)), activeMask(*VP));
+      }
+    } else {
+      llvm_unreachable("value preflight");
+    }
+    return Data[V] = R;
+  }
+
+public:
+  ElementTileLegalizer(Function &F, ArrayRef<Instruction *> Instructions)
+      : F(F), Owned(Instructions.begin(), Instructions.end()), B(F.getContext()) {
+    for (Instruction *I : Owned)
+      OwnedSet.insert(I);
+  }
+
+  bool preflight() {
+    for (Instruction *I : Owned) {
+      if (I->getParent() != Owned.front()->getParent())
+        return fail(I, "first physical profile requires one predicated IR block");
+      for (User *U : I->users())
+        if (!isa<Instruction>(U) || !OwnedSet.contains(cast<Instruction>(U)))
+          return fail(I, "vector live-out escapes its token-owned region");
+      if (I->mayHaveSideEffects() || I->mayReadOrWriteMemory()) {
+        auto *VP = dyn_cast<VPIntrinsic>(I);
+        if (!VP || !validateVP(*VP))
+          return fail(I, "unsupported token-owned side effect");
+      }
+    }
+    return true;
+  }
+
+  void emit() {
+    // Visit memory roots in their original order. Recursive pure operands are
+    // cached, so a gather is neither duplicated nor moved past a prior effect.
+    for (Instruction *I : Owned) {
+      auto *VP = dyn_cast<VPIntrinsic>(I);
+      if (!VP || !VP->mayReadOrWriteMemory())
+        continue;
+      B.SetInsertPoint(I);
+      B.SetCurrentDebugLocation(I->getDebugLoc());
+      if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
+        value(VP);
+      } else {
+        Address A = address(VP->getArgOperand(1));
+        Value *Source = value(VP->getArgOperand(0));
+        uint64_t SourceType = PhysicalTypes.lookup(Source);
+        assert((SourceType == 17 || SourceType == 25) &&
+               "scatter source descriptor must have an admitted i32 type");
+        call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
+              {A.Offset->getType(), Source->getType()},
+              {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType), B.getInt64(29),
+               B.getInt64(A.IndexType), A.Base, A.Offset, Source,
+               activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(0)});
+      }
+    }
+    for (Instruction *I : Owned)
+      I->dropAllReferences();
+    for (Instruction *I : Owned)
+      I->eraseFromParent();
+  }
+};
 
 struct RegionPlan {
   Loop *L = nullptr;
@@ -2224,6 +2736,8 @@ static bool verifyNoResidualElementContracts(Function &F) {
   for (Instruction &I : instructions(F)) {
     if (hasElementRegionLoopMetadata(I))
       return diagnose(F, &I, "marked scalar loop survived required lowering");
+    if (I.getMetadata(PredicatedOwnerMD))
+      return diagnose(F, &I, "token-owned VP region survived Tile legalization");
     auto *Call = dyn_cast<CallInst>(&I);
     if (isIntrinsic(Call, Intrinsic::linx_experimental_element_region) ||
         isIntrinsic(Call, Intrinsic::linx_experimental_element_view))
@@ -2397,4 +2911,71 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
     Changed = true;
   }
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
+
+PreservedAnalyses
+LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
+  SmallVector<CallInst *, 4> Sentinels;
+  for (Instruction &I : instructions(F))
+    if (isIntrinsic(dyn_cast<CallInst>(&I),
+                    Intrinsic::linx_experimental_element_region))
+      Sentinels.push_back(cast<CallInst>(&I));
+  if (Sentinels.empty()) {
+    for (Instruction &I : instructions(F))
+      if (I.getMetadata(PredicatedOwnerMD))
+        diagnose(F, &I, "Tile legalization: orphan predicated region ownership");
+    return PreservedAnalyses::all();
+  }
+  if (F.hasFnAttribute(Attribute::OptimizeNone))
+    diagnose(F, Sentinels.front(),
+             "Tile legalization: typed Tile spill/reload is unsupported at -O0");
+
+  SmallPtrSet<MDNode *, 4> Tokens;
+  SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
+  for (CallInst *Sentinel : Sentinels) {
+    auto *Domain = Sentinel->getMetadata(PredicatedDomainMD);
+    auto *Count = Domain && Domain->getNumOperands() == 1
+                      ? mdconst::dyn_extract<ConstantInt>(Domain->getOperand(0))
+                      : nullptr;
+    auto *TokenArg = dyn_cast<MetadataAsValue>(Sentinel->getArgOperand(0));
+    auto *Token = TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
+    if (!Count || !Count->equalsInt(32) || !Token || !Tokens.insert(Token).second)
+      diagnose(F, Sentinel,
+               "Tile legalization: requires a unique predicated 32-element domain");
+    SmallVector<Instruction *, 64> Owned;
+    for (Instruction &I : instructions(F))
+      if (I.getMetadata(PredicatedOwnerMD) == Token)
+        Owned.push_back(&I);
+    auto Plan = std::make_unique<ElementTileLegalizer>(F, Owned);
+    Plan->preflight();
+    Plans.push_back(std::move(Plan));
+  }
+  for (Instruction &I : instructions(F))
+    if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
+      if (!Tokens.contains(Owner))
+        diagnose(F, &I, "Tile legalization: unknown predicated region token");
+  // Preflight every region before publishing any target IR. Consumption of the
+  // sentinel is the last step, after all token-owned VP/vector-pointer IR is gone.
+  for (unsigned I = 0; I < Plans.size(); ++I) {
+    Plans[I]->emit();
+    Sentinels[I]->eraseFromParent();
+  }
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses
+LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
+  bool HasRegion = false;
+  for (Instruction &I : instructions(F))
+    HasRegion |= isIntrinsic(dyn_cast<CallInst>(&I),
+                             Intrinsic::linx_experimental_element_region);
+  if (!HasRegion)
+    return prepareViews(F) ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  FunctionPassManager Prepare;
+  Prepare.addPass(LinxV5ElementRegionPromotePass());
+  Prepare.addPass(LoopSimplifyPass());
+  Prepare.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
+  Prepare.addPass(InstCombinePass());
+  Prepare.addPass(LCSSAPass());
+  return Prepare.run(F, AM);
 }

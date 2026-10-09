@@ -36,6 +36,9 @@ using namespace llvm;
 
 cl::opt<bool> EnableClockHandSched("linxv5-enable-clock-hand-sched",
                                    cl::init(false));
+static cl::opt<bool> EnableGenericElement(
+    "linxv5-enable-generic-element", cl::init(false),
+    cl::desc("Use generic CFG/VP predication and explicit PTO Tile legalization"));
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   RegisterTargetMachine<LinxV5TargetMachine> V4(getTheLinx64V5Target());
@@ -166,6 +169,14 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           FPM.addPass(LinxV5ElementPredicationPass());
           return true;
         }
+        if (Name == "linx-v5-element-tile-legalize") {
+          FPM.addPass(LinxV5ElementTileLegalizationPass());
+          return true;
+        }
+        if (Name == "linx-v5-element-generic-prepare") {
+          FPM.addPass(LinxV5GenericElementPreparePass());
+          return true;
+        }
         if (Name == "linx-v5-element-region") {
           FPM.addPass(LinxV5ElementRegionPass());
           return true;
@@ -183,6 +194,14 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerOptimizerLastEPCallback(
       [](ModulePassManager &MPM, OptimizationLevel) {
         FunctionPassManager FPM;
+        if (EnableGenericElement) {
+          FPM.addPass(LinxV5GenericElementPreparePass());
+          FPM.addPass(LinxV5ElementPredicationPass());
+          FPM.addPass(LinxV5ElementTileLegalizationPass());
+          FPM.addPass(LinxV5ElementRegionVerifierPass());
+          MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+          return;
+        }
         FPM.addPass(LinxV5ElementRegionPreparePass());
         FPM.addPass(LinxV5ElementRegionPromotePass());
         FPM.addPass(LinxV5ElementRegionPass());
