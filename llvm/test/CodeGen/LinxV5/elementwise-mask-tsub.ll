@@ -5,7 +5,7 @@
 ; ZERO is selected and the layout is CUBE_M16 (31).
 ; CHECK-LABEL: <elementwise_masked_tsub>:
 ; CHECK: BSTART.TEPL TSUB, FP32
-; CHECK-NEXT: B.DATR CUBE_M16, FP32, Zero, byte0, Eq, RNONE, nosat, 0, 1
+; CHECK-NEXT: B.DATR CUBE_M16, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1
 ; CHECK: B.DIM
 ; CHECK: B.IOT
 ; CHECK: B.IOT
