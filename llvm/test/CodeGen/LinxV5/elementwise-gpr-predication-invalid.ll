@@ -7,7 +7,7 @@
 ; TBINARY: GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 Tiles, one low mask word and zero inactive lanes
 ; TCMP: TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles
 ; TSEL: TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask word
-; MSCATTER: GPR-masked MSCATTER requires exact 32x1 U32 values, S64/U64 byte offsets, CUBE_M32, one low mask word and merge-inactive stores
+; MSCATTER: GPR-masked MSCATTER requires exact 32x1 S32/U32 values, S64/U64 byte offsets, CUBE_M32, one low mask word and merge-inactive stores
 
 ;--- tbinary.ll
 define void @bad(ptr %out, ptr %ap, ptr %bp, i64 %m) {

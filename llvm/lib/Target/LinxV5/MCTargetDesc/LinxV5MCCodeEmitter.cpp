@@ -1037,7 +1037,7 @@ void LinxV5MCCodeEmitter::expandPseudoTLoadStore(const MCInst &MI, raw_ostream &
         {MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
              .addOperand(MI.getOperand(IsScatter ? 6 : 7)).addImm(0).addImm(31)
              .addOperand(IsScatter
-                             ? MCOperand::createImm(LinxV5Op::PadValue::Null)
+                             ? MCOperand::createImm(LinxV5Op::PadValue::Zero)
                              : MI.getOperand(6))
              .addImm(0).addImm(0).addImm(0).addImm(0)
              .addOperand(MI.getOperand(IsScatter ? 12 : 13))

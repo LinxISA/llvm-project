@@ -32,8 +32,27 @@ define void @gpr_predication(ptr %out, ptr %base, ptr %lhs.ptr, ptr %rhs.ptr) {
 ; CHECK: B.IOR [{{[a-z0-9]+}}], []
 ; CHECK-NOT: ExecMaskPresent
 ; CHECK: BSTART.TLSU MSCATTER, U32
+; CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
 ; CHECK-NOT: MSCATTER.MASK
 ; CHECK: ExecMaskPresent
+
+define void @signed_scatter(ptr %base, ptr %offset.ptr, ptr %value.ptr,
+                            i64 %mask) {
+  %offsets = load <32 x i64>, ptr %offset.ptr
+  %values = load <32 x i32>, ptr %value.ptr
+  call void @llvm.linx.experimental.ew.mscatter.gpr.masked.v32i64.v32i32(
+      i64 32, i64 1, i64 17, i64 29, i64 16, ptr %base,
+      <32 x i64> %offsets, <32 x i32> %values, i64 %mask, i64 0,
+      i64 0, i64 0)
+  ret void
+}
+
+; CHECK-LABEL: <signed_scatter>:
+; CHECK: BSTART.TLSU MSCATTER, S32
+; CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
+; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last
+; CHECK: ExecMaskPresent
+; CHECK-NOT: MSCATTER.MASK
 
 declare i64 @llvm.linx.experimental.ew.tcmp.gpr.v32i32(
     i64 immarg, i64 immarg, i64 immarg, i64 immarg, <32 x i32>,
