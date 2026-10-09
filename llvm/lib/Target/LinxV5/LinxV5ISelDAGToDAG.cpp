@@ -79,12 +79,12 @@ static SDNode *selectImmSeq(SelectionDAG *CurDAG, const SDLoc &DL,
       SDValue Zero = CurDAG->getRegister(LinxV5::R0, VT);
       Res = CurDAG->getMachineNode(I.Opc, DL, VT, {Zero, Src, SDImm});
     } else if (LinxV5::enableBFIOpt() && I.Opc == LinxV5::HL_BFI) {
-      // Packing mirrors generateMatIntSeq (issue #61): M in the low 6 bits
-      // (uimm6), N above (uimm6_plus1 on the instruction).
-      unsigned M = static_cast<unsigned>(I.Imm) & 0x3F;
-      unsigned N = static_cast<unsigned>(I.Imm) >> 6;
-      SDValue SDImm1 = CurDAG->getTargetConstant(M, DL, MVT::i64);
-      SDValue SDImm2 = CurDAG->getTargetConstant(N, DL, MVT::i64);
+      // Packing mirrors generateMatIntSeq: the raw inclusive immr endpoint is
+      // in the low six bits and the raw inclusive imms endpoint is above it.
+      unsigned First = static_cast<unsigned>(I.Imm) & 0x3F;
+      unsigned Last = static_cast<unsigned>(I.Imm) >> 6;
+      SDValue SDImm1 = CurDAG->getTargetConstant(First, DL, MVT::i64);
+      SDValue SDImm2 = CurDAG->getTargetConstant(Last, DL, MVT::i64);
       Res = CurDAG->getMachineNode(I.Opc, DL, MVT::i64,
                                    {Src, Src, SDImm1, SDImm2});
     } else {

@@ -4386,14 +4386,14 @@ def HL_MISUB : V5Inst_48_Mul_Arith<0b001, "hl.misub">;
 }
 
 let PE = PET_STD in {
-def HL_BFI :  V5Inst_48_M_A<0b010, (outs DstRWithArrow:$Dst), (ins GPRSrc:$SrcL, GPRSrc:$SrcR, uimm6:$ImmM, uimm6_plus1:$ImmN), "hl.bfi"> {
-  bits<6> ImmM;
-  bits<6> ImmN;
+def HL_BFI :  V5Inst_48_M_A<0b010, (outs DstRWithArrow:$Dst), (ins GPRSrc:$SrcL, GPRSrc:$SrcR, uimm6:$ImmR, uimm6:$ImmS), "hl.bfi"> {
+  bits<6> ImmR;
+  bits<6> ImmS;
 
   let Inst{47-41} = 0b0000000;
-  let Inst{15-10} = ImmM;
-  let Inst{9-4} = ImmN;
-  let AsmString = "hl.bfi" # "\t$SrcL, $SrcR, $ImmM, $ImmN, $Dst";
+  let Inst{15-10} = ImmS;
+  let Inst{9-4} = ImmR;
+  let AsmString = "hl.bfi" # "\t$SrcL, $SrcR, $ImmR, $ImmS, $Dst";
 }
 }
 
