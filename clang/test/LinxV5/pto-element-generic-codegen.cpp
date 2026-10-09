@@ -34,6 +34,8 @@ extern "C" void generic_i32(const int *__restrict input,
 // IR-NOT: @llvm.vp.
 // IR: ret void
 // OBJ-LABEL: <generic_i32>:
+// OBJ: BSTART.TEPL TCMPS, U64
+// OBJ-NEXT: {{.*}}B.DATR NORM.normal, Zero, LT
 // OBJ: BSTART.TLSU MGATHER, U32
 // OBJ: BSTART.TEPL TDIV, S32
 // OBJ: BSTART.TLSU MSCATTER, U32

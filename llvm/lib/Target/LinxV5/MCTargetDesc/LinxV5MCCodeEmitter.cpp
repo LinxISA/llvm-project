@@ -381,7 +381,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
       if (MI.getOpcode() == LinxV5::PseudoTCMPS_GPR) {
         writeBinaryCodes(OS, Fixups, STI,
             {MCInstBuilder(LinxV5::BDATR).addImm(0)
-                 .addImm(0).addImm(31).addImm(3).addOperand(MI.getOperand(9))
+                 .addImm(0).addImm(31).addImm(LinxV5Op::PadValue::Zero)
+                 .addOperand(MI.getOperand(9))
                  .addImm(0).addImm(0).addImm(0)}, Dummy);
         writeBinaryCodes(OS, Fixups, STI,
             compressMCInstVec(
