@@ -37,6 +37,7 @@ def linxv5_blk_matmul   : SDNode<"LinxV5ISD::BLK_MATMUL", SDT_LinxV5Call, [SDNPH
 def linxv5_blk_matmul_masked : SDNode<"LinxV5ISD::BLK_MATMUL_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tadd_masked : SDNode<"LinxV5ISD::EW_TADD_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tsub_masked : SDNode<"LinxV5ISD::EW_TSUB_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_tbinary_gpr_masked : SDNode<"LinxV5ISD::EW_TBINARY_GPR_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tcmp : SDNode<"LinxV5ISD::EW_TCMP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tsel : SDNode<"LinxV5ISD::EW_TSEL", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_texpands : SDNode<"LinxV5ISD::EW_TEXPANDS", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
@@ -3577,6 +3578,15 @@ def PseudoMSCATTER_MASK_SizeI : PseudoMTClImpl<(outs),
   let AsmString = "MSCATTER.MASK\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, $MaskTile, [$List]";
 }
 
+def PseudoMSCATTER_GPR_Masked_SizeI : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       BArgFormat:$Layout, TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$OffsetTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       GPRSrc:$Base, uimm1:$PredInv, uimm1:$Zero)> {
+  let AsmString = "MSCATTER.GPR.MASKED\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, [$Base]";
+}
+
 def PseudoMGATHER_ADD_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
        BstartDataType:$DataType, PadValue:$PadValue,
@@ -3663,6 +3673,20 @@ class PseudoTEPL_TBinary_Base :
 
 def PseudoTBinary_SizeI : PseudoTEPL_TBinary_Base;
 
+class PseudoTEPL_TBinary_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       TileOPTEPL:$Selector, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       uimm1:$PredInv, uimm1:$Zero)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "EW.TBINARY.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $Selector, $DstTile$TileSize";
+}
+def PseudoTBinary_GPR_Masked_SizeI : PseudoTEPL_TBinary_GPR_Masked_Base;
+
 class PseudoTEPL_TLEA_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3695,6 +3719,16 @@ class PseudoTEPL_TCMPS_GPR_Base :
 }
 def PseudoTCMPS_GPR : PseudoTEPL_TCMPS_GPR_Base;
 
+class PseudoTEPL_TCMP_GPR_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$Mask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, CmpMode:$CmpMode)> {
+  let AsmString = "TCMP.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $Mask";
+}
+def PseudoTCMP_GPR : PseudoTEPL_TCMP_GPR_Base;
+
 class PseudoTEPL_TCMP_Base :
   PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3720,6 +3754,17 @@ class PseudoTEPL_TSEL_Base :
 }
 
 def PseudoTSEL_SizeI : PseudoTEPL_TSEL_Base;
+
+class PseudoTEPL_TSEL_GPR_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$TrueTile,
+       TILE_Src_Reg:$FalseTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh)> {
+  let AsmString = "TSEL.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $MaskLow, $MaskHigh, $TrueTile, $FalseTile, $DstTile$TileSize";
+}
+def PseudoTSEL_GPR_SizeI : PseudoTEPL_TSEL_GPR_Base;
 
 class PseudoTEPL_TEXPANDS_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),

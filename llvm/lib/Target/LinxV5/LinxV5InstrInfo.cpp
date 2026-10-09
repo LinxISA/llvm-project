@@ -213,9 +213,13 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTBinary_SizeI) {
     return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI) {
+    return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI) {
+    return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI) {
     return MI.getOperand(7).getImm();
@@ -229,6 +233,8 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(8).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI) {
     return MI.getOperand(6).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_GPR_Masked_SizeI) {
+    return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI) {
