@@ -106,10 +106,10 @@ The first physical legalization profile is enabled with
 pipeline followed by ``linx-v5-element-tile-legalize`` and the mandatory region
 verifier.  It does not fall back to the older publication/gather/atomic profile
 recognizer when an operation is unsupported.  This option remains off by
-default while broader shape, typed-view and control-flow support is developed.
+default while broader shape and control-flow support is developed.
 
-Current machine-code scope is 32 logical elements of i32 data, canonical
-independent element memory streams, and the reducible acyclic iteration CFG
+Current machine-code scope is 32 logical elements of S32/U32 data, public typed
+Tile views, canonical independent i32 memory streams, and the acyclic iteration CFG
 already accepted by the predicator.  The backend chooses M32 internally;
 source programs use ordinary element indices without naming layout or lanes.
 The usual Linx Tile register configuration is still required when generating
@@ -134,6 +134,27 @@ publishes the matching index backing dtype before TLEA.  Proven representable
 i64 constant indices may use an equivalent U32 index Tile, and identical byte
 offset streams are shared.  The source-level semantics do not change.
 
+The public ``TPARTELEMENT`` annotation is prepared before ordinary SROA and
+promotion. Typed carriers retain their vector SSA type: an exact-IV extract
+maps to the current carrier, an exact-IV insert becomes a masked value update,
+and carrier PHIs use the same edge masks as scalar PHIs. Accumulator seeds keep
+their original values on unwritten elements. Only final backedge values and
+their compatible identity views may leave an accumulator region; intermediate
+iteration snapshots remain unsupported. Read-only views of a dominating Tile
+producer can be shared by later regions through ordinary LCSSA.
+
+Tile inputs and outputs use the existing ``Tr`` whole-carrier operand ABI.
+Consumer validation parses the operand constraints, including indirect output
+argument positions; it does not match assembly mnemonics. Imports require
+proven Tile producers or an already validated region publication. Final S32
+publications restore their signed dtype before subsequent TileOp consumers.
+No GM roundtrip or private Tile API wrapper is introduced.
+
+LLVM may narrow scalar control arithmetic to i8 or i16. The generic predicator
+represents those integer bits in i32 vectors, explicitly normalizes arithmetic
+and truncation modulo the original width, and sign-extends signed operations
+and casts before widening. This does not admit sub-i32 GM memory accesses.
+
 The predicator attaches the original region token and domain to the IR it
 emits.  The legalizer preflights all token-owned regions before mutation,
 preserves memory-root order, and consumes each sentinel only after removing
@@ -141,7 +162,8 @@ the complete owned VP/vector-pointer graph.  Missing ownership, escaping
 values, unsupported domains, partial EVL, effects or types receive diagnostics.
 Unmarked functions do not run the extra generic CFG canonicalization pipeline.
 
-This first executable profile operates on ordinary GM arrays.  It does not yet
-connect the public typed Tile element views to generic VP IR, support varying
-inner loops or general atomics, or close typed Tile spills at O0.  Existing
-typed Tile API tests and the generic GM-array tests are separate coverage lanes.
+The executable profile covers both ordinary GM arrays and the official S32/U32
+TileOp -> element-for -> TileOp bridge. Varying inner loops, general atomics,
+wider Tile shapes/dtypes, and typed Tile spills at O0 remain unsupported.
+The GM-array, public typed-view and whole-application migration tests remain
+separate coverage lanes.

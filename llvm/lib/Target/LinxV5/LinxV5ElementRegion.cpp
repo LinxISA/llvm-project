@@ -12,6 +12,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -19,8 +20,8 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -33,14 +34,14 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Scalar/SROA.h"
-#include "llvm/Transforms/Utils/Mem2Reg.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
-#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/LCSSA.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/Mem2Reg.h"
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -412,6 +413,13 @@ static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
                         *Profile};
 }
 
+static bool sameCarrierStorage(const ViewDescriptor &A,
+                               const ViewDescriptor &B) {
+  return A.StorageID == B.StorageID && A.Offset == B.Offset &&
+         A.Range == B.Range && A.Profile.DataType == B.Profile.DataType &&
+         A.ScalarizedLaneZero == B.ScalarizedLaneZero;
+}
+
 static MDNode *getElementRegionToken(const Loop &L) {
   MDNode *LoopID = L.getLoopID();
   if (!LoopID)
@@ -553,11 +561,103 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
 // Tile publication/gather/atomic profiles below. All legality is checked before
 // mutation. It deliberately leaves the mandatory sentinel for target lowering.
 struct PredicatedRegion {
-  Loop *L;
-  PHINode *Induction;
-  unsigned Count;
+  Loop *L = nullptr;
+  PHINode *Induction = nullptr;
+  unsigned Count = 0;
   SmallVector<BasicBlock *, 16> Order;
+  DenseMap<PHINode *, ViewDescriptor> Accumulators;
+  DenseMap<Value *, ViewDescriptor> Publications;
 };
+
+static bool isElementCarrier(Value *V) {
+  return V->getType() ==
+         FixedVectorType::get(Type::getInt32Ty(V->getContext()), 32);
+}
+
+static Value *stripCarrierLCSSA(Value *V) {
+  while (auto *Phi = dyn_cast<PHINode>(V)) {
+    if (!isElementCarrier(Phi) || Phi->getNumIncomingValues() != 1)
+      break;
+    V = Phi->getIncomingValue(0);
+  }
+  return V;
+}
+
+static bool isTileCarrierProducer(Value *V) {
+  auto *Call = dyn_cast<CallBase>(V);
+  if (!Call || !Call->isInlineAsm() || !isElementCarrier(V))
+    return false;
+  auto *Asm = cast<InlineAsm>(Call->getCalledOperand());
+  auto Constraints = Asm->ParseConstraints();
+  return !Constraints.empty() &&
+         Constraints.front().Type == InlineAsm::isOutput &&
+         !Constraints.front().isIndirect &&
+         llvm::any_of(Constraints.front().Codes,
+                      [](const std::string &Code) { return Code == "Tr"; });
+}
+
+static bool isTypedTileImport(Value *V, SmallPtrSetImpl<Value *> &Seen) {
+  V = stripCarrierLCSSA(V);
+  if (!Seen.insert(V).second)
+    return true;
+  if (auto View = getViewDescriptor(V)) {
+    if (View->ScalarizedLaneZero)
+      return false;
+    if (View->Marker->getMetadata(PredicatedOwnerMD))
+      return true; // Checked by the owning token's complete legalization plan.
+    return isTypedTileImport(View->Marker->getArgOperand(0), Seen);
+  }
+  if (isTileCarrierProducer(V) || isa<UndefValue>(V) || isa<PoisonValue>(V))
+    return true;
+  if (auto *Phi = dyn_cast<PHINode>(V)) {
+    if (!isElementCarrier(Phi))
+      return false;
+    return llvm::all_of(Phi->incoming_values(), [&](Value *Incoming) {
+      return isTypedTileImport(Incoming, Seen);
+    });
+  }
+  return false;
+}
+
+static bool isTypedTileImport(Value *V) {
+  SmallPtrSet<Value *, 16> Seen;
+  return isTypedTileImport(V, Seen);
+}
+
+// Infer a carrier's public descriptor over its SSA graph. Header seeds are
+// imports, not extra iterations; the backedge determines the publication type.
+static Optional<ViewDescriptor>
+carrierDescriptor(Value *V, Loop &L, SmallPtrSetImpl<Value *> &Seen) {
+  if (!Seen.insert(V).second)
+    return None;
+  if (auto Descriptor = getViewDescriptor(V))
+    return Descriptor;
+  SmallVector<Value *, 4> Sources;
+  if (auto *Phi = dyn_cast<PHINode>(V)) {
+    for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I)
+      if (L.contains(Phi->getIncomingBlock(I)) ||
+          getViewDescriptor(stripCarrierLCSSA(Phi->getIncomingValue(I))))
+        Sources.push_back(Phi->getIncomingValue(I));
+  } else if (auto *Insert = dyn_cast<InsertElementInst>(V)) {
+    Sources.push_back(Insert->getOperand(0));
+  } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+    Sources.push_back(Select->getTrueValue());
+    Sources.push_back(Select->getFalseValue());
+  }
+  Optional<ViewDescriptor> Result;
+  for (Value *Source : Sources) {
+    auto Candidate = carrierDescriptor(Source, L, Seen);
+    if (!Candidate)
+      continue;
+    if (Result && (Result->StorageID != Candidate->StorageID ||
+                   Result->Offset != Candidate->Offset ||
+                   Result->Profile.DataType != Candidate->Profile.DataType))
+      diagnose(*L.getHeader()->getParent(), dyn_cast<Instruction>(V),
+               "carrier PHI merges incompatible typed storage identities");
+    Result = Candidate;
+  }
+  return Result;
+}
 
 static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                             DominatorTree &DT, AAResults &AA,
@@ -582,9 +682,20 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
   if (!Plan.Induction || !Plan.Count || Plan.Count > 4096)
     return Fail(L.getHeader()->getTerminator(),
                 "requires a proven 1..4096 trip count and zero-based unit induction");
-  for (PHINode &Phi : L.getHeader()->phis())
-    if (&Phi != Plan.Induction)
+  for (PHINode &Phi : L.getHeader()->phis()) {
+    if (&Phi == Plan.Induction)
+      continue;
+    if (Plan.Count != 32 || !isElementCarrier(&Phi))
       return Fail(&Phi, "loop-carried recurrences are not yet supported");
+    Value *Final = Phi.getIncomingValueForBlock(L.getLoopLatch());
+    SmallPtrSet<Value *, 16> Seen;
+    auto Descriptor = carrierDescriptor(Final, L, Seen);
+    if (!Descriptor || Descriptor->ScalarizedLaneZero)
+      return Fail(&Phi,
+                  "carrier accumulator requires a typed final publication");
+    Plan.Accumulators[&Phi] = *Descriptor;
+    Plan.Publications.insert({Final, *Descriptor});
+  }
 
   // Kahn order over one iteration, excluding only the proven latch backedge.
   DenseMap<BasicBlock *, unsigned> Pending;
@@ -613,22 +724,97 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     return Fail(L.getHeader()->getTerminator(),
                 "iteration CFG must be acyclic after removing its backedge");
 
+  auto IsCarrierOperand = [&](Value *V) {
+    if (getViewDescriptor(stripCarrierLCSSA(V)))
+      return true;
+    auto *I = dyn_cast<Instruction>(V);
+    return I && L.contains(I) && isElementCarrier(I) &&
+           (isa<InsertElementInst>(I) ||
+            (isa<PHINode>(I) && (I->getParent() != L.getHeader() ||
+                                 Plan.Accumulators.count(cast<PHINode>(I)))));
+  };
   const DataLayout &DL = F.getParent()->getDataLayout();
   SmallVector<Instruction *, 8> Memory;
   for (BasicBlock *BB : Plan.Order) {
     for (Instruction &I : *BB) {
       if (I.isTerminator() || isa<DbgInfoIntrinsic>(I))
         continue;
+      bool Carrier = Plan.Count == 32 && isElementCarrier(&I);
       if (!I.getType()->isVoidTy() && !I.getType()->isIntegerTy() &&
-          !I.getType()->isPointerTy())
+          !I.getType()->isPointerTy() && !Carrier)
         return Fail(&I, "requires scalar integer or pointer results");
+      // An invariant typed import can be shared by later regions. Its carrier
+      // is a preheader SSA version, unlike an accumulator's iteration snapshot.
+      auto InvariantView = getViewDescriptor(&I);
+      if (InvariantView) {
+        auto Final =
+            Plan.Publications.find(InvariantView->Marker->getArgOperand(0));
+        if (Final != Plan.Publications.end()) {
+          const auto &Descriptor = Final->second;
+          if (!sameCarrierStorage(Descriptor, *InvariantView))
+            return Fail(&I,
+                        "final publication changes its typed storage identity");
+          Plan.Publications.insert({&I, *InvariantView});
+        }
+      }
+      bool ImmutableImport = false;
+      if (InvariantView && !InvariantView->ScalarizedLaneZero) {
+        Value *Source = InvariantView->Marker->getArgOperand(0);
+        auto *SourceI = dyn_cast<Instruction>(Source);
+        ImmutableImport =
+            SourceI && !L.contains(SourceI) &&
+            DT.dominates(SourceI, L.getLoopPreheader()->getTerminator()) &&
+            isTypedTileImport(Source);
+      }
       for (User *U : I.users())
         if (auto *UseI = dyn_cast<Instruction>(U))
-          if (!L.contains(UseI))
-            return Fail(&I, "scalar live-outs require a separate exit-value plan");
+          if (!L.contains(UseI) && !Plan.Publications.count(&I)) {
+            if (!ImmutableImport)
+              return Fail(
+                  &I,
+                  "live-out must be the final typed accumulator publication");
+            Plan.Publications.insert({&I, *InvariantView});
+          }
+      if (auto Descriptor = getViewDescriptor(&I)) {
+        Value *Source = Descriptor->Marker->getArgOperand(0);
+        if (Descriptor->ScalarizedLaneZero || Plan.Count != 32)
+          return Fail(&I, "typed carrier requires a full 32-element domain");
+        if (auto *Producer = dyn_cast<Instruction>(Source)) {
+          if (!L.contains(Producer) &&
+              (!DT.dominates(Producer, L.getLoopPreheader()->getTerminator()) ||
+               !isTypedTileImport(Source)))
+            return Fail(&I, "typed import requires a dominating Tile producer");
+        } else if (!isa<UndefValue>(Source) && !isa<PoisonValue>(Source)) {
+          return Fail(&I, "typed import requires an explicit Tile producer");
+        }
+        continue;
+      }
+      if (auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
+        if (!isElementCarrier(Extract->getVectorOperand()) ||
+            SE.getSCEV(Extract->getIndexOperand()) !=
+                SE.getSCEV(Plan.Induction) ||
+            !IsCarrierOperand(Extract->getVectorOperand()))
+          return Fail(
+              &I, "carrier extract requires a typed view and exact element IV");
+        if (auto *Source = dyn_cast<Instruction>(Extract->getVectorOperand()))
+          if (!L.contains(Source) &&
+              (!DT.dominates(Source, L.getLoopPreheader()->getTerminator()) ||
+               !isTypedTileImport(Source)))
+            return Fail(&I, "typed import requires a dominating Tile producer");
+        continue;
+      }
+      if (auto *Insert = dyn_cast<InsertElementInst>(&I)) {
+        if (!Carrier ||
+            SE.getSCEV(Insert->getOperand(2)) != SE.getSCEV(Plan.Induction) ||
+            !IsCarrierOperand(Insert->getOperand(0)))
+          return Fail(
+              &I, "carrier insert requires a typed view and exact element IV");
+        continue;
+      }
       if (isa<PHINode>(I)) {
-        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy())
-          return Fail(&I, "PHI requires a scalar integer or pointer");
+        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy() &&
+            !Carrier)
+          return Fail(&I, "PHI requires a scalar or typed carrier");
         continue;
       }
       if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
@@ -671,8 +857,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       } else {
         return Fail(&I, "unsupported opcode or effect in generic IR stage");
       }
-      if (!AccessTy->isIntegerTy())
-        return Fail(&I, "memory value must be a scalar integer");
+      if (!AccessTy->isIntegerTy(32))
+        return Fail(&I, "memory profile requires scalar i32 accesses");
       // Start with independently indexed objects. This proof is stronger than
       // unordered iteration: it excludes conflicting non-atomic memory effects.
       const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Pointer));
@@ -718,6 +904,17 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   Value *True = Constant::getAllOnesValue(MaskTy);
   Value *EVL = B.getInt32(Plan.Count);
   DenseMap<Value *, Value *> Values;
+  SimplifyQuery SQ(F.getParent()->getDataLayout());
+  auto UnionMask = [&](Value *Left, Value *Right, const Twine &Name) {
+    if (Value *Simple = simplifyOrInst(Left, Right, SQ))
+      return Simple;
+    return B.CreateOr(Left, Right, Name);
+  };
+  auto Blend = [&](Value *Mask, Value *Yes, Value *No, const Twine &Name) {
+    if (Value *Simple = simplifySelectInst(Mask, Yes, No, SQ))
+      return Simple;
+    return B.CreateSelect(Mask, Yes, No, Name);
+  };
   // Successor index is part of identity: a conditional can have two edges to
   // the same destination, and neither edge may be silently dropped.
   DenseMap<std::pair<BasicBlock *, unsigned>, Value *> Edges;
@@ -726,21 +923,69 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     Indices.push_back(ConstantInt::get(Plan.Induction->getType(), I));
   Values[Plan.Induction] = ConstantVector::get(Indices);
 
+  // LLVM narrows scalar control arithmetic (for example IV % 5) to i8.
+  // Represent those bits in i32 Tiles, with explicit modulo normalization and
+  // sign extension; this is value legalization, independent of source syntax.
+  auto WideType = [&](Type *Ty) -> Type * {
+    if (Ty->isVoidTy() || Ty->isVectorTy())
+      return Ty;
+    if (Ty->isIntegerTy() && Ty->getIntegerBitWidth() > 1 &&
+        Ty->getIntegerBitWidth() < 32)
+      Ty = B.getInt32Ty();
+    return FixedVectorType::get(Ty, Plan.Count);
+  };
   auto Widen = [&](Value *V) -> Value * {
     auto It = Values.find(V);
     if (It != Values.end())
       return It->second;
     assert((!isa<Instruction>(V) || !L.contains(cast<Instruction>(V))) &&
            "preflight and topological order must cover every operand");
-    Value *Wide = B.CreateVectorSplat(Plan.Count, V, "pto.uniform");
+    Value *Scalar = V;
+    if (V->getType()->isIntegerTy() && V->getType()->getIntegerBitWidth() > 1 &&
+        V->getType()->getIntegerBitWidth() < 32)
+      Scalar = B.CreateZExt(V, B.getInt32Ty(), "pto.narrow.uniform");
+    Value *Wide = isElementCarrier(V)
+                      ? V
+                      : B.CreateVectorSplat(Plan.Count, Scalar, "pto.uniform");
+    if (isElementCarrier(V) && isa<PHINode>(V)) {
+      if (auto Descriptor = getViewDescriptor(stripCarrierLCSSA(V))) {
+        auto *Marker = Descriptor->Marker;
+        SmallVector<Value *, 9> Args(Marker->args());
+        Args[0] = V;
+        Wide = B.CreateCall(Marker->getCalledFunction(), Args,
+                            "pto.carrier.import");
+      }
+    }
     Values[V] = Wide;
     return Wide;
   };
+  for (const auto &Entry : Plan.Accumulators) {
+    PHINode *Phi = Entry.first;
+    auto *Marker = Entry.second.Marker;
+    SmallVector<Value *, 9> Args(Marker->args());
+    Args[0] = Phi->getIncomingValueForBlock(L.getLoopPreheader());
+    Values[Phi] =
+        B.CreateCall(Marker->getCalledFunction(), Args, "pto.carrier.seed");
+  }
   auto EmitVP = [&](Intrinsic::ID ID, Type *Ty,
                     ArrayRef<Value *> Args) -> CallInst * {
     Function *Callee =
         VPIntrinsic::getDeclarationForParams(F.getParent(), ID, Ty, Args);
     return B.CreateCall(Callee, Args, Ty->isVoidTy() ? "" : "pto.vp");
+  };
+  auto Narrow = [&](Value *V, unsigned Width, Value *Mask) -> Value * {
+    Value *Bits =
+        ConstantVector::getSplat(ElementCount::getFixed(Plan.Count),
+                                 B.getInt32((uint64_t(1) << Width) - 1));
+    return EmitVP(Intrinsic::vp_and, V->getType(), {V, Bits, Mask, EVL});
+  };
+  auto SignExtendNarrow = [&](Value *V, unsigned Width,
+                              Value *Mask) -> Value * {
+    Value *Shift = ConstantVector::getSplat(ElementCount::getFixed(Plan.Count),
+                                            B.getInt32(32 - Width));
+    Value *Left =
+        EmitVP(Intrinsic::vp_shl, V->getType(), {V, Shift, Mask, EVL});
+    return EmitVP(Intrinsic::vp_ashr, V->getType(), {Left, Shift, Mask, EVL});
   };
   auto EdgeFrom = [&](BasicBlock *Pred, BasicBlock *Dest) -> Value * {
     Value *Mask = False;
@@ -749,7 +994,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       if (Term->getSuccessor(J) == Dest) {
         Value *Edge = Edges.lookup({Pred, J});
         assert(Edge && "all predecessor edges must already be built");
-        Mask = B.CreateOr(Mask, Edge, "pto.edge.union");
+        Mask = UnionMask(Mask, Edge, "pto.edge.union");
       }
     return Mask;
   };
@@ -758,36 +1003,80 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     Value *Mask = BB == L.getHeader() ? True : False;
     if (BB != L.getHeader())
       for (BasicBlock *Pred : predecessors(BB))
-        Mask = B.CreateOr(Mask, EdgeFrom(Pred, BB), "pto.block.mask");
+        Mask = UnionMask(Mask, EdgeFrom(Pred, BB), "pto.block.mask");
     for (Instruction &I : *BB) {
-      if (&I == Plan.Induction || I.isTerminator() || isa<DbgInfoIntrinsic>(I))
+      if (&I == Plan.Induction ||
+          Plan.Accumulators.count(dyn_cast<PHINode>(&I)) || I.isTerminator() ||
+          isa<DbgInfoIntrinsic>(I))
         continue;
       B.SetCurrentDebugLocation(I.getDebugLoc());
       Value *Result = nullptr;
-      Type *WideTy = I.getType()->isVoidTy()
-                         ? I.getType()
-                         : FixedVectorType::get(I.getType(), Plan.Count);
-      if (auto *Phi = dyn_cast<PHINode>(&I)) {
+      Type *WideTy = WideType(I.getType());
+      if (auto Descriptor = getViewDescriptor(&I)) {
+        auto *Marker = Descriptor->Marker;
+        SmallVector<Value *, 9> Args(Marker->args());
+        Args[0] = Widen(Marker->getArgOperand(0));
+        Result =
+            B.CreateCall(Marker->getCalledFunction(), Args, "pto.carrier.view");
+      } else if (auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
+        Result = Widen(Extract->getVectorOperand());
+      } else if (auto *Insert = dyn_cast<InsertElementInst>(&I)) {
+        Result = Blend(Mask, Widen(Insert->getOperand(1)),
+                       Widen(Insert->getOperand(0)), "pto.carrier.update");
+      } else if (auto *Phi = dyn_cast<PHINode>(&I)) {
         Result = PoisonValue::get(WideTy);
         for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
-          Result = B.CreateSelect(
-              EdgeFrom(Phi->getIncomingBlock(J), BB),
-              Widen(Phi->getIncomingValue(J)), Result, "pto.phi");
+          Result = Blend(EdgeFrom(Phi->getIncomingBlock(J), BB),
+                         Widen(Phi->getIncomingValue(J)), Result, "pto.phi");
       } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
+        Value *Left = Widen(Binary->getOperand(0));
+        Value *Right = Widen(Binary->getOperand(1));
+        unsigned Width = Binary->getType()->getIntegerBitWidth();
+        if (Width > 1 && Width < 32 &&
+            (Binary->getOpcode() == Instruction::SDiv ||
+             Binary->getOpcode() == Instruction::SRem ||
+             Binary->getOpcode() == Instruction::AShr)) {
+          Left = SignExtendNarrow(Left, Width, Mask);
+          if (Binary->getOpcode() != Instruction::AShr)
+            Right = SignExtendNarrow(Right, Width, Mask);
+        }
         Result = EmitVP(VPIntrinsic::getForOpcode(Binary->getOpcode()), WideTy,
-                        {Widen(Binary->getOperand(0)), Widen(Binary->getOperand(1)),
-                         Mask, EVL});
+                        {Left, Right, Mask, EVL});
+        if (Width > 1 && Width < 32)
+          Result = Narrow(Result, Width, Mask);
       } else if (auto *Compare = dyn_cast<ICmpInst>(&I)) {
-        Result = B.CreateICmp(Compare->getPredicate(),
-                              Widen(Compare->getOperand(0)),
-                              Widen(Compare->getOperand(1)), "pto.compare");
+        Value *Left = Widen(Compare->getOperand(0));
+        Value *Right = Widen(Compare->getOperand(1));
+        unsigned Width =
+            Compare->getOperand(0)->getType()->getScalarSizeInBits();
+        if (Width > 1 && Width < 32 && Compare->isSigned()) {
+          Left = SignExtendNarrow(Left, Width, Mask);
+          Right = SignExtendNarrow(Right, Width, Mask);
+        }
+        Result =
+            B.CreateICmp(Compare->getPredicate(), Left, Right, "pto.compare");
       } else if (auto *Select = dyn_cast<SelectInst>(&I)) {
         Result = B.CreateSelect(Widen(Select->getCondition()),
                                 Widen(Select->getTrueValue()),
                                 Widen(Select->getFalseValue()), "pto.select");
       } else if (auto *Cast = dyn_cast<CastInst>(&I)) {
-        Result = B.CreateCast(Cast->getOpcode(), Widen(Cast->getOperand(0)),
-                              WideTy, "pto.cast");
+        unsigned SourceWidth = Cast->getSrcTy()->getIntegerBitWidth();
+        unsigned DestWidth = Cast->getDestTy()->getIntegerBitWidth();
+        Value *Source = Widen(Cast->getOperand(0));
+        if (SourceWidth > 1 && SourceWidth < 32 &&
+            Cast->getOpcode() == Instruction::SExt)
+          Source = SignExtendNarrow(Source, SourceWidth, Mask);
+        if (DestWidth > 1 && DestWidth < 32) {
+          if (Source->getType() != WideTy)
+            Source =
+                B.CreateCast(Cast->getOpcode(), Source, WideTy, "pto.cast");
+          Result = Narrow(Source, DestWidth, Mask);
+        } else {
+          Result =
+              Source->getType() == WideTy
+                  ? Source
+                  : B.CreateCast(Cast->getOpcode(), Source, WideTy, "pto.cast");
+        }
       } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
         Result = B.CreateGEP(GEP->getSourceElementType(),
                              Widen(GEP->getPointerOperand()),
@@ -821,12 +1110,30 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
           Condition = B.CreateNot(Condition, "pto.edge.not");
         // As in LoopVectorize::createEdgeMask, and(false, poison) is poison;
         // select suppresses a condition that was never evaluated by this element.
-        Edge = B.CreateSelect(Mask, Condition, False, "pto.edge.mask");
+        Edge = Blend(Mask, Condition, False, "pto.edge.mask");
       }
       Edges[{BB, J}] = Edge;
     }
   }
-  // Effects now exist as ordered VP calls. No scalar live-outs were accepted.
+  for (const auto &Entry : Plan.Publications) {
+    Value *Publication = Entry.first;
+    Value *Result = Values.lookup(Publication);
+    assert(Result && "final publication must have a mapped carrier");
+    auto ResultDescriptor = getViewDescriptor(Result);
+    if (!ResultDescriptor ||
+        !sameCarrierStorage(*ResultDescriptor, Entry.second)) {
+      auto *Marker = Entry.second.Marker;
+      SmallVector<Value *, 9> Args(Marker->args());
+      Args[0] = Result;
+      Result =
+          B.CreateCall(Marker->getCalledFunction(), Args, "pto.carrier.final");
+    }
+    Publication->replaceUsesWithIf(Result, [&](Use &U) {
+      auto *User = dyn_cast<Instruction>(U.getUser());
+      return User && !L.contains(User);
+    });
+  }
+  // Effects now exist as ordered VP calls; typed live-outs have been rewritten.
   // Keep the sentinel: this is generic IR, not yet legal PTO Machine IR.
   // Ownership survives loop deletion and does not rely on instruction names,
   // function order, or recognizing a particular source expression.
@@ -840,6 +1147,56 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   deleteDeadLoop(&L, &DT, &SE, &LI);
 }
 
+// Tile values cross the region boundary through whole-carrier register inputs.
+// Match operand constraints, including the outputs that precede input operands.
+static bool isWholeTileConsumer(const CallBase &Call, Value *Carrier) {
+  if (!Call.isInlineAsm() || !isElementCarrier(Carrier))
+    return false;
+  auto *Asm = cast<InlineAsm>(Call.getCalledOperand());
+  unsigned Argument = 0;
+  bool Found = false;
+  for (const auto &Constraint : Asm->ParseConstraints()) {
+    if (Constraint.Type == InlineAsm::isOutput && Constraint.isIndirect) {
+      ++Argument;
+      continue;
+    }
+    if (Constraint.Type != InlineAsm::isInput)
+      continue;
+    if (Argument >= Call.arg_size())
+      return false;
+    if (Call.getArgOperand(Argument++) == Carrier) {
+      if (Constraint.isIndirect || Constraint.Codes.size() != 1 ||
+          Constraint.Codes.front() != "Tr")
+        return false;
+      Found = true;
+    }
+  }
+  return Found;
+}
+
+static bool hasWholeCarrierConsumers(Value *V, SmallPtrSetImpl<Value *> &Seen) {
+  if (!Seen.insert(V).second)
+    return true;
+  for (User *U : V->users()) {
+    auto *I = dyn_cast<Instruction>(U);
+    if (!I)
+      return false;
+    if (I->getMetadata(PredicatedOwnerMD))
+      continue;
+    if (auto *Phi = dyn_cast<PHINode>(I)) {
+      if (isTypedTileImport(Phi) && hasWholeCarrierConsumers(Phi, Seen))
+        continue;
+    }
+    if (auto *Call = dyn_cast<CallBase>(I)) {
+      if (isWholeTileConsumer(*Call, V) ||
+          (getViewDescriptor(Call) && hasWholeCarrierConsumers(Call, Seen)))
+        continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 // The first physical profile uses 32 M32 rows and one column. Logical mask SSA
 // remains independent of this choice: it is mapped to low 32 GPR bits here, not
 // in Clang or the CFG predicator. Each new Tile definition is fully initialized
@@ -849,6 +1206,7 @@ class ElementTileLegalizer {
   SmallVector<Instruction *, 64> Owned;
   SmallPtrSet<Instruction *, 32> OwnedSet;
   SmallPtrSet<Value *, 32> Validated;
+  SmallVector<CallInst *, 8> Publications;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
@@ -919,6 +1277,19 @@ class ElementTileLegalizer {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
     if (!Ty || Ty->getNumElements() != 32)
       return fail(V, "requires 32-element fixed vectors");
+    if (auto Descriptor = getViewDescriptor(V)) {
+      if (Descriptor->ScalarizedLaneZero)
+        return fail(V, "typed import requires a full Tile carrier");
+      if (!OwnedSet.contains(Descriptor->Marker))
+        return isTypedTileImport(V) ||
+               fail(V, "typed import requires an explicit Tile producer");
+      Value *Source = Descriptor->Marker->getArgOperand(0);
+      if (auto *I = dyn_cast<Instruction>(Source))
+        if (!OwnedSet.contains(I))
+          return isTypedTileImport(Source) ||
+                 fail(V, "typed import requires an explicit Tile producer");
+      return validate(Source);
+    }
     if (auto *I = dyn_cast<Instruction>(V))
       if (!OwnedSet.contains(I))
         return fail(V, "vector producer is outside its token-owned region");
@@ -1238,7 +1609,16 @@ class ElementTileLegalizer {
       return It->second;
     auto *Ty = cast<FixedVectorType>(V->getType());
     Value *R = nullptr;
-    if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+    if (auto Descriptor = getViewDescriptor(V)) {
+      Value *Source = Descriptor->Marker->getArgOperand(0);
+      if (auto *I = dyn_cast<Instruction>(Source)) {
+        if (!OwnedSet.contains(I) && !getViewDescriptor(Source)) {
+          PhysicalTypes[Source] = Descriptor->Profile.DataType;
+          return Data[V] = Source;
+        }
+      }
+      R = indexSource(value(Source), Descriptor->Profile.DataType);
+    } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
       R = splat(ConstantInt::get(Ty->getElementType(), 0), Ty);
     } else if (Value *Scalar = getSplatValue(V)) {
       R = splat(Scalar, Ty);
@@ -1287,13 +1667,53 @@ public:
   }
 
   bool preflight() {
+    if (Owned.empty())
+      return fail(nullptr, "empty predicated region");
     for (Instruction *I : Owned) {
       if (I->getParent() != Owned.front()->getParent())
         return fail(I, "first physical profile requires one predicated IR block");
-      for (User *U : I->users())
-        if (!isa<Instruction>(U) || !OwnedSet.contains(cast<Instruction>(U)))
-          return fail(I, "vector live-out escapes its token-owned region");
+      bool External = false;
+      SmallPtrSet<Value *, 16> Visited;
+      std::function<bool(Value *)> Consumers = [&](Value *V) {
+        if (!Visited.insert(V).second)
+          return true;
+        for (User *U : V->users()) {
+          auto *UserI = dyn_cast<Instruction>(U);
+          if (UserI && OwnedSet.contains(UserI))
+            continue;
+          External = true;
+          if (auto *Phi = dyn_cast_or_null<PHINode>(UserI)) {
+            if (isTypedTileImport(Phi) && Consumers(Phi))
+              continue;
+          }
+          if (auto *Call = dyn_cast_or_null<CallBase>(UserI)) {
+            auto View = getViewDescriptor(Call);
+            auto Publication = getViewDescriptor(I);
+            if (View && Publication && !Call->getMetadata(PredicatedOwnerMD) &&
+                !sameCarrierStorage(*View, *Publication))
+              return fail(
+                  Call, "final publication changes its typed storage identity");
+            if (isWholeTileConsumer(*Call, V) ||
+                (View && Call->getMetadata(PredicatedOwnerMD) &&
+                 !OwnedSet.contains(cast<Instruction>(Call))) ||
+                (View && Consumers(Call)))
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!Consumers(I) || (External && !getViewDescriptor(I)))
+        return fail(I,
+                    "vector live-out escapes its typed publication boundary");
+      if (External) {
+        if (!validate(I))
+          return false;
+        Publications.push_back(cast<CallInst>(I));
+      }
       if (I->mayHaveSideEffects() || I->mayReadOrWriteMemory()) {
+        if (getViewDescriptor(I))
+          continue;
         auto *VP = dyn_cast<VPIntrinsic>(I);
         if (!VP || !validateVP(*VP))
           return fail(I, "unsupported token-owned side effect");
@@ -1325,6 +1745,15 @@ public:
                B.getInt64(A.IndexType), A.Base, A.Offset, Source,
                activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(0)});
       }
+    }
+    for (CallInst *Publication : Publications) {
+      B.SetInsertPoint(Publication);
+      B.SetCurrentDebugLocation(Publication->getDebugLoc());
+      Value *Result = value(Publication);
+      Publication->replaceUsesWithIf(Result, [&](Use &U) {
+        auto *I = dyn_cast<Instruction>(U.getUser());
+        return !I || !OwnedSet.contains(I);
+      });
     }
     for (Instruction *I : Owned)
       I->dropAllReferences();
@@ -2901,7 +3330,7 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
       break;
     auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-    PredicatedRegion Plan{};
+    PredicatedRegion Plan;
     if (!planPredication(F, *Selected, SE, DT, AM.getResult<AAManager>(F), Plan))
       break;
     emitPredication(F, Plan, LI, SE, DT);
@@ -2954,11 +3383,28 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
       if (!Tokens.contains(Owner))
         diagnose(F, &I, "Tile legalization: unknown predicated region token");
+  for (Instruction &I : instructions(F)) {
+    auto View = getViewDescriptor(&I);
+    if (!View || I.getMetadata(PredicatedOwnerMD))
+      continue;
+    SmallPtrSet<Value *, 16> Seen;
+    if (!isTypedTileImport(&I) || !hasWholeCarrierConsumers(&I, Seen))
+      diagnose(F, &I,
+               "Tile legalization: invalid external typed carrier boundary");
+  }
   // Preflight every region before publishing any target IR. Consumption of the
   // sentinel is the last step, after all token-owned VP/vector-pointer IR is gone.
   for (unsigned I = 0; I < Plans.size(); ++I) {
     Plans[I]->emit();
     Sentinels[I]->eraseFromParent();
+  }
+  SmallVector<CallInst *, 8> Views;
+  for (Instruction &I : instructions(F))
+    if (getViewDescriptor(&I))
+      Views.push_back(cast<CallInst>(&I));
+  for (CallInst *View : Views) {
+    View->replaceAllUsesWith(View->getArgOperand(0));
+    View->eraseFromParent();
   }
   return PreservedAnalyses::none();
 }
@@ -2972,6 +3418,7 @@ LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!HasRegion)
     return prepareViews(F) ? PreservedAnalyses::none() : PreservedAnalyses::all();
   FunctionPassManager Prepare;
+  Prepare.addPass(LinxV5ElementRegionPreparePass());
   Prepare.addPass(LinxV5ElementRegionPromotePass());
   Prepare.addPass(LoopSimplifyPass());
   Prepare.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
