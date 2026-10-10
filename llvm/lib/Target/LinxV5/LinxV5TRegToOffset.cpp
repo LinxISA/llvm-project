@@ -357,13 +357,17 @@ public:
   bool IsScalarRC;
   bool IsTileRC;
   size_t HeadIdx, TailIdx, PreIdx;
+  // Issue #121: HeadIdx as restored by init(), i.e. the window position the
+  // block inherited. An unchanged HeadIdx after the instruction walk means
+  // the block performed no allocation for this register class.
+  size_t EntryHeadIdx;
   SmallVector<TRCopyRange> LiveSlots;
   uint64_t NrCopy;
   unsigned TRNumber;
   SlotCalc(MachineBasicBlock *mbb, const TargetInstrInfo *tii,
            const TargetRegisterClass *rc, bool iScalarRC, bool isTileRC)
       : MBB(mbb), TII(tii), RC(rc), IsScalarRC(iScalarRC), IsTileRC(isTileRC),
-        HeadIdx(0), TailIdx(0), PreIdx(0), NrCopy(0),
+        HeadIdx(0), TailIdx(0), PreIdx(0), EntryHeadIdx(0), NrCopy(0),
         TRNumber(RC->getNumRegs()) {
     TRI = MBB->getParent()->getSubtarget().getRegisterInfo();
   }
@@ -441,6 +445,7 @@ void SlotCalc::init(SlotStatus *SS) {
     PreIdx = HeadIdx;
     TailIdx = 0;
   }
+  EntryHeadIdx = HeadIdx;
 }
 
 bool SlotCalc::isKill(TRCopyRange &Slot, const MachineInstr *MI) {
@@ -731,6 +736,29 @@ void SlotCalc::BuildLiveoutAndEraseFrom(TRCopyRange &Slot, LinxRegOp RegOp,
   return;
 }
 
+// Issue #121: tail-aligned comparison of the block's liveout queue with the
+// sync order requested by its done successors. Requested bubble positions
+// (NoRegister) are unconstrained, mirroring how getLiveoutLimits builds the
+// request; every requested register position must hold the same register at
+// the same tail-aligned depth.
+static bool liveoutsSatisfySync(const SmallVectorImpl<LinxRegOp> &CurLiveouts,
+                                const SmallVectorImpl<LinxRegOp> &NeedSyncTo) {
+  size_t C = CurLiveouts.size();
+  size_t N = NeedSyncTo.size();
+  if (N == 0)
+    return true;
+  if (C < N)
+    return false;
+  for (size_t K = 0; K != N; ++K) {
+    const LinxRegOp &Want = NeedSyncTo[N - 1 - K];
+    if (Want.Reg == LinxV5::NoRegister)
+      continue;
+    if (CurLiveouts[C - 1 - K].Reg != Want.Reg)
+      return false;
+  }
+  return true;
+}
+
 /// Rolling RegQ(Insert copy) to satisfy liveouts order.
 /// Note:
 /// * Previous progress ensure liveouts rolling must start at empty slot.
@@ -964,7 +992,17 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
   // When handle bb.2, it's liveouts should sync-up to bb.0
   // Cause bb.0 liveouts without t1, liveouts order should:
   //   {t1, t2, t3} == changed to ==> {no-reg, t2, t3}
-  if (!needSyncTo.empty()) {
+  // Issue #121: a block that performed no allocation for this register class
+  // leaves the window exactly in the state it inherited, which is the state
+  // the sync-group expectations were derived from. When the liveout order
+  // also already matches the requested order, rolling would only insert
+  // physical re-anchoring copies: a loop-invariant tile living on an
+  // otherwise idle bank would pay a full TLSU TMOV on every back edge. The
+  // offsets encoded against the inherited state stay valid because nothing
+  // in this block advanced the window.
+  if (!needSyncTo.empty() &&
+      !(HeadIdx == EntryHeadIdx &&
+        liveoutsSatisfySync(getLiveouts(false), needSyncTo))) {
     // Note: MBB.liveouts interface may give same register.
     SmallVector<LinxRegOp> CurLiveouts;
     for (size_t j = 0; j < TRNumber; ++j) {
@@ -1011,9 +1049,9 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
           needSyncTo.insert(needSyncTo.begin(), RegOp);
       }
     }
-  }
 
-  rollingLiveouts(needSyncTo);
+    rollingLiveouts(needSyncTo);
+  }
 
   for (size_t j = 0; j < TRNumber; ++j) {
     if (LiveSlots[j].IsLiveout &&
