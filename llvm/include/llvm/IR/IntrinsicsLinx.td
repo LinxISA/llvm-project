@@ -31,6 +31,17 @@ def int_linx_experimental_element_view :
                llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_i64_ty],
               [IntrNoMem]>;
+
+// Required intermediate effect for a predicated monotonic i32 atomic add.
+// Active elements atomically add their value and return the observed old bits;
+// inactive elements do not access memory and return poison. EVL bounds the
+// logical mask. This is compiler IR, consumed before instruction selection,
+// not a public API, encoded instruction, or scalar atomic-helper call.
+def int_linx_experimental_element_atomic_add :
+    Intrinsic<[llvm_anyvector_ty],
+              [LLVMVectorOfAnyPointersToElt<0>, LLVMMatchType<0>,
+               LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty],
+              [IntrHasSideEffects, IntrNoDuplicate]>;
 def int_linx_hyper_region_start : Intrinsic<[], [llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_hyper_region_end : Intrinsic<[],[llvm_i64_ty], [IntrHasSideEffects]>;
@@ -219,6 +230,13 @@ def int_linx_experimental_ew_tbinary :
                llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>],
               [IntrHasSideEffects]>;
 
+def int_linx_experimental_ew_tbinary_gpr_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 // Extend S32/U32/S64/U64 logical element indices to the corresponding
 // S64/U64 representation, then scale by element_bits/8 modulo 2^64. The
 // result is a byte-displacement Tile; result and source types are distinct.
@@ -247,10 +265,22 @@ def int_linx_experimental_ew_tcmp :
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+def int_linx_experimental_ew_tcmp_gpr :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, LLVMMatchType<0>, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_tsel :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tsel_gpr :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>],
               [IntrHasSideEffects]>;
 
 def int_linx_experimental_ew_texpands :
@@ -304,6 +334,13 @@ def int_linx_experimental_ew_mscatter_masked :
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty,
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_gpr_masked :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty], [IntrHasSideEffects]>;
 
 // Element-wise indexed atomic add. Indices are U64/S64 byte displacements;
 // the TLSU lowering performs no data-width scaling. MGATHER_ADD returns the

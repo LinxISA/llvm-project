@@ -12,6 +12,7 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/EvaluatedExprVisitor.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Sema/DelayedDiagnostic.h"
@@ -22,6 +23,63 @@
 
 using namespace clang;
 using namespace sema;
+
+namespace {
+
+class LinxElementControlFlowValidator {
+  Sema &S;
+  unsigned NestedBreakScopeDepth = 0;
+  bool Invalid = false;
+
+  void diagnose(const Stmt *St, unsigned Kind) {
+    S.Diag(St->getBeginLoc(),
+           diag::err_pragma_linx_elementwise_control_flow)
+        << Kind;
+    Invalid = true;
+  }
+
+  void visit(const Stmt *St) {
+    if (!St || isa<LambdaExpr>(St))
+      return;
+
+    if (isa<ReturnStmt, CoreturnStmt>(St)) {
+      diagnose(St, 1);
+      return;
+    }
+    if (isa<GotoStmt, IndirectGotoStmt>(St)) {
+      diagnose(St, 2);
+      return;
+    }
+    if (isa<LabelStmt>(St)) {
+      diagnose(St, 3);
+      return;
+    }
+    if (isa<BreakStmt>(St)) {
+      if (NestedBreakScopeDepth == 0)
+        diagnose(St, 0);
+      return;
+    }
+
+    bool OpensBreakScope =
+        isa<ForStmt, CXXForRangeStmt, WhileStmt, DoStmt, SwitchStmt>(St);
+    if (OpensBreakScope)
+      ++NestedBreakScopeDepth;
+    for (const Stmt *Child : St->children())
+      visit(Child);
+    if (OpensBreakScope)
+      --NestedBreakScopeDepth;
+  }
+
+public:
+  explicit LinxElementControlFlowValidator(Sema &S) : S(S) {}
+
+  bool validate(const ForStmt &Loop) {
+    visit(Loop.getBody());
+    return !Invalid;
+  }
+};
+
+} // namespace
 
 static Attr *handleFallThroughAttr(Sema &S, Stmt *St, const ParsedAttr &A,
                                    SourceRange Range) {
@@ -82,6 +140,9 @@ static Attr *handleLinxAttr(Sema &S, Stmt *St, const ParsedAttr &A,
              diag::err_pragma_linx_elementwise_precedes_nonloop);
       return nullptr;
     }
+    LinxElementControlFlowValidator Validator(S);
+    if (!Validator.validate(*cast<ForStmt>(St)))
+      return nullptr;
     Option = LinxAttr::Elementwise;
   } else {
     assert(0 && "Error: Unsupport pragma linx format!");

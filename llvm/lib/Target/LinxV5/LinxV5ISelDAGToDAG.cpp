@@ -79,12 +79,12 @@ static SDNode *selectImmSeq(SelectionDAG *CurDAG, const SDLoc &DL,
       SDValue Zero = CurDAG->getRegister(LinxV5::R0, VT);
       Res = CurDAG->getMachineNode(I.Opc, DL, VT, {Zero, Src, SDImm});
     } else if (LinxV5::enableBFIOpt() && I.Opc == LinxV5::HL_BFI) {
-      // Packing mirrors generateMatIntSeq (issue #61): M in the low 6 bits
-      // (uimm6), N above (uimm6_plus1 on the instruction).
-      unsigned M = static_cast<unsigned>(I.Imm) & 0x3F;
-      unsigned N = static_cast<unsigned>(I.Imm) >> 6;
-      SDValue SDImm1 = CurDAG->getTargetConstant(M, DL, MVT::i64);
-      SDValue SDImm2 = CurDAG->getTargetConstant(N, DL, MVT::i64);
+      // Packing mirrors generateMatIntSeq: the raw inclusive immr endpoint is
+      // in the low six bits and the raw inclusive imms endpoint is above it.
+      unsigned First = static_cast<unsigned>(I.Imm) & 0x3F;
+      unsigned Last = static_cast<unsigned>(I.Imm) >> 6;
+      SDValue SDImm1 = CurDAG->getTargetConstant(First, DL, MVT::i64);
+      SDValue SDImm2 = CurDAG->getTargetConstant(Last, DL, MVT::i64);
       Res = CurDAG->getMachineNode(I.Opc, DL, MVT::i64,
                                    {Src, Src, SDImm1, SDImm2});
     } else {
@@ -584,6 +584,22 @@ static SDNode *selectElementwiseMScatterMasked(SDLoc &DL, SelectionDAG *DAG,
   Ops.push_back(Node->getOperand(10)); // mask
   Ops.push_back(Node->getOperand(7)); // base pointer
   Ops.push_back(Node->getOperand(0)); // chain
+  return DAG->getMachineNode(Opc, DL, Node->getValueType(0), Ops);
+}
+
+static SDNode *selectElementwiseMScatterGPRMasked(
+    SDLoc &DL, SelectionDAG *DAG, SDNode *Node, unsigned Opc) {
+  SmallVector<SDValue> Ops;
+  Ops.push_back(Node->getOperand(10)); // source tile
+  for (unsigned Index = 1; Index <= 7; ++Index)
+    Ops.push_back(Node->getOperand(Index));
+  Ops.push_back(Node->getOperand(9));  // byte offsets
+  Ops.push_back(Node->getOperand(11)); // mask low
+  Ops.push_back(Node->getOperand(12)); // mask high
+  Ops.push_back(Node->getOperand(8));  // base pointer
+  Ops.push_back(Node->getOperand(13)); // PredInv
+  Ops.push_back(Node->getOperand(14)); // Zero
+  Ops.push_back(Node->getOperand(0));  // chain
   return DAG->getMachineNode(Opc, DL, Node->getValueType(0), Ops);
 }
 
@@ -1329,6 +1345,12 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTBinary_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TBINARY_GPR_MASKED: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoTBinary_GPR_Masked_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_TLEA: {
     ReplaceNode(Node, selectElementwiseTLEA(
                           DL, CurDAG, Node, LinxV5::PseudoTLEA_SizeI));
@@ -1362,6 +1384,12 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           LinxV5::PseudoMSCATTER_MASK_SizeI));
     return;
   }
+  case LinxV5ISD::EW_MSCATTER_GPR_MASKED: {
+    ReplaceNode(Node, selectElementwiseMScatterGPRMasked(
+                          DL, CurDAG, Node,
+                          LinxV5::PseudoMSCATTER_GPR_Masked_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_MGATHER_ADD: {
     ReplaceNode(Node, selectElementwiseMGatherAdd(
                           DL, CurDAG, Node,
@@ -1385,9 +1413,19 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTCMP_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TCMP_GPR: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTCMP_GPR));
+    return;
+  }
   case LinxV5ISD::EW_TSEL: {
     ReplaceNode(Node, selectElementwiseTSel(
                           DL, CurDAG, Node, LinxV5::PseudoTSEL_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TSEL_GPR: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTSEL_GPR_SizeI));
     return;
   }
   case LinxV5ISD::EW_TEXPANDS: {

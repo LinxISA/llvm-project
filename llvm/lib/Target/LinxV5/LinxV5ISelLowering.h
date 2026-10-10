@@ -83,17 +83,21 @@ enum NodeType : unsigned {
   EW_TADD_MASKED,
   EW_TSUB_MASKED,
   EW_TBINARY,
+  EW_TBINARY_GPR_MASKED,
   EW_TLEA,
   EW_TCI,
   EW_TCMPS_GPR,
   EW_MGATHER_GPR_MASKED,
   EW_MGATHER_MASKED,
   EW_MSCATTER_MASKED,
+  EW_MSCATTER_GPR_MASKED,
   EW_MGATHER_ADD,
   EW_MGATHER_ADD_MASKED,
   EW_MSCATTER_ADD,
   EW_TCMP,
+  EW_TCMP_GPR,
   EW_TSEL,
+  EW_TSEL_GPR,
   EW_TEXPANDS,
   BLK_MATMUL_AC,
   BLK_MATMULMX,
@@ -315,6 +319,8 @@ private:
                                SelectionDAG &DAG) const;
   SDValue lowerElementwiseTBinary(SDLoc &DL, SDValue Op,
                                   SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTBinaryGPRMasked(SDLoc &DL, SDValue Op,
+                                           SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCI(SDLoc &DL, SDValue Op,
                               SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCMPSGPR(SDLoc &DL, SDValue Op,
@@ -325,6 +331,8 @@ private:
                                          SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
+  SDValue lowerElementwiseMScatterGPRMasked(SDLoc &DL, SDValue Op,
+                                            SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherAdd(SDLoc &DL, SDValue Op,
                                      SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherAddMasked(SDLoc &DL, SDValue Op,
@@ -333,8 +341,12 @@ private:
                                       SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
                                SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCmpGPR(SDLoc &DL, SDValue Op,
+                                  SelectionDAG &DAG) const;
   SDValue lowerElementwiseTSel(SDLoc &DL, SDValue Op,
                                SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTSelGPR(SDLoc &DL, SDValue Op,
+                                  SelectionDAG &DAG) const;
   SDValue lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
                                    SelectionDAG &DAG) const;
   SDValue lowerTemplateBLKMX(unsigned Opcode, SDLoc &DL, SDValue Op,

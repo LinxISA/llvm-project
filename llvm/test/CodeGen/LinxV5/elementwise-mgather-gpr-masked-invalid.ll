@@ -4,7 +4,7 @@
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/bad-mask.ll 2>&1 | FileCheck %s
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/bad-inactive-mode.ll 2>&1 | FileCheck %s
 
-; CHECK: GPR-masked MGATHER requires exact 32x1 U32 values, U64 byte offsets, CUBE_M32, one low GPR mask word and zero inactive lanes
+; CHECK: GPR-masked MGATHER requires exact 32x1 U32 values, S64/U64 byte offsets, CUBE_M32, one low GPR mask word and zero inactive lanes
 
 ;--- bad-index-type.ll
 define void @invalid(ptr %out, ptr %base, ptr %offset.ptr, i64 %mask) {

@@ -382,17 +382,21 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_TADD_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TSUB_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TBINARY)
+    MAKE_CASE(LinxV5ISD::EW_TBINARY_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TLEA)
     MAKE_CASE(LinxV5ISD::EW_TCI)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_MSCATTER_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_ADD)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_ADD_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_ADD)
     MAKE_CASE(LinxV5ISD::EW_TCMP)
+    MAKE_CASE(LinxV5ISD::EW_TCMP_GPR)
     MAKE_CASE(LinxV5ISD::EW_TSEL)
+    MAKE_CASE(LinxV5ISD::EW_TSEL_GPR)
     MAKE_CASE(LinxV5ISD::EW_TEXPANDS)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_AC)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX)
@@ -936,6 +940,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTSubMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tbinary:
       return lowerElementwiseTBinary(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tbinary_gpr_masked:
+      return lowerElementwiseTBinaryGPRMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tlea:
       return lowerElementwiseTLEA(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tci:
@@ -952,12 +958,18 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseMGatherAddMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mscatter_masked:
       return lowerElementwiseMScatterMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mscatter_gpr_masked:
+      return lowerElementwiseMScatterGPRMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mscatter_add:
       return lowerElementwiseMScatterAdd(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tcmp:
       return lowerElementwiseTCmp(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tcmp_gpr:
+      return lowerElementwiseTCmpGPR(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsel:
       return lowerElementwiseTSel(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tsel_gpr:
+      return lowerElementwiseTSelGPR(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_texpands:
       return lowerElementwiseTExpands(DL, Op, DAG);
     case Intrinsic::linx_blk_matmul_shared:
@@ -1564,11 +1576,13 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
   EVT ResultVT = Op.getValueType();
   EVT LHSVT = Op.getOperand(7).getValueType();
   EVT RHSVT = Op.getOperand(8).getValueType();
-  if (Rows != 32 || Cols != 1 || DataType != LinxV5Op::DataType::U32 ||
+  const bool IntegerProfile = DataType == LinxV5Op::DataType::U32 ||
+                              DataType == LinxV5Op::DataType::S32;
+  if (Rows != 32 || Cols != 1 || !IntegerProfile ||
       Layout != 29 || ResultVT != MVT::v32i32 || LHSVT != ResultVT ||
       RHSVT != ResultVT)
     report_fatal_error(
-        "element binary currently requires U32 CUBE_M32 <32 x i32> Tiles");
+        "element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles");
 
   static constexpr uint64_t PTOSelectors[] = {
       LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,
@@ -1592,6 +1606,60 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
   Ops.push_back(Op.getOperand(8));
   Ops.push_back(DAG.getTargetConstant(PTOSelectors[Opcode], DL, MVT::i64));
   return DAG.getNode(LinxV5ISD::EW_TBINARY, DL,
+                     DAG.getVTList(ResultVT, MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTBinaryGPRMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  const uint64_t Rows = getV5ConstantOperand(
+      Op.getOperand(2), "GPR-masked element binary rows", 32, false);
+  const uint64_t Cols = getV5ConstantOperand(
+      Op.getOperand(3), "GPR-masked element binary columns", 32, false);
+  const uint64_t DataType = getV5ConstantOperand(
+      Op.getOperand(4), "GPR-masked element binary data type", 31);
+  const uint64_t Layout = getV5ConstantOperand(
+      Op.getOperand(5), "GPR-masked element binary layout", 31);
+  const uint64_t Opcode = getV5ConstantOperand(
+      Op.getOperand(6), "GPR-masked element binary opcode", 9);
+  const uint64_t PredInv = getV5ConstantOperand(
+      Op.getOperand(11), "GPR-masked element binary PredInv", 1);
+  const uint64_t Zero = getV5ConstantOperand(
+      Op.getOperand(12), "GPR-masked element binary Zero", 1);
+  const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(10));
+  EVT ResultVT = Op.getValueType();
+  const bool IntegerProfile = DataType == LinxV5Op::DataType::U32 ||
+                              DataType == LinxV5Op::DataType::S32;
+  if (Rows != 32 || Cols != 1 || !IntegerProfile || Layout != 29 ||
+      ResultVT != MVT::v32i32 || Op.getOperand(7).getValueType() != ResultVT ||
+      Op.getOperand(8).getValueType() != ResultVT ||
+      Op.getOperand(9).getValueType() != MVT::i64 ||
+      Op.getOperand(10).getValueType() != MVT::i64 || !MaskHigh ||
+      MaskHigh->getZExtValue() != 0 || PredInv != 0 || Zero != 1)
+    report_fatal_error(
+        "GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 Tiles, one low mask word and zero inactive lanes");
+  static constexpr uint64_t PTOSelectors[] = {
+      LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,
+      LinxV5Op::TileOPTEPL::TMUL, LinxV5Op::TileOPTEPL::TDIV,
+      LinxV5Op::TileOPTEPL::TREM, LinxV5Op::TileOPTEPL::TAND,
+      LinxV5Op::TileOPTEPL::TOR,  LinxV5Op::TileOPTEPL::TXOR,
+      LinxV5Op::TileOPTEPL::TSHL, LinxV5Op::TileOPTEPL::TSHR};
+  SmallVector<SDValue> Ops = {Op.getOperand(0)};
+  for (uint64_t Dim : {Rows, Cols}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(Dim, DL, MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(DataType, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(calculateVCallSizeMask(ResultVT), DL,
+                                      MVT::i64));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(DAG.getTargetConstant(PTOSelectors[Opcode], DL, MVT::i64));
+  Ops.push_back(Op.getOperand(9));
+  Ops.push_back(Op.getOperand(10));
+  Ops.push_back(DAG.getTargetConstant(PredInv, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Zero, DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_TBINARY_GPR_MASKED, DL,
                      DAG.getVTList(ResultVT, MVT::Other), Ops);
 }
 
@@ -1718,14 +1786,16 @@ SDValue LinxV5TargetLowering::lowerElementwiseMGatherGPRMasked(
   EVT OffsetVT = Op.getOperand(9).getValueType();
   const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(11));
   if (DType != LinxV5Op::DataType::U32 ||
-      IndexDType != LinxV5Op::DataType::U64 || Layout != 29 || Rows != 32 ||
+      (IndexDType != LinxV5Op::DataType::S64 &&
+       IndexDType != LinxV5Op::DataType::U64) ||
+      Layout != 29 || Rows != 32 ||
       Cols != 1 || Pad != LinxV5Op::PadValue::Zero || PredInv != 0 ||
       Zero != 1 || MaskHigh == nullptr || MaskHigh->getZExtValue() != 0 ||
       ResultVT != MVT::v32i32 || OffsetVT != MVT::v32i64 ||
       Op.getOperand(10).getValueType() != MVT::i64 ||
       Op.getOperand(11).getValueType() != MVT::i64)
     report_fatal_error(
-        "GPR-masked MGATHER requires exact 32x1 U32 values, U64 byte offsets, CUBE_M32, one low GPR mask word and zero inactive lanes");
+        "GPR-masked MGATHER requires exact 32x1 U32 values, S64/U64 byte offsets, CUBE_M32, one low GPR mask word and zero inactive lanes");
 
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Cols, Rows}) {
@@ -1771,6 +1841,56 @@ SDValue LinxV5TargetLowering::lowerElementwiseMScatterMasked(
   Ops.push_back(Op.getOperand(7)); // logical element offsets
   Ops.push_back(Op.getOperand(8)); // predicate tile
   return DAG.getNode(LinxV5ISD::EW_MSCATTER_MASKED, DL,
+                     DAG.getVTList(MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseMScatterGPRMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  const uint64_t Rows = getV5ConstantOperand(
+      Op.getOperand(2), "GPR-masked MSCATTER rows", 32, false);
+  const uint64_t Cols = getV5ConstantOperand(
+      Op.getOperand(3), "GPR-masked MSCATTER columns", 32, false);
+  const uint64_t DataType = getV5ConstantOperand(
+      Op.getOperand(4), "GPR-masked MSCATTER data type", 31);
+  const uint64_t Layout = getV5ConstantOperand(
+      Op.getOperand(5), "GPR-masked MSCATTER layout", 31);
+  const uint64_t IndexDataType = getV5ConstantOperand(
+      Op.getOperand(6), "GPR-masked MSCATTER index data type", 31);
+  const uint64_t PredInv = getV5ConstantOperand(
+      Op.getOperand(12), "GPR-masked MSCATTER PredInv", 1);
+  const uint64_t Zero = getV5ConstantOperand(
+      Op.getOperand(13), "GPR-masked MSCATTER Zero", 1);
+  const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(11));
+  if (Rows != 32 || Cols != 1 ||
+      (DataType != LinxV5Op::DataType::S32 &&
+       DataType != LinxV5Op::DataType::U32) ||
+      Layout != 29 ||
+      (IndexDataType != LinxV5Op::DataType::S64 &&
+       IndexDataType != LinxV5Op::DataType::U64) ||
+      Op.getOperand(8).getValueType() != MVT::v32i64 ||
+      Op.getOperand(9).getValueType() != MVT::v32i32 ||
+      Op.getOperand(10).getValueType() != MVT::i64 ||
+      Op.getOperand(11).getValueType() != MVT::i64 || !MaskHigh ||
+      MaskHigh->getZExtValue() != 0 || Zero != 0)
+    report_fatal_error(
+        "GPR-masked MSCATTER requires exact 32x1 S32/U32 values, S64/U64 byte offsets, CUBE_M32, one low mask word and merge-inactive stores");
+  SmallVector<SDValue> Ops = {Op.getOperand(0)};
+  for (uint64_t Dim : {Cols, Rows}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(Dim, DL, MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(DataType, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(
+      calculateVCallSizeMask(Op.getOperand(9).getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(Op.getOperand(9));
+  Ops.push_back(Op.getOperand(10));
+  Ops.push_back(Op.getOperand(11));
+  Ops.push_back(DAG.getTargetConstant(PredInv, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Zero, DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_MSCATTER_GPR_MASKED, DL,
                      DAG.getVTList(MVT::Other), Ops);
 }
 
@@ -1909,6 +2029,34 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
                      DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
+SDValue LinxV5TargetLowering::lowerElementwiseTCmpGPR(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TCMP GPR rows", 32, false);
+  const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TCMP GPR columns", 32, false);
+  const uint64_t DataType = getV5ConstantOperand(Op.getOperand(4), "TCMP GPR data type", 31);
+  const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TCMP GPR layout", 31);
+  const uint64_t Cmp = getV5ConstantOperand(Op.getOperand(8), "TCMP GPR comparison", 5);
+  if (Rows != 32 || Cols != 1 || Layout != 29 ||
+      (DataType != LinxV5Op::DataType::S32 &&
+       DataType != LinxV5Op::DataType::U32) ||
+      Op.getOperand(6).getValueType() != MVT::v32i32 ||
+      Op.getOperand(7).getValueType() != MVT::v32i32)
+    report_fatal_error(
+        "TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles");
+  SmallVector<SDValue> Ops = {Op.getOperand(0)};
+  for (uint64_t Dim : {Rows, Cols}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(Dim, DL, MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(DataType, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  Ops.push_back(DAG.getTargetConstant(Cmp, DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_TCMP_GPR, DL,
+                     DAG.getVTList(MVT::i64, MVT::Other), Ops);
+}
+
 SDValue LinxV5TargetLowering::lowerElementwiseTSel(
     SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
   getV5ConstantOperand(Op.getOperand(2), "TSEL rows", 32, false);
@@ -1936,6 +2084,40 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSel(
   Ops.push_back(Op.getOperand(8));
   return DAG.getNode(LinxV5ISD::EW_TSEL, DL,
                      DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTSelGPR(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TSEL GPR rows", 32, false);
+  const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TSEL GPR columns", 32, false);
+  const uint64_t DataType = getV5ConstantOperand(Op.getOperand(4), "TSEL GPR data type", 31);
+  const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TSEL GPR layout", 31);
+  const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(7));
+  EVT ResultVT = Op.getValueType();
+  if (Rows != 32 || Cols != 1 || Layout != 29 ||
+      (DataType != LinxV5Op::DataType::S32 &&
+       DataType != LinxV5Op::DataType::U32) || ResultVT != MVT::v32i32 ||
+      Op.getOperand(6).getValueType() != MVT::i64 || !MaskHigh ||
+      MaskHigh->getZExtValue() != 0 ||
+      Op.getOperand(8).getValueType() != ResultVT ||
+      Op.getOperand(9).getValueType() != ResultVT)
+    report_fatal_error(
+        "TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask word");
+  SmallVector<SDValue> Ops = {Op.getOperand(0)};
+  for (uint64_t Dim : {Rows, Cols}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(Dim, DL, MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(DataType, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(calculateVCallSizeMask(ResultVT), DL,
+                                      MVT::i64));
+  Ops.push_back(Op.getOperand(8));
+  Ops.push_back(Op.getOperand(9));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  return DAG.getNode(LinxV5ISD::EW_TSEL_GPR, DL,
+                     DAG.getVTList(ResultVT, MVT::Other), Ops);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTExpands(
@@ -2302,6 +2484,8 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerTStore(LinxV5ISD::BLK_TSTORE, DL, Op, DAG);
   } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_masked) {
     return lowerElementwiseMScatterMasked(DL, Op, DAG);
+  } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_gpr_masked) {
+    return lowerElementwiseMScatterGPRMasked(DL, Op, DAG);
   } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_add) {
     return lowerElementwiseMScatterAdd(DL, Op, DAG);
   } else if (IntNo == Intrinsic::blkv_end_cf) {

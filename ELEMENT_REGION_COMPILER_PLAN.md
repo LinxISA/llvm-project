@@ -130,3 +130,74 @@ case passes actual installed API compile/IR/disassembly/gfrun, and the same ELF 
 shape repair (queue1592/1592,A3=0). Fresh clean-head full harness is pending.
 Default model regression before lifetime repair
 is899/900; no full-completion claim is made.
+
+## Typed B32 continuation after checkpoint 697f17
+
+The next delivery extends the same region compiler to a true S32 profile before
+adding F32. View dtype remains explicit throughout preparation, expression
+validation, Tile SSA and ND2M32/M322ND transport. U32 gather/atomic eligibility
+must explicitly require U32 views; accepting another arithmetic dtype must not
+silently enable its memory or predicate profile.
+
+S32 scalar splats reuse typed TCI. Add/subtract/multiply and bitwise operations
+retain their LLVM bit semantics; signed division uses TDIV and arithmetic right
+shift uses TSHR under S32. Source C++ `srem` lowers to TDIV, TMUL, TSUB: PTO TREM
+has divisor-sign floor modulo, so it cannot implement source `%` directly.
+Mixed view profiles and unsupported casts/CFG remain diagnosed. Native backend
+validation must match dtype, v32i32, 32x1 geometry and M32 layout explicitly.
+
+Acceptance includes source/IR/object tests, negative dtype/profile combinations,
+a complete unchanged-size S32 TileOp/element/TileOp benchmark with independent
+signed division/remainder/shift goldens, and same-ELF gfrun/gfsim checks. Model
+numeric corrections are separately reviewed against owning ASL at cab1978;
+models' raw low32 result helpers do not redefine source C++ signed overflow.
+F32 requires a separate exact TEXPANDS and native TNEG closure rather than
+reinterpret casts or `0.0 - x`. No application/configuration entry closes merely
+because a typed foundation example passes.
+
+## P0 history reconciliation (2026-10-08)
+
+The local `codex/pto-element-region-compiler` branch merged PR117 head
+`7be28644a0c937d05723a12127b73875e415311f` with a normal merge commit. The
+common ancestor was `34ade53ebfe81975a91512568e337bacb91ad27d`; the local
+pre-merge head was `9b43f05430eb757c1e14d6fe659fcfefee7a0206`.
+
+| Source | Kept | Reconciliation |
+| --- | --- | --- |
+| Local `9b43f054` | ordinary `EmitForStmt` region entry, typed view descriptors, S32 Tile SSA and diagnostics | authoritative for frontend entry and typed expression conflicts |
+| PR117 `7be28644` | `7a120731` multi-definition Tile CFG join fix, exceptional-control-flow rejection, block-name-independent tests and gather test hardening | merged without restoring `EmitLinxElementwiseForStmt` or its AST/body recognizers |
+| `dev-llvm15_56` `5c16f442` | comparison only | not merged; its only post-PR117 source change is the separate Local TMOV binder change in `LinxV5EmitHeader.cpp` |
+
+The reconciled tree must continue to satisfy both negative conditions:
+`CGStmt.cpp` contains no `EmitLinxElementwiseForStmt`, and marked loops always
+enter ordinary Clang CFG emission before the required LLVM region pass.
+
+## P1 frontend contract checkpoint (2026-10-08)
+
+Commit `9555b81055a47` records the source-level ordering and control boundary
+without adding an expression or kernel matcher. The user confirmed that
+different logical elements are unordered, while operations within one element
+retain source order. Clang emits two queryable loop properties:
+
+```text
+llvm.loop.linx.pto.element.inter_element_order = "unordered"
+llvm.loop.linx.pto.element.intra_element_order = "source"
+```
+
+The marked loop remains an ordinary `EmitForStmt` CFG with the existing region
+identity and sentinel. Sema rejects an outer-loop `break`, function `return`,
+and `goto` or labels that can cross the region boundary. It accepts outer-loop
+`continue`, nested loop/switch `break`, nested `continue`, and does not inspect
+nested lambda bodies as region control flow.
+
+Focused evidence:
+
+- `pto-element-control-flow.cpp` validates the accepted and rejected boundary.
+- `pto-element-order-metadata.cpp` checks the same raw metadata at O0, O2 and
+  O3 with LLVM optimization passes disabled.
+- `pto-element-for-invalid.c` and `pto-element-region-ir.cpp` remain passing.
+- `ninja -C build-tlea clang llc opt FileCheck -j8` passes with the P1 commit.
+
+This checkpoint proves frontend CFG and contract preservation. It does not
+claim complete O0 Tile lowering: typed Tile spill/reload remains a separate
+backend limitation.

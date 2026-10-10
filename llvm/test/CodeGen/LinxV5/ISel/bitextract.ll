@@ -30,7 +30,7 @@ define dso_local void @test_bfi1(i64* %arr) nounwind {
 ; CHECK-LABEL: test_bfi1
 ; CHECK: lui 4180, ->t
 ; CHECK-NEXT: addi t#1, 2333, ->t
-; DAG: hl.bfi t#1, t#1, 32, 64, ->t
+; DAG: hl.bfi t#1, t#1, 32, 63, ->t
 entry:
   store i64 u0x0105491D0105491D, i64* %arr
   ret void
@@ -40,7 +40,7 @@ define dso_local void @test_bfi2(i64* %arr) nounwind {
 ; CHECK-LABEL: test_bfi2
 ; DAG: lui 291, ->t
 ; DAG-NEXT: addi t#1, 1110, ->t
-; DAG: hl.bfi t#1, t#1, 24, 48, ->t
+; DAG: hl.bfi t#1, t#1, 24, 47, ->t
 entry:
   store i64 u0x0000123456123456, i64* %arr
   ret void
@@ -58,7 +58,7 @@ entry:
 
 define dso_local void @test_bfi4(i64* %arr) nounwind {
 ; CHECK-LABEL: test_bfi4
-; CHECK-NOT: hl.bfi t#1, t#1, 24, 48, ->t
+; CHECK-NOT: hl.bfi t#1, t#1, 24, 47, ->t
 entry:
   store i64 u0x1111123456123456, i64* %arr
   ret void
@@ -68,7 +68,7 @@ entry:
 define dso_local void @test_bfi5(i64* %arr) nounwind {
 ; CHECK-LABEL: test_bfi5
 ; DAG: lui -16
-; DAG-NEXT: hl.bfi t#1, t#1, 32, 64, ->t
+; DAG-NEXT: hl.bfi t#1, t#1, 32, 63, ->t
 entry:
   store i64 u0xFFFF0000FFFF0000, i64* %arr
   ret void
@@ -78,7 +78,7 @@ entry:
 define dso_local void @test_bfi6(i64* %arr) nounwind {
 ; CHECK-LABEL: test_bfi6
 ; CHECK: addi zero, 291
-; DAG: hl.bfi t#1, t#1, 24, 48, ->t
+; DAG: hl.bfi t#1, t#1, 24, 47, ->t
 ; DAG-NEXT: slli t#1, 24
 ; DAG-NEXT: addi t#1, 291
 entry:
