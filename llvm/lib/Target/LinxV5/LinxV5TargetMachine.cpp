@@ -183,6 +183,20 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         FPM.addPass(LinxV5ElementRegionPromotePass());
         FPM.addPass(LinxV5ElementRegionPass());
         FPM.addPass(LinxV5ElementRegionVerifierPass());
+        FPM.addPass(LinxV5TileCarrierTransportPass());
+        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+      });
+  // Issue #120: at -O0 the OptimizerLast hook never fires and nothing is
+  // inlined, so rewrite the boundary carrier accesses early there. At any
+  // optimization level the rewrite must happen after inlining/SROA (see
+  // the OptimizerLast hook), otherwise purely local carriers would pay
+  // transports after their templates get inlined.
+  PB.registerPipelineEarlySimplificationEPCallback(
+      [](ModulePassManager &MPM, OptimizationLevel Level) {
+        if (Level.getSpeedupLevel() > 0 || Level.getSizeLevel() > 0)
+          return;
+        FunctionPassManager FPM;
+        FPM.addPass(LinxV5TileCarrierTransportPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
 }

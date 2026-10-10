@@ -72,6 +72,15 @@ struct LinxV5ElementRegionVerifierPass
   static bool isRequired() { return true; }
 };
 
+// Issue #120: rewrite boundary CUBE Tile carrier accesses (marked by
+// clang's "linx.tile.carrier:v1" ptr.annotations) into blk.tload/tstore
+// layout transports, and strip non-boundary annotations before SROA.
+struct LinxV5TileCarrierTransportPass
+    : PassInfoMixin<LinxV5TileCarrierTransportPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
 FunctionPass *createLinxV5CanonicalizeBlockPass(bool dupConstOnly = false);
 void initializeLinxV5CanonicalizeBlockPass(PassRegistry &);
 
