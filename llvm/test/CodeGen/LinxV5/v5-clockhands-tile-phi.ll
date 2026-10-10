@@ -5,6 +5,9 @@
 ; RUN: llc < %s -mtriple=linx64v5 -mcpu=janus \
 ; RUN:   -enable-all-vector-as-tilereg=true \
 ; RUN:   -linxv5-enable-clock-hand-opt=true -o - | FileCheck %s --check-prefix=ASM
+; RUN: llc < %s -mtriple=linx64v5 -mcpu=janus \
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-clock-hand-opt=false -o - | FileCheck %s --check-prefix=ASM
 
 target triple = "linx64v5"
 
