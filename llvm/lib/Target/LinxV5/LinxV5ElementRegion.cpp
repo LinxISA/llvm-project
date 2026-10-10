@@ -879,6 +879,11 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           return Fail(&I, "PHI requires a scalar or typed carrier");
         continue;
       }
+      if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
+        if (!Freeze->getType()->isIntegerTy(32))
+          return Fail(&I, "freeze requires scalar i32 data");
+        continue;
+      }
       if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
         if (!Binary->getType()->isIntegerTy() ||
             VPIntrinsic::getForOpcode(Binary->getOpcode()) ==
@@ -1128,6 +1133,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
           Result = Blend(EdgeFrom(Phi->getIncomingBlock(J), BB),
                          Widen(Phi->getIncomingValue(J)), Result, "pto.phi");
+      } else if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
+        Result = B.CreateFreeze(Widen(Freeze->getOperand(0)), "pto.freeze");
       } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
         Value *Left = Widen(Binary->getOperand(0));
         Value *Right = Widen(Binary->getOperand(1));
@@ -1452,6 +1459,11 @@ class ElementTileLegalizer {
     if (isa<UndefValue>(V) || isa<PoisonValue>(V))
       return isVector(V, 1) || isVector(V, 32) || isVector(V, 64) ||
              fail(V, "unsupported undefined element type");
+    if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      if (!isVector(Freeze, 32))
+        return fail(V, "freeze requires i32 Tile data");
+      return validate(Freeze->getOperand(0));
+    }
     if (auto *C = dyn_cast<Constant>(V)) {
       if (isVector(V, 1)) {
         for (unsigned I = 0; I < 32; ++I)
@@ -1835,6 +1847,14 @@ class ElementTileLegalizer {
       (void)OK;
       R = splat(ConstantInt::get(Ty->getElementType(), Initial), Ty,
                 uint64_t(uint32_t(Step.getSExtValue())) << 32, PreferredType);
+    } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      // Every admitted numeric source has a concrete Tile producer before this
+      // point: native operations zero inactive lanes, splats freeze their scalar,
+      // and imported PHI undef/poison seeds are materialized as zero Tiles.
+      // The physical operand is therefore fully defined, so freeze is identity.
+      // Data caching preserves that one chosen value for all quotient/remainder
+      // users of the same widened freeze.
+      R = value(Freeze->getOperand(0), PreferredType);
     } else if (auto *Cast = dyn_cast<CastInst>(V)) {
       Value *Source = Cast->getOperand(0);
       uint64_t SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
