@@ -5386,7 +5386,10 @@ LValue CodeGenFunction::EmitCallExprLValue(const CallExpr *E) {
     // CUBE layout (see getLinxCubeTileCarrierContract).
     if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee)) {
       std::string Contract;
-      if (Method->getName() == "data" && Method->param_empty() &&
+      // getName() requires an identifier; reference-returning operators
+      // (operator[]/operator=/conversions) reach here as lvalue callees.
+      if (Method->getDeclName().isIdentifier() && Method->getName() == "data" &&
+          Method->param_empty() &&
           getLinxCubeTileCarrierContract(
               getContext(), getContext().getRecordType(Method->getParent()),
               Contract))
