@@ -14,7 +14,8 @@ define void @raw_index(ptr %base) {
   ret void
 }
 ; CHECK-LABEL: define void @raw_index
-; CHECK: [[RAW_TYPED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked{{.*}}i64 32, i64 1, i64 17, i64 29, i64 0,
+; CHECK: [[RAW_TYPED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 17, i64 29,
+; CHECK-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked
 ; CHECK: @llvm.linx.experimental.ew.tlea{{.*}}i64 32, i64 1, i64 17, i64 29, <32 x i32> [[RAW_TYPED]], i64 32)
 ; CHECK: @llvm.linx.experimental.ew.mgather.gpr.masked{{.*}}i64 25, i64 0, i64 29, i64 16,
 ; CHECK: @llvm.linx.experimental.ew.mscatter.gpr.masked{{.*}}i64 25, i64 29, i64 16,
@@ -34,7 +35,8 @@ define void @signed_index(ptr %base) {
   ret void
 }
 ; CHECK-LABEL: define void @signed_index
-; CHECK: [[SEXT_TYPED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked{{.*}}i64 32, i64 1, i64 17, i64 29, i64 0,
+; CHECK: [[SEXT_TYPED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 17, i64 29,
+; CHECK-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked
 ; CHECK: @llvm.linx.experimental.ew.tlea{{.*}}i64 32, i64 1, i64 17, i64 29, <32 x i32> [[SEXT_TYPED]], i64 32)
 ; CHECK: @llvm.linx.experimental.ew.mgather.gpr.masked{{.*}}i64 25, i64 0, i64 29, i64 16,
 ; CHECK: @llvm.linx.experimental.ew.mscatter.gpr.masked{{.*}}i64 25, i64 29, i64 16,

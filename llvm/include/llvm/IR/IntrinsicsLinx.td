@@ -31,6 +31,17 @@ def int_linx_experimental_element_view :
                llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_i64_ty],
               [IntrNoMem]>;
+
+// Required intermediate effect for a predicated monotonic i32 atomic add.
+// Active elements atomically add their value and return the observed old bits;
+// inactive elements do not access memory and return poison. EVL bounds the
+// logical mask. This is compiler IR, consumed before instruction selection,
+// not a public API, encoded instruction, or scalar atomic-helper call.
+def int_linx_experimental_element_atomic_add :
+    Intrinsic<[llvm_anyvector_ty],
+              [LLVMVectorOfAnyPointersToElt<0>, LLVMMatchType<0>,
+               LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty],
+              [IntrHasSideEffects, IntrNoDuplicate]>;
 def int_linx_hyper_region_start : Intrinsic<[], [llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_hyper_region_end : Intrinsic<[],[llvm_i64_ty], [IntrHasSideEffects]>;

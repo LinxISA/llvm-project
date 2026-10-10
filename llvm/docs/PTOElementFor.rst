@@ -109,7 +109,8 @@ recognizer when an operation is unsupported.  This option remains off by
 default while broader shape and control-flow support is developed.
 
 Current machine-code scope is 32 logical elements of S32/U32 data, public typed
-Tile views, canonical independent i32 memory streams, and the acyclic iteration CFG
+Tile views, independent i32 stores, varying indexed i32 gathers, monotonic i32
+atomic add, and the acyclic iteration CFG
 already accepted by the predicator.  The backend chooses M32 internally;
 source programs use ordinary element indices without naming layout or lanes.
 The usual Linx Tile register configuration is still required when generating
@@ -128,11 +129,39 @@ truncating division, multiply and subtract rather than PTO floor remainder.
 Stores select the exact physical source dtype, including direct S32 results.
 
 Vector GEPs retain one uniform base and an explicit element index.  TLEA scales
-the index to byte offsets exactly once.  Raw narrow GEP indices sign-extend;
+the S32/U32 B32 index to S64/U64 B64 byte offsets exactly once. LLVM GEP
+extensions preserve the original B32 source rather than materializing a
+separate wide index conversion. Raw narrow GEP indices sign-extend;
 an explicit zext selects unsigned extension.  When required, a typed add-zero
 publishes the matching index backing dtype before TLEA.  Proven representable
 i64 constant indices may use an equivalent U32 index Tile, and identical byte
-offset streams are shared.  The source-level semantics do not change.
+offset streams are shared across identity views and distinct GM bases using
+their actual typed source SSA. Fresh bit-preserving index producers can publish
+the required S32 dtype directly; signedness-sensitive operations retain their
+LLVM semantics and use a real retag when required. The source-level semantics
+do not change.
+
+Indexed reads may use an element-dependent index with one loop-invariant base.
+Ordinary writes still require a proven injective, unit-stride element stream.
+Read/read pairs may overlap. A read/write pair needs whole-object NoAlias,
+except for two proven independent streams with identical addresses; a scalar
+NoAlias result between individual indices does not prove iteration independence.
+
+Ordinary LLVM ``atomicrmw add`` is accepted for nonvolatile, naturally aligned
+i32 accesses with System scope and Monotonic ordering. Predication emits the
+compiler-only ``llvm.linx.experimental.element.atomic.add`` effect with vector
+addresses, addends, mask and EVL. Active elements return the observed old bits;
+inactive elements do not access memory and their IR result is poison. Physical
+legalization uses the existing masked MGATHER_ADD path with zero initialization,
+including when the old-value result is unused. Every memory root is visited in
+source CFG order and each generated old-value Tile is cached.
+
+Atomic/atomic pairs may overlap, including duplicate indices. Mixed atomic and
+ordinary memory effects require whole-object NoAlias. The U32 atomic operation
+receives an actual U32 addend descriptor, using a bit-preserving typed add-zero
+when needed; signed typed publications are restored at the output boundary.
+Unsupported operations, stronger orderings, non-System scopes and misaligned
+atomic accesses are diagnosed before predication mutates the loop.
 
 The public ``TPARTELEMENT`` annotation is prepared before ordinary SROA and
 promotion. Typed carriers retain their vector SSA type: an exact-IV extract
@@ -143,12 +172,32 @@ their compatible identity views may leave an accumulator region; intermediate
 iteration snapshots remain unsupported. Read-only views of a dominating Tile
 producer can be shared by later regions through ordinary LCSSA.
 
+When ordinary optimization scalarizes a guarded access to element zero, generic
+view preparation restores the proven local vector carrier before SROA. The load
+keeps its original position and proven alignment without copying scalar range
+or definedness metadata to the other elements. Promotion must recover an
+admitted full Tile producer. Each restored view use and constant-index insert
+must satisfy ``index == induction`` at that instruction's CFG context, proved
+with ScalarEvolution's block-entry guards. Unguarded, escaping, partial-store,
+unpromoted-load and scalar-to-TCI paths remain unsupported. This handles the
+optimized two-element coherence probe without scalar Tile reads or a legacy
+expression recognizer.
+
 Tile inputs and outputs use the existing ``Tr`` whole-carrier operand ABI.
 Consumer validation parses the operand constraints, including indirect output
 argument positions; it does not match assembly mnemonics. Imports require
 proven Tile producers or an already validated region publication. Final S32
 publications restore their signed dtype before subsequent TileOp consumers.
 No GM roundtrip or private Tile API wrapper is introduced.
+
+Imported carrier PHIs preserve their initialized inputs. Undefined or poison
+seeds, including seeds reached through identity views and cyclic PHIs, are
+refined to real zero Tile producers on their predecessor edges. Native TSEL
+requires both numeric sources to have producers even when one arm is inactive;
+an undefined LLVM input alone cannot supply a physical Tile operand.
+An imported PHI and its identity-view inputs must have one consistent dtype
+across all element regions in the function; conflicting S32/U32 imports are
+diagnosed during preflight before any physical producer is emitted.
 
 LLVM may narrow scalar control arithmetic to i8 or i16. The generic predicator
 represents those integer bits in i32 vectors, explicitly normalizes arithmetic
@@ -163,7 +212,8 @@ values, unsupported domains, partial EVL, effects or types receive diagnostics.
 Unmarked functions do not run the extra generic CFG canonicalization pipeline.
 
 The executable profile covers both ordinary GM arrays and the official S32/U32
-TileOp -> element-for -> TileOp bridge. Varying inner loops, general atomics,
+TileOp -> element-for -> TileOp bridge. Varying inner loops, other atomic
+operations/orderings, potentially overlapping ordinary indexed writes,
 wider Tile shapes/dtypes, and typed Tile spills at O0 remain unsupported.
 The GM-array, public typed-view and whole-application migration tests remain
 separate coverage lanes.

@@ -140,7 +140,7 @@ static bool collectPointerAccesses(Value *Pointer,
   return true;
 }
 
-static bool prepareViews(Function &F) {
+static bool prepareViews(Function &F, bool RestoreFullCarrier = false) {
   SmallVector<CallInst *, 8> Annotations;
   for (Instruction &I : instructions(F)) {
     auto *Call = dyn_cast<CallInst>(&I);
@@ -331,6 +331,27 @@ static bool prepareViews(Function &F) {
     for (Instruction *Access : Plan.Accesses) {
       if (auto *Load = dyn_cast<LoadInst>(Access)) {
         if (Load->getType()->isIntegerTy(32)) {
+          if (RestoreFullCarrier) {
+            // InstCombine may scalarize a guarded element-zero access before
+            // view preparation. Restore the proven local 128-byte carrier so
+            // SROA can recover the original Tile SSA, not a Tile-to-GPR load.
+            // Do not transfer scalar range/noundef metadata to unread elements.
+            IRBuilder<> Builder(Load);
+            auto *Carrier = Builder.CreateAlignedLoad(
+                Plan.Profile.VectorTy, Load->getPointerOperand(), Align(32),
+                "pto.element.full.carrier");
+            Carrier->setDebugLoc(Load->getDebugLoc());
+            auto *Marker = Builder.CreateCall(View, BuildArgs(Carrier),
+                                              "pto.element.view");
+            Marker->setMetadata(ScalarizedLaneZeroMD,
+                                MDNode::get(F.getContext(), {}));
+            auto *ElementZero = Builder.CreateExtractElement(
+                Marker, Builder.getInt32(0), "pto.element.zero");
+            Load->replaceAllUsesWith(ElementZero);
+            Load->eraseFromParent();
+            Changed = true;
+            continue;
+          }
           IRBuilder<> LoadBuilder(Load->getNextNode());
           auto *VectorTy =
               FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32);
@@ -567,6 +588,7 @@ struct PredicatedRegion {
   SmallVector<BasicBlock *, 16> Order;
   DenseMap<PHINode *, ViewDescriptor> Accumulators;
   DenseMap<Value *, ViewDescriptor> Publications;
+  SmallPtrSet<CallInst *, 8> GuardedElementZeroViews;
 };
 
 static bool isElementCarrier(Value *V) {
@@ -733,8 +755,36 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
             (isa<PHINode>(I) && (I->getParent() != L.getHeader() ||
                                  Plan.Accumulators.count(cast<PHINode>(I)))));
   };
+  auto IndexIsCurrent = [&](Value *Index, const Instruction *Use) {
+    const SCEV *IndexSCEV = SE.getSCEV(Index);
+    const SCEV *IVSCEV = SE.getSCEV(Plan.Induction);
+    if (IndexSCEV->getType() != IVSCEV->getType()) {
+      auto *Constant = dyn_cast<ConstantInt>(Index);
+      unsigned Width = Plan.Induction->getType()->getIntegerBitWidth();
+      if (!Constant || !Constant->getValue().isIntN(Width))
+        return false;
+      IndexSCEV = SE.getConstant(Constant->getValue().zextOrTrunc(Width));
+    }
+    return IndexSCEV == IVSCEV ||
+           SE.isKnownPredicateAt(ICmpInst::ICMP_EQ, IndexSCEV, IVSCEV, Use);
+  };
+  auto CertifyElementZeroView = [&](const ViewDescriptor &Descriptor) {
+    if (!Descriptor.ScalarizedLaneZero)
+      return true;
+    for (User *U : Descriptor.Marker->users()) {
+      auto *Extract = dyn_cast<ExtractElementInst>(U);
+      auto *Index =
+          Extract ? dyn_cast<ConstantInt>(Extract->getIndexOperand()) : nullptr;
+      if (!Extract || !L.contains(Extract) || !Index || !Index->isZero() ||
+          !IndexIsCurrent(Index, Extract))
+        return false;
+    }
+    Plan.GuardedElementZeroViews.insert(Descriptor.Marker);
+    return true;
+  };
   const DataLayout &DL = F.getParent()->getDataLayout();
   SmallVector<Instruction *, 8> Memory;
+  SmallPtrSet<Instruction *, 8> IndependentStreams;
   for (BasicBlock *BB : Plan.Order) {
     for (Instruction &I : *BB) {
       if (I.isTerminator() || isa<DbgInfoIntrinsic>(I))
@@ -777,8 +827,12 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           }
       if (auto Descriptor = getViewDescriptor(&I)) {
         Value *Source = Descriptor->Marker->getArgOperand(0);
-        if (Descriptor->ScalarizedLaneZero || Plan.Count != 32)
+        if (Plan.Count != 32)
           return Fail(&I, "typed carrier requires a full 32-element domain");
+        if (!CertifyElementZeroView(*Descriptor))
+          return Fail(
+              &I,
+              "scalarized view requires a proven current-element-zero guard");
         if (auto *Producer = dyn_cast<Instruction>(Source)) {
           if (!L.contains(Producer) &&
               (!DT.dominates(Producer, L.getLoopPreheader()->getTerminator()) ||
@@ -791,21 +845,29 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       }
       if (auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
         if (!isElementCarrier(Extract->getVectorOperand()) ||
-            SE.getSCEV(Extract->getIndexOperand()) !=
-                SE.getSCEV(Plan.Induction) ||
+            !IndexIsCurrent(Extract->getIndexOperand(), Extract) ||
             !IsCarrierOperand(Extract->getVectorOperand()))
           return Fail(
               &I, "carrier extract requires a typed view and exact element IV");
+        if (auto Descriptor = getViewDescriptor(
+                stripCarrierLCSSA(Extract->getVectorOperand())))
+          if (!CertifyElementZeroView(*Descriptor))
+            return Fail(
+                &I,
+                "scalarized view requires a proven current-element-zero guard");
         if (auto *Source = dyn_cast<Instruction>(Extract->getVectorOperand()))
           if (!L.contains(Source) &&
               (!DT.dominates(Source, L.getLoopPreheader()->getTerminator()) ||
-               !isTypedTileImport(Source)))
+               !(Plan.GuardedElementZeroViews.contains(
+                     dyn_cast<CallInst>(Source))
+                     ? isTypedTileImport(
+                           cast<CallInst>(Source)->getArgOperand(0))
+                     : isTypedTileImport(Source))))
             return Fail(&I, "typed import requires a dominating Tile producer");
         continue;
       }
       if (auto *Insert = dyn_cast<InsertElementInst>(&I)) {
-        if (!Carrier ||
-            SE.getSCEV(Insert->getOperand(2)) != SE.getSCEV(Plan.Induction) ||
+        if (!Carrier || !IndexIsCurrent(Insert->getOperand(2), Insert) ||
             !IsCarrierOperand(Insert->getOperand(0)))
           return Fail(
               &I, "carrier insert requires a typed view and exact element IV");
@@ -854,25 +916,49 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           return Fail(&I, "volatile/atomic store needs effect legalization");
         Pointer = Store->getPointerOperand();
         AccessTy = Store->getValueOperand()->getType();
+      } else if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
+        if (Atomic->getOperation() != AtomicRMWInst::Add ||
+            Atomic->getOrdering() != AtomicOrdering::Monotonic ||
+            Atomic->getSyncScopeID() != SyncScope::System ||
+            Atomic->isVolatile() || Atomic->getAlign() < Align(4))
+          return Fail(&I, "atomic profile requires aligned nonvolatile "
+                          "system-scope monotonic i32 add");
+        Pointer = Atomic->getPointerOperand();
+        AccessTy = Atomic->getType();
       } else {
         return Fail(&I, "unsupported opcode or effect in generic IR stage");
       }
       if (!AccessTy->isIntegerTy(32))
         return Fail(&I, "memory profile requires scalar i32 accesses");
-      // Start with independently indexed objects. This proof is stronger than
-      // unordered iteration: it excludes conflicting non-atomic memory effects.
+      // Reads may be indexed by arbitrary element values; overlapping atomic
+      // adds are intentional. Ordinary writes still need injective unit-stride
+      // streams. Mixed atomic/non-atomic objects are checked separately below.
+      if (!Pointer->getType()->isPointerTy() ||
+          Pointer->getType()->getPointerAddressSpace() != 0)
+        return Fail(&I, "memory profile requires the default address space");
+      auto *GEP = dyn_cast<GetElementPtrInst>(Pointer);
+      bool UniformBase = L.isLoopInvariant(Pointer) ||
+                         (GEP && GEP->getNumIndices() == 1 &&
+                          GEP->getSourceElementType()->isIntegerTy(32) &&
+                          L.isLoopInvariant(GEP->getPointerOperand()));
+      if (!UniformBase)
+        return Fail(&I, "memory address requires one loop-invariant base");
       const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Pointer));
       const auto *Step = AR && AR->getLoop() == &L
                              ? dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE))
                              : nullptr;
-      if (!Step || Step->getAPInt() != DL.getTypeStoreSize(AccessTy))
+      if (Step && Step->getAPInt() == DL.getTypeStoreSize(AccessTy))
+        IndependentStreams.insert(&I);
+      if (isa<StoreInst>(I) &&
+          (!Step || Step->getAPInt() != DL.getTypeStoreSize(AccessTy)))
         return Fail(&I, "memory address is not a proven independent element stream");
       Memory.push_back(&I);
     }
   }
   for (unsigned I = 0; I < Memory.size(); ++I) {
     for (unsigned J = I + 1; J < Memory.size(); ++J) {
-      if (isa<LoadInst>(Memory[I]) && isa<LoadInst>(Memory[J]))
+      if ((isa<LoadInst>(Memory[I]) && isa<LoadInst>(Memory[J])) ||
+          (isa<AtomicRMWInst>(Memory[I]) && isa<AtomicRMWInst>(Memory[J])))
         continue;
       MemoryLocation A = MemoryLocation::get(Memory[I]);
       MemoryLocation B = MemoryLocation::get(Memory[J]);
@@ -882,8 +968,11 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                              LocationSize::beforeOrAfterPointer());
       MemoryLocation BObject(getUnderlyingObject(B.Ptr),
                              LocationSize::beforeOrAfterPointer());
+      bool HasAtomic =
+          isa<AtomicRMWInst>(Memory[I]) || isa<AtomicRMWInst>(Memory[J]);
       if (AA.alias(AObject, BObject) != AliasResult::NoAlias &&
-          !(A.Size == B.Size &&
+          !(!HasAtomic && IndependentStreams.contains(Memory[I]) &&
+            IndependentStreams.contains(Memory[J]) && A.Size == B.Size &&
             SE.getSCEV(const_cast<Value *>(A.Ptr)) ==
                 SE.getSCEV(const_cast<Value *>(B.Ptr))))
         return Fail(Memory[J], "memory streams may overlap across elements");
@@ -898,6 +987,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   Loop &L = *Plan.L;
   Instruction *OldLast = L.getLoopPreheader()->getTerminator()->getPrevNode();
   MDNode *Token = getElementRegionToken(L);
+  for (CallInst *View : Plan.GuardedElementZeroViews)
+    View->setMetadata(ScalarizedLaneZeroMD, nullptr);
   IRBuilder<> B(L.getLoopPreheader()->getTerminator());
   auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.Count);
   Value *False = Constant::getNullValue(MaskTy);
@@ -999,6 +1090,15 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     return Mask;
   };
 
+  auto WidenAddress = [&](Value *Pointer) -> Value * {
+    Value *Wide = Widen(Pointer);
+    if (!L.isLoopInvariant(Pointer))
+      return Wide;
+    Value *Zero = Constant::getNullValue(
+        FixedVectorType::get(B.getInt32Ty(), Plan.Count));
+    return B.Insert(GetElementPtrInst::Create(B.getInt32Ty(), Wide, {Zero}),
+                    "pto.uniform.address");
+  };
   for (BasicBlock *BB : Plan.Order) {
     Value *Mask = BB == L.getHeader() ? True : False;
     if (BB != L.getHeader())
@@ -1082,15 +1182,28 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                              Widen(GEP->getPointerOperand()),
                              Widen(GEP->getOperand(1)), "pto.address");
       } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
-        auto *Call = EmitVP(Intrinsic::vp_gather, WideTy,
-                            {Widen(Load->getPointerOperand()), Mask, EVL});
+        auto *Call =
+            EmitVP(Intrinsic::vp_gather, WideTy,
+                   {WidenAddress(Load->getPointerOperand()), Mask, EVL});
         Call->addParamAttr(0, Attribute::getWithAlignment(F.getContext(),
                                                         Load->getAlign()));
         Result = Call;
+      } else if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
+        Value *Pointers = WidenAddress(Atomic->getPointerOperand());
+        Function *Callee = Intrinsic::getDeclaration(
+            F.getParent(), Intrinsic::linx_experimental_element_atomic_add,
+            {WideTy, Pointers->getType()});
+        auto *Call = B.CreateCall(
+            Callee, {Pointers, Widen(Atomic->getValOperand()), Mask, EVL},
+            "pto.atomic.old");
+        Call->addParamAttr(
+            0, Attribute::getWithAlignment(F.getContext(), Atomic->getAlign()));
+        Result = Call;
       } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
-        auto *Call = EmitVP(Intrinsic::vp_scatter, B.getVoidTy(),
-                            {Widen(Store->getValueOperand()),
-                             Widen(Store->getPointerOperand()), Mask, EVL});
+        auto *Call =
+            EmitVP(Intrinsic::vp_scatter, B.getVoidTy(),
+                   {Widen(Store->getValueOperand()),
+                    WidenAddress(Store->getPointerOperand()), Mask, EVL});
         Call->addParamAttr(1, Attribute::getWithAlignment(F.getContext(),
                                                         Store->getAlign()));
       } else {
@@ -1207,6 +1320,8 @@ class ElementTileLegalizer {
   SmallPtrSet<Instruction *, 32> OwnedSet;
   SmallPtrSet<Value *, 32> Validated;
   SmallVector<CallInst *, 8> Publications;
+  SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
+  DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
@@ -1271,6 +1386,38 @@ class ElementTileLegalizer {
     return true;
   }
 
+  bool validateImportTypes(Value *V, uint64_t DType,
+                           SmallPtrSetImpl<Value *> &Seen,
+                           bool PhiIncoming = false) {
+    if (!Seen.insert(V).second)
+      return true;
+    if (auto View = getViewDescriptor(V)) {
+      if (PhiIncoming && View->Profile.DataType != DType)
+        return fail(V, "imported carrier PHI requires one consistent dtype");
+      if (OwnedSet.contains(View->Marker) ||
+          View->Marker->getMetadata(PredicatedOwnerMD))
+        return true;
+      return validateImportTypes(View->Marker->getArgOperand(0),
+                                 View->Profile.DataType, Seen, PhiIncoming);
+    }
+    if (auto *Phi = dyn_cast<PHINode>(V)) {
+      auto Inserted = ImportedPhiTypes.try_emplace(Phi, DType);
+      if (!Inserted.second && Inserted.first->second != DType)
+        return fail(Phi, "imported carrier PHI requires one consistent dtype");
+      for (Value *Incoming : Phi->incoming_values())
+        if (!validateImportTypes(Incoming, DType, Seen, true))
+          return false;
+    }
+    return true;
+  }
+
+  bool validateImport(Value *V, uint64_t DType) {
+    if (!isTypedTileImport(V))
+      return fail(V, "typed import requires an explicit Tile producer");
+    SmallPtrSet<Value *, 16> Seen;
+    return validateImportTypes(V, DType, Seen);
+  }
+
   bool validate(Value *V) {
     if (!Validated.insert(V).second)
       return true;
@@ -1281,13 +1428,11 @@ class ElementTileLegalizer {
       if (Descriptor->ScalarizedLaneZero)
         return fail(V, "typed import requires a full Tile carrier");
       if (!OwnedSet.contains(Descriptor->Marker))
-        return isTypedTileImport(V) ||
-               fail(V, "typed import requires an explicit Tile producer");
+        return validateImport(V, Descriptor->Profile.DataType);
       Value *Source = Descriptor->Marker->getArgOperand(0);
       if (auto *I = dyn_cast<Instruction>(Source))
         if (!OwnedSet.contains(I))
-          return isTypedTileImport(Source) ||
-                 fail(V, "typed import requires an explicit Tile producer");
+          return validateImport(Source, Descriptor->Profile.DataType);
       return validate(Source);
     }
     if (auto *I = dyn_cast<Instruction>(V))
@@ -1362,9 +1507,26 @@ class ElementTileLegalizer {
         return fail(V, "non-VP data arithmetic is not supported");
       return validate(Binary->getOperand(0)) && validate(Binary->getOperand(1));
     }
+    if (auto *Atomic = dyn_cast<CallInst>(V))
+      if (isIntrinsic(Atomic, Intrinsic::linx_experimental_element_atomic_add))
+        return validateAtomic(*Atomic);
     if (auto *VP = dyn_cast<VPIntrinsic>(V))
       return validateVP(*VP);
     return fail(V, "unsupported vector operation");
+  }
+
+  bool validateAtomic(CallInst &Atomic) {
+    auto *EVL = dyn_cast<ConstantInt>(Atomic.getArgOperand(3));
+    auto Alignment = Atomic.getParamAlign(0);
+    if (!isVector(&Atomic, 32) || !isVector(Atomic.getArgOperand(1), 32) ||
+        !isVector(Atomic.getArgOperand(2), 1) || !EVL || !EVL->equalsInt(32) ||
+        !Alignment || *Alignment < Align(4) ||
+        !isa<GetElementPtrInst>(Atomic.getArgOperand(0)))
+      return fail(&Atomic, "atomic add requires i32 values, explicit GEP, "
+                           "aligned memory, 32-bit mask and EVL=32");
+    return validate(Atomic.getArgOperand(0)) &&
+           validate(Atomic.getArgOperand(1)) &&
+           validate(Atomic.getArgOperand(2));
   }
 
   bool validateVP(VPIntrinsic &VP) {
@@ -1412,15 +1574,17 @@ class ElementTileLegalizer {
     return Result;
   }
 
-  Value *splat(Value *Scalar, FixedVectorType *Ty, uint64_t Step = 0) {
+  Value *splat(Value *Scalar, FixedVectorType *Ty, uint64_t Step = 0,
+               uint64_t PreferredType = 0) {
     // A scalar used only under an inactive edge may itself be poison. Choosing
     // a defined representative keeps subsequent physical mask/Tile algebra
     // from reintroducing poison into lanes excluded by an LLVM select.
     Scalar = B.CreateFreeze(Scalar, "pto.uniform.defined");
     Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
+    const uint64_t DType =
+        Ty->getScalarSizeInBits() == 32 ? (PreferredType == 17 ? 17 : 25) : 24;
     return call(Intrinsic::linx_experimental_ew_tci, {Ty},
-                {B.getInt64(32), B.getInt64(1),
-                 B.getInt64(Ty->getScalarSizeInBits() == 32 ? 25 : 24),
+                {B.getInt64(32), B.getInt64(1), B.getInt64(DType),
                  B.getInt64(29), Scalar, B.getInt64(Step)});
   }
 
@@ -1501,7 +1665,8 @@ class ElementTileLegalizer {
     return B.CreateAnd(mask(VP.getMaskParam()), B.getInt64((uint64_t(1) << N) - 1));
   }
 
-  Value *binary(unsigned Op, Value *L, Value *R, Value *Active) {
+  Value *binary(unsigned Op, Value *L, Value *R, Value *Active,
+                uint64_t PreferredType = 0) {
     unsigned Code = 0;
     uint64_t DType = 25;
     switch (Op) {
@@ -1520,10 +1685,16 @@ class ElementTileLegalizer {
     case Instruction::SRem: {
       Value *Q = binary(Instruction::SDiv, L, R, Active);
       Value *Product = binary(Instruction::Mul, Q, R, Active);
-      return binary(Instruction::Sub, L, Product, Active);
+      return binary(Instruction::Sub, L, Product, Active, PreferredType);
     }
     default: llvm_unreachable("binary preflight");
     }
+    // Sign-neutral integer producers can publish the address index's actual
+    // S32 descriptor directly. Division/remainder/right-shift signedness
+    // remains determined by the LLVM opcode, never by a downstream descriptor
+    // hint.
+    if (PreferredType == 17 && (Code <= 2 || (Code >= 5 && Code <= 8)))
+      DType = 17;
     return call(Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
                 {B.getInt64(32), B.getInt64(1), B.getInt64(DType),
                  B.getInt64(29), B.getInt64(Code), L, R, Active,
@@ -1566,10 +1737,13 @@ class ElementTileLegalizer {
       }
     }
     Type *OffsetTy = FixedVectorType::get(B.getInt64Ty(), 32);
-    auto Key = std::make_pair(Index, SourceType);
+    Value *Source = indexSource(value(Index, SourceType), SourceType);
+    // Identity views and LLVM GEP extensions may refer to the same B32 Tile.
+    // Cache the normalized physical SSA source, independent of the GM base,
+    // so one extension/scaling serves every use of these index bits.
+    auto Key = std::make_pair(Source, SourceType);
     Value *Offset = ByteOffsets.lookup(Key);
     if (!Offset) {
-      Value *Source = indexSource(value(Index), SourceType);
       Offset = call(Intrinsic::linx_experimental_ew_tlea,
                     {OffsetTy, Index->getType()},
                     {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
@@ -1603,7 +1777,36 @@ class ElementTileLegalizer {
     return Result;
   }
 
-  Value *value(Value *V) {
+  void materializeImportPhi(PHINode *Phi, uint64_t DType) {
+    if (!MaterializedImportPhis.insert(Phi).second)
+      return;
+    assert(isElementCarrier(Phi) &&
+           "import preflight requires a full i32 carrier");
+    DenseMap<BasicBlock *, Value *> ZeroInputs;
+    for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+      Value *Incoming = Phi->getIncomingValue(I);
+      // Import preflight also admits identity views around a PHI or an
+      // undefined seed. Follow those views before final cleanup peels them;
+      // otherwise a native Tile PHI would again receive an unproduced input.
+      while (auto View = getViewDescriptor(Incoming))
+        Incoming = View->Marker->getArgOperand(0);
+      if (isa<UndefValue>(Incoming) || isa<PoisonValue>(Incoming)) {
+        BasicBlock *Predecessor = Phi->getIncomingBlock(I);
+        Value *&Zero = ZeroInputs[Predecessor];
+        if (!Zero) {
+          IRBuilderBase::InsertPointGuard Guard(B);
+          B.SetInsertPoint(Predecessor->getTerminator());
+          Zero = splat(B.getInt32(0),
+                       cast<FixedVectorType>(Phi->getType()), 0, DType);
+        }
+        Phi->setIncomingValue(I, Zero);
+      } else if (auto *IncomingPhi = dyn_cast<PHINode>(Incoming)) {
+        materializeImportPhi(IncomingPhi, DType);
+      }
+    }
+  }
+
+  Value *value(Value *V, uint64_t PreferredType = 0) {
     auto It = Data.find(V);
     if (It != Data.end())
       return It->second;
@@ -1613,22 +1816,25 @@ class ElementTileLegalizer {
       Value *Source = Descriptor->Marker->getArgOperand(0);
       if (auto *I = dyn_cast<Instruction>(Source)) {
         if (!OwnedSet.contains(I) && !getViewDescriptor(Source)) {
+          if (auto *Phi = dyn_cast<PHINode>(Source))
+            materializeImportPhi(Phi, Descriptor->Profile.DataType);
           PhysicalTypes[Source] = Descriptor->Profile.DataType;
           return Data[V] = Source;
         }
       }
       R = indexSource(value(Source), Descriptor->Profile.DataType);
     } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
-      R = splat(ConstantInt::get(Ty->getElementType(), 0), Ty);
+      R = splat(ConstantInt::get(Ty->getElementType(), 0), Ty, 0,
+                PreferredType);
     } else if (Value *Scalar = getSplatValue(V)) {
-      R = splat(Scalar, Ty);
+      R = splat(Scalar, Ty, 0, PreferredType);
     } else if (auto *C = dyn_cast<Constant>(V)) {
       APInt Initial, Step;
       bool OK = constantProgression(C, Initial, Step);
       assert(OK && "constant progression preflight");
       (void)OK;
       R = splat(ConstantInt::get(Ty->getElementType(), Initial), Ty,
-                 uint64_t(uint32_t(Step.getSExtValue())) << 32);
+                uint64_t(uint32_t(Step.getSExtValue())) << 32, PreferredType);
     } else if (auto *Cast = dyn_cast<CastInst>(V)) {
       Value *Source = Cast->getOperand(0);
       uint64_t SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
@@ -1638,9 +1844,25 @@ class ElementTileLegalizer {
                   indexSource(value(Source), SourceType), B.getInt64(8)});
     } else if (auto *Select = dyn_cast<SelectInst>(V)) {
       R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
-                 {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(29),
-                  mask(Select->getCondition()), B.getInt64(0),
-                  value(Select->getTrueValue()), value(Select->getFalseValue())});
+               {B.getInt64(32), B.getInt64(1),
+                B.getInt64(PreferredType == 17 ? 17 : 25), B.getInt64(29),
+                mask(Select->getCondition()), B.getInt64(0),
+                value(Select->getTrueValue()), value(Select->getFalseValue())});
+    } else if (isIntrinsic(dyn_cast<CallInst>(V),
+                           Intrinsic::linx_experimental_element_atomic_add)) {
+      auto *Atomic = cast<CallInst>(V);
+      assert(isIntrinsic(Atomic,
+                         Intrinsic::linx_experimental_element_atomic_add) &&
+             "atomic effect preflight");
+      Address A = address(Atomic->getArgOperand(0));
+      Value *Source = indexSource(value(Atomic->getArgOperand(1)), 25);
+      R = call(Intrinsic::linx_experimental_ew_mgather_add_masked,
+               {Ty, A.Offset->getType(), Source->getType()},
+               {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(0),
+                B.getInt64(29), A.Base, A.Offset, Source,
+                mask(Atomic->getArgOperand(2)), B.getInt64(0), B.getInt64(0),
+                B.getInt64(1)},
+               "pto.atomic.old.tile");
     } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
       if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
         Address A = address(VP->getArgOperand(0));
@@ -1650,8 +1872,9 @@ class ElementTileLegalizer {
                     B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset,
                     activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(1)});
       } else {
-        R = binary(*binaryOpcode(VP->getIntrinsicID()), value(VP->getArgOperand(0)),
-                     value(VP->getArgOperand(1)), activeMask(*VP));
+        R = binary(*binaryOpcode(VP->getIntrinsicID()),
+                   value(VP->getArgOperand(0)), value(VP->getArgOperand(1)),
+                   activeMask(*VP), PreferredType);
       }
     } else {
       llvm_unreachable("value preflight");
@@ -1660,8 +1883,10 @@ class ElementTileLegalizer {
   }
 
 public:
-  ElementTileLegalizer(Function &F, ArrayRef<Instruction *> Instructions)
-      : F(F), Owned(Instructions.begin(), Instructions.end()), B(F.getContext()) {
+  ElementTileLegalizer(Function &F, ArrayRef<Instruction *> Instructions,
+                       DenseMap<PHINode *, uint64_t> &ImportedPhiTypes)
+      : F(F), Owned(Instructions.begin(), Instructions.end()),
+        ImportedPhiTypes(ImportedPhiTypes), B(F.getContext()) {
     for (Instruction *I : Owned)
       OwnedSet.insert(I);
   }
@@ -1714,6 +1939,12 @@ public:
       if (I->mayHaveSideEffects() || I->mayReadOrWriteMemory()) {
         if (getViewDescriptor(I))
           continue;
+        if (isIntrinsic(dyn_cast<CallInst>(I),
+                        Intrinsic::linx_experimental_element_atomic_add)) {
+          if (!validateAtomic(*cast<CallInst>(I)))
+            return false;
+          continue;
+        }
         auto *VP = dyn_cast<VPIntrinsic>(I);
         if (!VP || !validateVP(*VP))
           return fail(I, "unsupported token-owned side effect");
@@ -1726,6 +1957,14 @@ public:
     // Visit memory roots in their original order. Recursive pure operands are
     // cached, so a gather is neither duplicated nor moved past a prior effect.
     for (Instruction *I : Owned) {
+      if (isIntrinsic(dyn_cast<CallInst>(I),
+                      Intrinsic::linx_experimental_element_atomic_add)) {
+        B.SetInsertPoint(I);
+        B.SetCurrentDebugLocation(I->getDebugLoc());
+        value(
+            I); // The effect must execute even if its old-value result is dead.
+        continue;
+      }
       auto *VP = dyn_cast<VPIntrinsic>(I);
       if (!VP || !VP->mayReadOrWriteMemory())
         continue;
@@ -3169,7 +3408,8 @@ static bool verifyNoResidualElementContracts(Function &F) {
       return diagnose(F, &I, "token-owned VP region survived Tile legalization");
     auto *Call = dyn_cast<CallInst>(&I);
     if (isIntrinsic(Call, Intrinsic::linx_experimental_element_region) ||
-        isIntrinsic(Call, Intrinsic::linx_experimental_element_view))
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_view) ||
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_atomic_add))
       return diagnose(F, &I, "required region lowering did not complete");
     StringRef Text;
     if (Call && getAnnotationString(*Call, Text) && Text.startswith(ViewPrefix))
@@ -3345,10 +3585,16 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
 PreservedAnalyses
 LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
   SmallVector<CallInst *, 4> Sentinels;
-  for (Instruction &I : instructions(F))
+  for (Instruction &I : instructions(F)) {
+    if (isIntrinsic(dyn_cast<CallInst>(&I),
+                    Intrinsic::linx_experimental_element_atomic_add) &&
+        !I.getMetadata(PredicatedOwnerMD))
+      diagnose(F, &I,
+               "Tile legalization: atomic effect lacks region ownership");
     if (isIntrinsic(dyn_cast<CallInst>(&I),
                     Intrinsic::linx_experimental_element_region))
       Sentinels.push_back(cast<CallInst>(&I));
+  }
   if (Sentinels.empty()) {
     for (Instruction &I : instructions(F))
       if (I.getMetadata(PredicatedOwnerMD))
@@ -3360,6 +3606,7 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
              "Tile legalization: typed Tile spill/reload is unsupported at -O0");
 
   SmallPtrSet<MDNode *, 4> Tokens;
+  DenseMap<PHINode *, uint64_t> ImportedPhiTypes;
   SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
   for (CallInst *Sentinel : Sentinels) {
     auto *Domain = Sentinel->getMetadata(PredicatedDomainMD);
@@ -3375,7 +3622,8 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     for (Instruction &I : instructions(F))
       if (I.getMetadata(PredicatedOwnerMD) == Token)
         Owned.push_back(&I);
-    auto Plan = std::make_unique<ElementTileLegalizer>(F, Owned);
+    auto Plan =
+        std::make_unique<ElementTileLegalizer>(F, Owned, ImportedPhiTypes);
     Plan->preflight();
     Plans.push_back(std::move(Plan));
   }
@@ -3417,12 +3665,15 @@ LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
                              Intrinsic::linx_experimental_element_region);
   if (!HasRegion)
     return prepareViews(F) ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  bool ViewsChanged = prepareViews(F, /*RestoreFullCarrier=*/true);
+  if (ViewsChanged)
+    AM.invalidate(F, PreservedAnalyses::none());
   FunctionPassManager Prepare;
-  Prepare.addPass(LinxV5ElementRegionPreparePass());
   Prepare.addPass(LinxV5ElementRegionPromotePass());
   Prepare.addPass(LoopSimplifyPass());
   Prepare.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
   Prepare.addPass(InstCombinePass());
   Prepare.addPass(LCSSAPass());
-  return Prepare.run(F, AM);
+  PreservedAnalyses PA = Prepare.run(F, AM);
+  return ViewsChanged ? PreservedAnalyses::none() : PA;
 }
