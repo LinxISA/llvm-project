@@ -622,7 +622,9 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
     break;
   }
   case 4: {
-    uint32_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
+    MCInst EncodedMI = MI;
+    normalizeBIOTLifetimeOpcode(EncodedMI);
+    uint32_t Bits = getBinaryCodeForInstr(EncodedMI, Fixups, STI);
     support::endian::write(OS, Bits, support::little);
     break;
   }
@@ -696,6 +698,7 @@ void LinxV5MCCodeEmitter::writeBinaryCodes(raw_ostream &OS,
                                            llvm::SmallVector<MCInst> McVec,
                                            unsigned &Count, bool isNeedFixUp) const {
   for (MCInst &inst : McVec) {
+    normalizeBIOTLifetimeOpcode(inst);
     MCInst out;
     // if (llvm::LinxV5::tryCompressInst(out, inst, STI, this->Ctx)) {
     //   uint16_t Bits = getBinaryCodeForInstr(out, Fixups, STI);
@@ -861,12 +864,16 @@ void LinxV5MCCodeEmitter::expandPseudoV5TLSU(
            .addOperand(MI.getOperand(2))
            .addOperand(MI.getOperand(1))},
       ByteCount);
-  // PTO v0.58 reissue: source B.IOS (S<id>, mask=...).
+  auto sharedSourceID = [&](MCRegister Reg) {
+    bool Reuse = Reg >= LinxV5::Shared_S0_RU && Reg <= LinxV5::Shared_S63_RU;
+    return Ctx.getRegisterInfo()->getEncodingValue(Reg) | (Reuse ? 0u : 0x40u);
+  };
+
+  // Source B.IOS: bare S<id> is last-use; S<id>.reuse retains it.
   writeBinaryCodes(OS, Fixups, STI,
                    {MCInstBuilder(LinxV5::B_IOS)
-                        .addOperand(MCOperand::createImm(
-                            Ctx.getRegisterInfo()->getEncodingValue(
-                                MI.getOperand(3).getReg())))  // SharedTID
+                        .addOperand(MCOperand::createImm(sharedSourceID(
+                            MI.getOperand(3).getReg())))       // SharedTID
                         .addOperand(MI.getOperand(4))          // PE_MASK
                         .addOperand(MCOperand::createImm(0))}, // TSize=0
                    ByteCount);
@@ -1061,14 +1068,17 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
   if (MI.getOpcode() == LinxV5::PseudoMAMULB_SharedRight_SizeI) {
     // PTO v0.58 reissue: CUBE Shared binder is a source B.IOS (TSize=0,
     // mask=1111). operand(11)=SharedTID.
+    MCRegister SharedReg = MI.getOperand(11).getReg();
+    bool Reuse =
+        SharedReg >= LinxV5::Shared_S0_RU && SharedReg <= LinxV5::Shared_S63_RU;
+    unsigned SharedID = Ctx.getRegisterInfo()->getEncodingValue(SharedReg) |
+                        (Reuse ? 0u : 0x40u);
     writeBinaryCodes(
         OS, Fixups, STI,
         {MCInstBuilder(LinxV5::B_IOS)
-             .addOperand(MCOperand::createImm(
-                 Ctx.getRegisterInfo()->getEncodingValue(
-                     MI.getOperand(11).getReg())))  // SharedTID
-             .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-             .addOperand(MCOperand::createImm(0))},     // TSize=0
+             .addOperand(MCOperand::createImm(SharedID)) // SharedTID+lifetime
+             .addOperand(MCOperand::createImm(0b1111))   // PE_MASK
+             .addOperand(MCOperand::createImm(0))},      // TSize=0
         Dummy);
   }
   writeBinaryCodes(OS, Fixups, STI,
@@ -1164,7 +1174,7 @@ unsigned LinxV5MCCodeEmitter::getImmOpValueSharedTID(
   else
     report_fatal_error("SharedTID requires an absolute immediate");
 
-  if (!isUInt<6>(Value))
+  if (!isUInt<7>(Value))
     report_fatal_error("SharedTID immediate is out of range");
   return static_cast<unsigned>(Value);
 }

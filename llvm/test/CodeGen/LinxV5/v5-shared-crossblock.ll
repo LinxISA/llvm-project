@@ -13,17 +13,19 @@ target triple = "linx64v5"
 ; must stay live across the loop backedge and reuse the same S register.
 ;
 ; CHECK-LABEL: shared_crossblock:
-; CHECK: B.IOS S0, mask=1111
+; CHECK: B.IOS mask=1111, ->S0<128B>
+; CHECK: B.IOS S0.reuse, mask=1111
 ; CHECK: B.IOS S0, mask=1111
 ; CHECK-NOT: B.IOS S1
 ;
 ; OBJ-LABEL: <shared_crossblock>:
-; OBJ: B.IOS S0, mask=1111
+; OBJ: B.IOS mask=1111, ->S0<128B>
+; OBJ: B.IOS S0.reuse, mask=1111
 ; OBJ: B.IOS S0, mask=1111
 ; OBJ-NOT: B.IOS S1
 define void @shared_crossblock(ptr %p, i64 %n) {
 entry:
-  %shared = call i64 asm sideeffect "B.IOS ${0:S}, mask=1111", "=@2Sr"()
+  %shared = call i64 asm sideeffect "B.IOS mask=1111, ->${0:S}<128B>", "=@2Sr"()
   br label %loop
 
 loop:
@@ -34,5 +36,6 @@ loop:
   br i1 %cond, label %loop, label %exit
 
 exit:
+  call void asm sideeffect "B.IOS ${0:K}, mask=1111", "@2Sr"(i64 %shared)
   ret void
 }
