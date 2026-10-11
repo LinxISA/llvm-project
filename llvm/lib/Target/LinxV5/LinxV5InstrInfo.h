@@ -135,6 +135,9 @@ int getPseudoMap(uint16_t Opcode);
 bool isRAInstrOfInlineASMBlock(MachineInstr &MI);
 
 bool isTileOp(const MachineInstr &MI);
+/// Return a destination-free B.ASSEMBLE continuation's Local ParentRef, or
+/// NoRegister when the inline-asm bundle has no such source-form binder.
+Register getAssembleParentRef(const MachineInstr &MI);
 unsigned getTileOpRegSize(MachineInstr &MI, Register Reg);
 bool isIsolateInstr(MachineInstr &MI);
 

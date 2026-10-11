@@ -16,6 +16,7 @@
 #include <llvm/CodeGen/MachineFunctionPass.h>
 #include <llvm/CodeGen/MachineRegisterInfo.h>
 #include <llvm/CodeGen/VirtRegMap.h>
+#include <llvm/IR/InlineAsm.h>
 
 using namespace llvm;
 
@@ -94,6 +95,7 @@ public:
   void assignSIMTReg(MachineFunction &MF);
   void assignTileReg(MachineFunction &MF);
   void assignMultiOutput(MachineFunction &MF);
+  SmallVector<Register> findOpenAssembleParents(MachineFunction &MF);
   bool assign(Register OriReg, const TargetRegisterClass *RC);
   bool isLoopInvariant(MachineLoop *Loop, MachineInstr &MI);
 
@@ -570,21 +572,103 @@ void LinxV5ClockhandsColoring::assignMultiOutput(MachineFunction &MF) {
   }
 }
 
+SmallVector<Register>
+LinxV5ClockhandsColoring::findOpenAssembleParents(MachineFunction &MF) {
+  SmallVector<Register> Parents;
+  DenseSet<Register> Seen;
+
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm() ||
+          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+               .contains("B.ASSEMBLE"))
+        continue;
+
+      for (MachineOperand *Def : getDefOperands(&MI)) {
+        Register Reg = Def->getReg();
+        if (!Reg.isVirtual() ||
+            MRI->getRegClass(Reg) != &LinxV5::Tile_ABSRegClass ||
+            Seen.count(Reg))
+          continue;
+
+        // INIT_LAST has no continuation and needs no reserved hand.  An open
+        // parent is the Tile result of an INIT writer that is subsequently
+        // consumed as ParentRef by a destination-free B.ASSEMBLE
+        // continuation.  A completed tile used later as another assembly's
+        // numeric writer fragment is not a parent.
+        bool HasContinuation = llvm::any_of(
+            MRI->use_instructions(Reg), [&](const MachineInstr &UseMI) {
+              if (&UseMI == &MI)
+                return false;
+              return LinxV5::getAssembleParentRef(UseMI) == Reg;
+            });
+        if (HasContinuation) {
+          Seen.insert(Reg);
+          Parents.push_back(Reg);
+        }
+      }
+    }
+  }
+  return Parents;
+}
+
 void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
-  if (!EnableTileClockHand) {
+  SmallVector<Register> OpenParents = findOpenAssembleParents(MF);
+  if (!EnableTileClockHand && OpenParents.empty()) {
     assignMultiOutput(MF);
     return;
   }
   LLVM_DEBUG(dbgs() << "\nAssignTileReg Start\n");
   DenseSet<const TargetRegisterClass *> OriRCs = {&LinxV5::Tile_ABSRegClass};
 
-  bool LoopAssignRes = assignLoopInvar(MF, OriRCs, &LinxV5::Tile_NRRegClass);
-  assignAccrosChain(MF, OriRCs,
-                    LoopAssignRes ? &LinxV5::Tile_MRRegClass
-                                  : &LinxV5::Tile_NRRegClass);
   SmallVector<const TargetRegisterClass *> CurRCs = {
       &LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
       &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass};
+
+  if (!OpenParents.empty()) {
+    // Keep one hand available for writer temporaries.  Parent values with
+    // nonoverlapping LiveIntervals may reuse a reserved hand; reject only
+    // actual simultaneous pressure that requires a fourth parent hand.
+    ArrayRef<const TargetRegisterClass *> ParentRCs(CurRCs.data(), 3);
+    DenseMap<const TargetRegisterClass *, SmallVector<LiveInterval *, 2>>
+        ParentIntervals;
+    SmallVector<std::pair<Register, const TargetRegisterClass *>, 4>
+        Assignments;
+    DenseSet<const TargetRegisterClass *> UsedParentRCs;
+    for (Register Parent : OpenParents) {
+      LiveInterval &LI = LIS->getInterval(Parent);
+      const TargetRegisterClass *Chosen = nullptr;
+      for (const TargetRegisterClass *RC : ParentRCs) {
+        bool Interferes =
+            llvm::any_of(ParentIntervals[RC], [&](LiveInterval *Other) {
+              return LI.overlaps(*Other);
+            });
+        if (!Interferes) {
+          Chosen = RC;
+          break;
+        }
+      }
+      if (!Chosen)
+        report_fatal_error(
+            "more than three overlapping OPEN B.ASSEMBLE parents leave no "
+            "Local tile hand for writer temporaries");
+      ParentIntervals[Chosen].push_back(&LI);
+      UsedParentRCs.insert(Chosen);
+      Assignments.emplace_back(Parent, Chosen);
+    }
+
+    for (const auto &Assignment : Assignments)
+      assign(Assignment.first, Assignment.second);
+    llvm::erase_if(CurRCs, [&](const TargetRegisterClass *RC) {
+      return UsedParentRCs.count(RC);
+    });
+  }
+
+  const TargetRegisterClass *LoopRC = CurRCs.back();
+  const TargetRegisterClass *AcrossRC =
+      CurRCs.size() > 1 ? CurRCs[CurRCs.size() - 2] : CurRCs.back();
+  bool LoopAssignRes = assignLoopInvar(MF, OriRCs, LoopRC);
+  assignAccrosChain(MF, OriRCs, LoopAssignRes ? AcrossRC : LoopRC);
   for (auto Chain : Chains) {
     ColoringInChain CIC(Chain, OriRCs, CurRCs, MRI, LIS, VRM);
     CIC.assign();

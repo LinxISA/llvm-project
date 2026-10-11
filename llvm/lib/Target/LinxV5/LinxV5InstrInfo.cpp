@@ -206,6 +206,78 @@ static bool isLocalTileReg(const MachineRegisterInfo &MRI, Register Reg) {
   return LinxV5::Tile_ABSRegClass.hasSubClassEq(MRI.getRegClass(Reg));
 }
 
+Register LinxV5::getAssembleParentRef(const MachineInstr &MI) {
+  if (!MI.isInlineAsm() ||
+      !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+           .contains("B.ASSEMBLE"))
+    return LinxV5::NoRegister;
+
+  // INIT publishes a destination.  Only a destination-free continuation has
+  // a ParentRef.  The modifier attaches to the immediately preceding B.IOT
+  // or B.IOS source-form binder, whose final Local tile operand is ParentRef;
+  // earlier operands in the same binder are numeric writer fragments.
+  if (llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
+        return MO.isReg() && MO.isDef() && !MO.isImplicit();
+      }))
+    return LinxV5::NoRegister;
+
+  StringRef Asm = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  size_t AssemblePos = Asm.find("B.ASSEMBLE");
+  StringRef BeforeAssemble = Asm.take_front(AssemblePos);
+  size_t IOTPos = BeforeAssemble.rfind("B.IOT");
+  size_t IOSPos = BeforeAssemble.rfind("B.IOS");
+  size_t BinderPos = IOTPos;
+  if (BinderPos == StringRef::npos ||
+      (IOSPos != StringRef::npos && IOSPos > BinderPos))
+    BinderPos = IOSPos;
+  if (BinderPos == StringRef::npos)
+    return LinxV5::NoRegister;
+
+  size_t BinderEnd = Asm.find('\n', BinderPos);
+  if (BinderEnd == StringRef::npos || BinderEnd > AssemblePos)
+    BinderEnd = AssemblePos;
+
+  const MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
+  Register ParentRef = LinxV5::NoRegister;
+  for (size_t Pos = Asm.find('$', BinderPos);
+       Pos != StringRef::npos && Pos < BinderEnd;
+       Pos = Asm.find('$', Pos + 1)) {
+    size_t DigitPos = Pos + 1;
+    if (DigitPos < BinderEnd && Asm[DigitPos] == '{')
+      ++DigitPos;
+    size_t DigitEnd = DigitPos;
+    while (DigitEnd < BinderEnd && isDigit(Asm[DigitEnd]))
+      ++DigitEnd;
+    if (DigitEnd == DigitPos)
+      continue;
+
+    unsigned ConstraintIdx = 0;
+    if (Asm.slice(DigitPos, DigitEnd).getAsInteger(10, ConstraintIdx))
+      continue;
+    unsigned Group = 0;
+    const MachineOperand *MO = nullptr;
+    for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+         I < E; ++Group) {
+      const MachineOperand &Flag = MI.getOperand(I);
+      if (!Flag.isImm())
+        break;
+      unsigned N = InlineAsm::getNumOperandRegisters(Flag.getImm());
+      if (Group == ConstraintIdx) {
+        if (N == 1 && I + 1 < E)
+          MO = &MI.getOperand(I + 1);
+        break;
+      }
+      I += 1 + N;
+    }
+    if (!MO || !MO->isReg() || !MO->isUse() || MO->isImplicit())
+      continue;
+    Register Reg = MO->getReg();
+    if (isLocalTileReg(MRI, Reg))
+      ParentRef = Reg;
+  }
+  return ParentRef;
+}
+
 static bool isSharedTileReg(const MachineRegisterInfo &MRI, Register Reg) {
   if (Reg.isPhysical())
     return LinxV5::Shared_ABSRegClass.contains(Reg);

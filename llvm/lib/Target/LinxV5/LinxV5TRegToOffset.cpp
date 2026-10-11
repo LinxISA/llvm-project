@@ -152,6 +152,12 @@ private:
   // Phase-2 offset rewrite assumes every predecessor leaves the window in the
   // same state, so those classes keep absolute registers.
   DenseSet<const TargetRegisterClass *> SyncConflictRCs;
+  // Exact post-RA INIT definitions for OPEN B.ASSEMBLE parents.  Phase 1 may
+  // insert copies, so this map is populated only after copy insertion and
+  // after validating that the reserved hand contains no other allocation.
+  DenseSet<Register> AssembleParentRegs;
+  DenseMap<const MachineInstr *, DenseMap<Register, unsigned>>
+      AssembleParentUseDistances;
 
   bool canSkipMI(MachineInstr &MI);
   bool isDistanceReg(Register Reg);
@@ -165,6 +171,8 @@ private:
     GlobalSlotsInfo.clear();
     RewriteTRDefInfo.clear();
     SyncConflictRCs.clear();
+    AssembleParentRegs.clear();
+    AssembleParentUseDistances.clear();
   }
 
   // Phase-1
@@ -180,6 +188,7 @@ private:
   void insertCopy(MachineBasicBlock &MBB);
 
   void legalityCheck(MachineFunction &MF);
+  void solveAssembleParentDataflow(MachineFunction &MF);
 
   // Phase-2
   void rewriteMBB(MachineBasicBlock &MBB);
@@ -333,6 +342,12 @@ static bool isAssembleParentDef(const TRLiveRange &LR) {
 
 static unsigned getTSlotOccupation(MachineInstr &MI,
                                    const TargetRegisterClass *RC) {
+  // PseudoEmptyTile expands to a zero-mask NoPE bundle.  Its dead destination
+  // is only a compiler bookkeeping operand; the instruction neither
+  // allocates nor publishes a Local tile queue entry.
+  if (MI.getOpcode() == LinxV5::PseudoEmptyTile)
+    return 0;
+
   unsigned Occ = 0;
   for (auto &MO : MI.operands()) {
     if (!MO.isReg() || MO.isUse())
@@ -718,6 +733,18 @@ void SlotCalc::BuildLiveoutAndEraseFrom(TRCopyRange &Slot, LinxRegOp RegOp,
   if (isTileReg(RC))
     ++TileCFGCopy;
   auto tmp = TRCopyRange(RegOp, RegOp.Reg != LinxV5::NoRegister);
+  // Rolling a live-out changes only its queue position.  Preserve the OPEN
+  // B.ASSEMBLE-parent identity from the source slot so SlotCopy cannot bypass
+  // the live-parent copy guard, and so later rolls still know that the
+  // generation is open.
+  if (RegOp.Reg != LinxV5::NoRegister) {
+    for (const TRCopyRange &LiveSlot : LiveSlots) {
+      if (LiveSlot.RegOp.Reg == RegOp.Reg && LiveSlot.IsAssembleParent) {
+        tmp.IsAssembleParent = true;
+        break;
+      }
+    }
+  }
   SlotCopy(EndI, tmp);
   if (RegOp.Reg != LinxV5::NoRegister) {
     // update: release liveout flag.
@@ -1429,6 +1456,240 @@ void LinxV5TRegToOffsetOpt::legalityCheck(MachineFunction &MF) {
   }
 }
 
+void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
+  AssembleParentRegs.clear();
+  AssembleParentUseDistances.clear();
+  SmallVector<std::pair<Register, MachineInstr *>, 4> ParentEpochs;
+
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm() ||
+          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+               .contains("B.ASSEMBLE"))
+        continue;
+      Optional<bool> Last = getAssembleControlBit(MI, /*LastIdx=*/1);
+      if (!Last || *Last)
+        continue;
+      for (MachineOperand &MO : MI.operands()) {
+        if (MO.isReg() && MO.isDef() && MO.getReg().isPhysical() &&
+            LinxV5::Tile_ABSRegClass.contains(MO.getReg())) {
+          Register Parent = MO.getReg();
+          AssembleParentRegs.insert(Parent);
+          ParentEpochs.emplace_back(Parent, &MI);
+        }
+      }
+    }
+  }
+
+  for (const auto &Entry : ParentEpochs) {
+    Register Parent = Entry.first;
+    MachineInstr *InitMI = Entry.second;
+    const TargetRegisterClass *ParentRC = nullptr;
+    for (const TargetRegisterClass *RC :
+         {&LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
+          &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass}) {
+      if (RC->contains(Parent)) {
+        ParentRC = RC;
+        break;
+      }
+    }
+    if (!ParentRC)
+      continue;
+
+    enum class StateKind {
+      Unknown,
+      Absent,
+      ExplicitUndef,
+      Parent,
+      Other,
+      Conflict
+    };
+    enum class ParentPhase { None, Open, Closed, Maybe };
+    struct ParentState {
+      StateKind Kind = StateKind::Unknown;
+      MachineInstr *Def = nullptr;
+      unsigned Distance = 0;
+      ParentPhase Phase = ParentPhase::None;
+    };
+    auto sameState = [](const ParentState &A, const ParentState &B) {
+      return A.Kind == B.Kind && A.Def == B.Def && A.Distance == B.Distance &&
+             A.Phase == B.Phase;
+    };
+    auto unknownState = []() { return ParentState(); };
+    auto absentState = []() {
+      ParentState S;
+      S.Kind = StateKind::Absent;
+      return S;
+    };
+    auto conflictState = []() {
+      ParentState S;
+      S.Kind = StateKind::Conflict;
+      return S;
+    };
+    DenseMap<MachineBasicBlock *, ParentState> InState;
+    DenseMap<MachineBasicBlock *, ParentState> OutState;
+    bool SawOutOfWindow = false;
+    for (MachineBasicBlock &MBB : MF) {
+      InState[&MBB] = unknownState();
+      OutState[&MBB] = unknownState();
+    }
+
+    auto transfer = [&](MachineBasicBlock &MBB, ParentState State,
+                        bool RecordUses) -> ParentState {
+      for (MachineInstr &MI : MBB) {
+        // Resolve sources against the pre-instruction queue. INIT may reuse
+        // the physical register number that still names an older source.
+        bool UsesParent = false;
+        for (const MachineOperand &MO : MI.operands()) {
+          if (!MO.isReg() || !MO.isUse() || MO.isImplicit() ||
+              MO.getReg() != Parent)
+            continue;
+          UsesParent = true;
+          if (RecordUses && State.Kind == StateKind::Parent)
+            AssembleParentUseDistances[&MI][Parent] = State.Distance;
+        }
+
+        // A TCOPY/TMOV consumes its source as ordinary published tile data.
+        // An OPEN parent still names the in-progress assembly generation, so
+        // copying it would manufacture a second architectural identity even
+        // when the destination uses another physical hand.  A Maybe phase is
+        // equally unsafe because at least one predecessor keeps it OPEN.
+        if (UsesParent && MI.getOpcode() == LinxV5::PseudoTCOPY &&
+            State.Kind == StateKind::Parent &&
+            (State.Phase == ParentPhase::Open ||
+             State.Phase == ParentPhase::Maybe))
+          report_fatal_error(
+              "cannot copy an OPEN B.ASSEMBLE parent source before LAST");
+
+        // LAST consumes the OPEN parent at its pre-state distance and only
+        // then publishes it as ordinary data.
+        if (LinxV5::getAssembleParentRef(MI) == Parent &&
+            State.Kind == StateKind::Parent &&
+            State.Phase != ParentPhase::Closed) {
+          Optional<bool> Last = getAssembleControlBit(MI, /*LastIdx=*/1);
+          if (Last && *Last)
+            State.Phase = ParentPhase::Closed;
+        }
+
+        if (MI.isImplicitDef()) {
+          for (const MachineOperand &MO : MI.operands()) {
+            if (MO.isReg() && MO.isDef() && MO.getReg() == Parent) {
+              State = ParentState();
+              State.Kind = StateKind::ExplicitUndef;
+            }
+          }
+          continue;
+        }
+
+        if (MI.getOpcode() != LinxV5::PseudoEmptyTile) {
+          for (const MachineOperand &MO : MI.operands()) {
+            if (!MO.isReg() || !MO.isDef() || MO.isImplicit())
+              continue;
+            Register Def = MO.getReg();
+            if (!Def.isPhysical() || !ParentRC->contains(Def))
+              continue;
+
+            if (&MI == InitMI && Def == Parent) {
+              State.Kind = StateKind::Parent;
+              State.Def = InitMI;
+              State.Distance = 1;
+              State.Phase = ParentPhase::Open;
+              continue;
+            }
+
+            if (Def == Parent) {
+              if (State.Kind == StateKind::Parent &&
+                  State.Phase != ParentPhase::Closed && RecordUses)
+                report_fatal_error(
+                    "OPEN B.ASSEMBLE parent register has a second real "
+                    "definition");
+              State.Kind = StateKind::Other;
+              State.Def = &MI;
+              State.Distance = 1;
+              State.Phase = ParentPhase::None;
+              continue;
+            }
+
+            if (State.Kind == StateKind::Parent ||
+                State.Kind == StateKind::Other) {
+              if (State.Kind == StateKind::Parent &&
+                  State.Phase != ParentPhase::Closed && RecordUses)
+                report_fatal_error(
+                    "OPEN B.ASSEMBLE parent hand contains another real tile "
+                    "definition after CFG copy insertion");
+              if (++State.Distance > ParentRC->getNumRegs()) {
+                SawOutOfWindow = true;
+                return conflictState();
+              }
+            }
+          }
+        }
+      }
+      return State;
+    };
+
+    bool Changed = true;
+    unsigned Iterations = 0;
+    while (Changed) {
+      if (++Iterations > MF.size() * (ParentRC->getNumRegs() + 2))
+        report_fatal_error(
+            "B.ASSEMBLE parent relative-distance dataflow did not converge");
+      Changed = false;
+      for (MachineBasicBlock &MBB : MF) {
+        ParentState Joined = MBB.pred_empty() ? absentState() : unknownState();
+        for (MachineBasicBlock *Pred : MBB.predecessors()) {
+          ParentState PredState = OutState[Pred];
+          if (PredState.Kind == StateKind::Unknown)
+            continue;
+          if (PredState.Kind == StateKind::ExplicitUndef) {
+            if (Joined.Kind == StateKind::Unknown)
+              Joined = PredState;
+            continue;
+          }
+          if (Joined.Kind == StateKind::Unknown ||
+              Joined.Kind == StateKind::ExplicitUndef)
+            Joined = PredState;
+          else if (Joined.Kind == StateKind::Parent &&
+                   PredState.Kind == StateKind::Parent &&
+                   Joined.Def == PredState.Def &&
+                   Joined.Distance == PredState.Distance &&
+                   Joined.Phase != PredState.Phase)
+            Joined.Phase = ParentPhase::Maybe;
+          else if (!sameState(Joined, PredState))
+            Joined = conflictState();
+        }
+        ParentState NewOut = transfer(MBB, Joined, /*RecordUses=*/false);
+        if (!sameState(InState[&MBB], Joined) ||
+            !sameState(OutState[&MBB], NewOut)) {
+          InState[&MBB] = Joined;
+          OutState[&MBB] = NewOut;
+          Changed = true;
+        }
+      }
+    }
+
+    for (MachineBasicBlock &MBB : MF) {
+      if (InState[&MBB].Kind == StateKind::Unknown ||
+          OutState[&MBB].Kind == StateKind::Unknown)
+        report_fatal_error(
+            "B.ASSEMBLE parent relative-distance dataflow has unresolved "
+            "CFG state");
+      if (InState[&MBB].Kind == StateKind::Conflict ||
+          OutState[&MBB].Kind == StateKind::Conflict) {
+        if (SawOutOfWindow)
+          report_fatal_error(
+              "B.ASSEMBLE parent relative distance exceeds the 16-entry "
+              "Local tile window");
+        report_fatal_error(
+            "B.ASSEMBLE parent has conflicting relative distances at a CFG "
+            "join");
+      }
+    }
+    for (MachineBasicBlock &MBB : MF)
+      (void)transfer(MBB, InState[&MBB], /*RecordUses=*/true);
+  }
+}
+
 bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   TII = static_cast<const LinxV5InstrInfo *>(MF.getSubtarget().getInstrInfo());
   TRI = static_cast<const LinxV5RegisterInfo *>(MF.getSubtarget().getRegisterInfo());
@@ -1484,6 +1745,11 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     llvm::erase_value(TBDoneMBBs, MBB);
     DoneMBBs.push_back(MBB);
   }
+
+  // Clockhands reserves an OPEN parent's hand before register allocation.
+  // Validate the final Phase-1 machine function, including every inserted
+  // copy, before relying on that isolation in the relative-window rewrite.
+  solveAssembleParentDataflow(MF);
 
   LLVM_DEBUG(dbgs() << "copys " << NumCopy - OldNumCopy << " total "
                     << MF.getInstructionCount() << "\n");
@@ -1606,6 +1872,13 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
     if (canSkipMI(MI))
       continue;
 
+    // PseudoEmptyTile lowers to a zero-mask NoPE bundle.  It does not allocate
+    // a Local tile, so it must not advance the physical relative-window index.
+    // Phase 1 may retain it as a CFG bookkeeping marker, but Phase 2 tracks
+    // only allocations that exist in the architectural queue.
+    if (MI.getOpcode() == LinxV5::PseudoEmptyTile)
+      continue;
+
     // inherit implicit-def until over-defined
     if (MI.isImplicitDef()) {
       Register Reg = MI.getOperand(0).getReg();
@@ -1622,11 +1895,26 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
         continue;
       } else if (MO.isUse()) {
         if (isRC(MO.getReg(), RC, MRI)) {
+          Register OriginalReg = MO.getReg();
+          auto UseIt = AssembleParentUseDistances.find(&MI);
+          if (UseIt != AssembleParentUseDistances.end()) {
+            auto DistanceIt = UseIt->second.find(OriginalReg);
+            if (DistanceIt != UseIt->second.end()) {
+              unsigned Distance = DistanceIt->second;
+              assert(Distance >= 1 && Distance <= RC->getNumRegs());
+              MO.setReg(OffsetBase + (Distance - 1));
+              continue;
+            }
+          }
           if (!TRegIdx.count(MO.getReg())) {
             // After coalescer, some tile vregs may be used without a prior
             // def in this block's tracked TRegIdx (e.g. live-in from a
-            // block we couldn't pick a pred for). Skip rewriting the offset
-            // for this use; the vreg will be handled by later regalloc.
+            // block we couldn't pick a pred for). Ordinary uses retain their
+            // absolute register.  OPEN assembly parents are never allowed to
+            // fall back: their use must have a solved reaching-INIT distance.
+            if (AssembleParentRegs.count(OriginalReg))
+              report_fatal_error(
+                  "OPEN B.ASSEMBLE parent use lacks solved relative distance");
             continue;
           }
           int64_t Index = CurIdx - TRegIdx[MO.getReg()];
