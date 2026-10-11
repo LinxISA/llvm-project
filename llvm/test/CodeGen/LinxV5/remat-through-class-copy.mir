@@ -1,0 +1,113 @@
+# RUN: llc -mtriple=linx64v5 -o - -run-pass=greedy %s | FileCheck %s
+#
+# A constant materialized by LUI into mixedgpr and forwarded by a
+# register-class conversion COPY into a gr vreg (the shape ISel produces when
+# the value feeds an inline-asm "r" operand, whose class is GR on this
+# target) is spilled under register pressure. The spilled vreg's defining
+# instruction is a COPY, which is not rematerializable, so the spiller used
+# to insert plain stack reloads even though the value behind the copy is a
+# single LUI constant. The remat machinery must trace through the copy and
+# re-materialize the LUI at the use instead of reloading from a stack slot.
+
+name:            remat_class_copy
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+frameInfo:
+  maxAlignment:   1
+machineFunctionInfo: {}
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x80000000)
+    liveins: $r2
+
+    BSTART_STD_WITHOUT_TARGET_32_FALL
+    %1:mixedgpr = LUI 3
+    %2:gr = COPY %1
+    ; Simultaneously-live values to fill the allocatable gr file so the
+    ; long-lived class-converted constant must spill.
+    %3:gr = ADD $r2, $r2, 0
+    %4:gr = ADD $r2, $r2, 0
+    %5:gr = ADD $r2, $r2, 0
+    %6:gr = ADD $r2, $r2, 0
+    %7:gr = ADD $r2, $r2, 0
+    %8:gr = ADD $r2, $r2, 0
+    %9:gr = ADD $r2, $r2, 0
+    %10:gr = ADD $r2, $r2, 0
+    %11:gr = ADD $r2, $r2, 0
+    %12:gr = ADD $r2, $r2, 0
+    %13:gr = ADD $r2, $r2, 0
+    %14:gr = ADD $r2, $r2, 0
+    %15:gr = ADD $r2, $r2, 0
+    %16:gr = ADD $r2, $r2, 0
+    %17:gr = ADD $r2, $r2, 0
+    %18:gr = ADD $r2, $r2, 0
+    %19:gr = ADD $r2, $r2, 0
+    %20:gr = ADD $r2, $r2, 0
+    %21:gr = ADD $r2, $r2, 0
+    %22:gr = ADD $r2, $r2, 0
+    %23:gr = ADD $r2, $r2, 0
+    %24:gr = ADD $r2, $r2, 0
+    %25:gr = ADD $r2, $r2, 0
+    %26:gr = ADD $r2, $r2, 0
+    %27:gr = ADD $r2, $r2, 0
+    %28:gr = ADD $r2, $r2, 0
+    %29:gr = ADD $r2, $r2, 0
+    %30:gr = ADD $r2, $r2, 0
+    %31:gr = ADD $r2, $r2, 0
+    %32:gr = ADD $r2, $r2, 0
+    ; The GR-constrained asm operand is what keeps the COPY alive (it blocks
+    ; coalescing %2 back into %1's mixedgpr interval).
+    INLINEASM &"", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, %2
+
+  bb.1.entry:
+    successors: %bb.2(0x80000000)
+
+    %100:gr = ADD %3, %4, 0
+    %100:gr = ADD killed %100, %5, 0
+    %100:gr = ADD killed %100, %6, 0
+    %100:gr = ADD killed %100, %7, 0
+    %100:gr = ADD killed %100, %8, 0
+    %100:gr = ADD killed %100, %9, 0
+    %100:gr = ADD killed %100, %10, 0
+    %100:gr = ADD killed %100, %11, 0
+    %100:gr = ADD killed %100, %12, 0
+    %100:gr = ADD killed %100, %13, 0
+    %100:gr = ADD killed %100, %14, 0
+    %100:gr = ADD killed %100, %15, 0
+    %100:gr = ADD killed %100, %16, 0
+    %100:gr = ADD killed %100, %17, 0
+    %100:gr = ADD killed %100, %18, 0
+    %100:gr = ADD killed %100, %19, 0
+    %100:gr = ADD killed %100, %20, 0
+    %100:gr = ADD killed %100, %21, 0
+    %100:gr = ADD killed %100, %22, 0
+    %100:gr = ADD killed %100, %23, 0
+    %100:gr = ADD killed %100, %24, 0
+    %100:gr = ADD killed %100, %25, 0
+    %100:gr = ADD killed %100, %26, 0
+    %100:gr = ADD killed %100, %27, 0
+    %100:gr = ADD killed %100, %28, 0
+    %100:gr = ADD killed %100, %29, 0
+    %100:gr = ADD killed %100, %30, 0
+    %100:gr = ADD killed %100, %31, 0
+    %100:gr = ADD killed %100, %32, 0
+    %101:gr = ADD %100, %2, 0
+    $r2 = COPY %101
+
+  bb.2.entry:
+    liveins: $r2
+
+    BSTART_STD_WITHOUT_TARGET_32_RET
+    $r2 = ADD killed renamable $r2, $r2, 0
+    C_SETC_TGT $r10, implicit-def $carg
+    BSTART_STD_WITHOUT_TARGET_32_FALL
+
+...
+# The original materialization ...
+# CHECK: %{{[0-9]+}}:mixedgpr = LUI 3
+# ... and a rematerialized copy at the far use instead of a stack reload.
+# CHECK: %{{[0-9]+}}:gr = LUI 3
+# CHECK: %{{[0-9]+}}:gr = ADD %{{[0-9]+}}, %{{[0-9]+}}, 0
+# CHECK: $r2 = COPY

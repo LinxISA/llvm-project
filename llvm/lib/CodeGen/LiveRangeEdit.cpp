@@ -77,6 +77,33 @@ bool LiveRangeEdit::checkRematerializable(VNInfo *VNI,
   return true;
 }
 
+/// Follow full COPY chains (live-range splitting boundaries, register-class
+/// conversions) from a defining instruction to the definition whose value the
+/// copies forward. Returns DefMI unchanged when the chain does not lead to a
+/// different instruction. Callers must still run isTriviallyReMaterializable
+/// on the result: only instructions without virtual-register uses can pass,
+/// so the traced def can be re-executed at any use without dominance or
+/// operand-availability concerns.
+static MachineInstr *traceDefThroughCopies(MachineInstr *DefMI,
+                                           const LiveIntervals &LIS) {
+  unsigned Hops = 0;
+  while (DefMI->isFullCopy() && ++Hops <= 8) {
+    Register Src = DefMI->getOperand(1).getReg();
+    if (!Src.isVirtual())
+      break;
+    const LiveInterval &SrcLI = LIS.getInterval(Src);
+    // The value the copy forwards is the one live into the copy.
+    const VNInfo *SrcVNI = SrcLI.Query(LIS.getInstructionIndex(*DefMI)).valueIn();
+    if (!SrcVNI || SrcVNI->isPHIDef())
+      break;
+    MachineInstr *SrcDef = LIS.getInstructionFromIndex(SrcVNI->def);
+    if (!SrcDef)
+      break;
+    DefMI = SrcDef;
+  }
+  return DefMI;
+}
+
 void LiveRangeEdit::scanRemattable() {
   for (VNInfo *VNI : getParent().valnos) {
     if (VNI->isUnused())
@@ -89,6 +116,10 @@ void LiveRangeEdit::scanRemattable() {
     MachineInstr *DefMI = LIS.getInstructionFromIndex(OrigVNI->def);
     if (!DefMI)
       continue;
+    // A value that is a constant behind a register-class conversion copy
+    // (e.g. a materialized immediate feeding an inline-asm operand with a
+    // narrower constraint class) is still rematerializable.
+    DefMI = traceDefThroughCopies(DefMI, LIS);
     checkRematerializable(OrigVNI, DefMI);
   }
   ScannedRemattable = true;
@@ -163,6 +194,11 @@ bool LiveRangeEdit::canRematerializeAt(Remat &RM, VNInfo *OrigVNI,
   // No defining instruction provided.
   SlotIndex DefIdx;
   assert(RM.OrigMI && "No defining instruction for remattable value");
+  // Follow register-class conversion copies to the def they forward so all
+  // callers (inline spiller, split editor) rematerialize the underlying
+  // constant instead of giving up on the copy. RM is an out-parameter here:
+  // successful queries consume RM.OrigMI with rematerializeAt().
+  RM.OrigMI = traceDefThroughCopies(RM.OrigMI, LIS);
   DefIdx = LIS.getInstructionIndex(*RM.OrigMI);
 
   // If only cheap remats were requested, bail out early.
