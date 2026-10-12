@@ -19663,6 +19663,8 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
       llvm::Value *Call = Builder.CreateCall(F, {});
       return Builder.CreateZExtOrTrunc(Call, CGM.Int32Ty);
   }
+  case LinxV5::BI__builtin_linx_sync_core:
+      return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::linx_sync_core));
   case LinxV5::BIblk_matmul:
       ID = Intrinsic::linx_blk_matmul;
       return EmitLinxV5BLK(E, ID, 2);
