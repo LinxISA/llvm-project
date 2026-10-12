@@ -42,6 +42,19 @@ def int_linx_experimental_element_atomic_add :
               [LLVMVectorOfAnyPointersToElt<0>, LLVMMatchType<0>,
                LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty],
               [IntrHasSideEffects, IntrNoDuplicate]>;
+
+// Required intermediate effect for an unordered predicated i32/f32 scatter
+// whose inter-element ordering follows from the source element-region
+// contract, rather than from llvm.vp.scatter. Each active element performs one
+// aligned store in an unspecified order; inactive elements do not access
+// memory. The metadata operand is the source region identity token. This is
+// compiler IR and must be consumed before instruction selection.
+def int_linx_experimental_element_scatter :
+    Intrinsic<[],
+              [llvm_anyvector_ty, LLVMVectorOfAnyPointersToElt<0>,
+               LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty,
+               llvm_metadata_ty],
+              [IntrHasSideEffects, IntrNoDuplicate]>;
 def int_linx_hyper_region_start : Intrinsic<[], [llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_hyper_region_end : Intrinsic<[],[llvm_i64_ty], [IntrHasSideEffects]>;

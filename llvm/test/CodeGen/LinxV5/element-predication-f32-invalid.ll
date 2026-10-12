@@ -11,8 +11,8 @@
 ; CAST: only integer casts are supported
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/f64.ll 2>&1 | FileCheck %s --check-prefix=F64
 ; F64: requires scalar integer or pointer results, f32 or typed carrier results
-; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/gm.ll 2>&1 | FileCheck %s --check-prefix=GM
-; GM: requires a scalar integer-element GEP
+; RUN: opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -S %t/gm.ll | FileCheck %s --check-prefix=GM
+; GM: @llvm.linx.experimental.ew.mgather.gpr.masked.v32f32
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/constrained.ll 2>&1 | FileCheck %s --check-prefix=CONSTRAINED
 ; CONSTRAINED: unsupported opcode or effect in generic IR stage
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/strictfp.ll 2>&1 | FileCheck %s --check-prefix=STRICTFP

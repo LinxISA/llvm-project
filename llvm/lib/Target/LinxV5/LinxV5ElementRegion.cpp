@@ -76,6 +76,10 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
 }
 
 constexpr StringLiteral RegionLoopMD = "llvm.loop.linx.pto.element.region";
+constexpr StringLiteral InterElementOrderMD =
+    "llvm.loop.linx.pto.element.inter_element_order";
+constexpr StringLiteral IntraElementOrderMD =
+    "llvm.loop.linx.pto.element.intra_element_order";
 constexpr StringLiteral PredicatedOwnerMD = "linx.pto.element.vp.owner";
 constexpr StringLiteral PredicatedDomainMD = "linx.pto.element.vp.domain";
 constexpr StringLiteral ScalarizedLaneZeroMD =
@@ -463,6 +467,43 @@ static MDNode *getElementRegionToken(const Loop &L) {
   return nullptr;
 }
 
+static bool hasExactLoopStringProperty(const Loop &L, StringRef PropertyName,
+                                       StringRef PropertyValue) {
+  MDNode *LoopID = L.getLoopID();
+  if (!LoopID)
+    return false;
+  unsigned Matches = 0;
+  for (const MDOperand &Operand : drop_begin(LoopID->operands())) {
+    auto *Property = dyn_cast_or_null<MDNode>(Operand.get());
+    if (!Property || Property->getNumOperands() == 0)
+      continue;
+    auto *Name = dyn_cast_or_null<MDString>(Property->getOperand(0));
+    if (!Name || Name->getString() != PropertyName)
+      continue;
+    if (Property->getNumOperands() != 2)
+      return false;
+    auto *Value = dyn_cast_or_null<MDString>(Property->getOperand(1));
+    if (!Value || Value->getString() != PropertyValue)
+      return false;
+    ++Matches;
+  }
+  return Matches == 1;
+}
+
+static bool hasUnorderedSourceContract(const Loop &L) {
+  return hasExactLoopStringProperty(L, InterElementOrderMD, "unordered") &&
+         hasExactLoopStringProperty(L, IntraElementOrderMD, "source");
+}
+
+static bool hasExactStringMetadata(const Instruction &I, StringRef Kind,
+                                   StringRef Value) {
+  MDNode *MD = I.getMetadata(Kind);
+  if (!MD || MD->getNumOperands() != 1)
+    return false;
+  auto *Text = dyn_cast_or_null<MDString>(MD->getOperand(0));
+  return Text && Text->getString() == Value;
+}
+
 static bool hasElementRegionLoopMetadata(const Instruction &I) {
   MDNode *LoopID = I.getMetadata(LLVMContext::MD_loop);
   if (!LoopID)
@@ -596,6 +637,7 @@ struct PredicatedRegion {
   DenseMap<PHINode *, ViewDescriptor> Accumulators;
   DenseMap<Value *, ViewDescriptor> Publications;
   SmallPtrSet<CallInst *, 8> GuardedElementZeroViews;
+  SmallPtrSet<StoreInst *, 1> UnorderedScatters;
 };
 
 static bool isElementCarrier(Value *V) {
@@ -783,11 +825,14 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     const SCEV *IndexSCEV = SE.getSCEV(Index);
     const SCEV *IVSCEV = SE.getSCEV(Plan.Induction);
     if (IndexSCEV->getType() != IVSCEV->getType()) {
-      auto *Constant = dyn_cast<ConstantInt>(Index);
-      unsigned Width = Plan.Induction->getType()->getIntegerBitWidth();
-      if (!Constant || !Constant->getValue().isIntN(Width))
+      // IndVarSimplify may widen the canonical IV for pointer indexing while
+      // Clang's logical vector index remains i32. Compare in the index type
+      // only when the complete proven domain fits, never by discarding bits
+      // of an arbitrary index expression.
+      unsigned Width = IndexSCEV->getType()->getIntegerBitWidth();
+      if (!isUIntN(Width, Plan.Count - 1))
         return false;
-      IndexSCEV = SE.getConstant(Constant->getValue().zextOrTrunc(Width));
+      IVSCEV = SE.getTruncateOrZeroExtend(IVSCEV, IndexSCEV->getType());
     }
     return IndexSCEV == IVSCEV ||
            SE.isKnownPredicateAt(ICmpInst::ICMP_EQ, IndexSCEV, IVSCEV, Use);
@@ -949,16 +994,22 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         continue;
       }
       if (auto *Cast = dyn_cast<CastInst>(&I)) {
-        if (!Cast->getSrcTy()->isIntegerTy() ||
-            !Cast->getDestTy()->isIntegerTy())
+        const bool Bits32 = Cast->getOpcode() == Instruction::BitCast &&
+                            ((Cast->getSrcTy()->isFloatTy() &&
+                              Cast->getDestTy()->isIntegerTy(32)) ||
+                             (Cast->getSrcTy()->isIntegerTy(32) &&
+                              Cast->getDestTy()->isFloatTy()));
+        if (!Bits32 && (!Cast->getSrcTy()->isIntegerTy() ||
+                        !Cast->getDestTy()->isIntegerTy()))
           return Fail(&I, "only integer casts are supported in this IR stage");
         continue;
       }
       if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
         if (GEP->getNumIndices() != 1 ||
             !GEP->getPointerOperandType()->isPointerTy() ||
-            !GEP->getSourceElementType()->isIntegerTy())
-          return Fail(&I, "requires a scalar integer-element GEP");
+            (!GEP->getSourceElementType()->isIntegerTy() &&
+             !GEP->getSourceElementType()->isFloatTy()))
+          return Fail(&I, "requires a scalar integer or f32 element GEP");
         continue;
       }
       Value *Pointer = nullptr;
@@ -985,8 +1036,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       } else {
         return Fail(&I, "unsupported opcode or effect in generic IR stage");
       }
-      if (!AccessTy->isIntegerTy(32))
-        return Fail(&I, "memory profile requires scalar i32 accesses");
+      if ((!AccessTy->isIntegerTy(32) && !AccessTy->isFloatTy()) ||
+          (isa<AtomicRMWInst>(I) && !AccessTy->isIntegerTy(32)))
+        return Fail(&I, "memory profile requires scalar i32 or f32 accesses");
       // Reads may be indexed by arbitrary element values; overlapping atomic
       // adds are intentional. Ordinary writes still need injective unit-stride
       // streams. Mixed atomic/non-atomic objects are checked separately below.
@@ -996,7 +1048,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       auto *GEP = dyn_cast<GetElementPtrInst>(Pointer);
       bool UniformBase = L.isLoopInvariant(Pointer) ||
                          (GEP && GEP->getNumIndices() == 1 &&
-                          GEP->getSourceElementType()->isIntegerTy(32) &&
+                          (GEP->getSourceElementType()->isIntegerTy(32) ||
+                           GEP->getSourceElementType()->isFloatTy()) &&
                           L.isLoopInvariant(GEP->getPointerOperand()));
       if (!UniformBase)
         return Fail(&I, "memory address requires one loop-invariant base");
@@ -1004,14 +1057,23 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       const auto *Step = AR && AR->getLoop() == &L
                              ? dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE))
                              : nullptr;
-      if (Step && Step->getAPInt() == DL.getTypeStoreSize(AccessTy))
+      bool IsIndependentStream =
+          Step && Step->getAPInt() == DL.getTypeStoreSize(AccessTy);
+      if (IsIndependentStream)
         IndependentStreams.insert(&I);
-      if (isa<StoreInst>(I) &&
-          (!Step || Step->getAPInt() != DL.getTypeStoreSize(AccessTy)))
-        return Fail(&I, "memory address is not a proven independent element stream");
+      if (auto *Store = dyn_cast<StoreInst>(&I))
+        if (!IsIndependentStream)
+          Plan.UnorderedScatters.insert(Store);
       Memory.push_back(&I);
     }
   }
+  if (Plan.UnorderedScatters.size() > 1)
+    return Fail(*Plan.UnorderedScatters.begin(),
+                "unordered scatter requires one isolated output stream");
+  if (!Plan.UnorderedScatters.empty() && !hasUnorderedSourceContract(L))
+    return Fail(
+        *Plan.UnorderedScatters.begin(),
+        "unordered scatter requires the unordered/source loop contract");
   for (unsigned I = 0; I < Memory.size(); ++I) {
     for (unsigned J = I + 1; J < Memory.size(); ++J) {
       if ((isa<LoadInst>(Memory[I]) && isa<LoadInst>(Memory[J])) ||
@@ -1230,6 +1292,11 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                                 Widen(Select->getTrueValue()),
                                 Widen(Select->getFalseValue()), "pto.select");
       } else if (auto *Cast = dyn_cast<CastInst>(&I)) {
+        if (Cast->getOpcode() == Instruction::BitCast) {
+          Values[&I] =
+              B.CreateBitCast(Widen(Cast->getOperand(0)), WideTy, "pto.bits");
+          continue;
+        }
         unsigned SourceWidth = Cast->getSrcTy()->getIntegerBitWidth();
         unsigned DestWidth = Cast->getDestTy()->getIntegerBitWidth();
         Value *Source = Widen(Cast->getOperand(0));
@@ -1270,10 +1337,28 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
             0, Attribute::getWithAlignment(F.getContext(), Atomic->getAlign()));
         Result = Call;
       } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
-        auto *Call =
-            EmitVP(Intrinsic::vp_scatter, B.getVoidTy(),
-                   {Widen(Store->getValueOperand()),
-                    WidenAddress(Store->getPointerOperand()), Mask, EVL});
+        Value *Data = Widen(Store->getValueOperand());
+        Value *Address = WidenAddress(Store->getPointerOperand());
+        CallInst *Call = nullptr;
+        if (Plan.UnorderedScatters.contains(Store)) {
+          Function *Callee = Intrinsic::getDeclaration(
+              F.getParent(), Intrinsic::linx_experimental_element_scatter,
+              {Data->getType(), Address->getType()});
+          Call = B.CreateCall(Callee,
+                              {Data, Address, Mask, EVL,
+                               MetadataAsValue::get(F.getContext(), Token)});
+          Call->setMetadata(
+              InterElementOrderMD,
+              MDNode::get(F.getContext(),
+                          MDString::get(F.getContext(), "unordered")));
+          Call->setMetadata(
+              IntraElementOrderMD,
+              MDNode::get(F.getContext(),
+                          MDString::get(F.getContext(), "source")));
+        } else {
+          Call = EmitVP(Intrinsic::vp_scatter, B.getVoidTy(),
+                        {Data, Address, Mask, EVL});
+        }
         Call->addParamAttr(1, Attribute::getWithAlignment(F.getContext(),
                                                         Store->getAlign()));
       } else {
@@ -1558,7 +1643,8 @@ class ElementTileLegalizer {
       if (!Base || !Base->getType()->isPointerTy() ||
           Base->getType()->getPointerAddressSpace() != 0 ||
           GEP->getNumIndices() != 1 ||
-          !GEP->getSourceElementType()->isIntegerTy(32) ||
+          (!GEP->getSourceElementType()->isIntegerTy(32) &&
+           !GEP->getSourceElementType()->isFloatTy()) ||
           (!isVector(GEP->getOperand(1), 32) &&
            !isVector(GEP->getOperand(1), 64)))
         return fail(V, "address requires one uniform base and one i32 element index");
@@ -1587,6 +1673,10 @@ class ElementTileLegalizer {
     if (isa<FCmpInst>(V))
       return fail(V, "floating comparison requires token-owned llvm.vp.fcmp");
     if (auto *Cast = dyn_cast<CastInst>(V)) {
+      if (Cast->getOpcode() == Instruction::BitCast &&
+          ((isVector(V, 32) && isF32Vector(Cast->getOperand(0))) ||
+           (isF32Vector(V) && isVector(Cast->getOperand(0), 32))))
+        return validate(Cast->getOperand(0));
       if ((Cast->getOpcode() != Instruction::ZExt &&
            Cast->getOpcode() != Instruction::SExt) ||
           !isVector(Cast->getOperand(0), 32) || !isVector(V, 64))
@@ -1621,6 +1711,29 @@ class ElementTileLegalizer {
     return validate(Atomic.getArgOperand(0)) &&
            validate(Atomic.getArgOperand(1)) &&
            validate(Atomic.getArgOperand(2));
+  }
+
+  bool validateUnorderedScatter(CallInst &Scatter) {
+    auto *EVL = dyn_cast<ConstantInt>(Scatter.getArgOperand(3));
+    auto Alignment = Scatter.getParamAlign(1);
+    auto *TokenArg = dyn_cast<MetadataAsValue>(Scatter.getArgOperand(4));
+    auto *Token =
+        TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
+    if ((!isVector(Scatter.getArgOperand(0), 32) &&
+         !isF32Vector(Scatter.getArgOperand(0))) ||
+        !isVector(Scatter.getArgOperand(2), 1) || !EVL || !EVL->equalsInt(32) ||
+        !Alignment || *Alignment < Align(4) ||
+        !isa<GetElementPtrInst>(Scatter.getArgOperand(1)) || !Token ||
+        Scatter.getMetadata(PredicatedOwnerMD) != Token ||
+        !hasExactStringMetadata(Scatter, InterElementOrderMD, "unordered") ||
+        !hasExactStringMetadata(Scatter, IntraElementOrderMD, "source"))
+      return fail(
+          &Scatter,
+          "unordered scatter requires owned i32/f32 data, explicit "
+          "GEP, aligned memory, 32-bit mask, EVL=32 and source contract");
+    return validate(Scatter.getArgOperand(0)) &&
+           validate(Scatter.getArgOperand(1)) &&
+           validate(Scatter.getArgOperand(2));
   }
 
   bool validateVP(VPIntrinsic &VP) {
@@ -1661,15 +1774,16 @@ class ElementTileLegalizer {
       return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_gather) {
-      if (!isVector(&VP, 32))
-        return fail(&VP, "VP gather requires i32 data");
+      if (!isVector(&VP, 32) && !isF32Vector(&VP))
+        return fail(&VP, "VP gather requires i32 or f32 data");
       if (!isa<GetElementPtrInst>(VP.getArgOperand(0)))
         return fail(&VP, "VP memory requires an explicit element GEP");
       return validate(VP.getArgOperand(0));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_scatter) {
-      if (!isVector(VP.getArgOperand(0), 32))
-        return fail(&VP, "VP scatter requires i32 data");
+      if (!isVector(VP.getArgOperand(0), 32) &&
+          !isF32Vector(VP.getArgOperand(0)))
+        return fail(&VP, "VP scatter requires i32 or f32 data");
       if (!isa<GetElementPtrInst>(VP.getArgOperand(1)))
         return fail(&VP, "VP memory requires an explicit element GEP");
       return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
@@ -2003,6 +2117,12 @@ class ElementTileLegalizer {
       R = value(Freeze->getOperand(0), PreferredType);
     } else if (auto *Cast = dyn_cast<CastInst>(V)) {
       Value *Source = Cast->getOperand(0);
+      if (Cast->getOpcode() == Instruction::BitCast) {
+        Value *Bits = value(Source);
+        R = B.CreateBitCast(Bits, Ty, "pto.tile.bits");
+        PhysicalTypes[R] = PhysicalTypes.lookup(Bits);
+        return Data[V] = R;
+      }
       uint64_t SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
       R = call(Intrinsic::linx_experimental_ew_tlea, {Ty, Source->getType()},
                  {B.getInt64(32), B.getInt64(1),
@@ -2041,10 +2161,12 @@ class ElementTileLegalizer {
       } else if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
         Address A = address(VP->getArgOperand(0));
         R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
-                   {Ty, A.Offset->getType()},
-                   {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(0),
-                    B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset,
-                    activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(1)});
+                 {Ty, A.Offset->getType()},
+                 {B.getInt64(32), B.getInt64(1),
+                  B.getInt64(isF32Vector(VP) ? 1 : 25), B.getInt64(0),
+                  B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset,
+                  activeMask(*VP), B.getInt64(0), B.getInt64(0),
+                  B.getInt64(1)});
       } else {
         R = binary(*binaryOpcode(VP->getIntrinsicID()),
                    value(VP->getArgOperand(0)), value(VP->getArgOperand(1)),
@@ -2121,6 +2243,12 @@ public:
             return false;
           continue;
         }
+        if (isIntrinsic(dyn_cast<CallInst>(I),
+                        Intrinsic::linx_experimental_element_scatter)) {
+          if (!validateUnorderedScatter(*cast<CallInst>(I)))
+            return false;
+          continue;
+        }
         auto *VP = dyn_cast<VPIntrinsic>(I);
         if (!VP || !validateVP(*VP))
           return fail(I, "unsupported token-owned side effect");
@@ -2141,6 +2269,24 @@ public:
             I); // The effect must execute even if its old-value result is dead.
         continue;
       }
+      if (isIntrinsic(dyn_cast<CallInst>(I),
+                      Intrinsic::linx_experimental_element_scatter)) {
+        auto *Scatter = cast<CallInst>(I);
+        B.SetInsertPoint(Scatter);
+        B.SetCurrentDebugLocation(Scatter->getDebugLoc());
+        Address A = address(Scatter->getArgOperand(1));
+        Value *Source = value(Scatter->getArgOperand(0));
+        uint64_t SourceType = PhysicalTypes.lookup(Source);
+        assert((SourceType == 17 || SourceType == 25 || SourceType == 1) &&
+               "scatter source descriptor must have an admitted i32/f32 type");
+        call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
+             {A.Offset->getType(), Source->getType()},
+             {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
+              B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset, Source,
+              mask(Scatter->getArgOperand(2)), B.getInt64(0), B.getInt64(0),
+              B.getInt64(0)});
+        continue;
+      }
       auto *VP = dyn_cast<VPIntrinsic>(I);
       if (!VP || !VP->mayReadOrWriteMemory())
         continue;
@@ -2152,8 +2298,8 @@ public:
         Address A = address(VP->getArgOperand(1));
         Value *Source = value(VP->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
-        assert((SourceType == 17 || SourceType == 25) &&
-               "scatter source descriptor must have an admitted i32 type");
+        assert((SourceType == 17 || SourceType == 25 || SourceType == 1) &&
+               "scatter source descriptor must have an admitted i32/f32 type");
         call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
               {A.Offset->getType(), Source->getType()},
               {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType), B.getInt64(29),
@@ -3585,7 +3731,8 @@ static bool verifyNoResidualElementContracts(Function &F) {
     auto *Call = dyn_cast<CallInst>(&I);
     if (isIntrinsic(Call, Intrinsic::linx_experimental_element_region) ||
         isIntrinsic(Call, Intrinsic::linx_experimental_element_view) ||
-        isIntrinsic(Call, Intrinsic::linx_experimental_element_atomic_add))
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_atomic_add) ||
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_scatter))
       return diagnose(F, &I, "required region lowering did not complete");
     StringRef Text;
     if (Call && getAnnotationString(*Call, Text) && Text.startswith(ViewPrefix))
@@ -3762,13 +3909,16 @@ PreservedAnalyses
 LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
   SmallVector<CallInst *, 4> Sentinels;
   for (Instruction &I : instructions(F)) {
-    if (isIntrinsic(dyn_cast<CallInst>(&I),
-                    Intrinsic::linx_experimental_element_atomic_add) &&
+    auto *Call = dyn_cast<CallInst>(&I);
+    if (isIntrinsic(Call, Intrinsic::linx_experimental_element_atomic_add) &&
         !I.getMetadata(PredicatedOwnerMD))
       diagnose(F, &I,
                "Tile legalization: atomic effect lacks region ownership");
-    if (isIntrinsic(dyn_cast<CallInst>(&I),
-                    Intrinsic::linx_experimental_element_region))
+    if (isIntrinsic(Call, Intrinsic::linx_experimental_element_scatter) &&
+        !I.getMetadata(PredicatedOwnerMD))
+      diagnose(F, &I,
+               "Tile legalization: scatter effect lacks region ownership");
+    if (isIntrinsic(Call, Intrinsic::linx_experimental_element_region))
       Sentinels.push_back(cast<CallInst>(&I));
   }
   if (Sentinels.empty()) {

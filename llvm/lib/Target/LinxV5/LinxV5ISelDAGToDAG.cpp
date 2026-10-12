@@ -1078,6 +1078,22 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   EVT VT = Node->getValueType(0);
 
   switch (Opcode) {
+  case ISD::BITCAST: {
+    // Equal-width logical element views share the same Tile carrier. The
+    // conversion changes LLVM's value type, not bits or the backing descriptor.
+    // Keep a typed machine copy for register-class constraints and coalescing.
+    EVT SourceVT = Node->getOperand(0).getValueType();
+    if (!Subtarget->isSIMT() &&
+        ((VT == MVT::v32i32 && SourceVT == MVT::v32f32) ||
+         (VT == MVT::v32f32 && SourceVT == MVT::v32i32))) {
+      CurDAG->SelectNodeTo(Node, TargetOpcode::COPY_TO_REGCLASS, VT,
+                           Node->getOperand(0),
+                           CurDAG->getTargetConstant(
+                               LinxV5::Tile_ABS_CGRegClassID, DL, MVT::i32));
+      return;
+    }
+    break;
+  }
   case ISD::UNDEF: {
     if (!Subtarget->isSIMT())
       break;

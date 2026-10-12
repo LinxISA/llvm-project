@@ -1827,17 +1827,20 @@ SDValue LinxV5TargetLowering::lowerElementwiseMGatherGPRMasked(
   EVT ResultVT = Op.getValueType();
   EVT OffsetVT = Op.getOperand(9).getValueType();
   const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(11));
-  if (DType != LinxV5Op::DataType::U32 ||
+  const bool ValidValue =
+      (DType == LinxV5Op::DataType::U32 && ResultVT == MVT::v32i32) ||
+      (DType == LinxV5Op::DataType::FP32 && ResultVT == MVT::v32f32);
+  if (!ValidValue ||
       (IndexDType != LinxV5Op::DataType::S64 &&
        IndexDType != LinxV5Op::DataType::U64) ||
-      Layout != 29 || Rows != 32 ||
-      Cols != 1 || Pad != LinxV5Op::PadValue::Zero || PredInv != 0 ||
-      Zero != 1 || MaskHigh == nullptr || MaskHigh->getZExtValue() != 0 ||
-      ResultVT != MVT::v32i32 || OffsetVT != MVT::v32i64 ||
-      Op.getOperand(10).getValueType() != MVT::i64 ||
+      Layout != 29 || Rows != 32 || Cols != 1 ||
+      Pad != LinxV5Op::PadValue::Zero || PredInv != 0 || Zero != 1 ||
+      MaskHigh == nullptr || MaskHigh->getZExtValue() != 0 ||
+      OffsetVT != MVT::v32i64 || Op.getOperand(10).getValueType() != MVT::i64 ||
       Op.getOperand(11).getValueType() != MVT::i64)
     report_fatal_error(
-        "GPR-masked MGATHER requires exact 32x1 U32 values, S64/U64 byte offsets, CUBE_M32, one low GPR mask word and zero inactive lanes");
+        "GPR-masked MGATHER requires exact 32x1 U32/F32 values, S64/U64 byte "
+        "offsets, CUBE_M32, one low GPR mask word and zero inactive lanes");
 
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Cols, Rows}) {
@@ -1903,19 +1906,22 @@ SDValue LinxV5TargetLowering::lowerElementwiseMScatterGPRMasked(
   const uint64_t Zero = getV5ConstantOperand(
       Op.getOperand(13), "GPR-masked MSCATTER Zero", 1);
   const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(11));
-  if (Rows != 32 || Cols != 1 ||
-      (DataType != LinxV5Op::DataType::S32 &&
-       DataType != LinxV5Op::DataType::U32) ||
-      Layout != 29 ||
+  const EVT ValueVT = Op.getOperand(9).getValueType();
+  const bool ValidValue =
+      ((DataType == LinxV5Op::DataType::S32 ||
+        DataType == LinxV5Op::DataType::U32) &&
+       ValueVT == MVT::v32i32) ||
+      (DataType == LinxV5Op::DataType::FP32 && ValueVT == MVT::v32f32);
+  if (Rows != 32 || Cols != 1 || !ValidValue || Layout != 29 ||
       (IndexDataType != LinxV5Op::DataType::S64 &&
        IndexDataType != LinxV5Op::DataType::U64) ||
       Op.getOperand(8).getValueType() != MVT::v32i64 ||
-      Op.getOperand(9).getValueType() != MVT::v32i32 ||
       Op.getOperand(10).getValueType() != MVT::i64 ||
       Op.getOperand(11).getValueType() != MVT::i64 || !MaskHigh ||
       MaskHigh->getZExtValue() != 0 || Zero != 0)
     report_fatal_error(
-        "GPR-masked MSCATTER requires exact 32x1 S32/U32 values, S64/U64 byte offsets, CUBE_M32, one low mask word and merge-inactive stores");
+        "GPR-masked MSCATTER requires exact 32x1 S32/U32/F32 values, S64/U64 "
+        "byte offsets, CUBE_M32, one low mask word and merge-inactive stores");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Cols, Rows}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));

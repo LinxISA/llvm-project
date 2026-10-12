@@ -433,6 +433,10 @@ MDNode *LoopInfo::createMetadata(
         MDNode::get(Ctx, MDString::get(Ctx, "llvm.loop.mustprogress")));
 
   if (Attrs.LinxElementRegion) {
+    // A required target region must survive generic idiom replacement (for
+    // example memcpy recognition) until its own lowering consumes the loop.
+    LoopProperties.push_back(
+        MDNode::get(Ctx, MDString::get(Ctx, "llvm.loop.disable_nonforced")));
     LoopProperties.push_back(MDNode::get(
         Ctx, {MDString::get(Ctx, "llvm.loop.linx.pto.element.region"),
               Attrs.LinxElementRegion}));
