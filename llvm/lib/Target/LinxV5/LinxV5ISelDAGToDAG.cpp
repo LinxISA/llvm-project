@@ -1356,6 +1356,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTLEA_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TNEG_GPR_MASKED: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTNEG_GPR_Masked_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_TCI: {
     ReplaceNode(Node, selectElementwiseSimple(
                           DL, CurDAG, Node, LinxV5::PseudoTCI_EW_SizeI));

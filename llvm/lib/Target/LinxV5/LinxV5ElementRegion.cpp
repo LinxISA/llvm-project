@@ -911,6 +911,13 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           return Fail(&I, "freeze requires scalar i32 data or f32 data");
         continue;
       }
+      if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
+        if (Unary->getOpcode() != Instruction::FNeg ||
+            !Unary->getType()->isFloatTy() ||
+            Unary->getFastMathFlags().any())
+          return Fail(&I, "floating unary requires f32 fneg without fast-math");
+        continue;
+      }
       if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
         if (Binary->getType()->isFloatTy()) {
           if ((Binary->getOpcode() != Instruction::FAdd &&
@@ -1180,6 +1187,9 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                          Widen(Phi->getIncomingValue(J)), Result, "pto.phi");
       } else if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
         Result = B.CreateFreeze(Widen(Freeze->getOperand(0)), "pto.freeze");
+      } else if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
+        Result = EmitVP(Intrinsic::vp_fneg, WideTy,
+                        {Widen(Unary->getOperand(0)), Mask, EVL});
       } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
         Value *Left = Widen(Binary->getOperand(0));
         Value *Right = Widen(Binary->getOperand(1));
@@ -1629,6 +1639,13 @@ class ElementTileLegalizer {
       // Scalar FCmp fast-math is rejected before conversion to this intrinsic.
       return validate(Cmp->getArgOperand(0)) && validate(Cmp->getArgOperand(1));
     }
+    if (VP.getIntrinsicID() == Intrinsic::vp_fneg) {
+      if (!isF32Vector(&VP) || !isF32Vector(VP.getArgOperand(0)))
+        return fail(&VP, "floating unary requires f32 Tile data");
+      if (VP.getFastMathFlags().any())
+        return fail(&VP, "floating unary requires no fast-math");
+      return validate(VP.getArgOperand(0));
+    }
     if (auto Op = binaryOpcode(VP.getIntrinsicID())) {
       bool MaskLogic = isVector(&VP, 1) &&
                        (*Op == Instruction::And || *Op == Instruction::Or ||
@@ -2014,7 +2031,14 @@ class ElementTileLegalizer {
                 B.getInt64(1)},
                "pto.atomic.old.tile");
     } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
-      if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
+      if (VP->getIntrinsicID() == Intrinsic::vp_fneg) {
+        // Native TNEG toggles the FP32 sign bit without numeric conversion,
+        // preserving zero, infinities, NaN class and payload. The VP mask
+        // suppresses inactive undefined reads even though TNEG raises no NV.
+        R = call(Intrinsic::linx_experimental_ew_tneg_gpr_masked, {Ty},
+                 {B.getInt64(32), B.getInt64(1), B.getInt64(1), B.getInt64(29),
+                  value(VP->getArgOperand(0)), activeMask(*VP)});
+      } else if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
         Address A = address(VP->getArgOperand(0));
         R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
                    {Ty, A.Offset->getType()},

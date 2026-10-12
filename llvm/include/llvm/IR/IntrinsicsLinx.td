@@ -237,6 +237,13 @@ def int_linx_experimental_ew_tbinary_gpr_masked :
                llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+// Bounded FP32 sign-bit negation. One low execution-mask word suppresses
+// inactive reads; PredInv=0 and ZERO inactive destination elements are fixed.
+def int_linx_experimental_ew_tneg_gpr_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               LLVMMatchType<0>, llvm_i64_ty], [IntrHasSideEffects]>;
+
 // Extend S32/U32/S64/U64 logical element indices to the corresponding
 // S64/U64 representation, then scale by element_bits/8 modulo 2^64. The
 // result is a byte-displacement Tile; result and source types are distinct.

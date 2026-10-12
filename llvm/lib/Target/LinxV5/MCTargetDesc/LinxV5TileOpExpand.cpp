@@ -83,6 +83,44 @@ bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
   return true;
 }
 
+bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
+                         MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded) {
+  if (Inst.getOpcode() != LinxV5::PseudoTNEG_GPR_Masked_SizeI)
+    return false;
+  if (Inst.getNumOperands() != 10 || !Inst.getOperand(0).isReg() ||
+      !Inst.getOperand(1).isReg() || Inst.getOperand(1).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 32 ||
+      !Inst.getOperand(3).isReg() || Inst.getOperand(3).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(4).isImm() || Inst.getOperand(4).getImm() != 1 ||
+      !Inst.getOperand(5).isImm() || Inst.getOperand(5).getImm() != 1 ||
+      !Inst.getOperand(6).isImm() || Inst.getOperand(6).getImm() != 29 ||
+      !Inst.getOperand(7).isImm() || Inst.getOperand(7).getImm() != 1 ||
+      !Inst.getOperand(8).isReg() || !Inst.getOperand(9).isReg())
+    report_fatal_error("masked TNEG expansion requires exact 32x1 FP32 CUBE_M32 and 128-byte destination");
+  Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                         .addImm(1).addImm(17)); // FP32 TNEG
+  Expanded.push_back(MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+                         .addImm(29).addImm(0).addImm(31)
+                         .addImm(LinxV5Op::PadValue::Null)
+                         .addImm(0).addImm(0).addImm(0).addImm(0)
+                         .addImm(0).addImm(1)); // PredInv=0, ZERO inactive
+  Expanded.push_back(MCInstBuilder(LinxV5::B_DIM)
+                         .addImm(1).addReg(LinxV5::R0).addImm(32));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                         .addOperand(Inst.getOperand(0)).addImm(0b1111)
+                         .addOperand(Inst.getOperand(7)).addImm(1)
+                         .addOperand(Inst.getOperand(8)));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
+                         .addOperand(Inst.getOperand(9))
+                         .addReg(LinxV5::R0).addReg(LinxV5::R0));
+  for (MCInst &Command : Expanded) {
+    MCInst Compressed;
+    if (LinxV5::tryCompressInst(Compressed, Command, STI, Ctx))
+      Command = Compressed;
+  }
+  return true;
+}
+
 static cl::opt<bool> EnableDimOpt("linxv5-enable-dim-opt",
                                   cl::desc("B.DIM Coding Optimization"),
                                   cl::init(true), cl::Hidden);

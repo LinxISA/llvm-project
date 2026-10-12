@@ -193,7 +193,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
   SmallVector<MCInst> CompareCommands;
-  if (expandMaskedGPRCompare(MI, STI, Ctx, CompareCommands)) {
+  if (expandMaskedGPRCompare(MI, STI, Ctx, CompareCommands) ||
+      expandMaskedGPRTNeg(MI, STI, Ctx, CompareCommands)) {
     unsigned Dummy = 0;
     writeBinaryCodes(OS, Fixups, STI, CompareCommands, Dummy);
     return;

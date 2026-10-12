@@ -383,6 +383,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_TSUB_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TBINARY)
     MAKE_CASE(LinxV5ISD::EW_TBINARY_GPR_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_TNEG_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TLEA)
     MAKE_CASE(LinxV5ISD::EW_TCI)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR)
@@ -944,6 +945,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTBinary(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tbinary_gpr_masked:
       return lowerElementwiseTBinaryGPRMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tneg_gpr_masked:
+      return lowerElementwiseTNegGPRMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tlea:
       return lowerElementwiseTLEA(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tci:
@@ -1669,6 +1672,31 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinaryGPRMasked(
   Ops.push_back(DAG.getTargetConstant(Zero, DL, MVT::i64));
   return DAG.getNode(LinxV5ISD::EW_TBINARY_GPR_MASKED, DL,
                      DAG.getVTList(ResultVT, MVT::Other), Ops);
+}
+
+SDValue LinxV5TargetLowering::lowerElementwiseTNegGPRMasked(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "masked TNEG rows", 32, false);
+  const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "masked TNEG columns", 32, false);
+  const uint64_t DType = getV5ConstantOperand(Op.getOperand(4), "masked TNEG data type", 31);
+  const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "masked TNEG layout", 31);
+  if (Rows != 32 || Cols != 1 || DType != LinxV5Op::DataType::FP32 ||
+      Layout != 29 || Op.getValueType() != MVT::v32f32 ||
+      Op.getOperand(6).getValueType() != MVT::v32f32 ||
+      Op.getOperand(7).getValueType() != MVT::i64)
+    report_fatal_error("GPR-masked TNEG requires exact 32x1 FP32 CUBE_M32 Tiles and one low mask word");
+  SmallVector<SDValue> Ops = {Op.getOperand(0)};
+  for (uint64_t Dim : {Rows, Cols}) {
+    Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
+    Ops.push_back(DAG.getTargetConstant(Dim, DL, MVT::i64));
+  }
+  Ops.push_back(DAG.getTargetConstant(DType, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
+  Ops.push_back(DAG.getTargetConstant(calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  Ops.push_back(Op.getOperand(6));
+  Ops.push_back(Op.getOperand(7));
+  return DAG.getNode(LinxV5ISD::EW_TNEG_GPR_MASKED, DL,
+                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTCI(

@@ -129,11 +129,15 @@ truncating division, multiply and subtract rather than PTO floor remainder.
 Stores select the exact physical source dtype, including direct S32 results.
 
 FP32 uses the existing public Tile carrier/view boundary, with 32 logical
-float elements per physical region. Ordinary ``fadd``/``fsub`` without fast-math,
+float elements per physical region. Ordinary ``fadd``/``fsub`` and ``fneg`` without fast-math,
 scalar and multiway PHIs, selects and freeze lower through the same CFG/SSA
 pipeline. Scalar constants use FP32 TEXPANDS. Undefined imported PHI edges
 materialize one zero Tile per predecessor; actual incoming Tiles and duplicate
-edges retain their identity. FP publications and TSEL preserve raw bits,
+edges retain their identity. ``fneg`` uses standard ``llvm.vp.fneg`` with its source block mask, then
+native masked FP32 TNEG. The value transform toggles only the sign bit and
+reports no floating status flags; inactive undefined source elements are not
+read and ZERO makes inactive destination elements defined positive zero.
+FP publications and TSEL preserve raw bits,
 including negative zero and NaN payloads, without numeric identity conversions.
 
 The six comparisons ``oeq``, ``une``, ``olt``, ``ogt``, ``ole`` and ``oge`` map

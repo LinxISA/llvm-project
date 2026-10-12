@@ -43,6 +43,11 @@ llvm::SmallVector<MCInst> getBTEXTTFromInst(MCInst Inst, const MCInstrInfo &MII)
 bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
                             MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded);
 
+// Native unary masked TNEG uses a Tile destination and one source-only
+// execution-mask B.IOR. Shared by textual and object emission.
+bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
+                         MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded);
+
 unsigned getPseudoTILEOpcode(unsigned Opcode);
 
 bool isActiveMatrixPseudo(unsigned Opcode);

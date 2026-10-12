@@ -128,7 +128,9 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
   SmallVector<MCInst> CompareCommands;
   if (expandMaskedGPRCompare(TmpInst, *TM.getMCSubtargetInfo(),
-                             OutStreamer->getContext(), CompareCommands)) {
+                             OutStreamer->getContext(), CompareCommands) ||
+      expandMaskedGPRTNeg(TmpInst, *TM.getMCSubtargetInfo(),
+                          OutStreamer->getContext(), CompareCommands)) {
     for (const MCInst &Command : CompareCommands)
       EmitToStreamer(*OutStreamer, Command);
     return;

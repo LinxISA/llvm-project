@@ -3726,6 +3726,18 @@ class PseudoTEPL_TLEA_Base :
 
 def PseudoTLEA_SizeI : PseudoTEPL_TLEA_Base;
 
+class PseudoTEPL_TNEG_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
+       GPRSrc:$ExecMask)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TNEG.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}, $Layout>, $SrcTile, $ExecMask, $DstTile$TileSize";
+}
+def PseudoTNEG_GPR_Masked_SizeI : PseudoTEPL_TNEG_GPR_Masked_Base;
+
 class PseudoTEPL_TCI_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
