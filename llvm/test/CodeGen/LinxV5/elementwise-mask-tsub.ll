@@ -13,27 +13,27 @@
 
 define void @elementwise_masked_tsub(ptr %a_ptr, ptr %b_ptr) #0 {
 entry:
-  %a = call <128 x float> @llvm.linx.blk.tload.v128f32(
+  %a = call <256 x float> @llvm.linx.blk.tload.v256f32(
       i64 16, i64 1, i64 1, i64 1, i64 3, i64 4, ptr %a_ptr, i64 16)
-  %b = call <128 x float> @llvm.linx.blk.tload.v128f32(
+  %b = call <256 x float> @llvm.linx.blk.tload.v256f32(
       i64 16, i64 1, i64 1, i64 1, i64 3, i64 4, ptr %b_ptr, i64 16)
-  %result = call <128 x float>
-      @llvm.linx.experimental.ew.tsub.masked.v128f32(
+  %result = call <256 x float>
+      @llvm.linx.experimental.ew.tsub.masked.v256f32(
           i64 16, i64 16, i64 1, i64 31,
-          <128 x float> %a, <128 x float> %b,
-          <128 x float> %a, i64 0, i64 1)
-  call void @llvm.linx.blk.tstore.v128f32(
+          <256 x float> %a, <256 x float> %b,
+          <256 x float> %a, i64 0, i64 1)
+  call void @llvm.linx.blk.tstore.v256f32(
       i64 16, i64 16, i64 1, i64 1, i64 0, ptr %a_ptr, i64 16,
-      <128 x float> %result)
+      <256 x float> %result)
   ret void
 }
 
-declare <128 x float> @llvm.linx.blk.tload.v128f32(
+declare <256 x float> @llvm.linx.blk.tload.v256f32(
     i64, i64, i64, i64, i64, i64, ptr, i64)
-declare <128 x float>
-    @llvm.linx.experimental.ew.tsub.masked.v128f32(
-        i64, i64, i64, i64, <128 x float>, <128 x float>,
-        <128 x float>, i64, i64)
-declare void @llvm.linx.blk.tstore.v128f32(
-    i64, i64, i64, i64, i64, ptr, i64, <128 x float>)
+declare <256 x float>
+    @llvm.linx.experimental.ew.tsub.masked.v256f32(
+        i64, i64, i64, i64, <256 x float>, <256 x float>,
+        <256 x float>, i64, i64)
+declare void @llvm.linx.blk.tstore.v256f32(
+    i64, i64, i64, i64, i64, ptr, i64, <256 x float>)
 attributes #0 = { "linx.elementwise" "linx.elementwise.lanes"="16" }

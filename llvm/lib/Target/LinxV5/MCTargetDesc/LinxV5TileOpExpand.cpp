@@ -35,14 +35,21 @@ bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
       !Inst.getOperand(10).isReg() || !Inst.getOperand(1).isReg() ||
       Inst.getOperand(1).getReg() != LinxV5::R0 ||
       !Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 32 ||
-      !Inst.getOperand(3).isReg() || Inst.getOperand(3).getReg() != LinxV5::R0 ||
-      !Inst.getOperand(4).isImm() || Inst.getOperand(4).getImm() != 1 ||
+      !Inst.getOperand(3).isReg() ||
+      Inst.getOperand(3).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(4).isImm() ||
+      (Inst.getOperand(4).getImm() != 1 && Inst.getOperand(4).getImm() != 2) ||
       !Inst.getOperand(5).isImm() ||
-      Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP32 ||
+      (Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP32 &&
+       Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP16) ||
+      ((Inst.getOperand(5).getImm() == LinxV5Op::DataType::FP32) !=
+       (Inst.getOperand(4).getImm() == 1)) ||
       !Inst.getOperand(6).isImm() || Inst.getOperand(6).getImm() != 29 ||
       !Inst.getOperand(9).isImm() || Inst.getOperand(9).getImm() < 0 ||
       Inst.getOperand(9).getImm() > 5)
-    report_fatal_error("masked GPR compare expansion requires exact 32x1 FP32 CUBE_M32 and comparison 0..5");
+    report_fatal_error(
+        "masked GPR compare expansion requires an exact admitted FP32/FP16 "
+        "CUBE_M32 profile and comparison 0..5");
 
   Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
                          .addOperand(Inst.getOperand(5))
@@ -54,10 +61,15 @@ bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
                          .addImm(LinxV5Op::PadValue::Zero)
                          .addOperand(Inst.getOperand(9))
                          .addImm(0).addImm(0).addImm(0).addImm(0).addImm(1));
-  // LB0 and TCMP LB2 are one and use the architectural omitted-dimension
-  // default. The bounded CUBE source domain still has 32 rows in LB1.
+  // FP16 logical64 has two physical columns; FP32 keeps the omitted LB0=1.
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(0).addReg(LinxV5::R0).addImm(2));
   Expanded.push_back(MCInstBuilder(LinxV5::B_DIM)
                          .addImm(1).addReg(LinxV5::R0).addImm(32));
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(2).addReg(LinxV5::R0).addImm(2));
   if (Scalar)
     Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
                            .addImm(0b1111).addImm(1)
@@ -88,24 +100,39 @@ bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
   if (Inst.getOpcode() != LinxV5::PseudoTNEG_GPR_Masked_SizeI)
     return false;
   if (Inst.getNumOperands() != 10 || !Inst.getOperand(0).isReg() ||
-      !Inst.getOperand(1).isReg() || Inst.getOperand(1).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(1).isReg() ||
+      Inst.getOperand(1).getReg() != LinxV5::R0 ||
       !Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 32 ||
-      !Inst.getOperand(3).isReg() || Inst.getOperand(3).getReg() != LinxV5::R0 ||
-      !Inst.getOperand(4).isImm() || Inst.getOperand(4).getImm() != 1 ||
-      !Inst.getOperand(5).isImm() || Inst.getOperand(5).getImm() != 1 ||
+      !Inst.getOperand(3).isReg() ||
+      Inst.getOperand(3).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(4).isImm() ||
+      (Inst.getOperand(4).getImm() != 1 && Inst.getOperand(4).getImm() != 2) ||
+      !Inst.getOperand(5).isImm() ||
+      (Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP32 &&
+       Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP16) ||
+      ((Inst.getOperand(5).getImm() == LinxV5Op::DataType::FP32) !=
+       (Inst.getOperand(4).getImm() == 1)) ||
       !Inst.getOperand(6).isImm() || Inst.getOperand(6).getImm() != 29 ||
       !Inst.getOperand(7).isImm() || Inst.getOperand(7).getImm() != 1 ||
       !Inst.getOperand(8).isReg() || !Inst.getOperand(9).isReg())
-    report_fatal_error("masked TNEG expansion requires exact 32x1 FP32 CUBE_M32 and 128-byte destination");
+    report_fatal_error("masked TNEG expansion requires exact FP32/FP16 "
+                       "CUBE_M32 and 128-byte destination");
   Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
-                         .addImm(1).addImm(17)); // FP32 TNEG
+                         .addOperand(Inst.getOperand(5))
+                         .addImm(17));
   Expanded.push_back(MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
                          .addImm(29).addImm(0).addImm(31)
                          .addImm(LinxV5Op::PadValue::Null)
                          .addImm(0).addImm(0).addImm(0).addImm(0)
                          .addImm(0).addImm(1)); // PredInv=0, ZERO inactive
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(0).addReg(LinxV5::R0).addImm(2));
   Expanded.push_back(MCInstBuilder(LinxV5::B_DIM)
                          .addImm(1).addReg(LinxV5::R0).addImm(32));
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(2).addReg(LinxV5::R0).addImm(2));
   Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
                          .addOperand(Inst.getOperand(0)).addImm(0b1111)
                          .addOperand(Inst.getOperand(7)).addImm(1)

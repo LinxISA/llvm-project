@@ -1638,16 +1638,33 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinaryGPRMasked(
   EVT ResultVT = Op.getValueType();
   const bool IntegerProfile = DataType == LinxV5Op::DataType::U32 ||
                               DataType == LinxV5Op::DataType::S32;
+  const bool WideIntegerProfile = DataType == LinxV5Op::DataType::U64 ||
+                                  DataType == LinxV5Op::DataType::S64;
   const bool F32Profile = DataType == LinxV5Op::DataType::FP32;
-  if (Rows != 32 || Cols != 1 || (!IntegerProfile && !F32Profile) || Layout != 29 ||
-      (F32Profile ? ResultVT != MVT::v32f32 || Opcode > 1
-                  : ResultVT != MVT::v32i32) || Op.getOperand(7).getValueType() != ResultVT ||
+  const bool F16Profile = DataType == LinxV5Op::DataType::FP16;
+  const bool DenseInteger =
+      IntegerProfile && Rows == 32 && Cols == 2 && ResultVT == MVT::v64i32;
+  const bool DenseWideInteger = WideIntegerProfile && Rows == 32 && Cols == 2 &&
+                                ResultVT == MVT::v64i64;
+  const bool DenseF16 = F16Profile && Rows == 32 && Cols == 2 &&
+                        ResultVT == MVT::v64f16 && Opcode <= 1;
+  if (Rows != 32 ||
+      (Cols != 1 && !DenseF16 && !DenseInteger && !DenseWideInteger) ||
+      (!IntegerProfile && !WideIntegerProfile && !F32Profile && !F16Profile) ||
+      Layout != 29 ||
+      (F32Profile   ? ResultVT != MVT::v32f32 || Opcode > 1
+       : F16Profile ? !DenseF16
+       : WideIntegerProfile ? !DenseWideInteger
+                            : (ResultVT != MVT::v32i32 && !DenseInteger)) ||
+      Op.getOperand(7).getValueType() != ResultVT ||
       Op.getOperand(8).getValueType() != ResultVT ||
       Op.getOperand(9).getValueType() != MVT::i64 ||
       Op.getOperand(10).getValueType() != MVT::i64 || !MaskHigh ||
       MaskHigh->getZExtValue() != 0 || PredInv != 0 || Zero != 1)
     report_fatal_error(
-        "GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 Tiles, one low mask word and zero inactive lanes; FP32 supports the same shape with add/sub only");
+        "GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 "
+        "Tiles, one low mask word and zero inactive lanes; FP32 supports the "
+        "same shape with add/sub only");
   static constexpr uint64_t PTOSelectors[] = {
       LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,
       LinxV5Op::TileOPTEPL::TMUL, LinxV5Op::TileOPTEPL::TDIV,
@@ -1680,11 +1697,15 @@ SDValue LinxV5TargetLowering::lowerElementwiseTNegGPRMasked(
   const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "masked TNEG columns", 32, false);
   const uint64_t DType = getV5ConstantOperand(Op.getOperand(4), "masked TNEG data type", 31);
   const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "masked TNEG layout", 31);
-  if (Rows != 32 || Cols != 1 || DType != LinxV5Op::DataType::FP32 ||
-      Layout != 29 || Op.getValueType() != MVT::v32f32 ||
-      Op.getOperand(6).getValueType() != MVT::v32f32 ||
+  const bool FP32Profile = DType == LinxV5Op::DataType::FP32 && Cols == 1 &&
+                           Op.getValueType() == MVT::v32f32;
+  const bool FP16Profile = DType == LinxV5Op::DataType::FP16 && Cols == 2 &&
+                           Op.getValueType() == MVT::v64f16;
+  if (Rows != 32 || (!FP32Profile && !FP16Profile) || Layout != 29 ||
+      Op.getOperand(6).getValueType() != Op.getValueType() ||
       Op.getOperand(7).getValueType() != MVT::i64)
-    report_fatal_error("GPR-masked TNEG requires exact 32x1 FP32 CUBE_M32 Tiles and one low mask word");
+    report_fatal_error("GPR-masked TNEG requires exact 32x1 FP32 CUBE_M32 "
+                       "Tiles and one low mask word");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Rows, Cols}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
@@ -1743,20 +1764,23 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCMPSGPR(
   uint64_t Cmp = getV5ConstantOperand(Op.getOperand(8), "TCMPS comparison", 5);
   EVT SourceVT = Op.getOperand(6).getValueType();
   const bool F32Profile = Masked && DType == LinxV5Op::DataType::FP32;
+  const bool F16Profile = Masked && DType == LinxV5Op::DataType::FP16;
   if (!SourceVT.isFixedLengthVector() ||
-      (!SourceVT.getScalarType().isInteger() && !F32Profile) || Rows > UINT64_MAX / Cols ||
-      Rows * Cols != SourceVT.getVectorNumElements() ||
-      Rows * Cols > 64 || Layout != 29 || Rows != 32 ||
-      ((DType == LinxV5Op::DataType::S32 ||
-        DType == LinxV5Op::DataType::U32)
+      (!SourceVT.getScalarType().isInteger() && !F32Profile && !F16Profile) ||
+      Rows > UINT64_MAX / Cols ||
+      Rows * Cols != SourceVT.getVectorNumElements() || Rows * Cols > 64 ||
+      Layout != 29 || Rows != 32 ||
+      ((DType == LinxV5Op::DataType::S32 || DType == LinxV5Op::DataType::U32)
            ? SourceVT.getScalarSizeInBits() != 32
-           : (DType == LinxV5Op::DataType::S64 ||
-              DType == LinxV5Op::DataType::U64)
-                 ? SourceVT.getScalarSizeInBits() != 64
-                 : F32Profile ? SourceVT != MVT::v32f32 : true) ||
+       : (DType == LinxV5Op::DataType::S64 || DType == LinxV5Op::DataType::U64)
+           ? SourceVT.getScalarSizeInBits() != 64
+       : F32Profile ? SourceVT != MVT::v32f32
+       : F16Profile ? SourceVT != MVT::v64f16
+                    : true) ||
       Op.getOperand(7).getValueType() != MVT::i64 ||
-      (Masked && (!F32Profile || Cols != 1 ||
-                  Op.getOperand(9).getValueType() != MVT::i64)))
+      (Masked &&
+       ((!F32Profile && !F16Profile) || (F16Profile ? Cols != 2 : Cols != 1) ||
+        Op.getOperand(9).getValueType() != MVT::i64)))
     report_fatal_error(
         "TCMPS GPR requires a 32-row exact-shape integer CUBE_M32 Tile; masked FP32 supports the same shape");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
@@ -1828,18 +1852,27 @@ SDValue LinxV5TargetLowering::lowerElementwiseMGatherGPRMasked(
   EVT OffsetVT = Op.getOperand(9).getValueType();
   const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(11));
   const bool ValidValue =
-      (DType == LinxV5Op::DataType::U32 && ResultVT == MVT::v32i32) ||
-      (DType == LinxV5Op::DataType::FP32 && ResultVT == MVT::v32f32);
+      (DType == LinxV5Op::DataType::U32 &&
+       (ResultVT == MVT::v32i32 || ResultVT == MVT::v64i32)) ||
+      (DType == LinxV5Op::DataType::U16 && ResultVT == MVT::v64i16) ||
+      (DType == LinxV5Op::DataType::FP32 && ResultVT == MVT::v32f32) ||
+      (DType == LinxV5Op::DataType::FP16 && ResultVT == MVT::v64f16);
   if (!ValidValue ||
       (IndexDType != LinxV5Op::DataType::S64 &&
        IndexDType != LinxV5Op::DataType::U64) ||
-      Layout != 29 || Rows != 32 || Cols != 1 ||
+      Layout != 29 || Rows != 32 ||
+      ((DType == LinxV5Op::DataType::FP16 ||
+        DType == LinxV5Op::DataType::U16 || ResultVT == MVT::v64i32)
+           ? Cols != 2
+           : Cols != 1) ||
       Pad != LinxV5Op::PadValue::Zero || PredInv != 0 || Zero != 1 ||
       MaskHigh == nullptr || MaskHigh->getZExtValue() != 0 ||
-      OffsetVT != MVT::v32i64 || Op.getOperand(10).getValueType() != MVT::i64 ||
+      OffsetVT != (Cols == 2 ? MVT::v64i64 : MVT::v32i64) ||
+      Op.getOperand(10).getValueType() != MVT::i64 ||
       Op.getOperand(11).getValueType() != MVT::i64)
     report_fatal_error(
-        "GPR-masked MGATHER requires exact 32x1 U32/F32 values, S64/U64 byte "
+        "GPR-masked MGATHER requires an exact admitted U16/U32/FP16/FP32 "
+        "element profile, S64/U64 byte "
         "offsets, CUBE_M32, one low GPR mask word and zero inactive lanes");
 
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
@@ -1910,17 +1943,26 @@ SDValue LinxV5TargetLowering::lowerElementwiseMScatterGPRMasked(
   const bool ValidValue =
       ((DataType == LinxV5Op::DataType::S32 ||
         DataType == LinxV5Op::DataType::U32) &&
-       ValueVT == MVT::v32i32) ||
-      (DataType == LinxV5Op::DataType::FP32 && ValueVT == MVT::v32f32);
-  if (Rows != 32 || Cols != 1 || !ValidValue || Layout != 29 ||
+       (ValueVT == MVT::v32i32 || ValueVT == MVT::v64i32)) ||
+      (DataType == LinxV5Op::DataType::U16 && ValueVT == MVT::v64i16) ||
+      (DataType == LinxV5Op::DataType::FP32 && ValueVT == MVT::v32f32) ||
+      (DataType == LinxV5Op::DataType::FP16 && ValueVT == MVT::v64f16);
+  if (Rows != 32 ||
+      ((DataType == LinxV5Op::DataType::FP16 ||
+        DataType == LinxV5Op::DataType::U16 || ValueVT == MVT::v64i32)
+           ? Cols != 2
+           : Cols != 1) ||
+      !ValidValue || Layout != 29 ||
       (IndexDataType != LinxV5Op::DataType::S64 &&
        IndexDataType != LinxV5Op::DataType::U64) ||
-      Op.getOperand(8).getValueType() != MVT::v32i64 ||
+      Op.getOperand(8).getValueType() !=
+          (Cols == 2 ? MVT::v64i64 : MVT::v32i64) ||
       Op.getOperand(10).getValueType() != MVT::i64 ||
       Op.getOperand(11).getValueType() != MVT::i64 || !MaskHigh ||
       MaskHigh->getZExtValue() != 0 || Zero != 0)
     report_fatal_error(
-        "GPR-masked MSCATTER requires exact 32x1 S32/U32/F32 values, S64/U64 "
+        "GPR-masked MSCATTER requires an exact admitted U16/S32/U32/FP16/FP32 "
+        "element profile, S64/U64 "
         "byte offsets, CUBE_M32, one low mask word and merge-inactive stores");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Cols, Rows}) {
@@ -2085,16 +2127,25 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmpGPR(
   const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TCMP GPR layout", 31);
   const uint64_t Cmp = getV5ConstantOperand(Op.getOperand(8), "TCMP GPR comparison", 5);
   const bool F32Profile = Masked && DataType == LinxV5Op::DataType::FP32;
-  EVT SourceVT = F32Profile ? MVT::v32f32 : MVT::v32i32;
-  if (Rows != 32 || Cols != 1 || Layout != 29 ||
+  const bool F16Profile = Masked && DataType == LinxV5Op::DataType::FP16;
+  const bool DenseInteger = !Masked && Rows == 32 && Cols == 2 &&
+                            (DataType == LinxV5Op::DataType::S32 ||
+                             DataType == LinxV5Op::DataType::U32);
+  EVT SourceVT = F16Profile     ? MVT::v64f16
+                 : F32Profile   ? MVT::v32f32
+                 : DenseInteger ? MVT::v64i32
+                                : MVT::v32i32;
+  if (Rows != 32 || ((F16Profile || DenseInteger) ? Cols != 2 : Cols != 1) ||
+      Layout != 29 ||
       (DataType != LinxV5Op::DataType::S32 &&
-       DataType != LinxV5Op::DataType::U32 && !F32Profile) ||
+       DataType != LinxV5Op::DataType::U32 && !F32Profile && !F16Profile) ||
       Op.getOperand(6).getValueType() != SourceVT ||
       Op.getOperand(7).getValueType() != SourceVT ||
-      (Masked && (!F32Profile ||
+      (Masked && ((!F32Profile && !F16Profile) ||
                   Op.getOperand(9).getValueType() != MVT::i64)))
     report_fatal_error(
-        "TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles; masked FP32 supports the same shape");
+        "TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles; masked FP32 "
+        "supports the same shape");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Rows, Cols}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
@@ -2150,16 +2201,28 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSelGPR(
   const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(7));
   EVT ResultVT = Op.getValueType();
   const bool F32Profile = DataType == LinxV5Op::DataType::FP32;
-  if (Rows != 32 || Cols != 1 || Layout != 29 ||
+  const bool F16Profile = DataType == LinxV5Op::DataType::FP16;
+  const bool U16Profile = DataType == LinxV5Op::DataType::U16;
+  const bool DenseInteger = Cols == 2 && (DataType == LinxV5Op::DataType::S32 ||
+                                          DataType == LinxV5Op::DataType::U32);
+  if (Rows != 32 ||
+      ((F16Profile || U16Profile || DenseInteger) ? Cols != 2 : Cols != 1) ||
+      Layout != 29 ||
       (DataType != LinxV5Op::DataType::S32 &&
-       DataType != LinxV5Op::DataType::U32 && !F32Profile) ||
-      (F32Profile ? ResultVT != MVT::v32f32 : ResultVT != MVT::v32i32) ||
+       DataType != LinxV5Op::DataType::U32 && !F32Profile && !F16Profile &&
+       !U16Profile) ||
+      (U16Profile     ? ResultVT != MVT::v64i16
+       : F16Profile   ? ResultVT != MVT::v64f16
+       : F32Profile   ? ResultVT != MVT::v32f32
+       : DenseInteger ? ResultVT != MVT::v64i32
+                      : ResultVT != MVT::v32i32) ||
       Op.getOperand(6).getValueType() != MVT::i64 || !MaskHigh ||
       MaskHigh->getZExtValue() != 0 ||
       Op.getOperand(8).getValueType() != ResultVT ||
       Op.getOperand(9).getValueType() != ResultVT)
     report_fatal_error(
-        "TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask word; FP32 supports the same shape");
+        "TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask "
+        "word; FP32 supports the same shape");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Rows, Cols}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));

@@ -3480,6 +3480,16 @@ def PseudoTCOPY : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
   let AsmString = "TCOPY\t$SrcTile, $DstTile$TileSize";
 }
 
+// CodeGen-only Local-tile copy with the complete logical/physical descriptor.
+// Generic register copies and PHI elimination must not lose the descriptor
+// carried by their producer: an untyped TCOPY defaults every omitted field and
+// is not an identity operation for typed CUBE tiles.
+let isCodeGenOnly = 1 in
+def PseudoTCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout)>;
+
 let isCodeGenOnly = 1, hasSideEffects = 1 in {
 def PseudoV5GMOV : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins BstartDataType:$DataType, PE_MASK_Op:$PE_MASK,

@@ -29,7 +29,7 @@ target triple = "linx64v5-unknown-linux-musl"
 define void @assemble_parent_loop(ptr %out) {
 entry:
   %writer = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 102, 25\0AB.DATR 29, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
       "=@2Tr,i"(i32 1)
   br label %loop
 
@@ -45,25 +45,25 @@ not.init:
 
 init:
   %created = call <512 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${4:c}, ${5:c}, $3, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${4:c}, ${5:c}, $3, 0, 1\0A",
       "=@2Tr,@2Tr,i,r,i,i"(<32 x i32> %writer, i32 5, i32 %part, i1 true, i1 false)
   br label %latch
 
 middle:
   %middle.scratch = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 102, 25\0AB.DATR 29, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
       "=@2Tr,i"(i32 1)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${3:c}, ${4:c}, $2, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${3:c}, ${4:c}, $2, 0, 1\0A",
       "@2Tr,@2Tr,r,i,i"(<512 x i32> %parent, <32 x i32> %middle.scratch, i32 %part, i1 false, i1 false)
   br label %latch
 
 last:
   %last.scratch = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 102, 25\0AB.DATR 29, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
       "=@2Tr,i"(i32 1)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${3:c}, ${4:c}, $2, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${3:c}, ${4:c}, $2, 0, 1\0A",
       "@2Tr,@2Tr,r,i,i"(<512 x i32> %parent, <32 x i32> %last.scratch, i32 %part, i1 false, i1 true)
   br label %latch
 
@@ -86,10 +86,10 @@ exit:
 define void @assemble_init_last() {
 entry:
   %writer = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 102, 25\0AB.DATR 29, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
       "=@2Tr,i"(i32 1)
   %parent = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 1, i1 true, i1 true)
   ret void
 }
@@ -99,31 +99,31 @@ entry:
 define void @four_nonoverlap_parents() {
 entry:
   %writer = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 102, 25\0AB.DATR 29, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
       "=@2Tr,i"(i32 1)
   %p0 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,i,i"(<64 x i32> %p0, <32 x i32> %writer, i1 false, i1 true)
   %p1 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,i,i"(<64 x i32> %p1, <32 x i32> %writer, i1 false, i1 true)
   %p2 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,i,i"(<64 x i32> %p2, <32 x i32> %writer, i1 false, i1 true)
   %p3 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,i,i"(<64 x i32> %p3, <32 x i32> %writer, i1 false, i1 true)
   ret void
 }
@@ -135,28 +135,28 @@ entry:
 define void @completed_writer_is_not_parent() {
 entry:
   %writer = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 102, 25\0AB.DATR 29, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
       "=@2Tr,i"(i32 1)
   %p0 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   %p1 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   %p2 = call <64 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 2, i1 true, i1 false)
   %completed = call <32 x i32> asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
       "=@2Tr,@2Tr,i,i,i"(<32 x i32> %writer, i32 1, i1 true, i1 true)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $0, mask=1111, last\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $0, mask=1111, last\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,i,i"(<64 x i32> %p0, <32 x i32> %completed, i1 false, i1 true)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, $0, mask=1111, last\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, $0, mask=1111, last\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,@2Tr,i,i"(<64 x i32> %p1, <32 x i32> %completed, <32 x i32> %writer, i1 false, i1 true)
   call void asm sideeffect
-      "BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $0, mask=1111, last\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $0, mask=1111, last\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
       "@2Tr,@2Tr,i,i"(<64 x i32> %p2, <32 x i32> %writer, i1 false, i1 true)
   ret void
 }

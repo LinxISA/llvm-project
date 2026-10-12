@@ -34,20 +34,6 @@ STATISTIC(TileCFGCopy, "Number jcore-tile control flow copys");
 STATISTIC(NumSyncConflictRC,
           "Number of regclass liveout sync conflicts (offset rewrite skipped)");
 
-// Issue #112: the window rotation TMOV-copies the oldest live tile when the
-// 16-slot relative window wraps, and an assembled parent whose generation is
-// still open is often that oldest tile. The current SuperScalarModel follows
-// the copied parent for the remaining MIDDLE/LAST writers (verified on
-// fa_lowp_algB Tk=256), so the rotation is allowed by default. The flag
-// restores the af743c28 fail-closed guard for models that reject a copied
-// open-generation parent (the toolchain-build#21 behavior).
-static cl::opt<bool> AllowLiveAssembleParentCopy(
-    "linxv5-allow-live-assemble-parent-copy",
-    cl::desc("Allow the TRegToOffset window rotation to TMOV-copy a tile "
-             "whose B.ASSEMBLE generation is still open. Disable to restore "
-             "the fail-closed guard against copied open-generation parents."),
-    cl::init(true));
-
 static cl::opt<bool> EnableGlobalDataSync(
     "linxv5-enable-global-sync",
     cl::desc("Enable Global Data sync for SIMT Clock-Hand."), cl::init(true),
@@ -63,6 +49,7 @@ namespace llvm {
 struct LinxRegOp {
   unsigned Reg;
   unsigned Size;
+  Optional<LinxV5::TileDescriptor> Descriptor;
 
   LinxRegOp()
       : Reg(MCRegister::NoRegister),
@@ -392,8 +379,8 @@ public:
   void insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
                    Register ReservedReg, SlotStatus *SS, bool IsInSyncGroup,
                    SmallVector<LinxRegOp> needSyncTo, SlotStatus &ResultSS);
-  void BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp);
-  void SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot);
+  bool BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp);
+  bool SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot);
   void PreAlloc(TRCopyRange Slot);
   void printLiveSlots();
   unsigned tailsi() { return TailIdx % TRNumber; }
@@ -476,7 +463,7 @@ bool SlotCalc::isIdle(TRCopyRange &Slot, const MachineInstr *MI) {
   return false;
 }
 
-void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
+bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
   Register TR = RegOp.Reg;
 
   if (Before != MBB->begin()) {
@@ -487,13 +474,53 @@ void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
 
   if (TR == LinxV5::NoRegister) {
     if (IsTileRC) {
-      // The placeholder uses a zero-mask no-op B.IOT with the minimum legal
-      // destination SizeCode (1..10; 0 is the source-only encoding). The
-      // encoded capacity preserves the bundle shape without allocating or
-      // reading a tile.
-      BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoEmptyTile))
+      // A queue-alignment hole must consume a real architectural Tile entry.
+      // PseudoEmptyTile is a zero-mask NoPE and cannot serve this purpose.
+      // Duplicate any closed live value into the reserved dead register; the
+      // full descriptor keeps the filler a legal identity transport while
+      // its payload remains semantically unused.
+      const TRCopyRange *Donor = nullptr;
+      Optional<LinxV5::TileDescriptor> DonorDescriptor;
+      bool SawLiveValue = false;
+      for (unsigned I = TailIdx; I < HeadIdx; ++I) {
+        const TRCopyRange &Candidate = LiveSlots[I % TRNumber];
+        SawLiveValue |= Candidate.RegOp.Reg != LinxV5::NoRegister;
+        if (Candidate.RegOp.Reg != LinxV5::NoRegister &&
+            Candidate.RegOp.Descriptor && !Candidate.IsAssembleParent) {
+          // Slot metadata is inherited across CFG edges and may name a prior
+          // closed generation after the same physical register is redefined.
+          // Re-prove the source descriptor at this exact insertion point so a
+          // dead alignment filler cannot reinterpret live payload bits using
+          // a stale dtype or shape.
+          Optional<LinxV5::TileDescriptor> Current =
+              LinxV5::tryGetTileRegDescriptor(*MBB, Before,
+                                              Candidate.RegOp.Reg);
+          if (!Current || Current->SizeCode != Candidate.RegOp.Size)
+            continue;
+          Donor = &Candidate;
+          DonorDescriptor = *Current;
+          break;
+        }
+      }
+      if (!Donor) {
+        if (SawLiveValue)
+          report_fatal_error(
+              "cannot materialize a Tile queue-alignment entry without a "
+              "closed descriptor-bearing source");
+        // An actually empty queue needs no physical alignment command. The
+        // caller must leave the software queue unchanged as well.
+        return false;
+      }
+      const LinxV5::TileDescriptor &Descriptor = *DonorDescriptor;
+      BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoTCOPYDesc))
           .addReg(ReserveReg, RegState::Define | RegState::Dead)
-          .addImm(1);
+          .addImm(Descriptor.SizeCode)
+          .addReg(Donor->RegOp.Reg)
+          .addImm(Descriptor.ValidCol)
+          .addImm(Descriptor.ValidRow)
+          .addImm(Descriptor.PhysicalCol)
+          .addImm(Descriptor.DataType)
+          .addImm(Descriptor.Layout);
     } else {
       if (LinxV5::SIMTCGSRegClass.contains(ReserveReg)) {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_ORI_SCAR))
@@ -514,9 +541,8 @@ void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
     if (!IsScalarRC) {
       if (LinxV5::Tile_ABS_CGRegClass.contains(RegOp.Reg)) {
         unsigned RegSizeCode = RegOp.Size;
-        unsigned RegSize = 1 << (RegSizeCode + 4);
-        // This pass creates PseudoTCOPY directly, bypassing
-        // LinxV5InstrInfo::copyPhysReg().  PseudoTCOPY is a Local-tile
+        // This pass creates PseudoTCOPYDesc directly, bypassing
+        // LinxV5InstrInfo::copyPhysReg().  PseudoTCOPYDesc is a Local-tile
         // operation; Shared tile handles must only be moved by the explicit
         // Shared transfer pseudos.  Keep this check next to the construction
         // so a future register-class change cannot silently lower a
@@ -524,10 +550,23 @@ void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
         if (!LinxV5::Tile_ABSRegClass.contains(TR))
           report_fatal_error(
               "LinxV5 TRegToOffset attempted PseudoTCOPY with non-Local tile");
-        BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoTCOPY))
+        if (!RegOp.Descriptor)
+          report_fatal_error(
+              "cannot prove a complete Local tile descriptor for window COPY");
+        LinxV5::TileDescriptor Descriptor = *RegOp.Descriptor;
+        if (Descriptor.SizeCode != RegSizeCode)
+          report_fatal_error(
+              "Local tile COPY descriptor SizeCode disagrees with allocator");
+        BuildMI(*MBB, Before, DebugLoc(),
+                TII->get(LinxV5::PseudoTCOPYDesc))
             .addReg(TR, RegState::Define)
             .addImm(RegSizeCode)
-            .addReg(TR, RegState::Kill);
+            .addReg(TR, RegState::Kill)
+            .addImm(Descriptor.ValidCol)
+            .addImm(Descriptor.ValidRow)
+            .addImm(Descriptor.PhysicalCol)
+            .addImm(Descriptor.DataType)
+            .addImm(Descriptor.Layout);
       } else {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_MOV))
             .addReg(TR, RegState::Define)
@@ -543,7 +582,7 @@ void SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp) {
     }
   }
   LLVM_DEBUG(dbgs() << "build copy " << *std::prev(Before));
-  return;
+  return true;
 }
 
 void SlotCalc::PreAlloc(TRCopyRange Slot) {
@@ -553,8 +592,8 @@ void SlotCalc::PreAlloc(TRCopyRange Slot) {
   prealloc();
 }
 
-void SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
-  if (Slot.IsAssembleParent && !AllowLiveAssembleParentCopy)
+bool SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
+  if (Slot.IsAssembleParent)
     report_fatal_error(
         "cannot copy a live B.ASSEMBLE parent: the INIT parent must retain "
         "its tile identity through the complete generation");
@@ -571,11 +610,13 @@ void SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
   //  . . [x o x x] . .
   while (has_pre()) {
     LLVM_DEBUG(dbgs() << "assign pre-alloc as copy " << HeadIdx << "\n");
-    BuildCopy(Before, head().RegOp);
+    if (!BuildCopy(Before, head().RegOp))
+      return false;
     advance();
   }
 
-  BuildCopy(Before, Slot.RegOp);
+  if (!BuildCopy(Before, Slot.RegOp))
+    return false;
   head() = Slot;
   head().Idx = HeadIdx;
   if (&Slot != &head())
@@ -584,6 +625,7 @@ void SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
     initSlot(&tail());
   }
   shift();
+  return true;
 }
 
 static char printHelper(TRCopyRange &RR) {
@@ -683,7 +725,10 @@ SlotCalc::allocNewSlot(SmallVectorImpl<const TRLiveRange *> &LRs) {
     NumCopy += Copys;
     if (isTileReg(RC))
       TileLongCopy += Copys;
-    SlotCopy(MI, *Slot);
+    if (!SlotCopy(MI, *Slot))
+      report_fatal_error(
+          "Tile allocation pressure requires an unrepresentable empty queue "
+          "alignment entry");
     LLVM_DEBUG(printLiveSlots());
   }
 
@@ -712,8 +757,10 @@ SmallVector<LinxRegOp> SlotCalc::getLiveouts(bool EnableVerify = true) {
     if (Slot.IsLiveout && !findFirstLiveout)
       findFirstLiveout = true;
     if (findFirstLiveout) {
-      Register Reg = Slot.IsLiveout ? Slot.RegOp.Reg : LinxV5::NoRegister;
-      CurLiveouts.push_back(LinxRegOp(Reg, Slot.RegOp.Size));
+      LinxRegOp RegOp = Slot.RegOp;
+      if (!Slot.IsLiveout)
+        RegOp.Reg = LinxV5::NoRegister;
+      CurLiveouts.push_back(RegOp);
     }
     index = index == TRNumber - 1 ? 0 : index + 1;
   }
@@ -745,7 +792,8 @@ void SlotCalc::BuildLiveoutAndEraseFrom(TRCopyRange &Slot, LinxRegOp RegOp,
       }
     }
   }
-  SlotCopy(EndI, tmp);
+  if (!SlotCopy(EndI, tmp))
+    return;
   if (RegOp.Reg != LinxV5::NoRegister) {
     // update: release liveout flag.
     for (size_t j = 0; j < TRNumber; ++j) {
@@ -774,6 +822,18 @@ void SlotCalc::BuildLiveoutAndEraseFrom(TRCopyRange &Slot, LinxRegOp RegOp,
 /// liveouts, and the worst scenario is use (regNum-1)*(regNum-1) copy.
 void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
   if (needSyncTo.empty())
+    return;
+
+  // An OPEN assembly parent pins this architectural queue. Reordering any
+  // liveout across it would either copy the parent payload or change the
+  // continuation's ParentRef distance. Preserve the actual queue state;
+  // ordinary operands are still rewritten from that state in Phase 2, while
+  // solveAssembleParentDataflow owns the exact parent distances and join
+  // rejection.
+  if (llvm::any_of(LiveSlots,
+                   [](const TRCopyRange &Slot) {
+                     return Slot.IsAssembleParent;
+                   }))
     return;
 
   LLVM_DEBUG(dbgs() << "Starting regQ rolling!\n");
@@ -895,6 +955,10 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
         NewSlots[i]->IsAssembleParent = isAssembleParentDef(*LRs[i]);
         if (LRs[i]->LastUse != nullptr || LRs[i]->IsLiveout) {
           NewSlots[i]->RegOp.Reg = LRs[i]->DefMO->getReg();
+          NewSlots[i]->RegOp.Descriptor =
+              LinxV5::tryGetTileRegDescriptor(
+                  *MBB, std::next(LRs[i]->MI->getIterator()),
+                  LRs[i]->DefMO->getReg());
         }
       }
       LLVM_DEBUG(dbgs() << "emit " << *OI.MI);
@@ -971,7 +1035,8 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
       LLVM_DEBUG(dbgs() << "Try to make liveouts less than RegNum...\n");
       if (isTileReg(RC))
         ++TileCFGCopy;
-      SlotCopy(EndI, RR);
+      if (!SlotCopy(EndI, RR))
+        break;
       LLVM_DEBUG(printLiveSlots(); dbgs() << "\n");
     } else {
       break;
@@ -1199,8 +1264,39 @@ SlotStatus *LinxV5TRegToOffsetOpt::getInitStatus(
     }
   }
 
-  // TODO: Add legality check for all SlotStatus.
-  // All Done MBB liveouts SlotStatus should be same.
+  // A physical Local-tile live-in denotes one SSA/PHI value at this join.
+  // Queue position reconciliation alone is insufficient: two predecessors
+  // can carry the same allocated register with incompatible descriptors.  A
+  // size-only comparison would then silently publish path-dependent dtype or
+  // CUBE geometry.  Require every completed predecessor that carries the
+  // live-in to agree on the complete descriptor before selecting a queue
+  // state to inherit.
+  if (isTileReg(RC) && DoneMBBsSlotStatus.size() > 1) {
+    for (const TRCopyRange &Reference :
+         DoneMBBsSlotStatus.front()->TRCopyRanges) {
+      if (!Reference.IsLiveout ||
+          !MBB.isLiveIn(Reference.RegOp.Reg))
+        continue;
+      if (!Reference.RegOp.Descriptor)
+        report_fatal_error(
+            "unknown Local tile descriptor at COPY/PHI control-flow join");
+      for (SlotStatus *Incoming : drop_begin(DoneMBBsSlotStatus)) {
+        const TRCopyRange *Match = nullptr;
+        for (const TRCopyRange &Candidate : Incoming->TRCopyRanges)
+          if (Candidate.IsLiveout &&
+              Candidate.RegOp.Reg == Reference.RegOp.Reg) {
+            Match = &Candidate;
+            break;
+          }
+        if (!Match || !Match->RegOp.Descriptor)
+          report_fatal_error(
+              "unknown Local tile descriptor at COPY/PHI control-flow join");
+        if (!(*Reference.RegOp.Descriptor == *Match->RegOp.Descriptor))
+          report_fatal_error(
+              "conflicting Local tile descriptors at COPY/PHI control-flow join");
+      }
+    }
+  }
 
   SlotStatus *SS = nullptr;
   if (!DoneMBBsSlotStatus.empty()) {
@@ -1401,9 +1497,13 @@ void LinxV5TRegToOffsetOpt::insertCopy(MachineBasicBlock &MBB) {
     // insert copy
     SlotCalc SC(&MBB, TII, RC, IsScalarRC, IsTileRC);
     SlotStatus ResultSS;
+    const bool CanSynchronizeQueue = !SyncConflictRCs.count(RC);
     SC.insertCopys(OriginalInstrs, RCsInfo[RC][2],
                    getInitStatus(MBB, LiveInsLastUse, RestLiveouts, RC),
-                   isInSyncGroup(&MBB), getLiveoutLimits(MBB, RC), ResultSS);
+                   CanSynchronizeQueue && isInSyncGroup(&MBB),
+                   CanSynchronizeQueue ? getLiveoutLimits(MBB, RC)
+                                       : SmallVector<LinxRegOp>(),
+                   ResultSS);
     GlobalSlotsInfo[&MBB][RC] = ResultSS; // commit status
   }
 }
@@ -1540,21 +1640,29 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         // Resolve sources against the pre-instruction queue. INIT may reuse
         // the physical register number that still names an older source.
         bool UsesParent = false;
+        bool KillsParent = false;
         for (const MachineOperand &MO : MI.operands()) {
           if (!MO.isReg() || !MO.isUse() || MO.isImplicit() ||
               MO.getReg() != Parent)
             continue;
           UsesParent = true;
+          KillsParent |= MO.isKill();
           if (RecordUses && State.Kind == StateKind::Parent)
             AssembleParentUseDistances[&MI][Parent] = State.Distance;
         }
+        if (RecordUses && UsesParent && State.Kind == StateKind::Conflict)
+          report_fatal_error(
+              "B.ASSEMBLE parent has conflicting relative distances at a CFG "
+              "join");
 
         // A TCOPY/TMOV consumes its source as ordinary published tile data.
         // An OPEN parent still names the in-progress assembly generation, so
         // copying it would manufacture a second architectural identity even
         // when the destination uses another physical hand.  A Maybe phase is
         // equally unsafe because at least one predecessor keeps it OPEN.
-        if (UsesParent && MI.getOpcode() == LinxV5::PseudoTCOPY &&
+        if (UsesParent &&
+            (MI.getOpcode() == LinxV5::PseudoTCOPY ||
+             MI.getOpcode() == LinxV5::PseudoTCOPYDesc) &&
             State.Kind == StateKind::Parent &&
             (State.Phase == ParentPhase::Open ||
              State.Phase == ParentPhase::Maybe))
@@ -1603,15 +1711,19 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
                 report_fatal_error(
                     "OPEN B.ASSEMBLE parent register has a second real "
                     "definition");
-              State.Kind = StateKind::Other;
-              State.Def = &MI;
-              State.Distance = 1;
-              State.Phase = ParentPhase::None;
+              if (State.Kind == StateKind::Parent &&
+                  State.Phase == ParentPhase::Closed) {
+                State = absentState();
+              } else {
+                State.Kind = StateKind::Other;
+                State.Def = &MI;
+                State.Distance = 1;
+                State.Phase = ParentPhase::None;
+              }
               continue;
             }
 
-            if (State.Kind == StateKind::Parent ||
-                State.Kind == StateKind::Other) {
+            if (State.Kind == StateKind::Parent) {
               if (State.Kind == StateKind::Parent &&
                   State.Phase != ParentPhase::Closed && RecordUses)
                 report_fatal_error(
@@ -1624,6 +1736,9 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             }
           }
         }
+        if (KillsParent && State.Kind == StateKind::Parent &&
+            State.Phase == ParentPhase::Closed)
+          State = absentState();
       }
       return State;
     };
@@ -1674,16 +1789,10 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         report_fatal_error(
             "B.ASSEMBLE parent relative-distance dataflow has unresolved "
             "CFG state");
-      if (InState[&MBB].Kind == StateKind::Conflict ||
-          OutState[&MBB].Kind == StateKind::Conflict) {
-        if (SawOutOfWindow)
-          report_fatal_error(
-              "B.ASSEMBLE parent relative distance exceeds the 16-entry "
-              "Local tile window");
+      if (SawOutOfWindow)
         report_fatal_error(
-            "B.ASSEMBLE parent has conflicting relative distances at a CFG "
-            "join");
-      }
+            "B.ASSEMBLE parent relative distance exceeds the 16-entry "
+            "Local tile window");
     }
     for (MachineBasicBlock &MBB : MF)
       (void)transfer(MBB, InState[&MBB], /*RecordUses=*/true);
@@ -1733,6 +1842,34 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   unsigned OldNumCopy = NumCopy;
 
   LLVM_DEBUG(dbgs() << "before insert copy:\n"; MF.dump());
+
+  // PHI elimination may coalesce all incoming Tile values to one physical
+  // register without inserting a COPY in the join block. Audit those direct
+  // predecessor definitions before queue rewriting: otherwise each arm can
+  // establish a different dtype/layout/shape for the same live-in handle and
+  // the chosen runtime descriptor becomes path-dependent.
+  for (MachineBasicBlock &MBB : MF) {
+    if (MBB.pred_size() < 2)
+      continue;
+    for (const auto &LiveIn : MBB.liveins()) {
+      Register Reg = LiveIn.PhysReg;
+      if (!LinxV5::Tile_ABSRegClass.contains(Reg))
+        continue;
+      bool EveryPredecessorDefines = llvm::all_of(
+          MBB.predecessors(), [&](const MachineBasicBlock *Pred) {
+            return llvm::any_of(*Pred, [&](const MachineInstr &MI) {
+              return MI.definesRegister(Reg);
+            });
+          });
+      if (!EveryPredecessorDefines)
+        continue;
+      Optional<LinxV5::TileDescriptor> Descriptor =
+          LinxV5::tryGetTileRegDescriptor(MBB, MBB.begin(), Reg);
+      if (!Descriptor)
+        report_fatal_error(
+            "unknown Local tile descriptor at COPY/PHI control-flow join");
+    }
+  }
 
   // Phase-1: Insert Copy to satify register offset index.
   updateGlobalSyncup(MF);
@@ -1789,11 +1926,35 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
     DenseMap<Register, unsigned int> TRegIdx;
     unsigned CurIdx = 0;
     if (SyncConflictRCs.count(RC)) {
-      // Issue #60: predecessors disagree on this class's window state; keep
-      // absolute registers instead of rewriting to window offsets.
+      // Keep ordinary values absolute when queue synchronization is disabled,
+      // but an OPEN assembly ParentRef is architecturally relative and has a
+      // separately proved reaching-INIT distance. Rewrite only those exact
+      // uses; solveAssembleParentDataflow already rejected unresolved or
+      // conflicting join distances.
+      Register OffsetBase = RCInfo.second[1];
+      for (MachineInstr &MI : MBB) {
+        auto UseIt = AssembleParentUseDistances.find(&MI);
+        if (UseIt == AssembleParentUseDistances.end())
+          continue;
+        for (MachineOperand &MO : MI.operands()) {
+          if (!MO.isReg() || !MO.isUse() || MO.isImplicit())
+            continue;
+          if (!RC->contains(MO.getReg()))
+            continue;
+          auto DistanceIt = UseIt->second.find(MO.getReg());
+          if (DistanceIt == UseIt->second.end())
+            continue;
+          unsigned Distance = DistanceIt->second;
+          if (Distance < 1 || Distance > RC->getNumRegs())
+            report_fatal_error(
+                "B.ASSEMBLE parent relative distance exceeds the Local tile "
+                "window");
+          MO.setReg(OffsetBase + (Distance - 1));
+        }
+      }
       LLVM_DEBUG(dbgs() << "skip rewrite for "
                         << TRI->getRegClassName(RC)
-                        << ": liveout sync conflict\n");
+                        << ": absolute values with solved ParentRef uses\n");
       continue;
     }
     LLVM_DEBUG(dbgs() << "rewrite " << TRI->getRegClassName(RC) << " in "

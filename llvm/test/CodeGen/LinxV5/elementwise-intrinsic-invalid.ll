@@ -9,6 +9,7 @@
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/atomic-dtype-layout.ll 2>&1 | FileCheck %s --check-prefix=ATOMIC-DTYPE
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/atomic-wide-mask.ll 2>&1 | FileCheck %s --check-prefix=ATOMIC-MASK
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/atomic-mask-high.ll 2>&1 | FileCheck %s --check-prefix=ATOMIC-MASK
+; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/u16-gather-shape.ll 2>&1 | FileCheck %s --check-prefix=U16-GATHER-SHAPE
 
 ; TLEA-FLOAT: TLEA requires equal-lane i32/i64 source and i64 destination Tiles
 ; TLEA-SHAPE: TLEA requires equal-lane i32/i64 source and i64 destination Tiles
@@ -19,6 +20,7 @@
 ; ATOMIC-SHAPE: masked MGATHER_ADD requires exact-shape U32 values, U64 offsets
 ; ATOMIC-DTYPE: masked MGATHER_ADD requires exact-shape U32 values, U64 offsets
 ; ATOMIC-MASK: masked MGATHER_ADD requires exact-shape U32 values, U64 offsets, CUBE_M32 and one low GPR mask word
+; U16-GATHER-SHAPE: GPR-masked MGATHER requires an exact admitted U16/U32/FP16/FP32 element profile
 
 ;--- tlea-float.ll
 define void @bad(ptr %out, ptr %in) {
@@ -114,6 +116,21 @@ define void @bad(ptr %out, ptr %base, ptr %offset.ptr, ptr %value.ptr) {
 declare <32 x i32>
     @llvm.linx.experimental.ew.mgather.add.masked.v32i32.v32i64.v32i32(
         i64, i64, i64, i64, i64, ptr, <32 x i64>, <32 x i32>,
+        i64, i64, i64, i64)
+
+;--- u16-gather-shape.ll
+define void @bad(ptr %out, ptr %base, ptr %offset.ptr) {
+  %offsets = load <64 x i64>, ptr %offset.ptr
+  %r = call <64 x i16>
+      @llvm.linx.experimental.ew.mgather.gpr.masked.v64i16.v64i64(
+          i64 32, i64 1, i64 26, i64 0, i64 29, i64 24, ptr %base,
+          <64 x i64> %offsets, i64 -1, i64 0, i64 0, i64 1)
+  store <64 x i16> %r, ptr %out
+  ret void
+}
+declare <64 x i16>
+    @llvm.linx.experimental.ew.mgather.gpr.masked.v64i16.v64i64(
+        i64, i64, i64, i64, i64, i64, ptr, <64 x i64>,
         i64, i64, i64, i64)
 
 ;--- atomic-mask-high.ll

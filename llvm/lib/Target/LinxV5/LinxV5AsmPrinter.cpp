@@ -126,6 +126,45 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
+  if (TmpInst.getOpcode() == LinxV5::PseudoTCOPYDesc) {
+    // PseudoTCOPYDesc operands:
+    //   Dst, SizeCode, Src, ValidCol, ValidRow, PhysicalCol, DType, Layout.
+    // Emit the physical TMOV bundle here. Sending a synthetic PseudoTMOV to
+    // the object streamer would bypass the assembly parser's TLSU ownership
+    // rewrite and incorrectly select the generic CUBE pseudo category.
+    SmallVector<MCInst, 6> Commands;
+    Commands.push_back(
+        MCInstBuilder(LinxV5::BSTART_TMA)
+            .addOperand(TmpInst.getOperand(6))
+            .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::TMOV)));
+    Commands.push_back(
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(TmpInst.getOperand(7))
+            .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
+            .addOperand(MCOperand::createImm(
+                LinxV5Op::DataType::EMPTY_DataType))
+            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Zero))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    for (unsigned Dimension = 0; Dimension != 3; ++Dimension)
+      Commands.push_back(
+          MCInstBuilder(LinxV5::B_DIM)
+              .addOperand(MCOperand::createImm(Dimension))
+              .addOperand(MCOperand::createReg(LinxV5::R0))
+              .addOperand(TmpInst.getOperand(3 + Dimension)));
+    Commands.push_back(
+        MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+            .addOperand(TmpInst.getOperand(0))
+            .addOperand(MCOperand::createImm(0b1111))
+            .addOperand(TmpInst.getOperand(1))
+            .addOperand(MCOperand::createImm(1))
+            .addOperand(TmpInst.getOperand(2)));
+    for (const MCInst &Command : Commands)
+      EmitToStreamer(*OutStreamer, Command);
+    return;
+  }
   SmallVector<MCInst> CompareCommands;
   if (expandMaskedGPRCompare(TmpInst, *TM.getMCSubtargetInfo(),
                              OutStreamer->getContext(), CompareCommands) ||

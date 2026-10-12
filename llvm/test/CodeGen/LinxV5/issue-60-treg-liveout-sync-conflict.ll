@@ -28,8 +28,13 @@
 ; CHECK: B.IOT m#1, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
 ; CHECK: BSTART.TLSU TMOV, FP32
 ; CHECK: B.IOT m#1, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
-;; The window rotation copy is emitted as a TCOPY macro (DTYPE_NONE carrier).
-; CHECK: TCOPY tile_{{[tu][0-9]+}}, ->tile_{{[tu][0-9]+}}<512B>
+;; Window rotation preserves the producer's complete FP32/NORM descriptor.
+; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: B.DATR NORM.normal, Zero
+; CHECK-NEXT: C.B.DIMI 1, ->lb0
+; CHECK-NEXT: C.B.DIMI 1, ->lb1
+; CHECK-NEXT: C.B.DIMI 1, ->lb2
+; CHECK-NEXT: B.IOT tile_{{[tu][0-9]+}}, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
 
 ; ModuleID = 'i60.cpp'
 source_filename = "i60.cpp"

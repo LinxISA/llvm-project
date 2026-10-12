@@ -128,6 +128,21 @@ struct SingleAsm {
   SmallVector<unsigned, 2> Sizes;
 };
 
+struct TileDescriptor {
+  unsigned DataType = 0;
+  unsigned Layout = 0;
+  unsigned ValidRow = 0;
+  unsigned ValidCol = 0;
+  unsigned PhysicalCol = 0;
+  unsigned SizeCode = 0;
+
+  bool operator==(const TileDescriptor &Other) const {
+    return DataType == Other.DataType && Layout == Other.Layout &&
+           ValidRow == Other.ValidRow && ValidCol == Other.ValidCol &&
+           PhysicalCol == Other.PhysicalCol && SizeCode == Other.SizeCode;
+  }
+};
+
 SingleAsm parseSingleAsm(MachineInstr *MI);
 
 int getPseudoMap(uint16_t Opcode);
@@ -147,6 +162,16 @@ bool isPhysScratchRegAvailable(MachineBasicBlock &MBB,
 unsigned getTileRegSize(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator MBBI, MCRegister Reg,
                         bool isSpill);
+
+/// Resolve the complete descriptor reaching Reg immediately before MBBI.
+/// Every predecessor must provide the same known descriptor. Unknown producer
+/// semantics and conflicting control-flow joins fail closed.
+TileDescriptor getTileRegDescriptor(MachineBasicBlock &MBB,
+                                    MachineBasicBlock::iterator MBBI,
+                                    MCRegister Reg);
+Optional<TileDescriptor>
+tryGetTileRegDescriptor(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator MBBI, MCRegister Reg);
 
 bool enableBFIOpt();
 

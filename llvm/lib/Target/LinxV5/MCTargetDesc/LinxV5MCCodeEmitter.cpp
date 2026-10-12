@@ -391,13 +391,20 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  .addImm(0).addImm(31).addImm(LinxV5Op::PadValue::Zero)
                  .addOperand(MI.getOperand(9))
                  .addImm(0).addImm(0).addImm(0)}, Dummy);
+        SmallVector<MCInst> Dimensions = {
+            MCInstBuilder(LinxV5::B_DIM).addImm(0)
+                .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4)),
+            MCInstBuilder(LinxV5::B_DIM).addImm(1)
+                .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2))};
+        if (!MI.getOperand(4).isImm())
+          report_fatal_error(
+              "TCMPS GPR requires a constant physical column count");
+        if (MI.getOperand(4).getImm() != 1)
+          Dimensions.push_back(MCInstBuilder(LinxV5::B_DIM).addImm(2)
+                                   .addReg(LinxV5::R0)
+                                   .addOperand(MI.getOperand(4)));
         writeBinaryCodes(OS, Fixups, STI,
-            compressMCInstVec(
-                {MCInstBuilder(LinxV5::B_DIM).addImm(0)
-                     .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4)),
-                 MCInstBuilder(LinxV5::B_DIM).addImm(1)
-                     .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2))},
-                STI, Ctx), Dummy);
+                         compressMCInstVec(Dimensions, STI, Ctx), Dummy);
         writeBinaryCodes(OS, Fixups, STI,
             {MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
                  .addImm(0b1111).addImm(1).addOperand(MI.getOperand(7))}, Dummy);
@@ -1055,7 +1062,11 @@ void LinxV5MCCodeEmitter::expandPseudoTLoadStore(const MCInst &MI, raw_ostream &
             {MCInstBuilder(LinxV5::B_DIM).addImm(0)
                  .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2)),
              MCInstBuilder(LinxV5::B_DIM).addImm(1)
-                 .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4))},
+                 .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4)),
+             // These bounded CUBE profiles are dense: physical columns equal
+             // valid columns. Preserve LB2 for logical64 (two columns).
+             MCInstBuilder(LinxV5::B_DIM).addImm(2)
+                 .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2))},
             STI, Ctx), Dummy);
     if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {
       writeBinaryCodes(OS, Fixups, STI,

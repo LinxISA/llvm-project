@@ -1,0 +1,21 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -o - %s | FileCheck %s
+#
+# Elementwise result pseudos omit LB2.  The common destination-shape default
+# is ValidCol, while excess SizeCode capacity supplies physical rows.  A copy
+# of this deliberately slack 1x1 result must therefore retain PhysicalCol=1.
+# CHECK: $tile_t2 = PseudoTCOPYDesc 5, $tile_t1, 1, 1, 1, 25, 0
+--- |
+  define void @pseudo_result_copy() { ret void }
+...
+---
+name: pseudo_result_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    INLINEASM &"BSTART.TEPL 102, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 13 /* imm */, 5
+    $tile_t1 = PseudoTBinary_SizeI $r0, 1, $r0, 1, 25, 0, 5, $tile_u1, $tile_u1, 0
+    $tile_t2 = COPY $tile_t1
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
