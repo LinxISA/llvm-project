@@ -192,6 +192,12 @@ MCCodeEmitter *llvm::createLinxV5MCCodeEmitter(const MCInstrInfo &MCII,
 void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
+  SmallVector<MCInst> CompareCommands;
+  if (expandMaskedGPRCompare(MI, STI, Ctx, CompareCommands)) {
+    unsigned Dummy = 0;
+    writeBinaryCodes(OS, Fixups, STI, CompareCommands, Dummy);
+    return;
+  }
   const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
   uint64_t TSFlags = Desc.TSFlags;
   if (MI.getOpcode() == LinxV5::PseudoV5GMOV ||

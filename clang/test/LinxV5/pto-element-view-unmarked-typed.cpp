@@ -23,13 +23,17 @@ void ordinary_f32(f32_elements &value) {
 }
 
 #ifdef MARKED
-void rejected_marked_f32(f32_elements &input, f32_elements &output) {
+using f64_elements = double tile_size(32);
+__attribute__((annotate(
+    "pto.element.view:v1;dtype=f64;rows=32;cols=1;layout=cube_m32")))
+f64_elements &typed_view(f64_elements &value);
+void rejected_marked_f64(f64_elements &input, f64_elements &output) {
   auto &in = typed_view(input);
   auto &out = typed_view(output);
 #pragma pto element for
   for (unsigned element = 0; element < 32; ++element)
     out[element] = in[element];
 }
-// CHECK: PTO element region: unsupported logical view contract 'pto.element.view:v1;dtype=f32;rows=32;cols=1;layout=cube_m32'
+// CHECK: PTO element region: unsupported logical view contract 'pto.element.view:v1;dtype=f64;rows=32;cols=1;layout=cube_m32'
 #endif
 

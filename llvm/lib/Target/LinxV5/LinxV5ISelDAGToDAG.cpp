@@ -1361,6 +1361,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTCI_EW_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TCMPS_GPR_MASKED: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTCMPS_GPR_Masked));
+    return;
+  }
   case LinxV5ISD::EW_TCMPS_GPR: {
     ReplaceNode(Node, selectElementwiseSimple(
                           DL, CurDAG, Node, LinxV5::PseudoTCMPS_GPR));
@@ -1411,6 +1416,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   case LinxV5ISD::EW_TCMP: {
     ReplaceNode(Node, selectElementwiseTCmp(
                           DL, CurDAG, Node, LinxV5::PseudoTCMP_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TCMP_GPR_MASKED: {
+    ReplaceNode(Node, selectElementwiseSimple(
+                          DL, CurDAG, Node, LinxV5::PseudoTCMP_GPR_Masked));
     return;
   }
   case LinxV5ISD::EW_TCMP_GPR: {

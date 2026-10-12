@@ -257,6 +257,20 @@ def int_linx_experimental_ew_tcmps_gpr :
                llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+// Native FP32 comparisons consume the execution mask before reading elements.
+// ZERO inactive lanes is fixed; the result and execution mask share one B.IOR.
+def int_linx_experimental_ew_tcmps_gpr_masked :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tcmp_gpr_masked :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, LLVMMatchType<0>, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 // TCMP returns a logical predicate vector. The LinxV5 backend materializes
 // it as a PredicateCell/PredicateTile according to the selected shape.
 def int_linx_experimental_ew_tcmp :

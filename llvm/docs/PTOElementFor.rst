@@ -108,7 +108,7 @@ verifier.  It does not fall back to the older publication/gather/atomic profile
 recognizer when an operation is unsupported.  This option remains off by
 default while broader shape and control-flow support is developed.
 
-Current machine-code scope is 32 logical elements of S32/U32 data, public typed
+Current machine-code scope is 32 logical elements of S32/U32 or FP32 data, public typed
 Tile views, independent i32 stores, varying indexed i32 gathers, monotonic i32
 atomic add, and the acyclic iteration CFG
 already accepted by the predicator.  The backend chooses M32 internally;
@@ -127,6 +127,36 @@ selects use fully defined numeric inputs and GPR-predicate TSEL.  Signed divide
 and arithmetic shift select S32 operations; signed remainder expands through
 truncating division, multiply and subtract rather than PTO floor remainder.
 Stores select the exact physical source dtype, including direct S32 results.
+
+FP32 uses the existing public Tile carrier/view boundary, with 32 logical
+float elements per physical region. Ordinary ``fadd``/``fsub`` without fast-math,
+scalar and multiway PHIs, selects and freeze lower through the same CFG/SSA
+pipeline. Scalar constants use FP32 TEXPANDS. Undefined imported PHI edges
+materialize one zero Tile per predecessor; actual incoming Tiles and duplicate
+edges retain their identity. FP publications and TSEL preserve raw bits,
+including negative zero and NaN payloads, without numeric identity conversions.
+
+The six comparisons ``oeq``, ``une``, ``olt``, ``ogt``, ``ole`` and ``oge`` map
+to native EQ, NE, LT, GT, LE and GE. The predicator emits standard
+``llvm.vp.fcmp`` carrying each source block's execution mask. Tile legalization
+uses native masked TCMP/TCMPS with ZERO inactive results. One B.IOR record carries
+both the result GPR and dense execution-mask sources; even a scalar zero keeps
+its source slot. Textual assembly and object emission share the same native
+command expansion. ``-S`` serializes the native comparison selector, mask
+controls and dense result record rather than publishing a compiler pseudo. Numeric comparison evaluates active elements only, so inactive
+signaling NaNs cannot raise NV in that emitted native instruction.
+
+This profile accepts ordinary non-fenv optimized C++/LLVM semantics.
+Unconstrained LLVM can speculate scalar floating-point expressions before
+predication; this profile does not promise source encounter-order status flags.
+Native active-only status is tested with direct guarded CFG/VP and native
+instruction inputs. ``strictfp`` and constrained FP, including FENV requests
+that reach LLVM under Clang's ``-fexperimental-strict-floating-point`` option,
+are diagnosed. Without that option the target's existing Clang frontend warns
+that FENV pragmas are ignored; ``-Werror=ignored-pragmas`` makes that diagnostic
+fatal. Fast-math, unsupported comparison predicates, F64, casts, FP32 GM element
+accesses and atomics are diagnosed. FP32 memory transport stays at whole-Tile TLOAD/TSTORE
+boundaries.
 
 Vector GEPs retain one uniform base and an explicit element index.  TLEA scales
 the S32/U32 B32 index to S64/U64 B64 byte offsets exactly once. LLVM GEP
@@ -211,8 +241,8 @@ the complete owned VP/vector-pointer graph.  Missing ownership, escaping
 values, unsupported domains, partial EVL, effects or types receive diagnostics.
 Unmarked functions do not run the extra generic CFG canonicalization pipeline.
 
-The executable profile covers both ordinary GM arrays and the official S32/U32
-TileOp -> element-for -> TileOp bridge. Varying inner loops, other atomic
+The executable profile covers ordinary integer GM arrays and the official
+S32/U32/FP32 TileOp -> element-for -> TileOp bridge. Varying inner loops, other atomic
 operations/orderings, potentially overlapping ordinary indexed writes,
 wider Tile shapes/dtypes, and typed Tile spills at O0 remain unsupported.
 The GM-array, public typed-view and whole-application migration tests remain

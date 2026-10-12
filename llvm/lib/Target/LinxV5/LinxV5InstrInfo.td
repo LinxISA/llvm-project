@@ -1873,6 +1873,33 @@ def B_IOR_EXEC_MASK : BlockModifierBase {
   let AsmString = "B.IOR [$RegSrc0,$RegSrc1,$RegSrc2], ExecMaskPresent";
 }
 
+// Compare result and dense scalar/mask sources occupy ONE execution record.
+// The source-only form above remains the more specific zero-destination decode.
+def B_IOR_EXEC_MASK_DST : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+  let isDisassembleOnly = 0;
+  let OutOperandList = (outs GPRDstWithOptionalArrow:$RegDst);
+  let InOperandList = (ins GPRSrc:$RegSrc0, GPRSrc:$RegSrc1, GPRSrc:$RegSrc2);
+
+  bits<5> RegSrc0;
+  bits<5> RegSrc1;
+  bits<5> RegSrc2;
+  bits<5> RegDst;
+  let Inst{31-27} = RegSrc2;
+  let Inst{26} = 0b1;
+  let Inst{25} = 0b0;
+  let Inst{24-20} = RegSrc1;
+  let Inst{19-15} = RegSrc0;
+  let Inst{14-12} = 0b000;
+  let Inst{11-7} = RegDst;
+  let Inst{6-4} = 0b001;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+  let AsmString = "B.IOR [$RegSrc0,$RegSrc1,$RegSrc2],[$RegDst], ExecMaskPresent";
+}
+
 def B_IOD_Dst : LinxV5InstBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;
@@ -3728,6 +3755,30 @@ class PseudoTEPL_TCMP_GPR_Base :
   let AsmString = "TCMP.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $Mask";
 }
 def PseudoTCMP_GPR : PseudoTEPL_TCMP_GPR_Base;
+
+class PseudoTEPL_TCMPS_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$ResultMask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile, GPRSrc:$Scalar, CmpMode:$CmpMode,
+       GPRSrc:$ExecMask)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TCMPS.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}, $Layout, $CmpMode>, $SrcTile, $Scalar, $ExecMask, $ResultMask";
+}
+def PseudoTCMPS_GPR_Masked : PseudoTEPL_TCMPS_GPR_Masked_Base;
+
+class PseudoTEPL_TCMP_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$ResultMask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, CmpMode:$CmpMode,
+       GPRSrc:$ExecMask)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TCMP.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}, $Layout, $CmpMode>, $SrcTile0, $SrcTile1, $ExecMask, $ResultMask";
+}
+def PseudoTCMP_GPR_Masked : PseudoTEPL_TCMP_GPR_Masked_Base;
 
 class PseudoTEPL_TCMP_Base :
   PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),

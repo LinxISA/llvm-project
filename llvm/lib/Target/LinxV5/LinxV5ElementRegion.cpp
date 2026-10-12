@@ -55,19 +55,23 @@ constexpr StringLiteral U32M32View =
     "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32";
 constexpr StringLiteral S32M32View =
     "pto.element.view:v1;dtype=s32;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral F32M32View =
+    "pto.element.view:v1;dtype=f32;rows=32;cols=1;layout=cube_m32";
 
 struct ElementProfile {
   Type *ScalarTy = nullptr;
   FixedVectorType *VectorTy = nullptr;
   uint64_t DataType = 25;
   bool isSigned() const { return DataType == 17; }
+  bool isFloat() const { return DataType == 1; }
 };
 
-static Optional<ElementProfile> integerProfile(uint64_t DataType,
-                                                LLVMContext &Context) {
-  if (DataType != 25 && DataType != 17)
+static Optional<ElementProfile> elementProfile(uint64_t DataType,
+                                               LLVMContext &Context) {
+  if (DataType != 25 && DataType != 17 && DataType != 1)
     return None;
-  Type *Scalar = Type::getInt32Ty(Context);
+  Type *Scalar = DataType == 1 ? Type::getFloatTy(Context)
+                              : Type::getInt32Ty(Context);
   return ElementProfile{Scalar, FixedVectorType::get(Scalar, 32), DataType};
 }
 
@@ -191,9 +195,10 @@ static bool prepareViews(Function &F, bool RestoreFullCarrier = false) {
     StringRef Text;
     (void)getAnnotationString(*Annotation, Text);
     Optional<ElementProfile> Profile =
-        Text == U32M32View ? integerProfile(25, F.getContext())
-                          : Text == S32M32View ? integerProfile(17, F.getContext())
-                                              : None;
+        Text == U32M32View   ? elementProfile(25, F.getContext())
+        : Text == S32M32View ? elementProfile(17, F.getContext())
+        : Text == F32M32View ? elementProfile(1, F.getContext())
+                             : None;
     if (!Profile)
       diagnose(F, Annotation,
                Twine("unsupported logical view contract '") + Text + "'");
@@ -295,15 +300,13 @@ static bool prepareViews(Function &F, bool RestoreFullCarrier = false) {
         Access->print(OS);
         diagnose(F, Access,
                  Twine("view access carrier is ") + OS.str() +
-                     "; expected exact <32 x i32>");
+                     "; expected exact " +
+                     (Plan.Profile.isFloat() ? "<32 x float>" : "<32 x i32>"));
       }
     }
     Plans.push_back(std::move(Plan));
   }
 
-  Function *View = Intrinsic::getDeclaration(
-      F.getParent(), Intrinsic::linx_experimental_element_view,
-      {FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32)});
   bool Changed = false;
   for (PreparedView &Plan : Plans) {
     if (Plan.Accesses.empty()) {
@@ -312,6 +315,10 @@ static bool prepareViews(Function &F, bool RestoreFullCarrier = false) {
       Changed = true;
       continue;
     }
+
+    Function *View = Intrinsic::getDeclaration(
+        F.getParent(), Intrinsic::linx_experimental_element_view,
+        {Plan.Profile.VectorTy});
 
     auto BuildArgs = [&](Value *Carrier) {
       SmallVector<Value *, 9> Args;
@@ -422,7 +429,7 @@ static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
       return None;
     Fields.push_back(C->getSExtValue());
   }
-  auto Profile = integerProfile(Fields[4], V->getContext());
+  auto Profile = elementProfile(Fields[4], V->getContext());
   if (!Profile || Fields[3] != 128 || Fields[5] != 32 ||
       Fields[6] != 1 || Fields[7] != 29 ||
       V->getType() != Profile->VectorTy)
@@ -592,8 +599,10 @@ struct PredicatedRegion {
 };
 
 static bool isElementCarrier(Value *V) {
-  return V->getType() ==
-         FixedVectorType::get(Type::getInt32Ty(V->getContext()), 32);
+  auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+  return Ty && Ty->getNumElements() == 32 &&
+         (Ty->getElementType()->isIntegerTy(32) ||
+          Ty->getElementType()->isFloatTy());
 }
 
 static Value *stripCarrierLCSSA(Value *V) {
@@ -681,12 +690,27 @@ carrierDescriptor(Value *V, Loop &L, SmallPtrSetImpl<Value *> &Seen) {
   return Result;
 }
 
+static Optional<uint64_t> floatComparisonSelector(CmpInst::Predicate Pred) {
+  switch (Pred) {
+  case FCmpInst::FCMP_OEQ: return 0;
+  case FCmpInst::FCMP_UNE: return 1;
+  case FCmpInst::FCMP_OLT: return 2;
+  case FCmpInst::FCMP_OGT: return 3;
+  case FCmpInst::FCMP_OLE: return 4;
+  case FCmpInst::FCMP_OGE: return 5;
+  default: return None;
+  }
+}
+
 static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                             DominatorTree &DT, AAResults &AA,
                             PredicatedRegion &Plan) {
   auto Fail = [&](const Instruction *I, const Twine &Why) {
     return diagnose(F, I, Twine("predication: ") + Why);
   };
+  if (F.hasFnAttribute(Attribute::StrictFP))
+    return Fail(L.getHeader()->getTerminator(),
+                "strictfp/fenv requires constrained floating-point lowering");
   if (!L.isInnermost() || !L.getLoopPreheader() || !L.getLoopLatch() ||
       !L.getExitBlock() || L.getExitingBlock() != L.getLoopLatch() ||
       L.getExitBlock()->getSinglePredecessor() != L.getLoopLatch())
@@ -791,8 +815,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         continue;
       bool Carrier = Plan.Count == 32 && isElementCarrier(&I);
       if (!I.getType()->isVoidTy() && !I.getType()->isIntegerTy() &&
-          !I.getType()->isPointerTy() && !Carrier)
-        return Fail(&I, "requires scalar integer or pointer results");
+          !I.getType()->isPointerTy() && !I.getType()->isFloatTy() && !Carrier)
+        return Fail(&I, "requires scalar integer or pointer results, f32 or typed carrier results");
       // An invariant typed import can be shared by later regions. Its carrier
       // is a preheader SSA version, unlike an accumulator's iteration snapshot.
       auto InvariantView = getViewDescriptor(&I);
@@ -874,25 +898,46 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         continue;
       }
       if (isa<PHINode>(I)) {
+        if (isa<FPMathOperator>(I) && I.getFastMathFlags().any())
+          return Fail(&I, "floating PHI requires no fast-math");
         if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy() &&
-            !Carrier)
+            !I.getType()->isFloatTy() && !Carrier)
           return Fail(&I, "PHI requires a scalar or typed carrier");
         continue;
       }
       if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
-        if (!Freeze->getType()->isIntegerTy(32))
-          return Fail(&I, "freeze requires scalar i32 data");
+        if (!Freeze->getType()->isIntegerTy(32) &&
+            !Freeze->getType()->isFloatTy())
+          return Fail(&I, "freeze requires scalar i32 data or f32 data");
         continue;
       }
       if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
-        if (!Binary->getType()->isIntegerTy() ||
-            VPIntrinsic::getForOpcode(Binary->getOpcode()) ==
-                Intrinsic::not_intrinsic)
+        if (Binary->getType()->isFloatTy()) {
+          if ((Binary->getOpcode() != Instruction::FAdd &&
+               Binary->getOpcode() != Instruction::FSub) ||
+              Binary->getFastMathFlags().any())
+            return Fail(&I, "floating arithmetic requires f32 fadd/fsub without fast-math");
+        } else if (!Binary->getType()->isIntegerTy() ||
+                   VPIntrinsic::getForOpcode(Binary->getOpcode()) ==
+                       Intrinsic::not_intrinsic) {
           return Fail(&I, "integer opcode has no VP lowering");
+        }
+        continue;
+      }
+      if (auto *Compare = dyn_cast<FCmpInst>(&I)) {
+        if (!Compare->getOperand(0)->getType()->isFloatTy() ||
+            Compare->getFastMathFlags().any())
+          return Fail(&I, "floating comparison requires f32 without fast-math");
+        if (!floatComparisonSelector(Compare->getPredicate()))
+          return Fail(&I, "floating comparison predicate has no exact native mapping");
         continue;
       }
       if (isa<ICmpInst>(I) || isa<SelectInst>(I)) {
-        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy())
+        if (isa<SelectInst>(I) && isa<FPMathOperator>(I) &&
+            I.getFastMathFlags().any())
+          return Fail(&I, "floating select requires no fast-math");
+        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy() &&
+            !I.getType()->isFloatTy())
           return Fail(&I, "comparison/select requires scalar operands");
         continue;
       }
@@ -1138,7 +1183,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
         Value *Left = Widen(Binary->getOperand(0));
         Value *Right = Widen(Binary->getOperand(1));
-        unsigned Width = Binary->getType()->getIntegerBitWidth();
+        unsigned Width = Binary->getType()->isIntegerTy()
+                             ? Binary->getType()->getIntegerBitWidth() : 32;
         if (Width > 1 && Width < 32 &&
             (Binary->getOpcode() == Instruction::SDiv ||
              Binary->getOpcode() == Instruction::SRem ||
@@ -1151,6 +1197,13 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                         {Left, Right, Mask, EVL});
         if (Width > 1 && Width < 32)
           Result = Narrow(Result, Width, Mask);
+      } else if (auto *Compare = dyn_cast<FCmpInst>(&I)) {
+        Value *Predicate = MetadataAsValue::get(
+            F.getContext(), MDString::get(F.getContext(),
+                FCmpInst::getPredicateName(Compare->getPredicate())));
+        Result = EmitVP(Intrinsic::vp_fcmp, WideTy,
+                        {Widen(Compare->getOperand(0)),
+                         Widen(Compare->getOperand(1)), Predicate, Mask, EVL});
       } else if (auto *Compare = dyn_cast<ICmpInst>(&I)) {
         Value *Left = Widen(Compare->getOperand(0));
         Value *Right = Widen(Compare->getOperand(1));
@@ -1350,6 +1403,8 @@ class ElementTileLegalizer {
 
   static Optional<unsigned> binaryOpcode(Intrinsic::ID ID) {
     switch (ID) {
+    case Intrinsic::vp_fadd: return Instruction::FAdd;
+    case Intrinsic::vp_fsub: return Instruction::FSub;
     case Intrinsic::vp_add: return Instruction::Add;
     case Intrinsic::vp_sub: return Instruction::Sub;
     case Intrinsic::vp_mul: return Instruction::Mul;
@@ -1371,6 +1426,12 @@ class ElementTileLegalizer {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
     return Ty && Ty->getNumElements() == 32 &&
            Ty->getElementType()->isIntegerTy(Width);
+  }
+
+  static bool isF32Vector(Value *V) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && Ty->getNumElements() == 32 &&
+           Ty->getElementType()->isFloatTy();
   }
 
   static bool constantProgression(Constant *C, APInt &Initial, APInt &Step) {
@@ -1398,6 +1459,9 @@ class ElementTileLegalizer {
                            bool PhiIncoming = false) {
     if (!Seen.insert(V).second)
       return true;
+    auto Profile = elementProfile(DType, V->getContext());
+    if (!Profile || V->getType() != Profile->VectorTy)
+      return fail(V, "typed import does not match its declared scalar type");
     if (auto View = getViewDescriptor(V)) {
       if (PhiIncoming && View->Profile.DataType != DType)
         return fail(V, "imported carrier PHI requires one consistent dtype");
@@ -1408,6 +1472,8 @@ class ElementTileLegalizer {
                                  View->Profile.DataType, Seen, PhiIncoming);
     }
     if (auto *Phi = dyn_cast<PHINode>(V)) {
+      if (isa<FPMathOperator>(Phi) && Phi->getFastMathFlags().any())
+        return fail(Phi, "floating PHI requires no fast-math");
       auto Inserted = ImportedPhiTypes.try_emplace(Phi, DType);
       if (!Inserted.second && Inserted.first->second != DType)
         return fail(Phi, "imported carrier PHI requires one consistent dtype");
@@ -1452,16 +1518,18 @@ class ElementTileLegalizer {
           return fail(V, "uniform source must be outside its predicated region");
       Type *ST = Scalar->getType();
       if (ST->isIntegerTy(1) || ST->isIntegerTy(32) || ST->isIntegerTy(64) ||
+          ST->isFloatTy() ||
           (ST->isPointerTy() && ST->getPointerAddressSpace() == 0))
         return true;
       return fail(V, "unsupported uniform element type");
     }
     if (isa<UndefValue>(V) || isa<PoisonValue>(V))
       return isVector(V, 1) || isVector(V, 32) || isVector(V, 64) ||
+             isF32Vector(V) ||
              fail(V, "unsupported undefined element type");
     if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
-      if (!isVector(Freeze, 32))
-        return fail(V, "freeze requires i32 Tile data");
+      if (!isVector(Freeze, 32) && !isF32Vector(Freeze))
+        return fail(V, "freeze requires i32 Tile data or f32 Tile data");
       return validate(Freeze->getOperand(0));
     }
     if (auto *C = dyn_cast<Constant>(V)) {
@@ -1490,9 +1558,11 @@ class ElementTileLegalizer {
       return validate(GEP->getOperand(1));
     }
     if (auto *Select = dyn_cast<SelectInst>(V)) {
-      if ((!isVector(V, 1) && !isVector(V, 32)) ||
+      if (isa<FPMathOperator>(Select) && Select->getFastMathFlags().any())
+        return fail(V, "floating select requires no fast-math");
+      if ((!isVector(V, 1) && !isVector(V, 32) && !isF32Vector(V)) ||
           !isVector(Select->getCondition(), 1))
-        return fail(V, "select requires an i1 mask and i1/i32 values");
+        return fail(V, "select requires an i1 mask and i1/i32/f32 values");
       return validate(Select->getCondition()) &&
              validate(Select->getTrueValue()) && validate(Select->getFalseValue());
     }
@@ -1504,6 +1574,8 @@ class ElementTileLegalizer {
         return fail(V, "comparison requires i32 Tiles or an i64 scalar operand");
       return validate(Cmp->getOperand(0)) && validate(Cmp->getOperand(1));
     }
+    if (isa<FCmpInst>(V))
+      return fail(V, "floating comparison requires token-owned llvm.vp.fcmp");
     if (auto *Cast = dyn_cast<CastInst>(V)) {
       if ((Cast->getOpcode() != Instruction::ZExt &&
            Cast->getOpcode() != Instruction::SExt) ||
@@ -1547,12 +1619,28 @@ class ElementTileLegalizer {
       return fail(&VP, "requires a 32-bit mask and constant EVL=32");
     if (!validate(VP.getMaskParam()))
       return false;
+    if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(&VP)) {
+      if (Cmp->getIntrinsicID() != Intrinsic::vp_fcmp ||
+          !isF32Vector(Cmp->getArgOperand(0)) ||
+          !isF32Vector(Cmp->getArgOperand(1)) ||
+          !floatComparisonSelector(Cmp->getPredicate()))
+        return fail(&VP, "floating comparison predicate/type has no exact native mapping");
+      // LLVM 15 vp.fcmp returns an i1 vector and is not an FPMathOperator.
+      // Scalar FCmp fast-math is rejected before conversion to this intrinsic.
+      return validate(Cmp->getArgOperand(0)) && validate(Cmp->getArgOperand(1));
+    }
     if (auto Op = binaryOpcode(VP.getIntrinsicID())) {
       bool MaskLogic = isVector(&VP, 1) &&
                        (*Op == Instruction::And || *Op == Instruction::Or ||
                         *Op == Instruction::Xor);
-      if (!isVector(&VP, 32) && !MaskLogic)
-        return fail(&VP, "VP arithmetic requires i32 data");
+      bool FloatOpcode = *Op == Instruction::FAdd || *Op == Instruction::FSub;
+      bool FloatArithmetic = isF32Vector(&VP) && FloatOpcode;
+      if (FloatOpcode && !FloatArithmetic)
+        return fail(&VP, "floating arithmetic requires f32 Tile data");
+      if (FloatArithmetic && VP.getFastMathFlags().any())
+        return fail(&VP, "floating arithmetic requires no fast-math");
+      if (!isVector(&VP, 32) && !MaskLogic && !FloatArithmetic)
+        return fail(&VP, "VP arithmetic requires admitted i32 or f32 data");
       return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_gather) {
@@ -1592,6 +1680,14 @@ class ElementTileLegalizer {
     // a defined representative keeps subsequent physical mask/Tile algebra
     // from reintroducing poison into lanes excluded by an LLVM select.
     Scalar = B.CreateFreeze(Scalar, "pto.uniform.defined");
+    if (Ty->getElementType()->isFloatTy()) {
+      assert(Step == 0 && (PreferredType == 0 || PreferredType == 1) &&
+             "f32 splats require the native FP32 profile");
+      return call(Intrinsic::linx_experimental_ew_texpands,
+                  {Ty, Scalar->getType()},
+                  {B.getInt64(32), B.getInt64(1), B.getInt64(1), B.getInt64(29),
+                   Scalar});
+    }
     Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
     const uint64_t DType =
         Ty->getScalarSizeInBits() == 32 ? (PreferredType == 17 ? 17 : 25) : 24;
@@ -1624,6 +1720,31 @@ class ElementTileLegalizer {
     } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
       R = B.CreateBinOp(Binary->getOpcode(), mask(Binary->getOperand(0)),
                         mask(Binary->getOperand(1)), "pto.mask.logic");
+    } else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(V)) {
+      Value *L = Cmp->getArgOperand(0), *RHS = Cmp->getArgOperand(1);
+      auto Pred = Cmp->getPredicate();
+      if (getSplatValue(L) && !getSplatValue(RHS)) {
+        std::swap(L, RHS);
+        Pred = FCmpInst::getSwappedPredicate(Pred);
+      }
+      uint64_t Selector = *floatComparisonSelector(Pred);
+      Value *Active = activeMask(*Cmp);
+      if (Value *Scalar = getSplatValue(RHS)) {
+        Scalar = B.CreateFreeze(Scalar);
+        Scalar = B.CreateZExt(B.CreateBitCast(Scalar, B.getInt32Ty()),
+                              B.getInt64Ty(), "pto.f32.raw");
+        R = call(Intrinsic::linx_experimental_ew_tcmps_gpr_masked,
+                 {L->getType()},
+                 {B.getInt64(32), B.getInt64(1), B.getInt64(1), B.getInt64(29),
+                  value(L), Scalar, B.getInt64(Selector), Active},
+                 "pto.mask.compare");
+      } else {
+        R = call(Intrinsic::linx_experimental_ew_tcmp_gpr_masked,
+                 {L->getType()},
+                 {B.getInt64(32), B.getInt64(1), B.getInt64(1), B.getInt64(29),
+                  value(L), value(RHS), B.getInt64(Selector), Active},
+                 "pto.mask.compare");
+      }
     } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
       R = B.CreateBinOp(static_cast<Instruction::BinaryOps>(
                             *binaryOpcode(VP->getIntrinsicID())),
@@ -1682,6 +1803,8 @@ class ElementTileLegalizer {
     unsigned Code = 0;
     uint64_t DType = 25;
     switch (Op) {
+    case Instruction::FAdd: DType = 1; Code = 0; break;
+    case Instruction::FSub: DType = 1; Code = 1; break;
     case Instruction::Add: Code = 0; break;
     case Instruction::Sub: Code = 1; break;
     case Instruction::Mul: Code = 2; break;
@@ -1705,7 +1828,8 @@ class ElementTileLegalizer {
     // S32 descriptor directly. Division/remainder/right-shift signedness
     // remains determined by the LLVM opcode, never by a downstream descriptor
     // hint.
-    if (PreferredType == 17 && (Code <= 2 || (Code >= 5 && Code <= 8)))
+    if (DType != 1 && PreferredType == 17 &&
+        (Code <= 2 || (Code >= 5 && Code <= 8)))
       DType = 17;
     return call(Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
                 {B.getInt64(32), B.getInt64(1), B.getInt64(DType),
@@ -1793,7 +1917,7 @@ class ElementTileLegalizer {
     if (!MaterializedImportPhis.insert(Phi).second)
       return;
     assert(isElementCarrier(Phi) &&
-           "import preflight requires a full i32 carrier");
+           "import preflight requires a full i32/f32 carrier");
     DenseMap<BasicBlock *, Value *> ZeroInputs;
     for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
       Value *Incoming = Phi->getIncomingValue(I);
@@ -1808,7 +1932,8 @@ class ElementTileLegalizer {
         if (!Zero) {
           IRBuilderBase::InsertPointGuard Guard(B);
           B.SetInsertPoint(Predecessor->getTerminator());
-          Zero = splat(B.getInt32(0),
+          Zero = splat(Constant::getNullValue(
+                           cast<FixedVectorType>(Phi->getType())->getElementType()),
                        cast<FixedVectorType>(Phi->getType()), 0, DType);
         }
         Phi->setIncomingValue(I, Zero);
@@ -1834,9 +1959,13 @@ class ElementTileLegalizer {
           return Data[V] = Source;
         }
       }
-      R = indexSource(value(Source), Descriptor->Profile.DataType);
+      // FP publications preserve raw bits; add-zero is not an identity for
+      // signed zero or NaN payloads.
+      R = Descriptor->Profile.isFloat()
+              ? value(Source, 1)
+              : indexSource(value(Source), Descriptor->Profile.DataType);
     } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
-      R = splat(ConstantInt::get(Ty->getElementType(), 0), Ty, 0,
+      R = splat(Constant::getNullValue(Ty->getElementType()), Ty, 0,
                 PreferredType);
     } else if (Value *Scalar = getSplatValue(V)) {
       R = splat(Scalar, Ty, 0, PreferredType);
@@ -1865,7 +1994,8 @@ class ElementTileLegalizer {
     } else if (auto *Select = dyn_cast<SelectInst>(V)) {
       R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
                {B.getInt64(32), B.getInt64(1),
-                B.getInt64(PreferredType == 17 ? 17 : 25), B.getInt64(29),
+                B.getInt64(isF32Vector(V) ? 1 : (PreferredType == 17 ? 17 : 25)),
+                B.getInt64(29),
                 mask(Select->getCondition()), B.getInt64(0),
                 value(Select->getTrueValue()), value(Select->getFalseValue())});
     } else if (isIntrinsic(dyn_cast<CallInst>(V),
@@ -1915,6 +2045,8 @@ public:
     if (Owned.empty())
       return fail(nullptr, "empty predicated region");
     for (Instruction *I : Owned) {
+      if (isa<FPMathOperator>(I) && I->getFastMathFlags().any())
+        return fail(I, "floating instructions require no fast-math");
       if (I->getParent() != Owned.front()->getParent())
         return fail(I, "first physical profile requires one predicated IR block");
       bool External = false;
@@ -3621,6 +3753,9 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
         diagnose(F, &I, "Tile legalization: orphan predicated region ownership");
     return PreservedAnalyses::all();
   }
+  if (F.hasFnAttribute(Attribute::StrictFP))
+    diagnose(F, Sentinels.front(),
+             "Tile legalization: strictfp/fenv requires constrained floating-point lowering");
   if (F.hasFnAttribute(Attribute::OptimizeNone))
     diagnose(F, Sentinels.front(),
              "Tile legalization: typed Tile spill/reload is unsupported at -O0");

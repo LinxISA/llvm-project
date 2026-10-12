@@ -386,6 +386,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_TLEA)
     MAKE_CASE(LinxV5ISD::EW_TCI)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR)
+    MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_MASKED)
@@ -395,6 +396,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_ADD)
     MAKE_CASE(LinxV5ISD::EW_TCMP)
     MAKE_CASE(LinxV5ISD::EW_TCMP_GPR)
+    MAKE_CASE(LinxV5ISD::EW_TCMP_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TSEL)
     MAKE_CASE(LinxV5ISD::EW_TSEL_GPR)
     MAKE_CASE(LinxV5ISD::EW_TEXPANDS)
@@ -946,6 +948,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTLEA(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tci:
       return lowerElementwiseTCI(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tcmps_gpr_masked:
+      return lowerElementwiseTCMPSGPR(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmps_gpr:
       return lowerElementwiseTCMPSGPR(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mgather_gpr_masked:
@@ -964,6 +968,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseMScatterAdd(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tcmp:
       return lowerElementwiseTCmp(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tcmp_gpr_masked:
+      return lowerElementwiseTCmpGPR(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmp_gpr:
       return lowerElementwiseTCmpGPR(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsel:
@@ -1629,14 +1635,16 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinaryGPRMasked(
   EVT ResultVT = Op.getValueType();
   const bool IntegerProfile = DataType == LinxV5Op::DataType::U32 ||
                               DataType == LinxV5Op::DataType::S32;
-  if (Rows != 32 || Cols != 1 || !IntegerProfile || Layout != 29 ||
-      ResultVT != MVT::v32i32 || Op.getOperand(7).getValueType() != ResultVT ||
+  const bool F32Profile = DataType == LinxV5Op::DataType::FP32;
+  if (Rows != 32 || Cols != 1 || (!IntegerProfile && !F32Profile) || Layout != 29 ||
+      (F32Profile ? ResultVT != MVT::v32f32 || Opcode > 1
+                  : ResultVT != MVT::v32i32) || Op.getOperand(7).getValueType() != ResultVT ||
       Op.getOperand(8).getValueType() != ResultVT ||
       Op.getOperand(9).getValueType() != MVT::i64 ||
       Op.getOperand(10).getValueType() != MVT::i64 || !MaskHigh ||
       MaskHigh->getZExtValue() != 0 || PredInv != 0 || Zero != 1)
     report_fatal_error(
-        "GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 Tiles, one low mask word and zero inactive lanes");
+        "GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 Tiles, one low mask word and zero inactive lanes; FP32 supports the same shape with add/sub only");
   static constexpr uint64_t PTOSelectors[] = {
       LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,
       LinxV5Op::TileOPTEPL::TMUL, LinxV5Op::TileOPTEPL::TDIV,
@@ -1699,15 +1707,16 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCI(
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTCMPSGPR(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG, bool Masked) const {
   uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TCMPS rows", 32, false);
   uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TCMPS columns", 32, false);
   uint64_t DType = getV5ConstantOperand(Op.getOperand(4), "TCMPS data type", 31);
   uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TCMPS layout", 31);
   uint64_t Cmp = getV5ConstantOperand(Op.getOperand(8), "TCMPS comparison", 5);
   EVT SourceVT = Op.getOperand(6).getValueType();
+  const bool F32Profile = Masked && DType == LinxV5Op::DataType::FP32;
   if (!SourceVT.isFixedLengthVector() ||
-      !SourceVT.getScalarType().isInteger() || Rows > UINT64_MAX / Cols ||
+      (!SourceVT.getScalarType().isInteger() && !F32Profile) || Rows > UINT64_MAX / Cols ||
       Rows * Cols != SourceVT.getVectorNumElements() ||
       Rows * Cols > 64 || Layout != 29 || Rows != 32 ||
       ((DType == LinxV5Op::DataType::S32 ||
@@ -1716,10 +1725,12 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCMPSGPR(
            : (DType == LinxV5Op::DataType::S64 ||
               DType == LinxV5Op::DataType::U64)
                  ? SourceVT.getScalarSizeInBits() != 64
-                 : true) ||
-      Op.getOperand(7).getValueType() != MVT::i64)
+                 : F32Profile ? SourceVT != MVT::v32f32 : true) ||
+      Op.getOperand(7).getValueType() != MVT::i64 ||
+      (Masked && (!F32Profile || Cols != 1 ||
+                  Op.getOperand(9).getValueType() != MVT::i64)))
     report_fatal_error(
-        "TCMPS GPR requires a 32-row exact-shape integer CUBE_M32 Tile");
+        "TCMPS GPR requires a 32-row exact-shape integer CUBE_M32 Tile; masked FP32 supports the same shape");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Rows, Cols}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
@@ -1730,7 +1741,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCMPSGPR(
   Ops.push_back(Op.getOperand(6));
   Ops.push_back(Op.getOperand(7));
   Ops.push_back(DAG.getTargetConstant(Cmp, DL, MVT::i64));
-  return DAG.getNode(LinxV5ISD::EW_TCMPS_GPR, DL,
+  if (Masked)
+    Ops.push_back(Op.getOperand(9));
+  return DAG.getNode(Masked ? LinxV5ISD::EW_TCMPS_GPR_MASKED
+                            : LinxV5ISD::EW_TCMPS_GPR, DL,
                      DAG.getVTList(MVT::i64, MVT::Other), Ops);
 }
 
@@ -2030,19 +2044,23 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTCmpGPR(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG, bool Masked) const {
   const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TCMP GPR rows", 32, false);
   const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TCMP GPR columns", 32, false);
   const uint64_t DataType = getV5ConstantOperand(Op.getOperand(4), "TCMP GPR data type", 31);
   const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TCMP GPR layout", 31);
   const uint64_t Cmp = getV5ConstantOperand(Op.getOperand(8), "TCMP GPR comparison", 5);
+  const bool F32Profile = Masked && DataType == LinxV5Op::DataType::FP32;
+  EVT SourceVT = F32Profile ? MVT::v32f32 : MVT::v32i32;
   if (Rows != 32 || Cols != 1 || Layout != 29 ||
       (DataType != LinxV5Op::DataType::S32 &&
-       DataType != LinxV5Op::DataType::U32) ||
-      Op.getOperand(6).getValueType() != MVT::v32i32 ||
-      Op.getOperand(7).getValueType() != MVT::v32i32)
+       DataType != LinxV5Op::DataType::U32 && !F32Profile) ||
+      Op.getOperand(6).getValueType() != SourceVT ||
+      Op.getOperand(7).getValueType() != SourceVT ||
+      (Masked && (!F32Profile ||
+                  Op.getOperand(9).getValueType() != MVT::i64)))
     report_fatal_error(
-        "TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles");
+        "TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles; masked FP32 supports the same shape");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Rows, Cols}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
@@ -2053,7 +2071,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmpGPR(
   Ops.push_back(Op.getOperand(6));
   Ops.push_back(Op.getOperand(7));
   Ops.push_back(DAG.getTargetConstant(Cmp, DL, MVT::i64));
-  return DAG.getNode(LinxV5ISD::EW_TCMP_GPR, DL,
+  if (Masked)
+    Ops.push_back(Op.getOperand(9));
+  return DAG.getNode(Masked ? LinxV5ISD::EW_TCMP_GPR_MASKED
+                            : LinxV5ISD::EW_TCMP_GPR, DL,
                      DAG.getVTList(MVT::i64, MVT::Other), Ops);
 }
 
@@ -2094,15 +2115,17 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSelGPR(
   const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TSEL GPR layout", 31);
   const auto *MaskHigh = dyn_cast<ConstantSDNode>(Op.getOperand(7));
   EVT ResultVT = Op.getValueType();
+  const bool F32Profile = DataType == LinxV5Op::DataType::FP32;
   if (Rows != 32 || Cols != 1 || Layout != 29 ||
       (DataType != LinxV5Op::DataType::S32 &&
-       DataType != LinxV5Op::DataType::U32) || ResultVT != MVT::v32i32 ||
+       DataType != LinxV5Op::DataType::U32 && !F32Profile) ||
+      (F32Profile ? ResultVT != MVT::v32f32 : ResultVT != MVT::v32i32) ||
       Op.getOperand(6).getValueType() != MVT::i64 || !MaskHigh ||
       MaskHigh->getZExtValue() != 0 ||
       Op.getOperand(8).getValueType() != ResultVT ||
       Op.getOperand(9).getValueType() != ResultVT)
     report_fatal_error(
-        "TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask word");
+        "TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask word; FP32 supports the same shape");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
   for (uint64_t Dim : {Rows, Cols}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
@@ -2122,10 +2145,15 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSelGPR(
 
 SDValue LinxV5TargetLowering::lowerElementwiseTExpands(
     SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
-  getV5ConstantOperand(Op.getOperand(2), "TEXPANDS rows", 32, false);
-  getV5ConstantOperand(Op.getOperand(3), "TEXPANDS cols", 32, false);
-  getV5ConstantOperand(Op.getOperand(4), "TEXPANDS data type", 31);
-  getV5ConstantOperand(Op.getOperand(5), "TEXPANDS layout", 31);
+  const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TEXPANDS rows", 32, false);
+  const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TEXPANDS cols", 32, false);
+  const uint64_t DType = getV5ConstantOperand(Op.getOperand(4), "TEXPANDS data type", 31);
+  const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TEXPANDS layout", 31);
+  if (DType == LinxV5Op::DataType::FP32 &&
+      (Rows != 32 || Cols != 1 || Layout != 29 ||
+       Op.getValueType() != MVT::v32f32 ||
+       Op.getOperand(6).getValueType() != MVT::f32))
+    report_fatal_error("FP32 TEXPANDS requires exact 32x1 CUBE_M32 f32 Tile and scalar");
   SmallVector<SDValue> Ops;
   Ops.push_back(Op.getOperand(0));
   for (unsigned Index : {2u, 3u}) {
