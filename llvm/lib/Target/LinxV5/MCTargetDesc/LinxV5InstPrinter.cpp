@@ -1019,8 +1019,32 @@ void LinxV5InstPrinter::printTileOPTMA(const MCInst *MI, unsigned OpNo,
   case LinxV5Op::TileOPTMA::MGATHER_XOR:
     O << "MGATHER.XOR";
     break;
+  case LinxV5Op::TileOPTMA::MSCATTER_MAX:
+    O << "MSCATTER.MAX";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_MIN:
+    O << "MSCATTER.MIN";
+    break;
   case LinxV5Op::TileOPTMA::MSCATTER_ADD:
     O << "MSCATTER.ADD";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_INC:
+    O << "MSCATTER.INC";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_DEC:
+    O << "MSCATTER.DEC";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_AND:
+    O << "MSCATTER.AND";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_OR:
+    O << "MSCATTER.OR";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_XOR:
+    O << "MSCATTER.XOR";
+    break;
+  case LinxV5Op::TileOPTMA::MSCATTER_POPC:
+    O << "MSCATTER.POPC";
     break;
   case LinxV5Op::TileOPTMA::TIMG2COL:
     O << "TIMG2COL";
