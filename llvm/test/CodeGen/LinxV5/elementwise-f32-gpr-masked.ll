@@ -14,7 +14,7 @@ define i64 @masked_tile_compare(ptr %ap, ptr %bp, i64 %active) {
 ; CHECK: B.IOT {{.*}}, mask=1111, last
 ; CHECK-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero],[{{[a-z0-9]+}}], ExecMaskPresent
 ; CHECK-NOT: B.IOR
-; CHECK: FRET
+; CHECK: BSTART.STD RET
 
 define i64 @masked_scalar_zero(ptr %ap, i64 %active) {
   %a = load <32 x float>, ptr %ap
@@ -27,7 +27,7 @@ define i64 @masked_scalar_zero(ptr %ap, i64 %active) {
 ; CHECK: B.IOT {{.*}}, mask=1111, last
 ; CHECK-NEXT: {{.*}}B.IOR [zero,{{[a-z0-9]+}},zero],[{{[a-z0-9]+}}], ExecMaskPresent
 ; CHECK-NOT: B.IOR
-; CHECK: FRET
+; CHECK: BSTART.STD RET
 
 define void @masked_add_sub_select(ptr %ap, ptr %bp, ptr %out, i64 %active) {
   %a = load <32 x float>, ptr %ap

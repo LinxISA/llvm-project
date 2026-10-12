@@ -43,7 +43,8 @@ exit:
 ; CHECK: preheader:
 ; CHECK: %import = phi <32 x float> [ [[ACTUAL0]], %real.path ], [ [[SEED0]], %empty.path ]
 ; CHECK-NOT: pto.index.typed
-; CHECK: call void asm sideeffect "opaque.tile.consumer $0", "@2Tr"(<32 x float> %import)
+; CHECK: [[FINAL0:%.*]] = phi <32 x float> [ %import, %preheader ]
+; CHECK: call void asm sideeffect "opaque.tile.consumer $0", "@2Tr"(<32 x float> [[FINAL0]])
 ; CHECK: ret void
 
 define void @duplicate_poison(i1 %take.real, i1 %duplicate) {
@@ -84,7 +85,8 @@ exit:
 ; CHECK: preheader:
 ; CHECK: %import = phi <32 x float> [ [[ACTUAL1]], %real.path ], [ [[SEED1]], %empty.path ], [ [[SEED1]], %empty.path ]
 ; CHECK-NOT: pto.index.typed
-; CHECK: call void asm sideeffect "opaque.tile.consumer $0", "@2Tr"(<32 x float> %import)
+; CHECK: [[FINAL1:%.*]] = phi <32 x float> [ %import, %preheader ]
+; CHECK: call void asm sideeffect "opaque.tile.consumer $0", "@2Tr"(<32 x float> [[FINAL1]])
 ; CHECK: ret void
 
 !0 = distinct !{}

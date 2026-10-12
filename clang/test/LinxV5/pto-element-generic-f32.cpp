@@ -15,15 +15,15 @@ extern "C" void nested_f32(f32_elements *sink, const f32_elements *a,
   asm volatile("BSTART.TLSU TLOAD, FP32\n"
                "B.DATR ND2M32, DTYPE_NONE, Null\n"
                "B.DIM zero, 32, ->lb1\n"
-               "B.IOT mask=1111, last, ->%0<128B>\n"
+               "B.IOT mask=1111, last, ->%0<%Z3>\n"
                "B.IOR [%1,%2], []\n"
-               : "=Tr"(input) : "r"(a), "r"(4UL) : "memory");
+               : "=Tr"(input) : "r"(a), "r"(4UL), "i"(1) : "memory");
   asm volatile("BSTART.TLSU TLOAD, FP32\n"
                "B.DATR ND2M32, DTYPE_NONE, Null\n"
                "B.DIM zero, 32, ->lb1\n"
-               "B.IOT mask=1111, last, ->%0<128B>\n"
+               "B.IOT mask=1111, last, ->%0<%Z3>\n"
                "B.IOR [%1,%2], []\n"
-               : "=Tr"(other) : "r"(b), "r"(4UL) : "memory");
+               : "=Tr"(other) : "r"(b), "r"(4UL), "i"(1) : "memory");
   auto &x = float_view(input);
   auto &y = float_view(other);
   auto &result = float_view(output);

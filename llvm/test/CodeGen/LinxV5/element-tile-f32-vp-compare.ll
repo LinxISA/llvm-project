@@ -133,10 +133,14 @@ entry:
   ret void
 }
 ; CHECK-LABEL: define void @scalar_left_raw_select
+; CHECK: [[TRUE:%.*]] = freeze i1 true
+; CHECK: [[FULL:%.*]] = select i1 [[TRUE]], i64 4294967295, i64 0
+; CHECK: [[FULL_LOW:%.*]] = and i64 [[FULL]], 4294967295
+; CHECK: [[FULL_ACTIVE:%.*]] = and i64 [[FULL_LOW]], 4294967295
 ; CHECK: [[SCALAR:%.*]] = freeze float -0.000000e+00
 ; CHECK: [[BITS:%.*]] = bitcast float [[SCALAR]] to i32
 ; CHECK: [[RAW:%.*]] = zext i32 [[BITS]] to i64
-; CHECK: call i64 @llvm.linx.experimental.ew.tcmps.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, <32 x float> %a, i64 [[RAW]], i64 3, i64 4294967295)
+; CHECK: call i64 @llvm.linx.experimental.ew.tcmps.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, <32 x float> %a, i64 [[RAW]], i64 3, i64 [[FULL_ACTIVE]])
 ; CHECK-DAG: [[NEGZERO:%.*]] = freeze float -0.000000e+00
 ; CHECK-DAG: [[QNAN:%.*]] = freeze float 0x7FF8000020000000
 ; CHECK-DAG: @llvm.linx.experimental.ew.texpands.v32f32.f32(i64 32, i64 1, i64 1, i64 29, float [[NEGZERO]])

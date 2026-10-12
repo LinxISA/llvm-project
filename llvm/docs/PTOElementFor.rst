@@ -151,7 +151,7 @@ Unconstrained LLVM can speculate scalar floating-point expressions before
 predication; this profile does not promise source encounter-order status flags.
 Native active-only status is tested with direct guarded CFG/VP and native
 instruction inputs. ``strictfp`` and constrained FP, including FENV requests
-that reach LLVM under Clang's ``-fexperimental-strict-floating-point`` option,
+that reach LLVM under Clang's ``-Xclang -fexperimental-strict-floating-point`` option,
 are diagnosed. Without that option the target's existing Clang frontend warns
 that FENV pragmas are ignored; ``-Werror=ignored-pragmas`` makes that diagnostic
 fatal. Fast-math, unsupported comparison predicates, F64, casts, FP32 GM element
