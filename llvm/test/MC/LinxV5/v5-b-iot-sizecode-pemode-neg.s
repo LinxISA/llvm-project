@@ -19,6 +19,10 @@ B.IOT mask=1111, TSize=0, last, ->t
 # CHECK: TSize=13
 B.IOT t#1, mask=1111, TSize=13, last, ->u
 
+# A destination without a nonzero SizeCode has no architectural capacity.
+# CHECK: B.IOT{{.*}}->t
+B.IOT t#1, u#1, ->t
+
 # B.IOS destination must carry 1..12; "->S0<0B>" would silently become source.
 # CHECK: B.IOS{{.*}}->S0<0B>
 B.IOS mask=1111, ->S0<0B>

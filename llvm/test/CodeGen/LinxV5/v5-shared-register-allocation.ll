@@ -47,6 +47,46 @@ define void @reuse(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
   ret void
 }
 
+; The same Shared SSA generation is retained until its final source binder.
+; CHECK-LABEL: <shared_twice>:
+; CHECK: B.IOS mask=1111, ->S0<512B>
+; CHECK: B.IOS S0.reuse, mask=1111
+; CHECK: B.IOS S0, mask=1111
+define void @shared_twice(ptr %in, ptr %out0, ptr %out1) {
+  %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in, i64 0)
+  %shared = call i64 @llvm.linx.v5.shared.l2s.publish.v128f32(i64 1, i64 15, <128 x float> %a)
+  %r0 = call <128 x float> @llvm.linx.v5.shared.s2l.extract.v128f32(i64 %shared, i64 1, i64 15)
+  call void @llvm.linx.blk.tstore.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, ptr %out0, i64 0, <128 x float> %r0)
+  %r1 = call <128 x float> @llvm.linx.v5.shared.s2l.extract.v128f32(i64 %shared, i64 1, i64 15)
+  call void @llvm.linx.blk.tstore.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, ptr %out1, i64 0, <128 x float> %r1)
+  ret void
+}
+
+; A use before a CFG split must retain the generation because it is live into
+; both successors. Each path's final use can independently be last-use.
+; CHECK-LABEL: <shared_cfg>:
+; CHECK: B.IOS S0.reuse, mask=1111
+; CHECK: B.IOS S0, mask=1111
+; CHECK: B.IOS S0, mask=1111
+define void @shared_cfg(ptr %in, ptr %out0, ptr %out1, i1 %cond) {
+entry:
+  %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in, i64 0)
+  %shared = call i64 @llvm.linx.v5.shared.l2s.publish.v128f32(i64 1, i64 15, <128 x float> %a)
+  %first = call <128 x float> @llvm.linx.v5.shared.s2l.extract.v128f32(i64 %shared, i64 1, i64 15)
+  call void @llvm.linx.blk.tstore.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, ptr %out0, i64 0, <128 x float> %first)
+  br i1 %cond, label %left, label %right
+
+left:
+  %l = call <128 x float> @llvm.linx.v5.shared.s2l.extract.v128f32(i64 %shared, i64 1, i64 15)
+  call void @llvm.linx.blk.tstore.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, ptr %out1, i64 0, <128 x float> %l)
+  ret void
+
+right:
+  %r = call <128 x float> @llvm.linx.v5.shared.s2l.extract.v128f32(i64 %shared, i64 1, i64 15)
+  call void @llvm.linx.blk.tstore.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, ptr %out1, i64 0, <128 x float> %r)
+  ret void
+}
+
 ; Shared-right TMATMUL consumes the Shared register through B.IOS. The B.IOT
 ; stream contains only local A and the ordinary local-tile result.
 ; CHECK-LABEL: <matmul_shared>:
@@ -62,6 +102,24 @@ define void @matmul_shared(ptr %in_a, ptr %in_b, ptr %out) {
   %shared = call i64 @llvm.linx.v5.shared.l2s.publish.v128f32(i64 1, i64 15, <128 x float> %b)
   %result = call <128 x float> @llvm.linx.blk.matmul.shared.v128f32.v128f32.v128f32(i64 16, i64 16, i64 16, i64 1, i64 1, <128 x float> %a, i64 %shared)
   call void @llvm.linx.blk.tstore.v128f32(i64 16, i64 16, i64 1, i64 1, i64 0, ptr %out, i64 16, <128 x float> %result)
+  ret void
+}
+
+; A Shared-right matrix macro is not necessarily the final consumer. Its
+; lowered B.IOS must preserve liveness just like the direct Shared TLSU path.
+; CHECK-LABEL: <matmul_shared_reuse>:
+; CHECK: BSTART.CUBE TMATMUL, FP32
+; CHECK: B.IOS S0.reuse, mask=1111
+; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK-NEXT: B.IOS S0, mask=1111
+define void @matmul_shared_reuse(ptr %in_a, ptr %in_b, ptr %out0, ptr %out1) {
+  %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)
+  %b = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 3, ptr %in_b, i64 16)
+  %shared = call i64 @llvm.linx.v5.shared.l2s.publish.v128f32(i64 1, i64 15, <128 x float> %b)
+  %result = call <128 x float> @llvm.linx.blk.matmul.shared.v128f32.v128f32.v128f32(i64 16, i64 16, i64 16, i64 1, i64 1, <128 x float> %a, i64 %shared)
+  %copy = call <128 x float> @llvm.linx.v5.shared.s2l.extract.v128f32(i64 %shared, i64 1, i64 15)
+  call void @llvm.linx.blk.tstore.v128f32(i64 16, i64 16, i64 1, i64 1, i64 0, ptr %out0, i64 16, <128 x float> %result)
+  call void @llvm.linx.blk.tstore.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, ptr %out1, i64 0, <128 x float> %copy)
   ret void
 }
 

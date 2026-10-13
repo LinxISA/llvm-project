@@ -21,6 +21,77 @@
 
 namespace llvm {
 
+static bool isTileReuseReg(MCRegister Reg) {
+  return (Reg >= LinxV5::Tile_T1_RU && Reg <= LinxV5::Tile_T16_RU) ||
+         (Reg >= LinxV5::Tile_U1_RU && Reg <= LinxV5::Tile_U16_RU) ||
+         (Reg >= LinxV5::Tile_M1_RU && Reg <= LinxV5::Tile_M16_RU) ||
+         (Reg >= LinxV5::Tile_N1_RU && Reg <= LinxV5::Tile_N16_RU) ||
+         (Reg >= LinxV5::Tile_TOS1_RU && Reg <= LinxV5::Tile_TOS16_RU) ||
+         (Reg >= LinxV5::Tile_UOS1_RU && Reg <= LinxV5::Tile_UOS16_RU) ||
+         (Reg >= LinxV5::Tile_MOS1_RU && Reg <= LinxV5::Tile_MOS16_RU) ||
+         (Reg >= LinxV5::Tile_NOS1_RU && Reg <= LinxV5::Tile_NOS16_RU);
+}
+
+void normalizeBIOTLifetimeOpcode(MCInst &Inst) {
+  unsigned Src0 = 0;
+  unsigned Src1 = 0;
+  bool HasOneSource = false;
+  bool HasDst = false;
+
+  switch (Inst.getOpcode()) {
+  default:
+    return;
+  case LinxV5::B_IOT_OneSrc_Dst:
+  case LinxV5::B_IOT_OneSrc_Dst_Reuse:
+    HasOneSource = true;
+    HasDst = true;
+    Src0 = 4;
+    break;
+  case LinxV5::B_IOT_OneSrc_NoDst:
+  case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
+    HasOneSource = true;
+    Src0 = 2;
+    break;
+  case LinxV5::B_IOT_TwoSrc_Dst:
+  case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+  case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+  case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
+    HasDst = true;
+    Src0 = 4;
+    Src1 = 5;
+    break;
+  case LinxV5::B_IOT_TwoSrc_NoDst:
+  case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+  case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+  case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
+    Src0 = 2;
+    Src1 = 3;
+    break;
+  }
+
+  bool Reuse0 = isTileReuseReg(Inst.getOperand(Src0).getReg());
+  if (HasOneSource) {
+    Inst.setOpcode(HasDst ? (Reuse0 ? LinxV5::B_IOT_OneSrc_Dst_Reuse
+                                   : LinxV5::B_IOT_OneSrc_Dst)
+                          : (Reuse0 ? LinxV5::B_IOT_OneSrc_NoDst_Reuse
+                                   : LinxV5::B_IOT_OneSrc_NoDst));
+    return;
+  }
+
+  bool Reuse1 = isTileReuseReg(Inst.getOperand(Src1).getReg());
+  if (HasDst) {
+    Inst.setOpcode(Reuse0 && Reuse1 ? LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth
+                   : Reuse0         ? LinxV5::B_IOT_TwoSrc_Dst_Reuse0
+                   : Reuse1         ? LinxV5::B_IOT_TwoSrc_Dst_Reuse1
+                                    : LinxV5::B_IOT_TwoSrc_Dst);
+  } else {
+    Inst.setOpcode(Reuse0 && Reuse1 ? LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth
+                   : Reuse0         ? LinxV5::B_IOT_TwoSrc_NoDst_Reuse0
+                   : Reuse1         ? LinxV5::B_IOT_TwoSrc_NoDst_Reuse1
+                                    : LinxV5::B_IOT_TwoSrc_NoDst);
+  }
+}
+
 static cl::opt<bool> EnableDimOpt("linxv5-enable-dim-opt",
                                   cl::desc("B.DIM Coding Optimization"),
                                   cl::init(true), cl::Hidden);

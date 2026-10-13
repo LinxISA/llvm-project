@@ -158,15 +158,24 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                                        const char *ExtraCode, raw_ostream &OS) {
   const MachineOperand &MO = MI->getOperand(OpNo);
 
-  // Handle LinxV5-specific modifiers before the generic printer. In
-  // particular, %S carries a Shared_ABS register and must always print the
-  // architectural S#n name rather than being consumed as a generic modifier.
-  if (ExtraCode && ExtraCode[0] == 'S' && ExtraCode[1] == 0) {
+  // Handle LinxV5-specific Shared modifiers before the generic printer:
+  //   %S: ordinary operand (definitions bare, inputs conservatively .reuse)
+  //   %K: one exact final-use source occurrence (bare)
+  //   %R: one exact retain source occurrence (.reuse), including a tied def
+  // MachineOperand::isKill applies to the whole INLINEASM operand, not to each
+  // textual placeholder occurrence, so it cannot safely select a bare source.
+  if (ExtraCode && ExtraCode[1] == 0 &&
+      (ExtraCode[0] == 'S' || ExtraCode[0] == 'K' || ExtraCode[0] == 'R')) {
     if (!MO.isReg() ||
         !LinxV5::Shared_ABSRegClass.contains(MO.getReg()))
       return true;
+    if (ExtraCode[0] == 'K' && (!MO.isUse() || MO.isDef() || !MO.isKill()))
+      return true;
     OS << LinxV5InstPrinter::getRegisterName(MO.getReg(),
                                              LinxV5::ABIRegAltName);
+    if (ExtraCode[0] == 'R' ||
+        (ExtraCode[0] == 'S' && MO.isUse() && !MO.isDef()))
+      OS << ".reuse";
     return false;
   }
   // v5: %Z carries a SizeCode imm (0..12) and prints the size text
