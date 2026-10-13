@@ -1754,6 +1754,7 @@ class ElementTileLegalizer {
   SmallVector<CallInst *, 8> Publications;
   SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
   DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
+  unsigned DomainCount;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
@@ -2023,12 +2024,23 @@ class ElementTileLegalizer {
   bool validateAtomic(CallInst &Atomic) {
     auto *EVL = dyn_cast<ConstantInt>(Atomic.getArgOperand(3));
     auto Alignment = Atomic.getParamAlign(0);
-    if (!isVector(&Atomic, 32) || !isVector(Atomic.getArgOperand(1), 32) ||
-        !isVector(Atomic.getArgOperand(2), 1) || !EVL || !EVL->equalsInt(32) ||
+    auto *ResultTy = dyn_cast<FixedVectorType>(Atomic.getType());
+    auto *ValueTy =
+        dyn_cast<FixedVectorType>(Atomic.getArgOperand(1)->getType());
+    auto *MaskTy =
+        dyn_cast<FixedVectorType>(Atomic.getArgOperand(2)->getType());
+    if (DomainCount != 32 || !ResultTy || ResultTy->getNumElements() != 32 ||
+        !ResultTy->getElementType()->isIntegerTy(32) || !ValueTy ||
+        ValueTy->getNumElements() != 32 ||
+        !ValueTy->getElementType()->isIntegerTy(32) || !MaskTy ||
+        MaskTy->getNumElements() != 32 ||
+        !MaskTy->getElementType()->isIntegerTy(1) || !EVL ||
+        !EVL->equalsInt(32) ||
         !Alignment || *Alignment < Align(4) ||
         !isa<GetElementPtrInst>(Atomic.getArgOperand(0)))
-      return fail(&Atomic, "atomic add requires i32 values, explicit GEP, "
-                           "aligned memory, 32-bit mask and EVL=32");
+      return fail(&Atomic, "atomic add requires an owning 32-element domain, "
+                           "v32i32 values, explicit GEP, aligned memory, "
+                           "v32i1 mask and EVL=32");
     return validate(Atomic.getArgOperand(0)) &&
            validate(Atomic.getArgOperand(1)) &&
            validate(Atomic.getArgOperand(2));
@@ -2037,21 +2049,42 @@ class ElementTileLegalizer {
   bool validateUnorderedScatter(CallInst &Scatter) {
     auto *EVL = dyn_cast<ConstantInt>(Scatter.getArgOperand(3));
     auto Alignment = Scatter.getParamAlign(1);
+    auto *DataTy =
+        dyn_cast<FixedVectorType>(Scatter.getArgOperand(0)->getType());
+    auto *MaskTy =
+        dyn_cast<FixedVectorType>(Scatter.getArgOperand(2)->getType());
     auto *TokenArg = dyn_cast<MetadataAsValue>(Scatter.getArgOperand(4));
     auto *Token =
         TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
-    if ((!isVector(Scatter.getArgOperand(0), 32) &&
-         !isF32Vector(Scatter.getArgOperand(0))) ||
-        !isVector(Scatter.getArgOperand(2), 1) || !EVL || !EVL->equalsInt(32) ||
-        !Alignment || *Alignment < Align(4) ||
+    unsigned Count = DataTy ? DataTy->getNumElements() : 0;
+    Type *ElementTy = DataTy ? DataTy->getElementType() : nullptr;
+    bool ValidData =
+        (Count == 32 &&
+         (ElementTy->isIntegerTy(32) || ElementTy->isFloatTy())) ||
+        (Count == 64 &&
+         (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy() ||
+          ElementTy->isIntegerTy(32)));
+    Align RequiredAlignment =
+        ElementTy && (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy())
+            ? Align(2)
+            : Align(4);
+    if (Count != DomainCount)
+      return fail(&Scatter,
+                  "unordered scatter width must match its owning element "
+                  "domain");
+    if (!ValidData || !MaskTy || MaskTy->getNumElements() != Count ||
+        !MaskTy->getElementType()->isIntegerTy(1) || !EVL ||
+        !EVL->equalsInt(Count) || !Alignment ||
+        *Alignment < RequiredAlignment ||
         !isa<GetElementPtrInst>(Scatter.getArgOperand(1)) || !Token ||
         Scatter.getMetadata(PredicatedOwnerMD) != Token ||
         !hasExactStringMetadata(Scatter, InterElementOrderMD, "unordered") ||
         !hasExactStringMetadata(Scatter, IntraElementOrderMD, "source"))
       return fail(
           &Scatter,
-          "unordered scatter requires owned i32/f32 data, explicit "
-          "GEP, aligned memory, 32-bit mask, EVL=32 and source contract");
+          "unordered scatter requires an exact owned 32-lane i32/f32 or "
+          "64-lane i16/f16/i32 profile, explicit GEP, natural alignment, "
+          "matching i1 mask/EVL and source contract");
     return validate(Scatter.getArgOperand(0)) &&
            validate(Scatter.getArgOperand(1)) &&
            validate(Scatter.getArgOperand(2));
@@ -2064,6 +2097,8 @@ class ElementTileLegalizer {
                          ? ResultTy->getNumElements()
                          : cast<FixedVectorType>(VP.getMaskParam()->getType())
                                ->getNumElements();
+    if (Count != DomainCount)
+      return fail(&VP, "VP effect width must match its owning element domain");
     if (!EVL || !EVL->equalsInt(Count) || !isVector(VP.getMaskParam(), 1))
       return fail(&VP, "requires a 32-bit mask and constant EVL=32");
     if (!validate(VP.getMaskParam()))
@@ -2612,9 +2647,11 @@ class ElementTileLegalizer {
 
 public:
   ElementTileLegalizer(Function &F, ArrayRef<Instruction *> Instructions,
-                       DenseMap<PHINode *, uint64_t> &ImportedPhiTypes)
+                       DenseMap<PHINode *, uint64_t> &ImportedPhiTypes,
+                       unsigned DomainCount)
       : F(F), Owned(Instructions.begin(), Instructions.end()),
-        ImportedPhiTypes(ImportedPhiTypes), B(F.getContext()) {
+        ImportedPhiTypes(ImportedPhiTypes), DomainCount(DomainCount),
+        B(F.getContext()) {
     for (Instruction *I : Owned)
       OwnedSet.insert(I);
   }
@@ -4393,8 +4430,8 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     for (Instruction &I : instructions(F))
       if (I.getMetadata(PredicatedOwnerMD) == Token)
         Owned.push_back(&I);
-    auto Plan =
-        std::make_unique<ElementTileLegalizer>(F, Owned, ImportedPhiTypes);
+    auto Plan = std::make_unique<ElementTileLegalizer>(
+        F, Owned, ImportedPhiTypes, Count->getZExtValue());
     Plan->preflight();
     Plans.push_back(std::move(Plan));
   }

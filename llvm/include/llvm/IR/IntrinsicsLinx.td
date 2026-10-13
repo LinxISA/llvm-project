@@ -43,7 +43,8 @@ def int_linx_experimental_element_atomic_add :
                LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty],
               [IntrHasSideEffects, IntrNoDuplicate]>;
 
-// Required intermediate effect for an unordered predicated i32/f32 scatter
+// Required intermediate effect for an unordered predicated admitted Tile
+// scatter (32-lane i32/f32 or logical-64 i16/f16/i32)
 // whose inter-element ordering follows from the source element-region
 // contract, rather than from llvm.vp.scatter. Each active element performs one
 // aligned store in an unspecified order; inactive elements do not access
