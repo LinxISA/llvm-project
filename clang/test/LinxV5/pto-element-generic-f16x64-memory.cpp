@@ -111,3 +111,21 @@ extern "C" void u32x64_widen_compare(const unsigned *__restrict input,
 // OBJ-LABEL: <u32x64_widen_compare>:
 // OBJ: BSTART.TEPL TLEA, U32
 
+extern "C" void u32x64_runtime_i64_base(const unsigned *__restrict input,
+                                         unsigned *__restrict output,
+                                         unsigned long offset) {
+#pragma pto element for
+  for (unsigned long element = 0; element < 64; ++element)
+    output[element] = input[offset + (element << 2)];
+}
+
+// IR-LABEL: define{{.*}} @u32x64_runtime_i64_base
+// IR: getelementptr i32, ptr %{{.*}}, i64 %{{.*}}
+// IR: @llvm.linx.experimental.ew.tlea.v64i64.v64i32
+// IR-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked.v64i64
+// IR: ret void
+// OBJ-LABEL: <u32x64_runtime_i64_base>:
+// OBJ: BSTART.TEPL TLEA, S32
+// OBJ-NOT: BSTART.TEPL TADD, U64
+// OBJ: BSTART.TLSU MGATHER, U32
+

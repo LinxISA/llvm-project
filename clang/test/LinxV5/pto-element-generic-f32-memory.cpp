@@ -20,6 +20,26 @@ extern "C" void gather(const float *__restrict input,
 // OBJ: BSTART.TLSU MGATHER, FP32
 // OBJ: ExecMaskPresent
 // OBJ: BSTART.TLSU MSCATTER, FP32
+
+extern "C" void masked_affine_scatter(const float *__restrict input,
+                                       float *__restrict output, u32 valid) {
+#pragma pto element for
+  for (unsigned e = 0; e < 32; ++e)
+    if (e < valid)
+      output[static_cast<unsigned long>(e) * 388] = input[e];
+}
+// IR-LABEL: define{{.*}} @masked_affine_scatter(
+// IR: @llvm.linx.experimental.ew.tci.v32i32
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v32i64.v32f32
+// IR-NOT: @llvm.vp.mul
+// OBJ-LABEL: <masked_affine_scatter>:
+// OBJ: BSTART.TEPL TCI, U32
+// OBJ: BSTART.TEPL TMUL, U32
+// OBJ: ExecMaskPresent
+// OBJ: BSTART.TEPL TADD, U32
+// OBJ: ExecMaskPresent
+// OBJ: BSTART.TLSU MSCATTER, FP32
 // OBJ: ExecMaskPresent
 
 extern "C" void scatter(const float *__restrict input,
@@ -106,3 +126,38 @@ extern "C" void wide_iv(const float *__restrict input, float *__restrict output,
 // OBJ-LABEL: <wide_iv>:
 // OBJ: BSTART.TLSU MGATHER, FP32
 // OBJ: BSTART.TLSU TSTORE, FP32
+
+extern "C" void affine_stride512(const float *__restrict input,
+                                  float *__restrict output) {
+#pragma pto element for
+  for (unsigned e = 0; e < 32; ++e)
+    output[e] = input[e << 9];
+}
+// IR-LABEL: define{{.*}} @affine_stride512(
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0, i64 4294967296)
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 512, i64 0)
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 2,
+// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea.v32i64.v32i32
+// OBJ-LABEL: <affine_stride512>:
+// OBJ: BSTART.TEPL TCI, U32
+// OBJ: BSTART.TEPL TMUL, U32
+// OBJ: BSTART.TEPL TLEA, U32
+// OBJ: BSTART.TLSU MGATHER, FP32
+// OBJ: BSTART.TLSU MSCATTER, FP32
+
+extern "C" void runtime_i64_base(const float *__restrict input,
+                                  float *__restrict output,
+                                  unsigned long offset) {
+#pragma pto element for
+  for (unsigned long e = 0; e < 32; ++e)
+    output[e] = input[offset + (e << 2)];
+}
+// IR-LABEL: define{{.*}} @runtime_i64_base(
+// IR: getelementptr float, ptr %{{.*}}, i64 %{{.*}}
+// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
+// IR-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64
+// IR-NOT: @llvm.vp.add.v32i64
+// OBJ-LABEL: <runtime_i64_base>:
+// OBJ: BSTART.TEPL TLEA, S32
+// OBJ-NOT: BSTART.TEPL TADD, U64
+// OBJ: BSTART.TLSU MGATHER, FP32
