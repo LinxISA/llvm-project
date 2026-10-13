@@ -704,7 +704,198 @@ struct PredicatedRegion {
   SmallPtrSet<CallInst *, 8> GuardedElementZeroViews;
   SmallPtrSet<CallInst *, 4> ProvenDeadTraps;
   SmallPtrSet<StoreInst *, 1> UnorderedScatters;
+  SmallPtrSet<Value *, 32> PositiveB32Values;
 };
+
+// IndVarSimplify may widen source B32 control/address expressions to i64.
+// Select a narrower physical representation only for complete def-use
+// components that remain in [0, INT32_MAX].  Scalar IR is left unchanged, so
+// every analysis below still describes the optimizer's original program.
+static void planPositiveB32Representation(Function &F, ScalarEvolution &SE,
+                                           DominatorTree &DT,
+                                           LazyValueInfo &LVI,
+                                           PredicatedRegion &Plan) {
+  Loop &L = *Plan.L;
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  auto RangeFits = [](const ConstantRange &Range) {
+    if (Range.isFullSet() || Range.isWrappedSet())
+      return false;
+    APInt Limit(Range.getBitWidth(), uint64_t(INT32_MAX));
+    return Range.getUnsignedMin().isNonNegative() &&
+           Range.getUnsignedMax().ule(Limit);
+  };
+  auto FitsEverywhere = [&](Value *V) {
+    if (!V->getType()->isIntegerTy(64))
+      return false;
+    if (auto *C = dyn_cast<ConstantInt>(V))
+      return C->getValue().ule(APInt(64, uint64_t(INT32_MAX)));
+    if (V == Plan.Induction)
+      return Plan.Count && Plan.Count - 1 <= uint64_t(INT32_MAX);
+    if (RangeFits(SE.getUnsignedRange(SE.getSCEV(V))))
+      return true;
+    bool SawUse = false;
+    for (User *U : V->users()) {
+      auto *Use = dyn_cast<Instruction>(U);
+      if (!Use || !L.contains(Use))
+        continue;
+      SawUse = true;
+      auto FitsAt = [&](Instruction *Context, ConstantRange LVIRange) {
+        ConstantRange Range = computeConstantRange(
+            V, /*ForSigned=*/false, /*UseInstrInfo=*/true, nullptr, Context,
+            &DT);
+        Range = Range.intersectWith(LVIRange);
+        KnownBits Known = computeKnownBits(V, DL, 0, nullptr, Context, &DT);
+        Range = Range.intersectWith(
+            ConstantRange::fromKnownBits(Known, /*IsSigned=*/false));
+        return RangeFits(Range);
+      };
+      if (auto *Phi = dyn_cast<PHINode>(Use)) {
+        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+          if (Phi->getIncomingValue(I) != V)
+            continue;
+          BasicBlock *From = Phi->getIncomingBlock(I);
+          if (!FitsAt(From->getTerminator(), LVI.getConstantRangeOnEdge(
+                                                   V, From, Phi->getParent(),
+                                                   Phi)))
+            return false;
+        }
+      } else if (!FitsAt(Use, LVI.getConstantRange(V, Use))) {
+        return false;
+      }
+    }
+    return SawUse;
+  };
+
+  SmallPtrSet<Value *, 32> Approved;
+  SmallPtrSet<Value *, 32> Rejected;
+  for (BasicBlock *BB : Plan.Order)
+    for (Instruction &RootI : *BB) {
+      SmallVector<Value *, 16> Roots;
+      // Address-only affine i64 expressions already have an exact lowering in
+      // the Tile legalizer.  Root components at comparisons and explicit
+      // truncation boundaries, then close over every consumer before approval.
+      if (auto *Cmp = dyn_cast<ICmpInst>(&RootI)) {
+        if (Cmp->getOperand(0)->getType()->isIntegerTy(64)) {
+          Roots.push_back(Cmp->getOperand(0));
+          Roots.push_back(Cmp->getOperand(1));
+        }
+      } else if (auto *Cast = dyn_cast<TruncInst>(&RootI)) {
+        if (Cast->getSrcTy()->isIntegerTy(64) &&
+            Cast->getDestTy()->getIntegerBitWidth() <= 32)
+          Roots.push_back(Cast->getOperand(0));
+      }
+      if (!Roots.empty()) {
+        SmallPtrSet<Value *, 32> Component;
+        SmallPtrSet<Value *, 16> Active;
+        std::function<bool(Value *)> Admit = [&](Value *V) {
+          if (Component.contains(V))
+            return true;
+          if (Rejected.contains(V) || !V->getType()->isIntegerTy(64) ||
+              !FitsEverywhere(V) || !Active.insert(V).second)
+            return false;
+          auto Finish = [&](bool OK) {
+            Active.erase(V);
+            if (OK)
+              Component.insert(V);
+            return OK;
+          };
+          if (isa<ConstantInt>(V) || V == Plan.Induction)
+            return Finish(true);
+          auto *I = dyn_cast<Instruction>(V);
+          if (!I || !L.contains(I)) {
+            if (I && !DT.dominates(I, L.getLoopPreheader()->getTerminator()))
+              return Finish(false);
+            return Finish(L.isLoopInvariant(V));
+          }
+          if (auto *Binary = dyn_cast<BinaryOperator>(I)) {
+            bool OpcodeOK = Binary->getOpcode() == Instruction::Add ||
+                            Binary->getOpcode() == Instruction::Sub ||
+                            Binary->getOpcode() == Instruction::Mul;
+            if (Binary->getOpcode() == Instruction::Shl) {
+              auto *Amount = dyn_cast<ConstantInt>(Binary->getOperand(1));
+              OpcodeOK = Amount && Amount->getValue().ult(32);
+            }
+            return Finish(OpcodeOK && Admit(Binary->getOperand(0)) &&
+                          Admit(Binary->getOperand(1)));
+          }
+          if (auto *Phi = dyn_cast<PHINode>(I)) {
+            if (Phi->getParent() == L.getHeader())
+              return Finish(false);
+            for (Value *Incoming : Phi->incoming_values())
+              if (!Admit(Incoming))
+                return Finish(false);
+            return Finish(true);
+          }
+          if (auto *Select = dyn_cast<SelectInst>(I))
+            return Finish(Admit(Select->getTrueValue()) &&
+                          Admit(Select->getFalseValue()));
+          if (auto *Cast = dyn_cast<CastInst>(I)) {
+            if (Cast->getOpcode() != Instruction::ZExt ||
+                Cast->getSrcTy()->getIntegerBitWidth() > 32)
+              return Finish(false);
+            return Finish(true);
+          }
+          return Finish(false);
+        };
+        bool OK = true;
+        for (Value *Root : Roots)
+          OK &= Admit(Root);
+        SmallPtrSet<Value *, 32> Verified;
+        while (OK) {
+          Value *V = nullptr;
+          for (Value *Candidate : Component)
+            if (!Verified.contains(Candidate)) {
+              V = Candidate;
+              break;
+            }
+          if (!V)
+            break;
+          Verified.insert(V);
+          if (isa<Constant>(V))
+            continue;
+          auto *Def = dyn_cast<Instruction>(V);
+          if (!Def || !L.contains(Def))
+            continue;
+          for (User *U : V->users()) {
+            auto *Use = dyn_cast<Instruction>(U);
+            if (!Use || !L.contains(Use)) {
+              OK = false;
+              break;
+            }
+            if (auto *Cmp = dyn_cast<ICmpInst>(Use)) {
+              Value *Other = Cmp->getOperand(0) == V ? Cmp->getOperand(1)
+                                                     : Cmp->getOperand(0);
+              OK = Other->getType()->isIntegerTy(64) && Admit(Other);
+            } else if (auto *GEP = dyn_cast<GetElementPtrInst>(Use)) {
+              OK = GEP->getNumIndices() == 1 && GEP->getOperand(1) == V;
+            } else if (auto *Cast = dyn_cast<TruncInst>(Use)) {
+              OK = Cast->getOperand(0) == V &&
+                   Cast->getDestTy()->getIntegerBitWidth() <= 32;
+            } else if (isa<BinaryOperator>(Use) || isa<PHINode>(Use) ||
+                       isa<SelectInst>(Use) || isa<ZExtInst>(Use)) {
+              OK = Use->getType()->isIntegerTy(64) && Admit(Use);
+            } else {
+              OK = false;
+            }
+            if (!OK)
+              break;
+          }
+        }
+        if (OK) {
+          Approved.insert(Component.begin(), Component.end());
+        } else {
+          for (Value *V : Component) {
+            auto *I = dyn_cast<Instruction>(V);
+            if (I && L.contains(I)) {
+              Approved.erase(V);
+              Rejected.insert(V);
+            }
+          }
+        }
+      }
+    }
+  Plan.PositiveB32Values.insert(Approved.begin(), Approved.end());
+}
 
 static bool isElementCarrier(Value *V) {
   auto *Ty = dyn_cast<FixedVectorType>(V->getType());
@@ -1937,6 +2128,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         return Fail(Memory[J], "memory streams may overlap across elements");
     }
   }
+  planPositiveB32Representation(F, SE, DT, LVI, Plan);
   return true;
 }
 
@@ -1954,6 +2146,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   Value *True = Constant::getAllOnesValue(MaskTy);
   Value *EVL = B.getInt32(Plan.Count);
   DenseMap<Value *, Value *> Values;
+  DenseMap<Value *, Value *> PositiveB32Values;
+  SmallPtrSet<Instruction *, 8> ScalarNarrowImports;
   SimplifyQuery SQ(F.getParent()->getDataLayout());
   auto UnionMask = [&](Value *Left, Value *Right, const Twine &Name) {
     if (Value *Simple = simplifyOrInst(Left, Right, SQ))
@@ -1969,16 +2163,25 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   // the same destination, and neither edge may be silently dropped.
   DenseMap<std::pair<BasicBlock *, unsigned>, Value *> Edges;
   SmallVector<Constant *, 32> Indices;
+  Type *InductionTy = Plan.PositiveB32Values.contains(Plan.Induction)
+                          ? B.getInt32Ty()
+                          : Plan.Induction->getType();
   for (unsigned I = 0; I < Plan.Count; ++I)
-    Indices.push_back(ConstantInt::get(Plan.Induction->getType(), I));
-  Values[Plan.Induction] = ConstantVector::get(Indices);
+    Indices.push_back(ConstantInt::get(InductionTy, I));
+  if (Plan.PositiveB32Values.contains(Plan.Induction))
+    PositiveB32Values[Plan.Induction] = ConstantVector::get(Indices);
+  else
+    Values[Plan.Induction] = ConstantVector::get(Indices);
 
   // LLVM narrows scalar control arithmetic (for example IV % 5) to i8.
   // Represent those bits in i32 Tiles, with explicit modulo normalization and
   // sign extension; this is value legalization, independent of source syntax.
-  auto WideType = [&](Type *Ty) -> Type * {
+  auto WideType = [&](Value *V) -> Type * {
+    Type *Ty = V->getType();
     if (Ty->isVoidTy() || Ty->isVectorTy())
       return Ty;
+    if (Plan.PositiveB32Values.contains(V) && Ty->isIntegerTy(64))
+      Ty = B.getInt32Ty();
     if (Ty->isIntegerTy() && Ty->getIntegerBitWidth() > 1 &&
         Ty->getIntegerBitWidth() < 32)
       Ty = B.getInt32Ty();
@@ -2007,6 +2210,26 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       }
     }
     Values[V] = Wide;
+    return Wide;
+  };
+  auto WidenPositiveB32 = [&](Value *V) -> Value * {
+    if (V->getType()->isIntegerTy() &&
+        V->getType()->getIntegerBitWidth() <= 32)
+      return Widen(V);
+    auto It = PositiveB32Values.find(V);
+    if (It != PositiveB32Values.end())
+      return It->second;
+    assert(Plan.PositiveB32Values.contains(V) &&
+           V->getType()->isIntegerTy(64) &&
+           "B32 representation requires a complete approved component");
+    auto *I = dyn_cast<Instruction>(V);
+    assert((!I || !L.contains(I)) &&
+           "topological order must materialize internal B32 values");
+    Value *Scalar = B.CreateTrunc(V, B.getInt32Ty(), "pto.b32.import");
+    if (auto *Import = dyn_cast<Instruction>(Scalar))
+      ScalarNarrowImports.insert(Import);
+    Value *Wide = B.CreateVectorSplat(Plan.Count, Scalar, "pto.b32.uniform");
+    PositiveB32Values[V] = Wide;
     return Wide;
   };
   for (const auto &Entry : Plan.Accumulators) {
@@ -2074,7 +2297,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       Type *WideTy =
           isa<LoadInst>(I) && I.getType()->isIntegerTy(16)
               ? FixedVectorType::get(I.getType(), Plan.Count)
-              : WideType(I.getType());
+              : WideType(&I);
+      bool PositiveB32Result = Plan.PositiveB32Values.contains(&I);
       if (auto Descriptor = getViewDescriptor(&I)) {
         auto *Marker = Descriptor->Marker;
         SmallVector<Value *, 9> Args(Marker->args());
@@ -2090,15 +2314,22 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Result = PoisonValue::get(WideTy);
         for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
           Result = Blend(EdgeFrom(Phi->getIncomingBlock(J), BB),
-                         Widen(Phi->getIncomingValue(J)), Result, "pto.phi");
+                         PositiveB32Result
+                             ? WidenPositiveB32(Phi->getIncomingValue(J))
+                             : Widen(Phi->getIncomingValue(J)),
+                         Result, "pto.phi");
       } else if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
         Result = B.CreateFreeze(Widen(Freeze->getOperand(0)), "pto.freeze");
       } else if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
         Result = EmitVP(Intrinsic::vp_fneg, WideTy,
                         {Widen(Unary->getOperand(0)), Mask, EVL});
       } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
-        Value *Left = Widen(Binary->getOperand(0));
-        Value *Right = Widen(Binary->getOperand(1));
+        Value *Left = PositiveB32Result
+                          ? WidenPositiveB32(Binary->getOperand(0))
+                          : Widen(Binary->getOperand(0));
+        Value *Right = PositiveB32Result
+                           ? WidenPositiveB32(Binary->getOperand(1))
+                           : Widen(Binary->getOperand(1));
         unsigned Width = Binary->getType()->isIntegerTy()
                              ? Binary->getType()->getIntegerBitWidth() : 32;
         if (Width > 1 && Width < 32 &&
@@ -2121,8 +2352,16 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                         {Widen(Compare->getOperand(0)),
                          Widen(Compare->getOperand(1)), Predicate, Mask, EVL});
       } else if (auto *Compare = dyn_cast<ICmpInst>(&I)) {
-        Value *Left = Widen(Compare->getOperand(0));
-        Value *Right = Widen(Compare->getOperand(1));
+        bool PositiveB32Compare =
+            Compare->getOperand(0)->getType()->isIntegerTy(64) &&
+            Plan.PositiveB32Values.contains(Compare->getOperand(0)) &&
+            Plan.PositiveB32Values.contains(Compare->getOperand(1));
+        Value *Left = PositiveB32Compare
+                          ? WidenPositiveB32(Compare->getOperand(0))
+                          : Widen(Compare->getOperand(0));
+        Value *Right = PositiveB32Compare
+                           ? WidenPositiveB32(Compare->getOperand(1))
+                           : Widen(Compare->getOperand(1));
         unsigned Width =
             Compare->getOperand(0)->getType()->getScalarSizeInBits();
         if (Width > 1 && Width < 32 && Compare->isSigned()) {
@@ -2132,9 +2371,15 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Result =
             B.CreateICmp(Compare->getPredicate(), Left, Right, "pto.compare");
       } else if (auto *Select = dyn_cast<SelectInst>(&I)) {
-        Result = B.CreateSelect(Widen(Select->getCondition()),
-                                Widen(Select->getTrueValue()),
-                                Widen(Select->getFalseValue()), "pto.select");
+        Result = B.CreateSelect(
+            Widen(Select->getCondition()),
+            PositiveB32Result
+                ? WidenPositiveB32(Select->getTrueValue())
+                : Widen(Select->getTrueValue()),
+            PositiveB32Result
+                ? WidenPositiveB32(Select->getFalseValue())
+                : Widen(Select->getFalseValue()),
+            "pto.select");
       } else if (auto *Cast = dyn_cast<CastInst>(&I)) {
         if (Cast->getOpcode() == Instruction::BitCast) {
           Values[&I] =
@@ -2143,7 +2388,14 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         }
         unsigned SourceWidth = Cast->getSrcTy()->getIntegerBitWidth();
         unsigned DestWidth = Cast->getDestTy()->getIntegerBitWidth();
-        Value *Source = Widen(Cast->getOperand(0));
+        bool PositiveB32Cast =
+            PositiveB32Result ||
+            (Cast->getOperand(0)->getType()->isIntegerTy(64) &&
+             Plan.PositiveB32Values.contains(Cast->getOperand(0)) &&
+             DestWidth <= 32);
+        Value *Source = PositiveB32Cast
+                            ? WidenPositiveB32(Cast->getOperand(0))
+                            : Widen(Cast->getOperand(0));
         if (SourceWidth > 1 && SourceWidth < 32 &&
             Cast->getOpcode() == Instruction::SExt)
           Source = SignExtendNarrow(Source, SourceWidth, Mask);
@@ -2159,9 +2411,19 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                   : B.CreateCast(Cast->getOpcode(), Source, WideTy, "pto.cast");
         }
       } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        Value *Index = GEP->getOperand(1);
+        if (Index->getType()->isIntegerTy(64) &&
+            Plan.PositiveB32Values.contains(Index)) {
+          Value *Narrow = WidenPositiveB32(Index);
+          Index = B.CreateZExt(
+              Narrow, FixedVectorType::get(B.getInt64Ty(), Plan.Count),
+              "pto.b32.gep");
+        } else {
+          Index = Widen(Index);
+        }
         Result = B.CreateGEP(GEP->getSourceElementType(),
-                             Widen(GEP->getPointerOperand()),
-                             Widen(GEP->getOperand(1)), "pto.address");
+                             Widen(GEP->getPointerOperand()), Index,
+                             "pto.address");
       } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
         auto *Call =
             EmitVP(Intrinsic::vp_gather, WideTy,
@@ -2208,8 +2470,12 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       } else {
         llvm_unreachable("preflight must reject unsupported instructions");
       }
-      if (Result)
-        Values[&I] = Result;
+      if (Result) {
+        if (PositiveB32Result)
+          PositiveB32Values[&I] = Result;
+        else
+          Values[&I] = Result;
+      }
     }
     if (BB == L.getLoopLatch())
       continue;
@@ -2252,7 +2518,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   for (Instruction *I = OldLast ? OldLast->getNextNode()
                                 : &L.getLoopPreheader()->front();
        I != L.getLoopPreheader()->getTerminator(); I = I->getNextNode())
-    I->setMetadata(PredicatedOwnerMD, Token);
+    if (!ScalarNarrowImports.contains(I))
+      I->setMetadata(PredicatedOwnerMD, Token);
   findRegionSentinel(F, Token)->setMetadata(
       PredicatedDomainMD,
       MDNode::get(F.getContext(), ConstantAsMetadata::get(B.getInt32(Plan.Count))));

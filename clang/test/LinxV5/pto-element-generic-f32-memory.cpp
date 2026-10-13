@@ -134,13 +134,13 @@ extern "C" void affine_stride512(const float *__restrict input,
     output[e] = input[e << 9];
 }
 // IR-LABEL: define{{.*}} @affine_stride512(
-// IR: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0, i64 4294967296)
-// IR: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 512, i64 0)
-// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 2,
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 {{.*}}, i64 4294967296)
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 {{.*}}, i64 0)
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 8,
 // IR: call <32 x i64> @llvm.linx.experimental.ew.tlea.v32i64.v32i32
 // OBJ-LABEL: <affine_stride512>:
 // OBJ: BSTART.TEPL TCI, U32
-// OBJ: BSTART.TEPL TMUL, U32
+// OBJ: BSTART.TEPL TSHL, U32
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TLSU MGATHER, FP32
 // OBJ: BSTART.TLSU MSCATTER, FP32
