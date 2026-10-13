@@ -153,6 +153,10 @@ bool isTileOp(const MachineInstr &MI);
 /// Return a destination-free B.ASSEMBLE continuation's Local ParentRef, or
 /// NoRegister when the inline-asm bundle has no such source-form binder.
 Register getAssembleParentRef(const MachineInstr &MI);
+/// Resolve the OperandIndex-th positional B.ASSEMBLE control operand.
+/// Named or otherwise non-constant operands return None so callers fail closed.
+Optional<bool> getAssembleControlBit(const MachineInstr &MI,
+                                     unsigned OperandIndex);
 unsigned getTileOpRegSize(MachineInstr &MI, Register Reg);
 bool isIsolateInstr(MachineInstr &MI);
 

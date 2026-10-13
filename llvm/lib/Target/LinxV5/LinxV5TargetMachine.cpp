@@ -56,6 +56,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5SharedRegAllocPass(*PR);
   initializeLinxV5SharedCopyElimPass(*PR);
   initializeLinxV5TRegToOffsetOptPass(*PR);
+  initializeLinxV5TileFixupPass(*PR);
   initializeLinxV5EmitHeaderPass(*PR);
   initializeLinxV5ExpandPseudoPass(*PR);
   initializeLinxV5AnnotateControlFlowPass(*PR);

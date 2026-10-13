@@ -203,6 +203,69 @@ bool LinxV5::isTileOp(const MachineInstr &MI) {
   return LinxV5II::isTileOp(TSFlags);
 }
 
+Optional<bool> LinxV5::getAssembleControlBit(const MachineInstr &MI,
+                                             unsigned OperandIndex) {
+  if (!MI.isInlineAsm())
+    return None;
+  StringRef Asm(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName());
+  size_t Pos = Asm.find("B.ASSEMBLE");
+  if (Pos == StringRef::npos)
+    return None;
+  Pos += strlen("B.ASSEMBLE");
+  unsigned ConstraintIdx = 0;
+  for (unsigned Seen = 0; Seen <= OperandIndex; ++Seen) {
+    size_t Dollar = Asm.find_first_of("$%", Pos);
+    if (Dollar == StringRef::npos)
+      return None;
+    Pos = Dollar;
+    StringRef Digits;
+    if (Asm[Pos] == '$') {
+      ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == '{') {
+        size_t Close = Asm.find('}', Pos);
+        if (Close == StringRef::npos)
+          return None;
+        StringRef Body = Asm.substr(Pos + 1, Close - Pos - 1);
+        size_t Colon = Body.find(':');
+        if (Colon != StringRef::npos)
+          Body = Body.substr(0, Colon);
+        Digits = Body;
+        Pos = Close + 1;
+      } else {
+        size_t End = Asm.find_first_not_of("0123456789", Pos);
+        Digits = Asm.slice(Pos, End == StringRef::npos ? Asm.size() : End);
+        Pos = End == StringRef::npos ? Asm.size() : End;
+      }
+    } else {
+      ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == 'c')
+        ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == '[')
+        return None;
+      size_t End = Asm.find_first_not_of("0123456789", Pos);
+      Digits = Asm.slice(Pos, End == StringRef::npos ? Asm.size() : End);
+      Pos = End == StringRef::npos ? Asm.size() : End;
+    }
+    if (Digits.empty() || Digits.getAsInteger(10, ConstraintIdx))
+      return None;
+  }
+  unsigned Group = 0;
+  for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+       I < E; ++Group) {
+    const MachineOperand &Flag = MI.getOperand(I);
+    if (!Flag.isImm())
+      return None;
+    unsigned N = InlineAsm::getNumOperandRegisters(Flag.getImm());
+    if (Group == ConstraintIdx) {
+      if (N != 1 || I + 1 >= E || !MI.getOperand(I + 1).isImm())
+        return None;
+      return MI.getOperand(I + 1).getImm() != 0;
+    }
+    I += 1 + N;
+  }
+  return None;
+}
+
 static bool isLocalTileReg(const MachineRegisterInfo &MRI, Register Reg) {
   if (Reg.isPhysical())
     return LinxV5::Tile_ABSRegClass.contains(Reg);
@@ -853,6 +916,54 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
         static_cast<unsigned>(MI.getOperand(6).getImm()),
         static_cast<unsigned>(MI.getOperand(8).getImm())});
   }
+
+  if (MI.getOpcode() == LinxV5::PseudoTLOAD_noDsrc_noDdst ||
+      MI.getOpcode() == LinxV5::PseudoTLOAD_noDsrc_Ddst ||
+      MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_noDdst ||
+      MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_Ddst) {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0 ||
+        !MI.getOperand(5).isReg() || MI.getOperand(5).getReg() != LinxV5::R0)
+      return None;
+    unsigned LayoutOperand =
+        (MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_noDdst ||
+         MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_Ddst)
+            ? 10
+            : 9;
+    unsigned Layout = MI.getOperand(LayoutOperand).getImm();
+    if (Layout == LinxV5Op::ArgFormat::ND2M32)
+      Layout = LinxV5Op::ArgFormat::CUBE_M32;
+    else if (Layout == LinxV5Op::ArgFormat::ND2M16)
+      Layout = LinxV5Op::ArgFormat::CUBE_M16;
+    else if (Layout != LinxV5Op::ArgFormat::NORM &&
+             Layout != LinxV5Op::ArgFormat::CUBE_M32 &&
+             Layout != LinxV5Op::ArgFormat::CUBE_M16)
+      return None;
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(7).getImm()), Layout,
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoTLOADSpillDesc)
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(14).getImm()),
+        static_cast<unsigned>(MI.getOperand(15).getImm()),
+        static_cast<unsigned>(MI.getOperand(12).getImm()),
+        static_cast<unsigned>(MI.getOperand(11).getImm()),
+        static_cast<unsigned>(MI.getOperand(13).getImm()),
+        static_cast<unsigned>(MI.getOperand(16).getImm())});
+
+  if (MI.getOpcode() == LinxV5::PseudoTReloadDesc)
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(3).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(7).getImm())});
 
   switch (MI.getOpcode()) {
   case LinxV5::PseudoTADD_Masked_SizeI:

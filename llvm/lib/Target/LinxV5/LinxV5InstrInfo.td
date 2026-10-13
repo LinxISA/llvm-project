@@ -3525,10 +3525,29 @@ def PseudoERCOV : PseudoTEPLImpl<(outs ),
 
 def PseudoTSpill : PseudoMCalllImpl<(outs), (ins TILE_Src_Reg:$SrcTile, GPRSrc:$SrcR)> {
   let isCodeGenOnly = 1;
+  let mayStore = 1;
 }
 
 def PseudoTReload : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile), (ins GPRSrc:$SrcR)> {
   let isCodeGenOnly = 1;
+  let mayLoad = 1;
+}
+
+def PseudoTSpillDesc : PseudoMCalllImpl<(outs),
+    (ins TILE_Src_Reg:$SrcTile, GPRSrc:$SrcR,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout,
+         TileSizeWithBracket:$TileSize)> {
+  let isCodeGenOnly = 1;
+  let mayStore = 1;
+}
+
+def PseudoTReloadDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
+    (ins GPRSrc:$SrcR, uimm17:$ValidCol, uimm17:$ValidRow,
+         uimm17:$PhysicalCol, BstartDataType:$DataType, BArgFormat:$Layout,
+         TileSizeWithBracket:$TileSize)> {
+  let isCodeGenOnly = 1;
+  let mayLoad = 1;
 }
 
 class PseudoMTClImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
@@ -3540,6 +3559,20 @@ def PseudoTLOAD_noDsrc_noDdst : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile)
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataType,
   TileSizeWithBracket:$TileSize, BArgFormat:$Layout, PadValue:$PadValue, GPRList:$List)> {
     let AsmString = "TLOAD.$Layout\t<LB0: $RegM$immM, LB1: $RegN$immN, LB2: $RegK$immK, ${DataType}, ${PadValue}>" #"\t[$List], $DstTile$TileSize";
+}
+
+let isCodeGenOnly = 1 in
+def PseudoTLOADSpillDesc : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       GPRPlusImm:$RegK, PlusImm17:$immK,
+       BstartDataType:$DataType, TileSizeWithBracket:$TileSize,
+       BArgFormat:$Layout, PadValue:$PadValue,
+       uimm17:$OriginalValidCol, uimm17:$OriginalValidRow,
+       uimm17:$OriginalPhysicalCol, BstartDataType:$OriginalDataType,
+       BArgFormat:$OriginalLayout, TileSizeWithBracket:$OriginalTileSize,
+       GPRList:$List)> {
+  let mayLoad = 1;
 }
 
 def PseudoTSTORE_noDsrc_noDdst : PseudoMTClImpl<(outs),

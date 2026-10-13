@@ -224,6 +224,7 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
             .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
     break;
   case LinxV5::PseudoTLOAD_noDsrc_noDdst:
+  case LinxV5::PseudoTLOADSpillDesc:
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
     MCVec.push_back(
         MCInstBuilder(LinxV5::BDATR)
@@ -692,6 +693,7 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(0)));          // SrcTile0
     break;
   case LinxV5::PseudoTLOAD_noDsrc_noDdst:
+  case LinxV5::PseudoTLOADSpillDesc:
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
   case LinxV5::PseudoTLOAD_Dsrc_noDdst:
   case LinxV5::PseudoTLOAD_Dsrc_Ddst:
@@ -844,6 +846,7 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(4)));
     break;
   case PseudoTLOAD_noDsrc_noDdst:
+  case PseudoTLOADSpillDesc:
   case PseudoTSTORE_noDsrc_noDdst:
   case PseudoTLOAD_noDsrc_Ddst:
   case PseudoTSTORE_noDsrc_Ddst:
@@ -911,6 +914,7 @@ llvm::SmallVector<MCInst> getBIORFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTLOAD_Dsrc_noDdst:
   case LinxV5::PseudoTLOAD_Dsrc_Ddst:
   case LinxV5::PseudoTLOAD_noDsrc_noDdst:
+  case LinxV5::PseudoTLOADSpillDesc:
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
   case LinxV5::PseudoTSTORE_Dsrc_noDdst:
   case LinxV5::PseudoTSTORE_Dsrc_Ddst:
@@ -1024,6 +1028,7 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoMAMULBMXACC_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX_ACC},
       {LinxV5::PseudoMAMULBMXBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX_ACC},
       {LinxV5::PseudoTLOAD_noDsrc_noDdst, LinxV5Op::TileOPTMA::TLOAD},
+      {LinxV5::PseudoTLOADSpillDesc, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_noDsrc_noDdst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoTLOAD_noDsrc_Ddst, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_noDsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},

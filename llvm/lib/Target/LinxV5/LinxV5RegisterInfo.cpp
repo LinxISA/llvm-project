@@ -393,21 +393,23 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   // -->
   // %1:gpr = add sp, <off>
   // tilereg = PseudoTLOAD <M, N, K, DataType>, %1:gpr
-  if (MI.getOpcode() == LinxV5::PseudoTSpill ||
-      MI.getOpcode() == LinxV5::PseudoTReload) {
-    bool IsSpill = MI.getOpcode() == LinxV5::PseudoTSpill;
+  if (MI.getOpcode() == LinxV5::PseudoTSpillDesc ||
+      MI.getOpcode() == LinxV5::PseudoTReloadDesc) {
+    bool IsSpill = MI.getOpcode() == LinxV5::PseudoTSpillDesc;
 
-    Register TileReg = MI.getOperand(0).getReg();
     int FI = MI.getOperand(1).getIndex();
-    unsigned RegSize = MF.getFrameInfo().getObjectSize(FI);
+    unsigned RegSizeCode = MI.getOperand(7).getImm();
+    if (RegSizeCode < 1 || RegSizeCode > 10)
+      report_fatal_error("raw Tile spill SizeCode must be 1..10");
+    unsigned RegSize = 1u << (RegSizeCode + 6);
+    if (RegSize > MF.getFrameInfo().getObjectSize(FI))
+      report_fatal_error("raw Tile spill exceeds its colored frame object");
     // B.IOT SizeCode 1..10 encodes 128 B..64 KiB at PE granularity
     // (issue #77); a [32,1] i32 fragment is a legal 128 B spill (code 1).
     if (RegSize < 128 || RegSize > 64 * 1024) {
       errs() << "TSPILL-DIAG: size=" << RegSize << " MI=" << MI << "\n";
       llvm::report_fatal_error("tile spill size " + Twine(RegSize));
     }
-    unsigned RegSizeCode = llvm::Log2_32(RegSize) - 6;
-
     Register AddrReg = MRI.createVirtualRegister(&LinxV5::GRRegClass);
     if (isUInt<12>(Offset) || isUInt<12>(-Offset)) {
       // addi with small imm
@@ -430,15 +432,17 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
 
     if (IsSpill)
       BuildMI(MBB, II, DL, TII->get(LinxV5::PseudoTSTORE_noDsrc_noDdst))
-          .addReg(TileReg, RegState::Kill)
+          .add(MI.getOperand(0))
           .addReg(LinxV5::R0).addImm(RegSize / 8)   // M
           .addReg(LinxV5::R0).addImm(1)             // N
           .addReg(LinxV5::R0).addImm(RegSize / 8)   // K
           .addImm(LinxV5Op::DataType::S64)          // DataType
           .addImm(LinxV5Op::ArgFormat::NORM)        // LayOut
-          .addReg(AddrReg, RegState::Kill);         // GPR
+          .addReg(AddrReg, RegState::Kill)
+          .cloneMemRefs(MI);                        // GPR
     else
-      BuildMI(MBB, II, DL, TII->get(LinxV5::PseudoTLOAD_noDsrc_noDdst), TileReg)
+      BuildMI(MBB, II, DL, TII->get(LinxV5::PseudoTLOADSpillDesc))
+          .add(MI.getOperand(0))
           .addReg(LinxV5::R0).addImm(RegSize / 8)   // M
           .addReg(LinxV5::R0).addImm(1)             // N
           .addReg(LinxV5::R0).addImm(RegSize / 8)   // K
@@ -446,7 +450,14 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
           .addImm(RegSizeCode)                      // RegSizeCode
           .addImm(LinxV5Op::ArgFormat::NORM)        // LayOut
           .addImm(LinxV5Op::PadValue::Zero)         // PadValue
-          .addReg(AddrReg, RegState::Kill);         // GPR
+          .addImm(MI.getOperand(2).getImm())         // Original ValidCol
+          .addImm(MI.getOperand(3).getImm())         // Original ValidRow
+          .addImm(MI.getOperand(4).getImm())         // Original PhysicalCol
+          .addImm(MI.getOperand(5).getImm())         // Original DataType
+          .addImm(MI.getOperand(6).getImm())         // Original Layout
+          .addImm(MI.getOperand(7).getImm())         // Original SizeCode
+          .addReg(AddrReg, RegState::Kill)
+          .cloneMemRefs(MI);                        // GPR
 
     MI.eraseFromParent();
     return;

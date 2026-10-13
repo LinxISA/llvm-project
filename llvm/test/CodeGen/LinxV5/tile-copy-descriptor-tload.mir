@@ -1,0 +1,63 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -o - %s | FileCheck %s
+#
+# Ordinary backend TLOAD producers carry a complete Local descriptor too.
+# COPY lowering must preserve their dtype, layout and explicit physical shape.
+# CHECK-LABEL: name: tload_result_copy
+# CHECK: $tile_t1 = PseudoTCOPYDesc 3, $tile_n1, 64, 1, 64, 16, 0
+# CHECK-LABEL: name: raw_spill_reload_copy
+# A user-authored raw S64/NORM TLOAD has no compiler spill provenance. Even
+# when its final address resembles an earlier store, it retains its own
+# descriptor and never inherits the store source's U32/CUBE descriptor.
+# CHECK: $tile_t1 = PseudoTCOPYDesc 3, $tile_n1, 64, 1, 64, 16, 0
+# CHECK-LABEL: name: compiler_spill_tload_copy
+# CHECK: $tile_t1 = PseudoTCOPYDesc 3, $tile_n1, 4, 32, 4, 25, 29
+--- |
+  define void @tload_result_copy() { ret void }
+  define void @raw_spill_reload_copy() { ret void }
+  define void @compiler_spill_tload_copy() { ret void }
+...
+---
+name: tload_result_copy
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_n1 = PseudoTLOAD_noDsrc_noDdst $r0, 64, $r0, 1, $r0, 64, 16, 3, 0, 0, $r2
+    $tile_t1 = COPY $tile_n1
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
+---
+name: raw_spill_reload_copy
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r1', virtual-reg: '' }
+  - { reg: '$r2', virtual-reg: '' }
+body: |
+  bb.0:
+    liveins: $r1, $r2
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r2
+    $r3 = ADDI $r1, 256
+    PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 64, $r0, 1, $r0, 64, 16, 0, killed $r3
+    $r4 = ADDI $r1, 256
+    $tile_n1 = PseudoTLOAD_noDsrc_noDdst $r0, 64, $r0, 1, $r0, 64, 16, 3, 0, 0, killed $r4
+    $tile_t1 = COPY $tile_n1
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
+---
+name: compiler_spill_tload_copy
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_n1 = PseudoTLOADSpillDesc $r0, 64, $r0, 1, $r0, 64, 16, 3, 0, 0, 4, 32, 4, 25, 29, 3, $r2
+    $tile_t1 = COPY $tile_n1
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
