@@ -19,11 +19,12 @@
 # CHECK-LABEL: name: assemble_parent_unreachable_continuation
 # CHECK-COUNT-4: B.ASSEMBLE
 # CHECK-LABEL: name: assemble_parent_loop_rotation
-# CHECK: $tile_u = PseudoTCOPYDesc 1, $tile_uos1
+# CHECK: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos1
+# CHECK: $tile_u = PseudoTCOPYDesc 1, $tile_uos2
 # CHECK: B.ASSEMBLE
-# CHECK: $tile_u = PseudoTCOPYDesc 1, killed $tile_uos2
-# CHECK: B.ASSEMBLE {{.*}}$tile_uos3{{.*}}$tile_uos1
-# CHECK: TSTORE{{.*}}$tile_uos3
+# CHECK-NOT: PseudoTCOPYDesc
+# CHECK: B.ASSEMBLE {{.*}}$tile_uos2{{.*}}$tile_uos1
+# CHECK: TSTORE{{.*}}$tile_uos2
 --- |
   define dso_local void @assemble_parent_hierarchy_lifetime() {
     ret void

@@ -1,0 +1,55 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
+#
+# The preheader publishes two loop-carried values followed by a dead real Tile
+# publication.  The backedge republishes only the two live values.  The dead
+# suffix still ages both live-ins, so queue normalization must materialize one
+# real descriptor-bearing filler on the backedge.  PseudoEmptyTile would not
+# allocate a queue entry and is not a valid substitute.
+#
+# The two live values deliberately use different complete descriptors while a
+# third same-register-class payload has a larger 512-byte descriptor.  Every
+# source must be rewritten to a native relative offset; no absolute Tile_N
+# operand may survive.
+#
+# CHECK-LABEL: name: trailing_publication_loop_contract
+# CHECK: bb.2:
+# CHECK: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, 25, 29
+# CHECK: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, 1, 29
+# CHECK: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
+# CHECK-NOT: PseudoEmptyTile
+# CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
+--- |
+  define void @trailing_publication_loop_contract() { ret void }
+...
+---
+name: trailing_publication_loop_contract
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    $tile_n2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 1, 29, 1, $r0, $r0
+    dead $tile_n3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    PseudoBR %bb.1
+
+  bb.1:
+    successors: %bb.3, %bb.2
+    liveins: $r2, $tile_n1, $tile_n2
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.2
+
+  bb.2:
+    successors: %bb.1
+    liveins: $r2, $tile_n1, $tile_n2
+    $tile_n1 = PseudoTCOPYDesc 1, $tile_n1, 1, 32, 1, 25, 29
+    $tile_n2 = PseudoTCOPYDesc 1, $tile_n2, 1, 32, 1, 1, 29
+    PseudoBR %bb.1
+
+  bb.3:
+    liveins: $tile_n1, $tile_n2
+    dead $tile_n3 = PseudoTCOPYDesc 1, $tile_n1, 1, 32, 1, 25, 29
+    dead $tile_n4 = PseudoTCOPYDesc 1, $tile_n2, 1, 32, 1, 1, 29
+    PseudoRET
+...

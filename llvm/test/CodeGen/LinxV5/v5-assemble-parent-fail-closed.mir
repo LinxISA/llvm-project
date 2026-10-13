@@ -43,7 +43,7 @@
 # OPEN: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
 # CONTROL: LLVM ERROR: B.ASSEMBLE Init/Last controls must be immediate operands
 # CONTINUATION: LLVM ERROR: B.ASSEMBLE continuation requires one exact OPEN parent epoch at a uniform relative distance
-# ROTATION: LLVM ERROR: cannot synchronize Local tile queue without copying an OPEN B.ASSEMBLE parent
+# ROTATION: LLVM ERROR: OPEN B.ASSEMBLE parent hand contains another real tile definition after CFG copy insertion
 
 #--- stale-implicit-def.mir
 --- |

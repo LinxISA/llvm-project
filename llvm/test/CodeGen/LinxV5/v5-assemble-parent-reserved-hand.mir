@@ -1,0 +1,100 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-treg-to-offset -o - %t/pure.mir | FileCheck %s --check-prefix=PURE
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-treg-to-offset -o /dev/null %t/mixed-overflow.mir 2>&1 | FileCheck %s --check-prefix=BAD
+# Pure parent hands lower every source with its own proved distance across
+# absent-first-entry / OPEN-backedge joins without alignment copies.
+# Injecting an ordinary same-hand definition disqualifies this mode, and the
+# loop must still fail when it would rotate an OPEN epoch out of the window.
+# PURE-LABEL: name: reserved_parent_hand_loop
+# PURE-NOT: $tile_t{{[0-9]+}} = PseudoTCOPY
+# PURE: B.ASSEMBLE{{.*}}$tile_tos1
+# PURE: PseudoTCOPYDesc 2, $tile_tos2
+# PURE-NOT: $tile_t{{[0-9]+}} = PseudoTCOPY
+# PURE: B.ASSEMBLE{{.*}}$tile_tos1
+# PURE: TSTORE{{.*}}$tile_tos1
+# PURE-NOT: $tile_t{{[0-9]+}} = PseudoTCOPY
+# PURE: PseudoRET
+# BAD: LLVM ERROR: {{.*}}B.ASSEMBLE{{.*}}
+#--- pure.mir
+--- |
+  define void @reserved_parent_hand_loop() { ret void }
+...
+---
+name: reserved_parent_hand_loop
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2
+    $r4 = ORI $r0, 0
+    $r5 = ORI $r0, 32
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    $tile_t2 = IMPLICIT_DEF
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2, %bb.3
+    liveins: $r2, $r4, $r5, $tile_u1, $tile_t1, $tile_t2
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3
+    liveins: $r2, $r4, $r5, $tile_u1, $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t2, 720905, $tile_u1, 13, 2, 13, 1, 13, 0
+    PseudoBR %bb.3
+  bb.3:
+    successors: %bb.4, %bb.1
+    liveins: $r2, $r4, $r5, $tile_u1, $tile_t1, $tile_t2
+    $tile_n1 = PseudoTCOPYDesc 2, $tile_t1, 2, 32, 2, 17, 29
+    $r4 = ADDI $r4, 1
+    BEQ $r4, $r5, %bb.4
+    PseudoBR %bb.1
+  bb.4:
+    liveins: $r2, $tile_t2, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t2, 720905, $tile_u1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r2, 720905, $tile_t2
+    PseudoRET
+...
+#--- mixed-overflow.mir
+--- |
+  define void @mixed_parent_hand_overflow() { ret void }
+...
+---
+name: mixed_parent_hand_overflow
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2
+    $r4 = ORI $r0, 0
+    $r5 = ORI $r0, 32
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    $tile_t2 = IMPLICIT_DEF
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2, %bb.3
+    liveins: $r2, $r4, $r5, $tile_u1, $tile_t1, $tile_t2
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3
+    liveins: $r2, $r4, $r5, $tile_u1, $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t2, 720905, $tile_u1, 13, 2, 13, 1, 13, 0
+    PseudoBR %bb.3
+  bb.3:
+    successors: %bb.4, %bb.1
+    liveins: $r2, $r4, $r5, $tile_u1, $tile_t1, $tile_t2
+    $tile_t1 = PseudoTCOPYDesc 2, $tile_t1, 2, 32, 2, 17, 29
+    $tile_n1 = PseudoTCOPYDesc 2, $tile_t1, 2, 32, 2, 17, 29
+    $r4 = ADDI $r4, 1
+    BEQ $r4, $r5, %bb.4
+    PseudoBR %bb.1
+  bb.4:
+    liveins: $r2, $tile_t2, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t2, 720905, $tile_u1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r2, 720905, $tile_t2
+    PseudoRET
+...

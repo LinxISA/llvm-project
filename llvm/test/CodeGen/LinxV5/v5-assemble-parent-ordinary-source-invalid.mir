@@ -22,9 +22,9 @@
 # writer source for another hierarchy level.
 #
 # TSTORE: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
-# TMOV: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
+# TMOV: LLVM ERROR: OPEN B.ASSEMBLE parent hand contains another real tile definition after CFG copy insertion
 # HIER: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
-# COUNTER: LLVM ERROR: B.ASSEMBLE parent has conflicting relative distances at a CFG join
+# COUNTER: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
 # ZERO-TRIP: LLVM ERROR: B.ASSEMBLE parent has conflicting relative distances at a CFG join
 
 #--- tstore.mir
