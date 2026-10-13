@@ -3609,7 +3609,8 @@ class ElementTileLegalizer {
       }
       // FP publications preserve raw bits; add-zero is not an identity for
       // signed zero or NaN payloads.
-      R = Descriptor->Profile.isFloat() ? value(Source, 1)
+      R = Descriptor->Profile.isFloat()
+              ? value(Source, Descriptor->Profile.DataType)
           : Descriptor->Profile.DataType == 26
               ? value(Source, 26)
               : indexSource(value(Source), Descriptor->Profile.DataType);
