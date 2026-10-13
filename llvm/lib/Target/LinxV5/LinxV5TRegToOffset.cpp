@@ -143,10 +143,6 @@ private:
   // Phase-2 offset rewrite assumes every predecessor leaves the window in the
   // same state, so those classes keep absolute registers.
   DenseSet<const TargetRegisterClass *> SyncConflictRCs;
-  // Clockhands reserves each RC/hand that carries an OPEN B.ASSEMBLE parent.
-  // Keep that hand's queue order exact through Phase 1: CFG rolling would
-  // require copying the in-progress parent or changing its ParentRef distance.
-  DenseSet<const TargetRegisterClass *> PinnedAssembleParentRCs;
   // Exact post-RA INIT definitions for OPEN B.ASSEMBLE parents.  Phase 1 may
   // insert copies, so this map is populated only after copy insertion and
   // after validating that the reserved hand contains no other allocation.
@@ -165,7 +161,6 @@ private:
     GlobalSlotsInfo.clear();
     RewriteTRDefInfo.clear();
     SyncConflictRCs.clear();
-    PinnedAssembleParentRCs.clear();
     AssembleParentUseDistances.clear();
   }
 
@@ -761,17 +756,54 @@ void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
   if (needSyncTo.empty())
     return;
 
-  // An OPEN assembly parent pins this architectural queue. Reordering any
-  // liveout across it would either copy the parent payload or change the
-  // continuation's ParentRef distance. Preserve the actual queue state;
-  // ordinary operands are still rewritten from that state in Phase 2, while
-  // solveAssembleParentDataflow owns the exact parent distances and join
-  // rejection.
-  if (llvm::any_of(LiveSlots,
-                   [](const TRCopyRange &Slot) {
-                     return Slot.IsAssembleParent;
-                   }))
+  // An OPEN assembly parent itself cannot be copied, but ordinary live-outs
+  // may be rotated past it.  This is required when an INIT is conditional:
+  // the first loop entry has no parent while a backedge has one, so the
+  // ordinary loop-carried value otherwise reaches the same instruction at
+  // two different relative offsets.  Only accept an exact cyclic rotation
+  // whose moved prefix contains no OPEN parent.  The inserted ordinary copies
+  // advance the queue without changing parent identity; the later assembly
+  // dataflow proof recomputes every ParentRef distance after copy insertion.
+  const bool HasOpenParent = llvm::any_of(
+      LiveSlots, [](const TRCopyRange &Slot) { return Slot.IsAssembleParent; });
+  if (HasOpenParent) {
+    SmallVector<LinxRegOp> CurLiveouts(getLiveouts());
+    if (CurLiveouts.size() != needSyncTo.size())
+      report_fatal_error(
+          "cannot synchronize Local tile queue without copying an OPEN "
+          "B.ASSEMBLE parent");
+
+    Optional<unsigned> SafeRotation;
+    for (unsigned Shift = 0; Shift < CurLiveouts.size(); ++Shift) {
+      bool Matches = true;
+      for (unsigned I = 0; I < CurLiveouts.size(); ++I)
+        Matches &= CurLiveouts[(I + Shift) % CurLiveouts.size()] ==
+                   needSyncTo[I];
+      if (!Matches)
+        continue;
+
+      bool MovesParent = false;
+      for (unsigned I = 0; I < Shift; ++I)
+        MovesParent |= llvm::any_of(LiveSlots, [&](const TRCopyRange &Slot) {
+          return Slot.IsAssembleParent &&
+                 Slot.RegOp.Reg == CurLiveouts[I].Reg;
+        });
+      if (!MovesParent) {
+        SafeRotation = Shift;
+        break;
+      }
+    }
+    if (!SafeRotation)
+      report_fatal_error(
+          "cannot synchronize Local tile queue without copying an OPEN "
+          "B.ASSEMBLE parent");
+
+    for (unsigned I = 0; I < *SafeRotation; ++I) {
+      TRCopyRange &TmpSlot = tail();
+      BuildLiveoutAndEraseFrom(TmpSlot, CurLiveouts.front(), CurLiveouts);
+    }
     return;
+  }
 
   LLVM_DEBUG(dbgs() << "Starting regQ rolling!\n");
   LLVM_DEBUG(dbgs() << "need sync to liveouts:\n";
@@ -1434,8 +1466,7 @@ void LinxV5TRegToOffsetOpt::insertCopy(MachineBasicBlock &MBB) {
     // insert copy
     SlotCalc SC(&MBB, TII, RC, IsScalarRC, IsTileRC);
     SlotStatus ResultSS;
-    const bool CanSynchronizeQueue =
-        !SyncConflictRCs.count(RC) && !PinnedAssembleParentRCs.count(RC);
+    const bool CanSynchronizeQueue = !SyncConflictRCs.count(RC);
     SC.insertCopys(OriginalInstrs, RCsInfo[RC][2],
                    getInitStatus(MBB, LiveInsLastUse, RestLiveouts, RC),
                    CanSynchronizeQueue && isInSyncGroup(&MBB),
@@ -1845,6 +1876,14 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
                 UseProofs[UseMI] = UseProof();
                 return UseProof();
               }
+              if (UseKind == StateKind::Parent) {
+                if (!ReachingParentDistance)
+                  ReachingParentDistance = State.Distance;
+                else if (*ReachingParentDistance != State.Distance) {
+                  UseProofs[UseMI] = UseProof();
+                  return UseProof();
+                }
+              }
             }
             EndedAtUse = true;
             break;
@@ -2110,18 +2149,23 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         // has LAST-closed the tracked generation.  This keeps a closed child
         // usable as the writer for its next hierarchy level without mistaking
         // that source for the child's old ParentRef epoch.
-        if (RecordUses && UsesParentRegister && !UsesParentRef &&
-            !proveUse(&MI, /*RequireOpenParent=*/false).Proven) {
-          LLVM_DEBUG(dbgs() << "OPEN assembly parent ordinary use for epoch "
-                            << printReg(Parent, TRI) << " defined by "
-                            << *InitMI << "at " << MI);
-          if (State.Kind == StateKind::Conflict)
+        if (RecordUses && UsesParentRegister && !UsesParentRef) {
+          UseProof Proof = proveUse(&MI, /*RequireOpenParent=*/false);
+          if (Proof.Proven && Proof.Distance != 0)
+            AssembleParentUseDistances[&MI][Parent] = Proof.Distance;
+          if (!Proof.Proven) {
+            LLVM_DEBUG(dbgs()
+                       << "OPEN assembly parent ordinary use for epoch "
+                       << printReg(Parent, TRI) << " defined by " << *InitMI
+                       << "at " << MI);
+            if (State.Kind == StateKind::Conflict)
+              report_fatal_error(
+                  "B.ASSEMBLE parent has conflicting relative distances at a "
+                  "CFG join");
             report_fatal_error(
-                "B.ASSEMBLE parent has conflicting relative distances at a "
-                "CFG join");
-          report_fatal_error(
-              "cannot use an OPEN B.ASSEMBLE parent as an ordinary tile "
-              "source before LAST");
+                "cannot use an OPEN B.ASSEMBLE parent as an ordinary tile "
+                "source before LAST");
+          }
         }
 
         // LAST consumes the OPEN parent at its pre-state distance and only
@@ -2179,8 +2223,15 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             }
 
             if (State.Kind == StateKind::Parent) {
+              const bool IsOrdinaryQueueRotationCopy =
+                  MI.getOpcode() == LinxV5::PseudoTCOPYDesc &&
+                  MI.getNumOperands() > 2 && MI.getOperand(0).isReg() &&
+                  MI.getOperand(2).isReg() &&
+                  MI.getOperand(0).getReg() == MI.getOperand(2).getReg() &&
+                  Def == MI.getOperand(0).getReg();
               if (State.Kind == StateKind::Parent &&
-                  State.Phase != ParentPhase::Closed && RecordUses)
+                  State.Phase != ParentPhase::Closed && RecordUses &&
+                  !IsOrdinaryQueueRotationCopy)
                 report_fatal_error(
                     "OPEN B.ASSEMBLE parent hand contains another real tile "
                     "definition after CFG copy insertion");
@@ -2289,7 +2340,6 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   TRI = static_cast<const LinxV5RegisterInfo *>(MF.getSubtarget().getRegisterInfo());
   MRI = &MF.getRegInfo();
   SyncConflictRCs.clear();
-  PinnedAssembleParentRCs.clear();
 
 #ifndef NDEBUG
   verifyGPR(MF);
@@ -2338,33 +2388,6 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
           !LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1))
         report_fatal_error(
             "B.ASSEMBLE Init/Last controls must be immediate operands");
-    }
-  }
-
-  // OPEN assembly parents have already been assigned dedicated physical
-  // hands by Clockhands.  Discover those hands before Phase 1 so CFG queue
-  // synchronization cannot manufacture a COPY of an in-progress parent.
-  for (MachineBasicBlock &MBB : MF) {
-    for (MachineInstr &MI : MBB) {
-      if (!MI.isInlineAsm() ||
-          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
-               .contains("B.ASSEMBLE"))
-        continue;
-      Optional<bool> Last = LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
-      if (!Last || *Last)
-        continue;
-      for (const MachineOperand &MO : MI.operands()) {
-        if (!MO.isReg() || !MO.isDef() || !MO.getReg().isPhysical())
-          continue;
-        for (const TargetRegisterClass *RC :
-             {&LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
-              &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass}) {
-          if (RC->contains(MO.getReg())) {
-            PinnedAssembleParentRCs.insert(RC);
-            break;
-          }
-        }
-      }
     }
   }
 

@@ -24,7 +24,7 @@
 # TSTORE: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
 # TMOV: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
 # HIER: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
-# COUNTER: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
+# COUNTER: LLVM ERROR: B.ASSEMBLE parent has conflicting relative distances at a CFG join
 # ZERO-TRIP: LLVM ERROR: B.ASSEMBLE parent has conflicting relative distances at a CFG join
 
 #--- tstore.mir
