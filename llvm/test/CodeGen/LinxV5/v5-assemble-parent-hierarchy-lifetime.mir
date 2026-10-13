@@ -12,11 +12,23 @@
 # CHECK: B.ASSEMBLE {{.*}}$tile_tos1
 # CHECK: B.ASSEMBLE {{.*}}$tile_tos1
 # CHECK: TSTORE{{.*}}$tile_tos1
+# CHECK-LABEL: name: assemble_parent_spilled_counted_loop
+# CHECK: B.ASSEMBLE {{.*}}$tile_tos1
+# CHECK: B.ASSEMBLE {{.*}}$tile_tos1
+# CHECK: TSTORE{{.*}}$tile_tos1
+# CHECK-LABEL: name: assemble_parent_unreachable_continuation
+# CHECK-COUNT-4: B.ASSEMBLE
 --- |
   define dso_local void @assemble_parent_hierarchy_lifetime() {
     ret void
   }
   define dso_local void @assemble_parent_counted_loop() {
+    ret void
+  }
+  define dso_local void @assemble_parent_spilled_counted_loop() {
+    ret void
+  }
+  define dso_local void @assemble_parent_unreachable_continuation() {
     ret void
   }
 ...
@@ -74,5 +86,71 @@ body:             |
   bb.4:
     liveins: $r2, $tile_t1
     INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+    PseudoRET
+...
+---
+name:            assemble_parent_spilled_counted_loop
+alignment:       2
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    $r4 = ORI $r0, 0
+    $r5 = ORI $r0, 1
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x40000000), %bb.2(0x40000000)
+    liveins: $r5, $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r5, %bb.3
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1(0x80000000)
+    liveins: $r4, $r5, $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 0
+    $r4 = ADDI $r4, 1
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    PseudoBR %bb.1
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoBR %bb.4
+  bb.4:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
+    PseudoRET
+...
+---
+name:            assemble_parent_unreachable_continuation
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    successors: %bb.2(0x40000000), %bb.1(0x40000000)
+    $r4 = ORI $r0, 0
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_u1, 720905, $tile_n1, 13, 5, 13, 1, 13, 0
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x80000000)
+    liveins: $tile_n1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720905, $tile_u1, 720905, $tile_n1, 13, 0, 13, 0
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_n1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_u1, 720905, $tile_n1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
     PseudoRET
 ...

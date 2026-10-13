@@ -18,10 +18,13 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/Support/MathExtras.h"
 #include <set>
 
 #define DEBUG_TYPE "linxv5-treg-to-offset"
@@ -1494,8 +1497,12 @@ void LinxV5TRegToOffsetOpt::legalityCheck(MachineFunction &MF) {
 void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
   AssembleParentUseDistances.clear();
   SmallVector<std::pair<Register, MachineInstr *>, 4> ParentEpochs;
+  DenseMap<unsigned, unsigned> ParentEpochCounts;
   DenseSet<const MachineInstr *> ParentRefUses;
   DenseMap<const MachineInstr *, unsigned> ParentRefProofCounts;
+  DenseMap<const MachineInstr *, unsigned> ParentRefAnalysisCounts;
+  DenseSet<const MachineInstr *> ReachedUnprovedParentRefs;
+  DenseSet<const MachineInstr *> IncompleteParentRefProofs;
 
   for (MachineBasicBlock &MBB : MF) {
     for (MachineInstr &MI : MBB) {
@@ -1513,6 +1520,7 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             LinxV5::Tile_ABSRegClass.contains(MO.getReg())) {
           Register Parent = MO.getReg();
           ParentEpochs.emplace_back(Parent, &MI);
+          ++ParentEpochCounts[Parent.id()];
         }
       }
     }
@@ -1583,6 +1591,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
     // modular overflow exactly.
     struct UseProof {
       bool Proven = false;
+      bool Reached = false;
+      bool Complete = false;
       unsigned Distance = 0;
     };
     DenseMap<const MachineInstr *, UseProof> UseProofs;
@@ -1591,6 +1601,16 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
       if (Cached != UseProofs.end())
         return Cached->second;
 
+      struct SpillSlotKey {
+        int FI = 0;
+        int64_t Offset = 0;
+        uint64_t Size = 0;
+
+        bool operator<(const SpillSlotKey &Other) const {
+          return std::tie(FI, Offset, Size) <
+                 std::tie(Other.FI, Other.Offset, Other.Size);
+        }
+      };
       struct PathState {
         MachineBasicBlock *MBB = nullptr;
         StateKind Kind = StateKind::Absent;
@@ -1598,6 +1618,7 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         MachineInstr *Def = nullptr;
         unsigned Distance = 0;
         std::map<unsigned, uint64_t> Constants;
+        std::map<SpillSlotKey, uint64_t> SpillConstants;
       };
       SmallVector<PathState, 32> Worklist;
       PathState Entry;
@@ -1641,11 +1662,132 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         for (const auto &Entry : State.Constants)
           Key += ":" + std::to_string(Entry.first) + "=" +
                  std::to_string(Entry.second);
+        for (const auto &Entry : State.SpillConstants)
+          Key += ":s" + std::to_string(Entry.first.FI) + ":" +
+                 std::to_string(Entry.first.Offset) + ":" +
+                 std::to_string(Entry.first.Size) + "=" +
+                 std::to_string(Entry.second);
         return Key;
       };
 
+      const MachineFrameInfo &MFI = MF.getFrameInfo();
+      auto getExactSpillAccess = [&](const MachineInstr &MI,
+                                     bool IsLoad) -> Optional<SpillSlotKey> {
+        if (MI.getOpcode() != (IsLoad ? LinxV5::LDI : LinxV5::SDI) ||
+            !MI.hasOneMemOperand())
+          return None;
+        const MachineMemOperand *MMO = *MI.memoperands_begin();
+        if ((IsLoad ? !MMO->isLoad() || MMO->isStore()
+                    : !MMO->isStore() || MMO->isLoad()) ||
+            MMO->isAtomic() || MMO->isVolatile() || MMO->getSize() != 8 ||
+            MMO->getAlign() < Align(8))
+          return None;
+        const auto *PSV =
+            dyn_cast_or_null<FixedStackPseudoSourceValue>(MMO->getPseudoValue());
+        if (!PSV)
+          return None;
+        int FI = PSV->getFrameIndex();
+        if (!MFI.isSpillSlotObjectIndex(FI) || PSV->mayAlias(&MFI))
+          return None;
+        return SpillSlotKey{FI, MMO->getOffset(), MMO->getSize()};
+      };
+      auto invalidateSpillWrites = [&](PathState &State,
+                                       const MachineInstr &MI) {
+        for (const MachineMemOperand *MMO : MI.memoperands()) {
+          if (!MMO->isStore())
+            continue;
+          const auto *PSV = dyn_cast_or_null<FixedStackPseudoSourceValue>(
+              MMO->getPseudoValue());
+          if (!PSV)
+            continue;
+          int FI = PSV->getFrameIndex();
+          uint64_t Size = MMO->getSize();
+          int64_t WriteEnd = 0;
+          bool UnknownRange =
+              Size == ~UINT64_C(0) || Size > uint64_t(INT64_MAX) ||
+              AddOverflow(MMO->getOffset(), static_cast<int64_t>(Size),
+                          WriteEnd);
+          for (auto It = State.SpillConstants.begin();
+               It != State.SpillConstants.end();) {
+            if (It->first.FI != FI) {
+              ++It;
+              continue;
+            }
+            int64_t SlotEnd = 0;
+            bool SlotOverflow =
+                AddOverflow(It->first.Offset,
+                            static_cast<int64_t>(It->first.Size), SlotEnd);
+            if (UnknownRange || SlotOverflow ||
+                (MMO->getOffset() < SlotEnd && It->first.Offset < WriteEnd))
+              It = State.SpillConstants.erase(It);
+            else
+              ++It;
+          }
+        }
+      };
+
+      // Keep only the scalar values that can affect an explored CFG edge.
+      // Address and payload temporaries otherwise multiply the path-state
+      // space even though they cannot change reachability.
+      std::set<unsigned> RelevantRegs;
+      std::set<SpillSlotKey> RelevantSpills;
+      for (const MachineBasicBlock &MBB : MF) {
+        for (const MachineInstr &MI : MBB) {
+          if ((MI.getOpcode() == LinxV5::BEQ ||
+               MI.getOpcode() == LinxV5::BNE) &&
+              MI.getNumOperands() >= 2) {
+            for (unsigned I = 0; I != 2; ++I)
+              if (MI.getOperand(I).isReg())
+                RelevantRegs.insert(MI.getOperand(I).getReg().id());
+          } else if ((MI.getOpcode() == LinxV5::SETC_EQI ||
+                      MI.getOpcode() == LinxV5::SETC_NEI ||
+                      MI.getOpcode() == LinxV5::SETC_GEI) &&
+                     MI.getNumOperands() >= 1 && MI.getOperand(0).isReg()) {
+            RelevantRegs.insert(MI.getOperand(0).getReg().id());
+          }
+        }
+      }
+      bool RelevantChanged = true;
+      while (RelevantChanged) {
+        RelevantChanged = false;
+        for (const MachineBasicBlock &MBB : MF) {
+          for (const MachineInstr &MI : MBB) {
+            if (MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+                RelevantRegs.count(MI.getOperand(0).getReg().id()) &&
+                (MI.getOpcode() == LinxV5::ORI ||
+                 MI.getOpcode() == LinxV5::ADDI)) {
+              RelevantChanged |=
+                  RelevantRegs.insert(MI.getOperand(1).getReg().id()).second;
+            } else if (MI.getNumOperands() >= 3 &&
+                       MI.getOperand(0).isReg() &&
+                       RelevantRegs.count(MI.getOperand(0).getReg().id()) &&
+                       MI.getOpcode() == LinxV5::OR_SW) {
+              RelevantChanged |=
+                  RelevantRegs.insert(MI.getOperand(1).getReg().id()).second;
+              RelevantChanged |=
+                  RelevantRegs.insert(MI.getOperand(2).getReg().id()).second;
+            }
+            Optional<SpillSlotKey> Load =
+                getExactSpillAccess(MI, /*IsLoad=*/true);
+            if (Load && MI.getNumOperands() >= 1 &&
+                MI.getOperand(0).isReg() &&
+                RelevantRegs.count(MI.getOperand(0).getReg().id()))
+              RelevantChanged |= RelevantSpills.insert(*Load).second;
+            Optional<SpillSlotKey> Store =
+                getExactSpillAccess(MI, /*IsLoad=*/false);
+            if (Store && RelevantSpills.count(*Store) &&
+                MI.getNumOperands() >= 1 && MI.getOperand(0).isReg())
+              RelevantChanged |=
+                  RelevantRegs.insert(MI.getOperand(0).getReg().id()).second;
+          }
+        }
+      }
+
       while (!Worklist.empty()) {
         if (++ProcessedStates > MaxPathStates) {
+          LLVM_DEBUG(dbgs() << "B.ASSEMBLE scalar proof state cap for "
+                            << printReg(Parent, TRI) << " init " << *InitMI
+                            << "use " << *UseMI);
           UseProofs[UseMI] = UseProof();
           return UseProof();
         }
@@ -1664,14 +1806,28 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             if (RequireOpenParent) {
               if (UseKind != StateKind::Parent ||
                   State.Phase != ParentPhase::Open || State.Def != InitMI) {
-                UseProofs[UseMI] = UseProof();
-                return UseProof();
+                LLVM_DEBUG(dbgs()
+                           << "reached continuation without exact OPEN epoch "
+                           << printReg(Parent, TRI) << " init " << *InitMI
+                           << "state kind " << static_cast<unsigned>(UseKind)
+                           << " phase "
+                           << static_cast<unsigned>(State.Phase)
+                           << " distance " << State.Distance << " use "
+                           << MI);
+                UseProof Failed;
+                Failed.Reached = true;
+                Failed.Complete = true;
+                UseProofs[UseMI] = Failed;
+                return Failed;
               }
               if (!ReachingParentDistance)
                 ReachingParentDistance = State.Distance;
               else if (*ReachingParentDistance != State.Distance) {
-                UseProofs[UseMI] = UseProof();
-                return UseProof();
+                UseProof Failed;
+                Failed.Reached = true;
+                Failed.Complete = true;
+                UseProofs[UseMI] = Failed;
+                return Failed;
               }
             } else {
               if (!((UseKind == StateKind::Parent &&
@@ -1743,6 +1899,22 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             }
           }
 
+          Optional<SpillSlotKey> ExactSpillLoad =
+              getExactSpillAccess(MI, /*IsLoad=*/true);
+          if (ExactSpillLoad && MI.getNumOperands() >= 1 &&
+              MI.getOperand(0).isReg()) {
+            auto It = State.SpillConstants.find(*ExactSpillLoad);
+            if (It != State.SpillConstants.end())
+              KnownDef = std::make_pair(MI.getOperand(0).getReg(), It->second);
+          }
+          Optional<SpillSlotKey> ExactSpillStore =
+              getExactSpillAccess(MI, /*IsLoad=*/false);
+          Optional<uint64_t> SpillStoreValue;
+          if (ExactSpillStore && MI.getNumOperands() >= 1 &&
+              MI.getOperand(0).isReg())
+            SpillStoreValue =
+                getConstant(State, MI.getOperand(0).getReg());
+
           bool DefinesCArg = false;
           Optional<bool> NewCArg;
           const bool ModelsCArg =
@@ -1786,6 +1958,11 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             ConditionalTaken = CArg;
           }
 
+          invalidateSpillWrites(State, MI);
+          if (ExactSpillStore && RelevantSpills.count(*ExactSpillStore) &&
+              SpillStoreValue)
+            State.SpillConstants[*ExactSpillStore] = *SpillStoreValue;
+
           for (const MachineOperand &MO : MI.operands()) {
             if (MO.isReg() && MO.isDef()) {
               invalidateAliases(State, MO.getReg());
@@ -1804,7 +1981,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
             }
           }
           if (KnownDef)
-            State.Constants[KnownDef->first.id()] = KnownDef->second;
+            if (RelevantRegs.count(KnownDef->first.id()))
+              State.Constants[KnownDef->first.id()] = KnownDef->second;
           // SETC is the only modeled producer.  Every other explicit or
           // implicit CARG definition, including a regmask clobber, destroys
           // the previous predicate so a later branch explores both edges.
@@ -1873,6 +2051,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
       }
       UseProof Proof;
       Proof.Proven = SawUse;
+      Proof.Reached = SawUse;
+      Proof.Complete = true;
       if (ReachingParentDistance)
         Proof.Distance = *ReachingParentDistance;
       UseProofs[UseMI] = Proof;
@@ -1897,6 +2077,11 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         }
         if (RecordUses && UsesParentRef) {
           UseProof Proof = proveUse(&MI, /*RequireOpenParent=*/true);
+          ++ParentRefAnalysisCounts[&MI];
+          if (!Proof.Complete)
+            IncompleteParentRefProofs.insert(&MI);
+          if (Proof.Reached && !Proof.Proven)
+            ReachedUnprovedParentRefs.insert(&MI);
           if (Proof.Proven) {
             if (++ParentRefProofCounts[&MI] != 1)
               report_fatal_error(
@@ -2069,10 +2254,33 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
   }
 
   for (const MachineInstr *MI : ParentRefUses) {
-    if (ParentRefProofCounts.lookup(MI) != 1)
-      report_fatal_error(
-          "B.ASSEMBLE continuation requires one exact OPEN parent epoch at "
-          "a uniform relative distance");
+    unsigned ProofCount = ParentRefProofCounts.lookup(MI);
+    Register ParentRef = LinxV5::getAssembleParentRef(*MI);
+    unsigned CandidateEpochCount = ParentEpochCounts.lookup(ParentRef.id());
+    if (ProofCount == 1)
+      continue;
+    // A scalar proof may establish that a syntactic continuation is
+    // unreachable for every parent epoch.  It still needs a legal encoded
+    // ParentRef operand, but its architectural distance is unobservable.
+    // Use the nearest offset only after every bounded analysis completed
+    // without reaching the instruction.
+    if (ProofCount == 0 && CandidateEpochCount != 0 &&
+        ParentRefAnalysisCounts.lookup(MI) == CandidateEpochCount &&
+        !IncompleteParentRefProofs.count(MI) &&
+        !ReachedUnprovedParentRefs.count(MI)) {
+      AssembleParentUseDistances[MI][ParentRef] = 1;
+      continue;
+    }
+    LLVM_DEBUG(dbgs() << "unproved B.ASSEMBLE continuation: " << *MI);
+    LLVM_DEBUG(dbgs() << "proofs " << ProofCount << " analyses "
+                      << ParentRefAnalysisCounts.lookup(MI) << " of "
+                      << CandidateEpochCount << " candidate epochs, "
+                      << ParentEpochs.size() << " total, incomplete "
+                      << IncompleteParentRefProofs.count(MI) << " reached "
+                      << ReachedUnprovedParentRefs.count(MI) << "\n");
+    report_fatal_error(
+        "B.ASSEMBLE continuation requires one exact OPEN parent epoch at "
+        "a uniform relative distance");
   }
 }
 

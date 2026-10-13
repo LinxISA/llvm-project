@@ -19,6 +19,18 @@
 # RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
 # RUN:   -o /dev/null %t/already-closed-continuation.mir 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=CONTINUATION
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/overlapping-spill-write.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/unknown-spill-store.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/non-spill-stack-object.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
 #
 # An unmodeled implicit register definition invalidates an earlier known
 # scalar value.  The conditional branch must explore both successors,
@@ -141,5 +153,112 @@ body:             |
     INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
     INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
     INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+...
+
+#--- overlapping-spill-write.mir
+--- |
+  define void @overlapping_spill_write_must_invalidate_counter() { ret void }
+...
+---
+name:            overlapping_spill_write_must_invalidate_counter
+alignment:       2
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    $r4 = ORI $r0, 0
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    INLINEASM &"", 17 :: (store (s32) into %stack.0, align 4)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
+    PseudoRET
+...
+
+#--- unknown-spill-store.mir
+--- |
+  define void @unknown_spill_store_must_invalidate_counter(i64 %unknown) { ret void }
+...
+---
+name:            unknown_spill_store_must_invalidate_counter
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2
+    $r4 = ORI $r0, 0
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    SDI $r2, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
+    PseudoRET
+...
+
+#--- non-spill-stack-object.mir
+--- |
+  define void @non_spill_stack_object_must_not_transport_counter() { ret void }
+...
+---
+name:            non_spill_stack_object_must_not_transport_counter
+alignment:       2
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: default, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    $r4 = ORI $r0, 0
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
     PseudoRET
 ...
