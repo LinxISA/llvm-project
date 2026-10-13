@@ -955,6 +955,20 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
         static_cast<unsigned>(MI.getOperand(8).getImm())});
   }
 
+  if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0)
+      return None;
+    // TLSU operands carry LB0 (columns) before LB1 (rows), unlike the
+    // elementwise arithmetic pseudos below. Omitted LB2 defaults to LB0.
+    unsigned ValidCol = MI.getOperand(2).getImm();
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(7).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()), ValidCol, ValidCol,
+        static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
   if (MI.getOpcode() == LinxV5::PseudoTLOAD_noDsrc_noDdst ||
       MI.getOpcode() == LinxV5::PseudoTLOAD_noDsrc_Ddst ||
       MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_noDdst ||
@@ -1020,6 +1034,18 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
     unsigned ValidRow = MI.getOperand(2).getImm();
     unsigned ValidCol = MI.getOperand(4).getImm();
     unsigned DataType = MI.getOperand(5).getImm();
+    if (MI.getOpcode() == LinxV5::PseudoTLEA_SizeI) {
+      // TLEA names the index dtype but publishes signed/unsigned B64 byte
+      // displacements. A copy must preserve the result descriptor.
+      if (DataType == LinxV5Op::DataType::S32 ||
+          DataType == LinxV5Op::DataType::S64)
+        DataType = LinxV5Op::DataType::S64;
+      else if (DataType == LinxV5Op::DataType::U32 ||
+               DataType == LinxV5Op::DataType::U64)
+        DataType = LinxV5Op::DataType::U64;
+      else
+        return None;
+    }
     unsigned Layout = MI.getOperand(6).getImm();
     unsigned SizeCode = MI.getOperand(7).getImm();
     // These pseudos omit LB2 under the common destination-shape contract.
