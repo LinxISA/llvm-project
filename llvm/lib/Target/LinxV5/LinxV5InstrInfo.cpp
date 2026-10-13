@@ -745,6 +745,9 @@ static bool hasInlineAsmDimension(StringRef Text, unsigned Dimension) {
   return Text.contains((Twine("->lb") + Twine(Dimension)).str());
 }
 
+static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
+                                               StringRef Text);
+
 static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
                                              StringRef Text) {
   struct ConditionalLayout {
@@ -780,7 +783,42 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
     return LinxV5Op::ArgFormat::NORM;
   if (!Text.contains("B.DATR"))
     return LinxV5Op::ArgFormat::NORM;
-  return None;
+
+  // Identity conversions may spell only dtype and rounding in B.DATR.
+  // Every possible attribute line then has the architectural default NORM
+  // layout. Require exact two-field spellings and the same resolved dtype as
+  // the header; non-identity conversion result typing needs separate proof.
+  size_t BStart = Text.find("BSTART.");
+  if (BStart == StringRef::npos)
+    return None;
+  StringRef Header = Text.drop_front(BStart).split('\n').first;
+  Optional<unsigned> HeaderType = getInlineAsmDataType(MI, Header);
+  if (!HeaderType || *HeaderType == LinxV5Op::DataType::EMPTY_DataType)
+    return None;
+  SmallVector<StringRef, 8> Lines;
+  Text.split(Lines, '\n');
+  bool SawAttribute = false;
+  for (StringRef Line : Lines) {
+    Line = Line.trim();
+    if (!Line.consume_front("B.DATR"))
+      continue;
+    Line = Line.trim();
+    auto Fields = Line.split(',');
+    StringRef Type = Fields.first.trim();
+    StringRef Rounding = Fields.second.trim();
+    if (!Type.startswith("${") || !Type.endswith(":D}") ||
+        (Rounding != "RNONE" && Rounding != "RNE" && Rounding != "RTZ" &&
+         Rounding != "RTM" && Rounding != "RTP" && Rounding != "RNA" &&
+         Rounding != "RTO" && Rounding != "RHB"))
+      return None;
+    size_t Marker = Type.data() - Text.data() + Type.find(":D}");
+    Optional<unsigned> ResultType =
+        getInlineAsmOperandImmediate(MI, Text, Marker);
+    if (!ResultType || *ResultType != *HeaderType)
+      return None;
+    SawAttribute = true;
+  }
+  return SawAttribute ? Optional<unsigned>(LinxV5Op::ArgFormat::NORM) : None;
 }
 
 static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
