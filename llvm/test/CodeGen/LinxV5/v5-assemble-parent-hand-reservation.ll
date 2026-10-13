@@ -161,6 +161,40 @@ entry:
   ret void
 }
 
+; A branch-local ordinary writer is coalesced into one non-SSA virtual register
+; with two definitions.  While the parent is OPEN, that residual Tile_ABS value
+; must be constrained to the unreserved writer hand.
+define void @open_parent_with_multidef_writer(i1 %cond) {
+entry:
+  %base = call <32 x i32> asm sideeffect
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "=@2Tr,i"(i32 1)
+  %parent = call <64 x i32> asm sideeffect
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A",
+      "=@2Tr,@2Tr,i,i,i"(<32 x i32> %base, i32 2, i1 true, i1 false)
+  br i1 %cond, label %left, label %right
+
+left:
+  %left.writer = call <32 x i32> asm sideeffect
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "=@2Tr,i"(i32 1)
+  br label %merge
+
+right:
+  %right.writer = call <32 x i32> asm sideeffect
+      "BSTART.TEPL 102, 25\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A",
+      "=@2Tr,i"(i32 1)
+  br label %merge
+
+merge:
+  %writer = phi <32 x i32> [ %left.writer, %left ],
+                                 [ %right.writer, %right ]
+  call void asm sideeffect
+      "BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A",
+      "@2Tr,@2Tr,i,i"(<64 x i32> %parent, <32 x i32> %writer, i1 false, i1 true)
+  ret void
+}
+
 ; POS-LABEL: name: assemble_parent_loop
 ; POS: - { id: [[PARENT:[0-9]+]], class: tile_tr
 ; POS: - { id: [[SCRATCH:[0-9]+]], class: tile_nr
@@ -183,8 +217,8 @@ entry:
 ;
 ; SINGLE-LABEL: name: completed_writer_is_not_parent
 ; SINGLE: - { id: [[P0:[0-9]+]], class: tile_tr
-; SINGLE: - { id: [[P1:[0-9]+]], class: tile_ur
-; SINGLE: - { id: [[P2:[0-9]+]], class: tile_mr
+; SINGLE: - { id: [[P1:[0-9]+]], class: tile_mr
+; SINGLE: - { id: [[P2:[0-9]+]], class: tile_ur
 ; SINGLE: - { id: [[BASE:[0-9]+]], class: tile_nr
 ; SINGLE: - { id: [[COMPLETED:[0-9]+]], class: tile_nr
 ; SINGLE: BSTART.TEPL 102{{.*}}def %[[BASE]]
@@ -195,3 +229,11 @@ entry:
 ; SINGLE: B.IOT $1, $0{{.*}}%[[P0]]{{.*}}%[[COMPLETED]]
 ; SINGLE: B.IOT $1, $2, $0{{.*}}%[[P1]]{{.*}}%[[COMPLETED]]{{.*}}%[[BASE]]
 ; SINGLE: B.IOT $1, $0{{.*}}%[[P2]]{{.*}}%[[BASE]]
+;
+; SINGLE-LABEL: name: open_parent_with_multidef_writer
+; SINGLE-NOT: class: tile_abs,
+; SINGLE: - { id: [[OPEN:[0-9]+]], class: tile_tr
+; SINGLE: def %[[OPEN]]
+; SINGLE: def %[[WRITER:[0-9]+]]
+; SINGLE: def %[[WRITER]]
+; SINGLE: %[[OPEN]]{{.*}}%[[WRITER]]

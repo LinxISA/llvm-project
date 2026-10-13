@@ -10,13 +10,18 @@
 #include "LinxV5RegisterInfo.h"
 #include "LinxV5Subtarget.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include <llvm/CodeGen/LiveIntervals.h>
 #include <llvm/CodeGen/MachineFunctionPass.h>
 #include <llvm/CodeGen/MachineRegisterInfo.h>
 #include <llvm/CodeGen/VirtRegMap.h>
+#include <llvm/IR/ConstantRange.h>
 #include <llvm/IR/InlineAsm.h>
+#include <functional>
+#include <map>
+#include <set>
 
 using namespace llvm;
 
@@ -253,6 +258,504 @@ static SmallVector<MachineOperand *, 2> getDefOperands(MachineInstr *MI) {
   }
 
   return Defs;
+}
+
+static bool isAssemble(const MachineInstr &MI) {
+  return MI.isInlineAsm() &&
+         StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+             .contains("B.ASSEMBLE");
+}
+
+struct AssembleParentEvent {
+  bool Defines = false;
+  bool References = false;
+  bool Last = false;
+};
+
+static AssembleParentEvent getAssembleParentEvent(MachineInstr &MI,
+                                                  Register Parent) {
+  AssembleParentEvent Event;
+  if (!isAssemble(MI))
+    return Event;
+
+  for (MachineOperand *Def : getDefOperands(&MI))
+    Event.Defines |= Def->getReg() == Parent;
+  Event.References = LinxV5::getAssembleParentRef(MI) == Parent;
+  if (!Event.Defines && !Event.References)
+    return Event;
+
+  Optional<bool> Init = LinxV5::getAssembleControlBit(MI, /*InitIdx=*/0);
+  Optional<bool> Last = LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
+  if (!Init || !Last)
+    report_fatal_error(
+        "B.ASSEMBLE Init/Last controls must be immediate operands");
+  if (Event.Defines && !*Init)
+    report_fatal_error("B.ASSEMBLE parent definition requires Init=1");
+  if (Event.References && *Init)
+    report_fatal_error("B.ASSEMBLE continuation requires Init=0");
+  Event.Last = *Last;
+  return Event;
+}
+
+enum class ParentPhaseResult { Disjoint, Overlap, Invalid, UnableToProve };
+
+using ParentRangeEnvironment = std::map<unsigned, ConstantRange>;
+
+struct ParentPhaseStateKey {
+  MachineBasicBlock *MBB = nullptr;
+  unsigned Open = 0;
+
+  bool operator<(const ParentPhaseStateKey &Other) const {
+    return std::tie(MBB, Open) < std::tie(Other.MBB, Other.Open);
+  }
+};
+
+static ConstantRange getParentRange(const ParentRangeEnvironment &Environment,
+                                    Register Reg) {
+  if (Reg == LinxV5::R0)
+    return ConstantRange(APInt(64, 0));
+  auto It = Environment.find(Reg.id());
+  return It == Environment.end() ? ConstantRange::getFull(64) : It->second;
+}
+
+static void setParentRange(ParentRangeEnvironment &Environment, Register Reg,
+                           const ConstantRange &Range) {
+  if (Range.isFullSet())
+    Environment.erase(Reg.id());
+  else {
+    auto It = Environment.find(Reg.id());
+    if (It == Environment.end())
+      Environment.emplace(Reg.id(), Range);
+    else
+      It->second = Range;
+  }
+}
+
+// Missing entries mean Top.  Therefore a fact survives a join only when both
+// incoming environments carry it.
+static bool joinParentRanges(ParentRangeEnvironment &Into,
+                             const ParentRangeEnvironment &From) {
+  bool Changed = false;
+  for (auto It = Into.begin(); It != Into.end();) {
+    auto Other = From.find(It->first);
+    if (Other == From.end()) {
+      It = Into.erase(It);
+      Changed = true;
+      continue;
+    }
+    ConstantRange Joined = It->second.unionWith(Other->second);
+    if (Joined != It->second) {
+      It->second = std::move(Joined);
+      Changed = true;
+    }
+    ++It;
+  }
+  return Changed;
+}
+
+static void invalidateParentRangeAliases(ParentRangeEnvironment &Environment,
+                                         const TargetRegisterInfo &TRI,
+                                         Register Def) {
+  if (Def.isVirtual()) {
+    Environment.erase(Def.id());
+    return;
+  }
+  for (auto It = Environment.begin(); It != Environment.end();) {
+    Register Known(It->first);
+    if (Known.isPhysical() && TRI.regsOverlap(Known, Def))
+      It = Environment.erase(It);
+    else
+      ++It;
+  }
+}
+
+static Optional<std::pair<Register, bool>> findEquivalentBranchSource(
+    MachineInstr &Branch, Register Condition, const TargetRegisterInfo &TRI) {
+  SmallVector<Register, 8> LaterDefs;
+  SmallVector<const MachineOperand *, 2> LaterRegMasks;
+  SmallPtrSet<MachineBasicBlock *, 8> Visited;
+  MachineBasicBlock *MBB = Branch.getParent();
+  MachineInstr *StopAt = &Branch;
+
+  while (MBB && Visited.insert(MBB).second) {
+    bool BelowStop = StopAt != nullptr;
+    for (MachineInstr &MI : llvm::reverse(*MBB)) {
+      if (BelowStop) {
+        if (&MI == StopAt)
+          BelowStop = false;
+        continue;
+      }
+
+      if (MI.definesRegister(Condition, &TRI)) {
+        Register Source;
+        bool NeedsCanonicalSignedWord = false;
+        if (MI.getOpcode() == TargetOpcode::COPY &&
+            MI.getNumOperands() >= 2 && MI.getOperand(1).isReg()) {
+          Source = MI.getOperand(1).getReg();
+        } else if (MI.getOpcode() == LinxV5::ORI &&
+                   MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
+                   MI.getOperand(2).isImm() &&
+                   MI.getOperand(2).getImm() == 0) {
+          Source = MI.getOperand(1).getReg();
+        } else if (MI.getOpcode() == LinxV5::OR_SW &&
+                   MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
+                   MI.getOperand(2).isReg()) {
+          Register LHS = MI.getOperand(1).getReg();
+          Register RHS = MI.getOperand(2).getReg();
+          Source = LHS == LinxV5::R0 ? RHS :
+                   RHS == LinxV5::R0 ? LHS : Register();
+          NeedsCanonicalSignedWord = true;
+        }
+        if (!Source)
+          return None;
+        for (Register Def : LaterDefs)
+          if (Def == Source || (Def.isPhysical() && Source.isPhysical() &&
+                                TRI.regsOverlap(Def, Source)))
+            return None;
+        for (const MachineOperand *Mask : LaterRegMasks)
+          if (Source.isPhysical() && Mask->clobbersPhysReg(Source))
+            return None;
+        return std::make_pair(Source, NeedsCanonicalSignedWord);
+      }
+
+      for (const MachineOperand &MO : MI.operands()) {
+        if (MO.isReg() && MO.isDef())
+          LaterDefs.push_back(MO.getReg());
+        else if (MO.isRegMask())
+          LaterRegMasks.push_back(&MO);
+      }
+    }
+    if (BelowStop || MBB->pred_size() != 1)
+      return None;
+    MBB = *MBB->pred_begin();
+    StopAt = nullptr;
+  }
+  return None;
+}
+
+static ConstantRange widenParentRangeAtLoopHeader(
+    const ConstantRange &Old, const ConstantRange &Joined,
+    ArrayRef<APInt> ComparisonEndpoints) {
+  if (Old.contains(Joined))
+    return Old;
+  if (Old.isFullSet() || Joined.isFullSet() || Old.isWrappedSet() ||
+      Joined.isWrappedSet())
+    return ConstantRange::getFull(64);
+
+  APInt Lower = Joined.getLower();
+  APInt Upper = Joined.getUpper();
+  if (Lower != Old.getLower()) {
+    bool Found = false;
+    APInt Candidate(64, 0);
+    for (const APInt &Endpoint : ComparisonEndpoints) {
+      if (Endpoint.ule(Lower) && (!Found || Candidate.ult(Endpoint))) {
+        Candidate = Endpoint;
+        Found = true;
+      }
+    }
+    if (!Found)
+      return ConstantRange::getFull(64);
+    Lower = Candidate;
+  }
+  if (Upper != Old.getUpper()) {
+    bool Found = false;
+    APInt Candidate(64, 0);
+    for (const APInt &Endpoint : ComparisonEndpoints) {
+      if (Upper.ule(Endpoint) && (!Found || Endpoint.ult(Candidate))) {
+        Candidate = Endpoint;
+        Found = true;
+      }
+    }
+    if (!Found)
+      return ConstantRange::getFull(64);
+    Upper = Candidate;
+  }
+
+  ConstantRange Widened(Lower, Upper);
+  if (!Widened.contains(Joined))
+    return ConstantRange::getFull(64);
+  return Widened;
+}
+
+static ParentPhaseResult analyzeAssembleParentPhases(
+    MachineFunction &MF, MachineLoopInfo &MLI, const TargetRegisterInfo &TRI,
+    Register ParentA, Register ParentB = Register()) {
+  std::set<unsigned> RelevantRegs;
+  std::map<unsigned, SmallVector<APInt, 4>> ComparisonEndpoints;
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB) {
+      if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
+           MI.getOpcode() == LinxV5::SETC_NEI_BR) &&
+          MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+          MI.getOperand(1).isImm()) {
+        unsigned Reg = MI.getOperand(0).getReg().id();
+        RelevantRegs.insert(Reg);
+        APInt Endpoint(64, static_cast<uint64_t>(MI.getOperand(1).getImm()));
+        ComparisonEndpoints[Reg].push_back(Endpoint);
+        ComparisonEndpoints[Reg].push_back(Endpoint + 1);
+      }
+    }
+
+  bool RelevantChanged = true;
+  auto addEndpoint = [&](unsigned Reg, const APInt &Endpoint) {
+    SmallVectorImpl<APInt> &Endpoints = ComparisonEndpoints[Reg];
+    if (llvm::is_contained(Endpoints, Endpoint))
+      return false;
+    Endpoints.push_back(Endpoint);
+    return true;
+  };
+  while (RelevantChanged) {
+    RelevantChanged = false;
+    for (MachineBasicBlock &MBB : MF) {
+      for (MachineInstr &MI : MBB) {
+        if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
+            !RelevantRegs.count(MI.getOperand(0).getReg().id()))
+          continue;
+        unsigned DefReg = MI.getOperand(0).getReg().id();
+        if ((MI.getOpcode() == TargetOpcode::COPY ||
+             MI.getOpcode() == LinxV5::ORI ||
+             MI.getOpcode() == LinxV5::ADDI ||
+             MI.getOpcode() == LinxV5::SUBI) &&
+            MI.getOperand(1).isReg()) {
+          unsigned SrcReg = MI.getOperand(1).getReg().id();
+          RelevantChanged |= RelevantRegs.insert(SrcReg).second;
+          bool Propagate = MI.getOpcode() == TargetOpcode::COPY;
+          APInt Adjustment(64, 0);
+          if (MI.getOpcode() == LinxV5::ORI && MI.getNumOperands() >= 3 &&
+              MI.getOperand(2).isImm())
+            Propagate = MI.getOperand(2).getImm() == 0;
+          else if ((MI.getOpcode() == LinxV5::ADDI ||
+                    MI.getOpcode() == LinxV5::SUBI) &&
+                   MI.getNumOperands() >= 3 && MI.getOperand(2).isImm()) {
+            Propagate = true;
+            Adjustment =
+                APInt(64, static_cast<uint64_t>(MI.getOperand(2).getImm()));
+          }
+          // A self-update is the recurrence itself.  Its comparison endpoints
+          // already describe the loop bound; repeatedly inverting ADDI/SUBI
+          // would manufacture an unbounded endpoint sequence.
+          if (Propagate && SrcReg != DefReg) {
+            SmallVector<APInt, 4> DefEndpoints =
+                ComparisonEndpoints[DefReg];
+            for (const APInt &Endpoint : DefEndpoints) {
+              APInt SourceEndpoint = Endpoint;
+              if (MI.getOpcode() == LinxV5::ADDI)
+                SourceEndpoint -= Adjustment;
+              else if (MI.getOpcode() == LinxV5::SUBI)
+                SourceEndpoint += Adjustment;
+              RelevantChanged |= addEndpoint(SrcReg, SourceEndpoint);
+            }
+          }
+        } else if (MI.getOpcode() == LinxV5::OR_SW &&
+                 MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
+                 MI.getOperand(2).isReg()) {
+          Register LHS = MI.getOperand(1).getReg();
+          Register RHS = MI.getOperand(2).getReg();
+          RelevantChanged |= RelevantRegs.insert(LHS.id()).second;
+          RelevantChanged |= RelevantRegs.insert(RHS.id()).second;
+          Register Source = LHS == LinxV5::R0 ? RHS :
+                            RHS == LinxV5::R0 ? LHS : Register();
+          if (Source) {
+            SmallVector<APInt, 4> DefEndpoints =
+                ComparisonEndpoints[DefReg];
+            for (const APInt &Endpoint : DefEndpoints)
+              if (Endpoint.trunc(32).sext(64) == Endpoint)
+                RelevantChanged |= addEndpoint(Source.id(), Endpoint);
+          }
+        }
+      }
+    }
+  }
+
+  SmallVector<ParentPhaseStateKey, 32> Worklist;
+  std::map<ParentPhaseStateKey, ParentRangeEnvironment> EntryStates;
+  ParentPhaseStateKey Entry{&MF.front(), 0};
+  EntryStates.emplace(Entry, ParentRangeEnvironment());
+  Worklist.push_back(Entry);
+  constexpr unsigned MaxPathStates = 65536;
+  unsigned ProcessedStates = 0;
+
+  while (!Worklist.empty()) {
+    ParentPhaseStateKey Key = Worklist.pop_back_val();
+    ParentRangeEnvironment Environment = EntryStates.find(Key)->second;
+    if (++ProcessedStates > MaxPathStates) {
+      LLVM_DEBUG(dbgs() << "B.ASSEMBLE phase state cap for "
+                        << printReg(ParentA) << " / " << printReg(ParentB)
+                        << ", pending " << Worklist.size() << "\n");
+      return ParentPhaseResult::UnableToProve;
+    }
+    if (Key.Open == 3)
+      return ParentPhaseResult::Overlap;
+
+    Optional<unsigned> ConditionalOpcode;
+    Register ConditionalReg;
+    Register ConditionalEquivalentReg;
+    APInt ConditionalValue(64, 0);
+    MachineBasicBlock *ConditionalTarget = nullptr;
+    for (MachineInstr &MI : *Key.MBB) {
+      AssembleParentEvent A = getAssembleParentEvent(MI, ParentA);
+      AssembleParentEvent B = ParentB ? getAssembleParentEvent(MI, ParentB)
+                                      : AssembleParentEvent();
+
+      // ParentRef reads occur before a destination is published.
+      if ((A.References && !(Key.Open & 1u)) ||
+          (B.References && !(Key.Open & 2u))) {
+        LLVM_DEBUG(dbgs() << "invalid B.ASSEMBLE phase at "
+                          << printMBBReference(*Key.MBB)
+                          << " open=" << Key.Open << "\n" << MI);
+        return ParentPhaseResult::Invalid;
+      }
+      if (A.References && A.Last)
+        Key.Open &= ~1u;
+      if (B.References && B.Last)
+        Key.Open &= ~2u;
+      if (Key.Open == 3)
+        return ParentPhaseResult::Overlap;
+      if (A.Defines)
+        Key.Open = A.Last ? Key.Open & ~1u : Key.Open | 1u;
+      if (B.Defines)
+        Key.Open = B.Last ? Key.Open & ~2u : Key.Open | 2u;
+      if (Key.Open == 3)
+        return ParentPhaseResult::Overlap;
+
+      Optional<std::pair<Register, ConstantRange>> KnownDef;
+      if (MI.getOpcode() == TargetOpcode::COPY &&
+          MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+          MI.getOperand(1).isReg()) {
+        KnownDef = std::make_pair(
+            MI.getOperand(0).getReg(),
+            getParentRange(Environment, MI.getOperand(1).getReg()));
+      } else if ((MI.getOpcode() == LinxV5::ORI ||
+                  MI.getOpcode() == LinxV5::ADDI ||
+                  MI.getOpcode() == LinxV5::SUBI) &&
+                 MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+                 MI.getOperand(1).isReg() && MI.getOperand(2).isImm()) {
+        ConstantRange Src =
+            getParentRange(Environment, MI.getOperand(1).getReg());
+        ConstantRange Imm(
+            APInt(64, static_cast<uint64_t>(MI.getOperand(2).getImm())));
+        ConstantRange Value =
+            MI.getOpcode() == LinxV5::ORI
+                ? Src.binaryOr(Imm)
+                : MI.getOpcode() == LinxV5::ADDI ? Src.add(Imm)
+                                                 : Src.sub(Imm);
+        KnownDef = std::make_pair(MI.getOperand(0).getReg(), Value);
+      } else if (MI.getOpcode() == LinxV5::OR_SW &&
+                 MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+                 MI.getOperand(1).isReg() && MI.getOperand(2).isReg()) {
+        ConstantRange LHS =
+            getParentRange(Environment, MI.getOperand(1).getReg());
+        ConstantRange RHS =
+            getParentRange(Environment, MI.getOperand(2).getReg());
+        ConstantRange Value =
+            LHS.truncate(32).binaryOr(RHS.truncate(32)).signExtend(64);
+        KnownDef = std::make_pair(MI.getOperand(0).getReg(), Value);
+      }
+
+      if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
+           MI.getOpcode() == LinxV5::SETC_NEI_BR) &&
+          MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+          MI.getOperand(1).isImm() && MI.getOperand(2).isMBB()) {
+        ConditionalOpcode = MI.getOpcode();
+        ConditionalReg = MI.getOperand(0).getReg();
+        Optional<std::pair<Register, bool>> Equivalent =
+            findEquivalentBranchSource(MI, ConditionalReg, TRI);
+        if (Equivalent) {
+          Register Source = Equivalent->first;
+          ConstantRange SourceRange = getParentRange(Environment, Source);
+          bool CanonicalSignedWord =
+              SourceRange.isAllNonNegative() &&
+              SourceRange.getUnsignedMax().ult(APInt(64, uint64_t(1) << 31));
+          if (!Equivalent->second || CanonicalSignedWord)
+            ConditionalEquivalentReg = Source;
+        }
+        ConditionalValue =
+            APInt(64, static_cast<uint64_t>(MI.getOperand(1).getImm()));
+        ConditionalTarget = MI.getOperand(2).getMBB();
+      }
+
+      for (const MachineOperand &MO : MI.operands()) {
+        if (MO.isReg() && MO.isDef())
+          invalidateParentRangeAliases(Environment, TRI, MO.getReg());
+        else if (MO.isRegMask())
+          for (auto It = Environment.begin(); It != Environment.end();) {
+            Register Known(It->first);
+            if (Known.isPhysical() && MO.clobbersPhysReg(Known))
+              It = Environment.erase(It);
+            else
+              ++It;
+          }
+      }
+      if (KnownDef && RelevantRegs.count(KnownDef->first.id()))
+        setParentRange(Environment, KnownDef->first, KnownDef->second);
+    }
+
+    for (MachineBasicBlock *Succ : Key.MBB->successors()) {
+      ParentRangeEnvironment SuccessorEnvironment = Environment;
+      if (ConditionalTarget && ConditionalOpcode) {
+        bool EqualEdge = (*ConditionalOpcode == LinxV5::SETC_EQI_BR) ==
+                         (Succ == ConditionalTarget);
+        ConstantRange Current =
+            getParentRange(SuccessorEnvironment, ConditionalReg);
+        ConstantRange Singleton(ConditionalValue);
+        Optional<ConstantRange> Narrowed =
+            EqualEdge ? Current.exactIntersectWith(Singleton)
+                      : Current.exactIntersectWith(Singleton.inverse());
+        if (Narrowed && Narrowed->isEmptySet())
+          continue;
+        // Removing a point from the middle creates a hole.  Keep the original
+        // over-approximation when ConstantRange cannot express it exactly.
+        if (Narrowed)
+          setParentRange(SuccessorEnvironment, ConditionalReg, *Narrowed);
+        if (Narrowed && ConditionalEquivalentReg) {
+          ConstantRange EquivalentCurrent = getParentRange(
+              SuccessorEnvironment, ConditionalEquivalentReg);
+          Optional<ConstantRange> EquivalentNarrowed =
+              EqualEdge
+                  ? EquivalentCurrent.exactIntersectWith(Singleton)
+                  : EquivalentCurrent.exactIntersectWith(Singleton.inverse());
+          if (EquivalentNarrowed && EquivalentNarrowed->isEmptySet())
+            continue;
+          if (EquivalentNarrowed)
+            setParentRange(SuccessorEnvironment, ConditionalEquivalentReg,
+                           *EquivalentNarrowed);
+        }
+      }
+
+      ParentPhaseStateKey Next{Succ, Key.Open};
+      auto Existing = EntryStates.find(Next);
+      if (Existing == EntryStates.end()) {
+        EntryStates.emplace(Next, std::move(SuccessorEnvironment));
+        Worklist.push_back(Next);
+        continue;
+      }
+
+      ParentRangeEnvironment Joined = Existing->second;
+      if (!joinParentRanges(Joined, SuccessorEnvironment))
+        continue;
+      MachineLoop *Loop = MLI.getLoopFor(Succ);
+      if (Loop && Loop->getHeader() == Succ) {
+        for (auto It = Joined.begin(); It != Joined.end();) {
+          auto Old = Existing->second.find(It->first);
+          if (Old == Existing->second.end()) {
+            It = Joined.erase(It);
+            continue;
+          }
+          It->second = widenParentRangeAtLoopHeader(
+              Old->second, It->second, ComparisonEndpoints[It->first]);
+          if (It->second.isFullSet())
+            It = Joined.erase(It);
+          else
+            ++It;
+        }
+      }
+      if (Joined == Existing->second)
+        continue;
+      Existing->second = std::move(Joined);
+      Worklist.push_back(Next);
+    }
+  }
+  return ParentPhaseResult::Disjoint;
 }
 
 void ColoringInChain::updateRCSlotIndex(
@@ -579,16 +1082,33 @@ LinxV5ClockhandsColoring::findOpenAssembleParents(MachineFunction &MF) {
 
   for (MachineBasicBlock &MBB : MF) {
     for (MachineInstr &MI : MBB) {
-      if (!MI.isInlineAsm() ||
-          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
-               .contains("B.ASSEMBLE"))
+      if (!isAssemble(MI))
         continue;
 
-      for (MachineOperand *Def : getDefOperands(&MI)) {
+      Optional<bool> Init =
+          LinxV5::getAssembleControlBit(MI, /*InitIdx=*/0);
+      Optional<bool> Last =
+          LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
+      if (!Init || !Last)
+        report_fatal_error(
+            "B.ASSEMBLE Init/Last controls must be immediate operands");
+
+      SmallVector<MachineOperand *, 2> Defs = getDefOperands(&MI);
+      Register ParentRef = LinxV5::getAssembleParentRef(MI);
+      if (ParentRef != LinxV5::NoRegister &&
+          (*Init || !Defs.empty()))
+        report_fatal_error(
+            "B.ASSEMBLE continuation must be destination-free with Init=0");
+
+      for (MachineOperand *Def : Defs) {
         Register Reg = Def->getReg();
         if (!Reg.isVirtual() ||
             MRI->getRegClass(Reg) != &LinxV5::Tile_ABSRegClass ||
             Seen.count(Reg))
+          continue;
+        if (!*Init)
+          report_fatal_error("B.ASSEMBLE parent definition requires Init=1");
+        if (*Last)
           continue;
 
         // INIT_LAST has no continuation and needs no reserved hand.  An open
@@ -609,6 +1129,17 @@ LinxV5ClockhandsColoring::findOpenAssembleParents(MachineFunction &MF) {
       }
     }
   }
+  const TargetRegisterInfo &TRI = *MRI->getTargetRegisterInfo();
+  for (Register Parent : Parents) {
+    ParentPhaseResult Result =
+        analyzeAssembleParentPhases(MF, *MLI, TRI, Parent);
+    if (Result == ParentPhaseResult::Invalid)
+      report_fatal_error(
+          "B.ASSEMBLE continuation may execute without an OPEN parent");
+    if (Result == ParentPhaseResult::UnableToProve)
+      report_fatal_error(
+          "unable to prove bounded B.ASSEMBLE parent phase behavior");
+  }
   return Parents;
 }
 
@@ -627,38 +1158,89 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
 
   if (!OpenParents.empty()) {
     // Keep one hand available for writer temporaries.  Parent values with
-    // nonoverlapping LiveIntervals may reuse a reserved hand; reject only
-    // actual simultaneous pressure that requires a fourth parent hand.
+    // nonoverlapping architectural OPEN phases may reuse a reserved hand even
+    // when the completed tile remains ordinarily live.  Full LiveIntervals
+    // still govern allocation inside each selected hand.
     ArrayRef<const TargetRegisterClass *> ParentRCs(CurRCs.data(), 3);
-    DenseMap<const TargetRegisterClass *, SmallVector<LiveInterval *, 2>>
-        ParentIntervals;
-    SmallVector<std::pair<Register, const TargetRegisterClass *>, 4>
-        Assignments;
-    DenseSet<const TargetRegisterClass *> UsedParentRCs;
-    for (Register Parent : OpenParents) {
-      LiveInterval &LI = LIS->getInterval(Parent);
-      const TargetRegisterClass *Chosen = nullptr;
-      for (const TargetRegisterClass *RC : ParentRCs) {
-        bool Interferes =
-            llvm::any_of(ParentIntervals[RC], [&](LiveInterval *Other) {
-              return LI.overlaps(*Other);
-            });
-        if (!Interferes) {
-          Chosen = RC;
-          break;
+    const unsigned ParentCount = OpenParents.size();
+    SmallVector<SmallVector<uint8_t, 8>, 8> Interferes(
+        ParentCount, SmallVector<uint8_t, 8>(ParentCount, 0));
+    const TargetRegisterInfo &TRI = *MRI->getTargetRegisterInfo();
+    for (unsigned I = 0; I < ParentCount; ++I) {
+      for (unsigned J = I + 1; J < ParentCount; ++J) {
+        ParentPhaseResult Result = analyzeAssembleParentPhases(
+            MF, *MLI, TRI, OpenParents[I], OpenParents[J]);
+        if (Result == ParentPhaseResult::UnableToProve)
+          report_fatal_error(
+              "unable to prove bounded B.ASSEMBLE parent phase behavior");
+        if (Result == ParentPhaseResult::Invalid)
+          report_fatal_error(
+              "B.ASSEMBLE continuation may execute without an OPEN parent");
+        if (Result == ParentPhaseResult::Overlap) {
+          Interferes[I][J] = Interferes[J][I] = 1;
+          LLVM_DEBUG(dbgs() << "OPEN parent conflict "
+                            << printReg(OpenParents[I]) << " / "
+                            << printReg(OpenParents[J]) << "\n");
         }
       }
-      if (!Chosen)
-        report_fatal_error(
-            "more than three overlapping OPEN B.ASSEMBLE parents leave no "
-            "Local tile hand for writer temporaries");
-      ParentIntervals[Chosen].push_back(&LI);
-      UsedParentRCs.insert(Chosen);
-      Assignments.emplace_back(Parent, Chosen);
     }
 
-    for (const auto &Assignment : Assignments)
-      assign(Assignment.first, Assignment.second);
+    SmallVector<int, 8> Colors(ParentCount, -1);
+    std::function<bool(unsigned)> ColorParents = [&](unsigned Colored) {
+      if (Colored == ParentCount)
+        return true;
+
+      int Best = -1;
+      unsigned BestSaturation = 0;
+      unsigned BestDegree = 0;
+      for (unsigned I = 0; I < ParentCount; ++I) {
+        if (Colors[I] != -1)
+          continue;
+        bool NeighborColors[3] = {false, false, false};
+        unsigned Degree = 0;
+        for (unsigned J = 0; J < ParentCount; ++J) {
+          if (!Interferes[I][J])
+            continue;
+          ++Degree;
+          if (Colors[J] != -1)
+            NeighborColors[Colors[J]] = true;
+        }
+        unsigned Saturation = NeighborColors[0] + NeighborColors[1] +
+                              NeighborColors[2];
+        if (Best == -1 || Saturation > BestSaturation ||
+            (Saturation == BestSaturation && Degree > BestDegree)) {
+          Best = I;
+          BestSaturation = Saturation;
+          BestDegree = Degree;
+        }
+      }
+
+      constexpr int ColorPreference[3] = {0, 2, 1};
+      for (int Attempt = 0; Attempt != 3; ++Attempt) {
+        int Color = ColorPreference[Attempt];
+        bool Conflict = false;
+        for (unsigned J = 0; J < ParentCount; ++J)
+          Conflict |= Interferes[Best][J] && Colors[J] == Color;
+        if (Conflict)
+          continue;
+        Colors[Best] = Color;
+        if (ColorParents(Colored + 1))
+          return true;
+        Colors[Best] = -1;
+      }
+      return false;
+    };
+    if (!ColorParents(0))
+      report_fatal_error(
+          "more than three overlapping OPEN B.ASSEMBLE parents leave no "
+          "Local tile hand for writer temporaries");
+
+    DenseSet<const TargetRegisterClass *> UsedParentRCs;
+    for (unsigned I = 0; I < ParentCount; ++I) {
+      const TargetRegisterClass *RC = ParentRCs[Colors[I]];
+      UsedParentRCs.insert(RC);
+      assign(OpenParents[I], RC);
+    }
     llvm::erase_if(CurRCs, [&](const TargetRegisterClass *RC) {
       return UsedParentRCs.count(RC);
     });
@@ -672,6 +1254,20 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
   for (auto Chain : Chains) {
     ColoringInChain CIC(Chain, OriRCs, CurRCs, MRI, LIS, VRM);
     CIC.assign();
+  }
+  // Register coalescing can leave ordinary Tile_ABS values with multiple
+  // definitions.  ColoringInChain deliberately skips those non-SSA values,
+  // but standard RA must not place them in a hand reserved by an OPEN parent.
+  // N is excluded from parent coloring above and remains the dedicated writer
+  // hand for every such residual value.
+  if (!OpenParents.empty()) {
+    assert(!CurRCs.empty() && "OPEN parents must leave a writer hand");
+    const TargetRegisterClass *WriterRC = CurRCs.back();
+    for (unsigned I = 0, E = MRI->getNumVirtRegs(); I != E; ++I) {
+      Register Reg = Register::index2VirtReg(I);
+      if (MRI->getRegClassOrNull(Reg) == &LinxV5::Tile_ABSRegClass)
+        MRI->setRegClass(Reg, WriterRC);
+    }
   }
   LLVM_DEBUG(dbgs() << "\nAssignTileReg End\n");
 }
