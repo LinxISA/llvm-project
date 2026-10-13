@@ -212,6 +212,7 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
       MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI ||
+      MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTLEA_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ||
@@ -247,6 +248,7 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
          MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI ||
+         MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTLEA_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ||
@@ -257,6 +259,7 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
          MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI ||
+         MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTLEA_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ||
@@ -303,6 +306,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                                       ? 59
                                                 : MI.getOpcode() == LinxV5::PseudoTLEA_SizeI
                                                       ? LinxV5Op::TileOPTEPL::TLEA
+                                                : MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI
+                                                      ? 27
                                                 : MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI
                                                       ? 102
                                                 : MI.getOpcode() == LinxV5::PseudoTCMPS_GPR
@@ -360,6 +365,34 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
         writeBinaryCodes(OS, Fixups, STI,
             {MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
                  .addOperand(MI.getOperand(11)).addOperand(MI.getOperand(12))
+                 .addReg(LinxV5::R0)}, Dummy);
+        return;
+      }
+      if (MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI) {
+        // A CUBE_M32 source keeps its descriptor layout, but the normative
+        // TCVT schema encodes B.DATR.Layout=NORM for the operation view.
+        writeBinaryCodes(OS, Fixups, STI,
+            {MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+                 .addImm(0).addImm(0).addOperand(MI.getOperand(6))
+                 .addImm(LinxV5Op::PadValue::Null).addImm(0)
+                 .addOperand(MI.getOperand(10)).addOperand(MI.getOperand(11))
+                 .addImm(0).addOperand(MI.getOperand(14))
+                 .addOperand(MI.getOperand(15))}, Dummy);
+        writeBinaryCodes(OS, Fixups, STI,
+            compressMCInstVec(
+                {MCInstBuilder(LinxV5::B_DIM).addImm(0)
+                     .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4)),
+                 MCInstBuilder(LinxV5::B_DIM).addImm(1)
+                     .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2))},
+                STI, Ctx), Dummy);
+        writeBinaryCodes(OS, Fixups, STI,
+            {MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                 .addOperand(MI.getOperand(0)).addImm(0b1111)
+                 .addOperand(MI.getOperand(8)).addImm(1)
+                 .addOperand(MI.getOperand(9))}, Dummy);
+        writeBinaryCodes(OS, Fixups, STI,
+            {MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
+                 .addOperand(MI.getOperand(12)).addOperand(MI.getOperand(13))
                  .addReg(LinxV5::R0)}, Dummy);
         return;
       }

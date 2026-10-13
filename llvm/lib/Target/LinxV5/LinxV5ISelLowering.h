@@ -85,6 +85,7 @@ enum NodeType : unsigned {
   EW_TBINARY,
   EW_TBINARY_GPR_MASKED,
   EW_TNEG_GPR_MASKED,
+  EW_TCVT_GPR_MASKED,
   EW_TLEA,
   EW_TCI,
   EW_TCMPS_GPR,
@@ -320,6 +321,8 @@ private:
                                      SelectionDAG &DAG) const;
   SDValue lowerElementwiseTNegGPRMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCVTGPRMasked(SDLoc &DL, SDValue Op,
+                                        SelectionDAG &DAG) const;
   SDValue lowerElementwiseTLEA(SDLoc &DL, SDValue Op,
                                SelectionDAG &DAG) const;
   SDValue lowerElementwiseTBinary(SDLoc &DL, SDValue Op,

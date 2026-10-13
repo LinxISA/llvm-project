@@ -4,10 +4,10 @@
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/tsel.ll 2>&1 | FileCheck %s --check-prefix=TSEL
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/mscatter.ll 2>&1 | FileCheck %s --check-prefix=MSCATTER
 
-; TBINARY: GPR-masked element binary requires exact 32x1 S32/U32 CUBE_M32 Tiles, one low mask word and zero inactive lanes
+; TBINARY: GPR-masked element binary requires an exact admitted logical32 or dense64 CUBE_M32 Tile, one low mask word and zero inactive lanes
 ; TCMP: TCMP GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles
-; TSEL: TSEL GPR requires exact 32x1 S32/U32 CUBE_M32 Tiles and one low mask word
-; MSCATTER: GPR-masked MSCATTER requires an exact admitted U16/S32/U32/FP16/FP32 element profile, S64/U64 byte offsets, CUBE_M32, one low mask word and merge-inactive stores
+; TSEL: TSEL GPR requires an exact admitted 32x1 or dense64 CUBE_M32 Tile and one low mask word
+; MSCATTER: GPR-masked MSCATTER requires an exact admitted S64/U64/U16/S32/U32/FP16/FP32 element profile, S64/U64 byte offsets, CUBE_M32, one low mask word and merge-inactive stores
 
 ;--- tbinary.ll
 define void @bad(ptr %out, ptr %ap, ptr %bp, i64 %m) {

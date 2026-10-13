@@ -2,9 +2,9 @@
 // RUN: FileCheck %s --check-prefix=IR < %t.ll
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_WIDE -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=WIDE
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_SHIFT32 -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=SHIFT32
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_UNBOUNDED_JOIN -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=UNBOUNDED
+// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_UNBOUNDED_JOIN -emit-llvm -S %s -o - | FileCheck %s --check-prefix=UNBOUNDED
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_UNSUPPORTED_USER -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=BADUSER
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_NEGATIVE_JOIN -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=NEGATIVE
+// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_NEGATIVE_JOIN -emit-llvm -S %s -o - | FileCheck %s --check-prefix=NEGATIVE
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_HIGH_GEP -emit-llvm -S %s -o - | FileCheck %s --check-prefix=HIGHGEP
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_BOUNDARY -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=BOUNDARY
 
@@ -82,7 +82,9 @@ extern "C" void unbounded_join(const u32 *__restrict input,
       output[element] = input[joined];
   }
 }
-// UNBOUNDED: select requires an i1 mask and admitted Tile values
+// UNBOUNDED: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 24,
+// UNBOUNDED: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24,
+// UNBOUNDED: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64
 #endif
 
 #ifdef TEST_UNSUPPORTED_USER
@@ -108,7 +110,10 @@ extern "C" void negative_join(const u32 *__restrict input,
       output[element] = input[joined];
   }
 }
-// NEGATIVE: select requires an i1 mask and admitted Tile values
+// NEGATIVE: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 24,
+// NEGATIVE: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24,
+// NEGATIVE: @llvm.linx.experimental.ew.tcmps.gpr.v32i64(i64 32, i64 1, i64 16,
+// NEGATIVE: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64
 #endif
 
 #ifdef TEST_HIGH_GEP

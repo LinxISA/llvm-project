@@ -11,7 +11,7 @@
 ; BOUNDED: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
 ; BOUNDED-NOT: @llvm.vp.{{.*}}v32i64
 
-; UNBOUNDED: Tile legalization: select requires an i1 mask and admitted Tile values
+; UNBOUNDED: Tile legalization: i64 VP address arithmetic requires a constant affine result or a fully active, address-only uniform offset with signed-B32 lane offsets
 
 ;--- bounded.ll
 target triple = "linx64v5"

@@ -1,6 +1,6 @@
 ; RUN: split-file %s %t
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/mul.ll 2>&1 | FileCheck %s --check-prefix=MUL
-; MUL: FP32 supports the same shape with add/sub only
+; MUL: GPR-masked element binary requires an exact admitted logical32 or dense64 CUBE_M32 Tile
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/cmp-layout.ll 2>&1 | FileCheck %s --check-prefix=CMPLAYOUT
 ; CMPLAYOUT: TCMP GPR requires exact 32x1
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/cmp-unmasked.ll 2>&1 | FileCheck %s --check-prefix=CMPUNMASKED

@@ -3781,6 +3781,19 @@ class PseudoTEPL_TNEG_GPR_Masked_Base :
 }
 def PseudoTNEG_GPR_Masked_SizeI : PseudoTEPL_TNEG_GPR_Masked_Base;
 
+class PseudoTEPL_TCVT_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$SrcDataType, BstartDataType:$DstDataType,
+       BArgFormat:$Layout, TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile, RMode:$RMode, Sat:$Sat,
+       GPRSrc:$MaskLow, GPRSrc:$MaskHigh, uimm1:$PredInv, uimm1:$Zero)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TCVT.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${SrcDataType}, ${DstDataType}, $Layout>, $SrcTile, $MaskLow, $MaskHigh, $DstTile$TileSize";
+}
+def PseudoTCVT_GPR_Masked_SizeI : PseudoTEPL_TCVT_GPR_Masked_Base;
+
 class PseudoTEPL_TCI_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,

@@ -258,6 +258,17 @@ def int_linx_experimental_ew_tneg_gpr_masked :
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                LLVMMatchType<0>, llvm_i64_ty], [IntrHasSideEffects]>;
 
+// Native integer narrowing through TCVT.  Source and destination vectors have
+// distinct element widths.  The backend admits only logical32 S64/U64 to
+// S32/U32 with one low execution-mask word; RMode/Sat remain explicit so all
+// unsupported conversion profiles fail before instruction selection.
+def int_linx_experimental_ew_tcvt_gpr_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 // Extend S32/U32/S64/U64 logical element indices to the corresponding
 // S64/U64 representation, then scale by element_bits/8 modulo 2^64. The
 // result is a byte-displacement Tile; result and source types are distinct.

@@ -1,5 +1,5 @@
 ; RUN: not opt -mtriple=linx64v5 -passes='linx-v5-element-generic-prepare,linx-v5-element-predication' -disable-output %s 2>&1 | FileCheck %s
-; CHECK: freeze requires scalar i32 data
+; CHECK: freeze requires admitted scalar numeric data
 
 target triple = "linx64v5"
 declare void @llvm.linx.experimental.element.region(metadata)

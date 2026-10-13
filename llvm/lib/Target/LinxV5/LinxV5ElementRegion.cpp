@@ -1873,6 +1873,36 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                                        Compare->getOperand(1), Branch);
   };
   const DataLayout &DL = F.getParent()->getDataLayout();
+  auto IsAggregateMemoryPointer = [&](Value *Pointer) {
+    Value *Current = Pointer;
+    Value *DynamicIndex = nullptr;
+    APInt DynamicScale(DL.getIndexSizeInBits(0), 0);
+    unsigned DynamicOccurrences = 0;
+    while (auto *GEP = dyn_cast<GetElementPtrInst>(Current)) {
+      unsigned BitWidth =
+          DL.getIndexSizeInBits(GEP->getPointerAddressSpace());
+      MapVector<Value *, APInt> Variables;
+      APInt ConstantOffset(BitWidth, 0);
+      if (!GEP->getSourceElementType()->isAggregateType() ||
+          !GEP->collectOffset(DL, BitWidth, Variables, ConstantOffset) ||
+          Variables.size() > 1)
+        return false;
+      for (Value *Index : GEP->indices())
+        if (!isa<Constant>(Index) && ++DynamicOccurrences > 1)
+          return false;
+      if (!Variables.empty()) {
+        if (DynamicIndex && DynamicIndex != Variables.front().first)
+          return false;
+        DynamicIndex = Variables.front().first;
+        DynamicScale = Variables.front().second;
+      }
+      Current = GEP->getPointerOperand();
+    }
+    return DynamicIndex && !DynamicScale.isZero() &&
+           Current->getType()->isPointerTy() &&
+           Current->getType()->getPointerAddressSpace() == 0 &&
+           L.isLoopInvariant(Current);
+  };
   SmallVector<Instruction *, 8> Memory;
   SmallPtrSet<Instruction *, 8> IndependentStreams;
   for (BasicBlock *BB : Plan.Order) {
@@ -2026,6 +2056,15 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           return Fail(&I, "comparison/select requires scalar operands");
         continue;
       }
+      if (auto *Intrinsic = dyn_cast<IntrinsicInst>(&I)) {
+        const Intrinsic::ID ID = Intrinsic->getIntrinsicID();
+        if ((ID == Intrinsic::fshl || ID == Intrinsic::fshr) &&
+            Intrinsic->getType()->isIntegerTy(32) &&
+            Intrinsic->getArgOperand(0)->getType()->isIntegerTy(32) &&
+            Intrinsic->getArgOperand(1)->getType()->isIntegerTy(32) &&
+            Intrinsic->getArgOperand(2)->getType()->isIntegerTy(32))
+          continue;
+      }
       if (auto *Cast = dyn_cast<CastInst>(&I)) {
         const bool Bits32 = Cast->getOpcode() == Instruction::BitCast &&
                             ((Cast->getSrcTy()->isFloatTy() &&
@@ -2038,12 +2077,27 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         continue;
       }
       if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-        if (GEP->getNumIndices() != 1 ||
-            !GEP->getPointerOperandType()->isPointerTy() ||
-            (!GEP->getSourceElementType()->isIntegerTy() &&
-             !GEP->getSourceElementType()->isFloatTy() &&
-             !GEP->getSourceElementType()->isHalfTy()))
-          return Fail(&I, "requires a scalar integer/f32/f16 element GEP");
+        unsigned BitWidth =
+            DL.getIndexSizeInBits(GEP->getPointerAddressSpace());
+        MapVector<Value *, APInt> Variables;
+        APInt ConstantOffset(BitWidth, 0);
+        const bool ScalarLeaf =
+            GEP->getNumIndices() == 1 &&
+            (GEP->getSourceElementType()->isIntegerTy() ||
+             GEP->getSourceElementType()->isFloatTy() ||
+             GEP->getSourceElementType()->isHalfTy());
+        const bool AggregatePath =
+            GEP->getSourceElementType()->isAggregateType() &&
+            GEP->collectOffset(DL, BitWidth, Variables, ConstantOffset) &&
+            Variables.size() <= 1 &&
+            llvm::count_if(GEP->indices(),
+                           [](Value *Index) { return !isa<Constant>(Index); }) <=
+                1;
+        if (!GEP->getPointerOperandType()->isPointerTy() ||
+            (!ScalarLeaf && !AggregatePath))
+          return Fail(&I,
+                      "requires a scalar leaf GEP or one dynamic aggregate "
+                      "index with constant field suffixes");
         continue;
       }
       Value *Pointer = nullptr;
@@ -2095,6 +2149,11 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           Pointer->getType()->getPointerAddressSpace() != 0)
         return Fail(&I, "memory profile requires the default address space");
       auto *GEP = dyn_cast<GetElementPtrInst>(Pointer);
+      if (GEP && GEP->getSourceElementType()->isAggregateType() &&
+          !IsAggregateMemoryPointer(Pointer))
+        return Fail(GEP,
+                    "requires one dynamic aggregate index with constant "
+                    "field suffixes");
       bool UniformBase = L.isLoopInvariant(Pointer) ||
                          (GEP && GEP->getNumIndices() == 1 &&
                           (GEP->getSourceElementType()->isIntegerTy(64) ||
@@ -2102,7 +2161,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                            GEP->getSourceElementType()->isIntegerTy(32) ||
                            GEP->getSourceElementType()->isFloatTy() ||
                            GEP->getSourceElementType()->isHalfTy()) &&
-                          L.isLoopInvariant(GEP->getPointerOperand()));
+                          L.isLoopInvariant(GEP->getPointerOperand())) ||
+                         IsAggregateMemoryPointer(Pointer);
       if (!UniformBase)
         return Fail(&I, "memory address requires one loop-invariant base");
       const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Pointer));
@@ -2365,6 +2425,34 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                         {Left, Right, Mask, EVL});
         if (Width > 1 && Width < 32)
           Result = Narrow(Result, Width, Mask);
+      } else if (auto *Intrinsic = dyn_cast<IntrinsicInst>(&I)) {
+        const Intrinsic::ID ID = Intrinsic->getIntrinsicID();
+        assert((ID == Intrinsic::fshl || ID == Intrinsic::fshr) &&
+               "funnel-shift preflight");
+        Value *Left = Widen(Intrinsic->getArgOperand(0));
+        Value *Right = Widen(Intrinsic->getArgOperand(1));
+        Value *Shift = Widen(Intrinsic->getArgOperand(2));
+        Value *WidthMask = ConstantVector::getSplat(
+            ElementCount::getFixed(Plan.Count), B.getInt32(31));
+        Value *Zero = Constant::getNullValue(WideTy);
+        Value *Normalized = EmitVP(Intrinsic::vp_and, WideTy,
+                                   {Shift, WidthMask, Mask, EVL});
+        Value *Negative = EmitVP(Intrinsic::vp_sub, WideTy,
+                                 {Zero, Normalized, Mask, EVL});
+        Value *Inverse = EmitVP(Intrinsic::vp_and, WideTy,
+                                {Negative, WidthMask, Mask, EVL});
+        Value *LeftAmount = ID == Intrinsic::fshl ? Normalized : Inverse;
+        Value *RightAmount = ID == Intrinsic::fshl ? Inverse : Normalized;
+        Value *ShiftedLeft = EmitVP(Intrinsic::vp_shl, WideTy,
+                                    {Left, LeftAmount, Mask, EVL});
+        Value *ShiftedRight = EmitVP(Intrinsic::vp_lshr, WideTy,
+                                     {Right, RightAmount, Mask, EVL});
+        Value *Combined = EmitVP(Intrinsic::vp_or, WideTy,
+                                 {ShiftedLeft, ShiftedRight, Mask, EVL});
+        Value *ZeroShift = B.CreateICmpEQ(Normalized, Zero, "pto.funnel.zero");
+        Result = B.CreateSelect(ZeroShift,
+                                ID == Intrinsic::fshl ? Left : Right,
+                                Combined, "pto.funnel");
       } else if (auto *Compare = dyn_cast<FCmpInst>(&I)) {
         Value *Predicate = MetadataAsValue::get(
             F.getContext(), MDString::get(F.getContext(),
@@ -2420,6 +2508,13 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         if (SourceWidth > 1 && SourceWidth < 32 &&
             Cast->getOpcode() == Instruction::SExt)
           Source = SignExtendNarrow(Source, SourceWidth, Mask);
+        if (!PositiveB32Cast && Cast->getOpcode() == Instruction::Trunc &&
+            SourceWidth == 64 && DestWidth == 32) {
+          Result = EmitVP(Intrinsic::vp_trunc, WideTy,
+                          {Source, Mask, EVL});
+          Values[&I] = Result;
+          continue;
+        }
         if (DestWidth > 1 && DestWidth < 32) {
           if (Source->getType() != WideTy)
             Source =
@@ -2432,18 +2527,22 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                   : B.CreateCast(Cast->getOpcode(), Source, WideTy, "pto.cast");
         }
       } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-        Value *Index = GEP->getOperand(1);
-        if (Index->getType()->isIntegerTy(64) &&
-            Plan.PositiveB32Values.contains(Index)) {
-          Value *Narrow = WidenPositiveB32(Index);
-          Index = B.CreateZExt(
-              Narrow, FixedVectorType::get(B.getInt64Ty(), Plan.Count),
-              "pto.b32.gep");
-        } else {
-          Index = Widen(Index);
+        SmallVector<Value *, 4> Indices;
+        for (Value *Index : GEP->indices()) {
+          if (isa<Constant>(Index)) {
+            Indices.push_back(Index);
+          } else if (Index->getType()->isIntegerTy(64) &&
+                     Plan.PositiveB32Values.contains(Index)) {
+            Value *Narrow = WidenPositiveB32(Index);
+            Indices.push_back(B.CreateZExt(
+                Narrow, FixedVectorType::get(B.getInt64Ty(), Plan.Count),
+                "pto.b32.gep"));
+          } else {
+            Indices.push_back(Widen(Index));
+          }
         }
         Result = B.CreateGEP(GEP->getSourceElementType(),
-                             Widen(GEP->getPointerOperand()), Index,
+                             Widen(GEP->getPointerOperand()), Indices,
                              "pto.address");
       } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
         auto *Call =
@@ -2612,11 +2711,18 @@ class ElementTileLegalizer {
   unsigned DomainCount;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
+  DenseMap<Value *, Value *> ActiveMasks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
   uint64_t NativeI64RegionType = 0;
+  uint64_t NativeI32RegionType = 0;
+  bool MixedNativeI64RegionTypes = false;
+  bool MixedNativeI32RegionTypes = false;
   DenseMap<std::pair<Value *, uint64_t>, Value *> RetypedIndices;
   DenseMap<std::pair<Value *, uint64_t>, DenseMap<unsigned, Value *>>
       ByteOffsets;
+  DenseMap<std::pair<Value *, uint64_t>,
+           DenseMap<uint64_t, DenseMap<Value *, Value *>>>
+      AggregateByteOffsets;
   IRBuilder<> B;
 
   struct Address {
@@ -2624,11 +2730,56 @@ class ElementTileLegalizer {
     Value *Offset;
     uint64_t IndexType;
   };
+  struct AggregateAddress {
+    Value *Base;
+    Value *Index;
+    uint64_t StrideBytes;
+    uint64_t FieldOffsetBytes;
+  };
   DenseMap<Value *, Address> Addresses;
 
   bool fail(Value *V, const Twine &Why) {
     return diagnose(F, dyn_cast<Instruction>(V),
                     Twine("Tile legalization: ") + Why);
+  }
+
+  Optional<AggregateAddress> aggregateAddress(Value *V) {
+    const DataLayout &DL = F.getParent()->getDataLayout();
+    const unsigned BitWidth = DL.getIndexSizeInBits(0);
+    APInt ConstantOffset(BitWidth, 0);
+    APInt DynamicScale(BitWidth, 0);
+    Value *DynamicIndex = nullptr;
+    Value *Current = V;
+    unsigned DynamicOccurrences = 0;
+    while (auto *GEP = dyn_cast<GetElementPtrInst>(Current)) {
+      if (GEP->getPointerAddressSpace() != 0 ||
+          !GEP->getSourceElementType()->isAggregateType())
+        return None;
+      MapVector<Value *, APInt> Variables;
+      APInt LocalOffset(BitWidth, 0);
+      if (!GEP->collectOffset(DL, BitWidth, Variables, LocalOffset) ||
+          Variables.size() > 1)
+        return None;
+      for (Value *Index : GEP->indices())
+        if (!isa<Constant>(Index) && ++DynamicOccurrences > 1)
+          return None;
+      ConstantOffset += LocalOffset;
+      if (!Variables.empty()) {
+        if (DynamicIndex && DynamicIndex != Variables.front().first)
+          return None;
+        DynamicIndex = Variables.front().first;
+        DynamicScale = Variables.front().second;
+      }
+      Current = GEP->getPointerOperand();
+    }
+    Value *Base = getSplatValue(Current);
+    if (!Base || !Base->getType()->isPointerTy() ||
+        Base->getType()->getPointerAddressSpace() != 0 || !DynamicIndex ||
+        !DynamicScale.isStrictlyPositive() || DynamicScale.getActiveBits() > 63 ||
+        ConstantOffset.isNegative() || ConstantOffset.getActiveBits() > 63)
+      return None;
+    return AggregateAddress{Base, DynamicIndex, DynamicScale.getZExtValue(),
+                            ConstantOffset.getZExtValue()};
   }
 
   static Optional<unsigned> binaryOpcode(Intrinsic::ID ID) {
@@ -2992,6 +3143,8 @@ class ElementTileLegalizer {
       return true;
     }
     if (auto *GEP = dyn_cast<GetElementPtrInst>(V)) {
+      if (auto Aggregate = aggregateAddress(GEP))
+        return validate(Aggregate->Index);
       Value *Base = getSplatValue(GEP->getPointerOperand());
       if (!Base || !Base->getType()->isPointerTy() ||
           Base->getType()->getPointerAddressSpace() != 0 ||
@@ -3003,7 +3156,9 @@ class ElementTileLegalizer {
            !GEP->getSourceElementType()->isHalfTy()) ||
           (!isVector(GEP->getOperand(1), 32) &&
            !isVector(GEP->getOperand(1), 64)))
-        return fail(V, "address requires one uniform base and one i32 element index");
+        return fail(V, "address requires one uniform base and one scalar "
+                       "element index, or one dynamic aggregate index with "
+                       "constant field suffixes");
       if (auto *I = dyn_cast<Instruction>(Base))
         if (OwnedSet.contains(I))
           return fail(V, "address base must be uniform outside its region");
@@ -3159,6 +3314,12 @@ class ElementTileLegalizer {
         return fail(&VP, "floating unary requires no fast-math");
       return validate(VP.getArgOperand(0));
     }
+    if (VP.getIntrinsicID() == Intrinsic::vp_trunc) {
+      if (!isVector(&VP, 32) || !isI64LeafVector(VP.getArgOperand(0)))
+        return fail(&VP,
+                    "native integer narrowing requires logical32 i64 to i32");
+      return validate(VP.getArgOperand(0));
+    }
     if (auto Op = binaryOpcode(VP.getIntrinsicID())) {
       bool MaskLogic = isVector(&VP, 1) &&
                        (*Op == Instruction::And || *Op == Instruction::Or ||
@@ -3171,6 +3332,20 @@ class ElementTileLegalizer {
       if (FloatArithmetic && VP.getFastMathFlags().any())
         return fail(&VP, "floating arithmetic requires no fast-math");
       if (isVector(&VP, 64)) {
+        const bool NativeShift =
+            isI64LeafVector(&VP) &&
+            (*Op == Instruction::LShr || *Op == Instruction::AShr) &&
+            getSplatValue(VP.getArgOperand(1));
+        if (NativeShift)
+          return validate(VP.getArgOperand(0)) &&
+                 validate(VP.getArgOperand(1));
+        const bool NativeScale =
+            isI64LeafVector(&VP) && *Op == Instruction::Mul &&
+            (getSplatValue(VP.getArgOperand(0)) ||
+             getSplatValue(VP.getArgOperand(1)));
+        if (NativeScale)
+          return validate(VP.getArgOperand(0)) &&
+                 validate(VP.getArgOperand(1));
         Constant *Folded = foldAffineI64VPBinary(VP);
         if (Folded)
           return validate(Folded);
@@ -3447,9 +3622,12 @@ class ElementTileLegalizer {
   }
 
   Value *activeMask(VPIntrinsic &VP) {
+    if (Value *Existing = ActiveMasks.lookup(VP.getMaskParam()))
+      return Existing;
     uint64_t N = cast<ConstantInt>(VP.getVectorLengthParam())->getZExtValue();
     uint64_t FullMask = N == 64 ? ~uint64_t(0) : (uint64_t(1) << N) - 1;
-    return B.CreateAnd(mask(VP.getMaskParam()), B.getInt64(FullMask));
+    return ActiveMasks[VP.getMaskParam()] =
+               B.CreateAnd(mask(VP.getMaskParam()), B.getInt64(FullMask));
   }
 
   Value *binary(unsigned Op, Value *L, Value *R, Value *Active,
@@ -3501,13 +3679,18 @@ class ElementTileLegalizer {
          B.getInt64(0), B.getInt64(0), B.getInt64(1)});
   }
 
-  Address address(Value *V) {
-    auto It = Addresses.find(V);
-    if (It != Addresses.end())
-      return It->second;
+  Address address(Value *V, Value *Active, unsigned AccessBits) {
     auto *GEP = cast<GetElementPtrInst>(V);
-    Value *Index = GEP->getOperand(1);
-    Value *Base = getSplatValue(GEP->getPointerOperand());
+    auto Aggregate = aggregateAddress(GEP);
+    if (!Aggregate) {
+      auto It = Addresses.find(V);
+      if (It != Addresses.end())
+        return It->second;
+    }
+    Value *Index =
+        Aggregate ? Aggregate->Index : GEP->getOperand(1);
+    Value *Base = Aggregate ? Aggregate->Base
+                            : getSplatValue(GEP->getPointerOperand());
     assert(Base && "address preflight requires a uniform pointer base");
     if (auto *VP = dyn_cast<VPIntrinsic>(Index)) {
       if (Constant *Folded = foldAffineI64VPBinary(*VP)) {
@@ -3564,19 +3747,43 @@ class ElementTileLegalizer {
     // of the GM base. The same index Tile may address mixed-width objects; its
     // 32-bit byte offsets cannot be reused for a later 16-bit access.
     auto Key = std::make_pair(Source, SourceType);
-    unsigned ElementBits =
+    unsigned ElementBits = Aggregate ? 8 :
         GEP->getSourceElementType()->getScalarSizeInBits();
-    Value *Offset = ByteOffsets[Key].lookup(ElementBits);
+    Value *Offset =
+        Aggregate
+            ? AggregateByteOffsets[Key][Aggregate->StrideBytes].lookup(Active)
+            : ByteOffsets[Key].lookup(ElementBits);
     if (!Offset) {
-      Offset = call(
-          Intrinsic::linx_experimental_ew_tlea, {OffsetTy, Index->getType()},
-          {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
-           B.getInt64(29), Source, B.getInt64(ElementBits)},
-          "pto.byte.offsets");
-      ByteOffsets[Key][ElementBits] = Offset;
+      Offset = ByteOffsets[Key].lookup(ElementBits);
+      if (!Offset) {
+        Offset = call(
+            Intrinsic::linx_experimental_ew_tlea, {OffsetTy, Index->getType()},
+            {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
+             B.getInt64(29), Source, B.getInt64(ElementBits)},
+            "pto.byte.offsets");
+        ByteOffsets[Key][ElementBits] = Offset;
+      }
+      if (Aggregate) {
+        assert(AccessBits != 0 && Aggregate->StrideBytes != 0 &&
+               "aggregate address requires an exact leaf width and stride");
+        if (Aggregate->StrideBytes != 1) {
+          auto *OffsetTy = cast<FixedVectorType>(Offset->getType());
+          Value *Scale = splat(B.getInt64(Aggregate->StrideBytes), OffsetTy, 0,
+                               IndexType);
+          Offset = binary(Instruction::Mul, Offset, Scale, Active, IndexType);
+        }
+        AggregateByteOffsets[Key][Aggregate->StrideBytes][Active] = Offset;
+      }
+    }
+    if (Aggregate) {
+      if (Aggregate->FieldOffsetBytes != 0)
+        Base = B.CreateGEP(B.getInt8Ty(), Base,
+                           B.getInt64(Aggregate->FieldOffsetBytes),
+                           "pto.aggregate.field.base");
     }
     Address A{B.CreateFreeze(Base), Offset, IndexType};
-    Addresses.insert({V, A});
+    if (!Aggregate)
+      Addresses.insert({V, A});
     return A;
   }
 
@@ -3660,6 +3867,10 @@ class ElementTileLegalizer {
               ? value(Source, Descriptor->Profile.DataType)
           : Descriptor->Profile.DataType == 26
               ? value(Source, 26)
+          : Descriptor->Profile.DataType == 17 ||
+                  Descriptor->Profile.DataType == 25
+              ? indexSource(value(Source, Descriptor->Profile.DataType),
+                            Descriptor->Profile.DataType)
               : indexSource(value(Source), Descriptor->Profile.DataType);
     } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
       R = splat(Constant::getNullValue(Ty->getElementType()), Ty, 0,
@@ -3718,7 +3929,8 @@ class ElementTileLegalizer {
       assert(isIntrinsic(Atomic,
                          Intrinsic::linx_experimental_element_atomic_add) &&
              "atomic effect preflight");
-      Address A = address(Atomic->getArgOperand(0));
+      Address A = address(Atomic->getArgOperand(0),
+                          mask(Atomic->getArgOperand(2)), 32);
       Value *Source = indexSource(value(Atomic->getArgOperand(1)), 25);
       R = call(Intrinsic::linx_experimental_ew_mgather_add_masked,
                {Ty, A.Offset->getType(), Source->getType()},
@@ -3739,8 +3951,26 @@ class ElementTileLegalizer {
                  {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
                   B.getInt64(DType), B.getInt64(29),
                   value(VP->getArgOperand(0)), activeMask(*VP)});
+      } else if (VP->getIntrinsicID() == Intrinsic::vp_trunc) {
+        Value *Source = value(VP->getArgOperand(0));
+        uint64_t SourceType = PhysicalTypes.lookup(Source);
+        uint64_t DestinationType =
+            PreferredType == 17 ||
+                    (PreferredType == 0 && NativeI32RegionType == 17)
+                ? 17
+                : 25;
+        assert((SourceType == 16 || SourceType == 24) &&
+               "native narrowing source requires an S64/U64 descriptor");
+        R = call(Intrinsic::linx_experimental_ew_tcvt_gpr_masked,
+                 {Ty, Source->getType()},
+                 {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
+                  B.getInt64(DestinationType), B.getInt64(29), B.getInt64(0),
+                  B.getInt64(0), Source, activeMask(*VP), B.getInt64(0),
+                  B.getInt64(0), B.getInt64(1)});
+        PhysicalTypes[R] = DestinationType;
       } else if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
-        Address A = address(VP->getArgOperand(0));
+        Address A = address(VP->getArgOperand(0), activeMask(*VP),
+                            Ty->getScalarSizeInBits());
         unsigned Count = Ty->getNumElements();
         uint64_t ValueType = isF16Vector(VP)    ? 4
                              : isVector(VP, 16) ? 26
@@ -3816,8 +4046,9 @@ public:
         return true;
       };
       if (!Consumers(I) || (External && !getViewDescriptor(I)))
-        return fail(I,
-                    "vector live-out escapes its typed publication boundary");
+        return fail(I, Twine("vector live-out escapes its typed publication "
+                             "boundary: ") +
+                           I->getName());
       if (External) {
         if (!validate(I))
           return false;
@@ -3848,14 +4079,27 @@ public:
 
   void emit() {
     NativeI64RegionType = 0;
+    NativeI32RegionType = 0;
+    MixedNativeI64RegionTypes = false;
+    MixedNativeI32RegionTypes = false;
     for (CallInst *Publication : Publications)
       if (auto Descriptor = getViewDescriptor(Publication)) {
         uint64_t DType = Descriptor->Profile.DataType;
         if (DType == 16 || DType == 24) {
-          assert((NativeI64RegionType == 0 ||
-                  NativeI64RegionType == DType) &&
-                 "one native64 region requires one publication signedness");
-          NativeI64RegionType = DType;
+          if (NativeI64RegionType && NativeI64RegionType != DType) {
+            NativeI64RegionType = 0;
+            MixedNativeI64RegionTypes = true;
+          } else if (!MixedNativeI64RegionTypes) {
+            NativeI64RegionType = DType;
+          }
+        }
+        if (DType == 17 || DType == 25) {
+          if (NativeI32RegionType && NativeI32RegionType != DType) {
+            NativeI32RegionType = 0;
+            MixedNativeI32RegionTypes = true;
+          } else if (!MixedNativeI32RegionTypes) {
+            NativeI32RegionType = DType;
+          }
         }
       }
     // Visit memory roots in their original order. Recursive pure operands are
@@ -3874,7 +4118,9 @@ public:
         auto *Scatter = cast<CallInst>(I);
         B.SetInsertPoint(Scatter);
         B.SetCurrentDebugLocation(Scatter->getDebugLoc());
-        Address A = address(Scatter->getArgOperand(1));
+        Address A = address(
+            Scatter->getArgOperand(1), mask(Scatter->getArgOperand(2)),
+            Scatter->getArgOperand(0)->getType()->getScalarSizeInBits());
         Value *Source = value(Scatter->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
         assert((SourceType == 16 || SourceType == 17 || SourceType == 24 ||
@@ -3899,7 +4145,9 @@ public:
       if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
         value(VP, NativeI64RegionType);
       } else {
-        Address A = address(VP->getArgOperand(1));
+        Address A = address(
+            VP->getArgOperand(1), activeMask(*VP),
+            VP->getArgOperand(0)->getType()->getScalarSizeInBits());
         Value *Source = value(VP->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
         assert((SourceType == 16 || SourceType == 17 || SourceType == 24 ||

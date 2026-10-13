@@ -20,7 +20,7 @@
 ; ATOMIC-SHAPE: masked MGATHER_ADD requires exact-shape U32 values, U64 offsets
 ; ATOMIC-DTYPE: masked MGATHER_ADD requires exact-shape U32 values, U64 offsets
 ; ATOMIC-MASK: masked MGATHER_ADD requires exact-shape U32 values, U64 offsets, CUBE_M32 and one low GPR mask word
-; U16-GATHER-SHAPE: GPR-masked MGATHER requires an exact admitted U16/U32/FP16/FP32 element profile
+; U16-GATHER-SHAPE: GPR-masked MGATHER requires an exact admitted S64/U64/U16/U32/FP16/FP32 element profile
 
 ;--- tlea-float.ll
 define void @bad(ptr %out, ptr %in) {

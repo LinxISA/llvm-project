@@ -15,7 +15,7 @@
 ; EXACT: PTO element region: predication: carrier extract requires a typed view and exact element IV
 ; IMPORT: PTO element region: predication: typed import requires a dominating Tile producer
 ; PARTIAL: PTO element region: view access carrier is i32 in store i32 7
-; VECTOR: PTO element region: predication: memory profile requires scalar U16/i32/f16/f32 accesses with U16 using the logical64 profile
+; VECTOR: PTO element region: predication: memory profile requires scalar i64/U16/i32/f16/f32 accesses with i64 using logical32 and U16 using logical64
 ; NOMETA: %pto.element.full.carrier = load <32 x i32>, ptr %storage, align {{[0-9]+}}{{$}}
 ; NOMETA-NOT: %pto.element.full.carrier = load {{.*}}!range
 ; NOMETA-NOT: %pto.element.full.carrier = load {{.*}}!noundef

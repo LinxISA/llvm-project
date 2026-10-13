@@ -14,7 +14,7 @@
 ; SNAPSHOT: PTO element region: predication: live-out must be the final typed accumulator publication
 ; IMPORT: PTO element region: predication: typed import requires a dominating Tile producer
 ; CONSUMER: PTO element region: Tile legalization: vector live-out escapes its typed publication boundary
-; MEMORY: PTO element region: predication: memory profile requires scalar U16/i32/f16/f32 accesses with U16 using the logical64 profile
+; MEMORY: PTO element region: predication: memory profile requires scalar i64/U16/i32/f16/f32 accesses with i64 using logical32 and U16 using logical64
 ; WRAPPER: PTO element region: predication: final publication changes its typed storage identity
 ; PRODWRAPPER: PTO element region: Tile legalization: final publication changes its typed storage identity
 
