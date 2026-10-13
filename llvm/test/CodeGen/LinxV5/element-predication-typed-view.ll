@@ -73,7 +73,7 @@ exit:
 ; CHECK: call i64 @llvm.linx.experimental.ew.tcmps.gpr.v32i32
 ; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32
 ; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr.v32i32{{.*}}<32 x i32> [[SIGNED_INITIAL]]
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 17, i64 29, i64 0,
+; CHECK-NOT: pto.index.typed
 ; CHECK: call void asm sideeffect "BSTART.TEPL 32, $0", "@2Tr"(<32 x i32>
 ; CHECK-NOT: llvm.linx.experimental.element.region
 ; CHECK-NOT: llvm.linx.experimental.element.view

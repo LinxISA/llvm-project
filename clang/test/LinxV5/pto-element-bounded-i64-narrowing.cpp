@@ -3,7 +3,7 @@
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_WIDE -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=WIDE
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_SHIFT32 -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=SHIFT32
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_UNBOUNDED_JOIN -emit-llvm -S %s -o - | FileCheck %s --check-prefix=UNBOUNDED
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_UNSUPPORTED_USER -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=BADUSER
+// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_UNSUPPORTED_USER -emit-llvm -S %s -o - | FileCheck %s --check-prefix=USER
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_NEGATIVE_JOIN -emit-llvm -S %s -o - | FileCheck %s --check-prefix=NEGATIVE
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_HIGH_GEP -emit-llvm -S %s -o - | FileCheck %s --check-prefix=HIGHGEP
 // RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -DTEST_BOUNDARY -emit-llvm -S %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=BOUNDARY
@@ -97,7 +97,11 @@ extern "C" void unsupported_user(const u32 *__restrict input,
     output[element] = input[shared] + static_cast<u32>(shifted);
   }
 }
-// BADUSER: only i32 to i64 index extension is supported
+// USER-LABEL: define{{.*}} @unsupported_user(
+// USER: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
+// USER: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 9,
+// USER: @llvm.linx.experimental.ew.tcvt.gpr.masked.v32i32.v32i64(i64 32, i64 1, i64 24, i64 25,
+// USER: @llvm.linx.experimental.ew.mscatter.gpr.masked.v32i64.v32i32
 #endif
 
 #ifdef TEST_NEGATIVE_JOIN
@@ -110,9 +114,9 @@ extern "C" void negative_join(const u32 *__restrict input,
       output[element] = input[joined];
   }
 }
-// NEGATIVE: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 24,
-// NEGATIVE: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24,
+// NEGATIVE: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 16,
 // NEGATIVE: @llvm.linx.experimental.ew.tcmps.gpr.v32i64(i64 32, i64 1, i64 16,
+// NEGATIVE: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24,
 // NEGATIVE: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64
 #endif
 

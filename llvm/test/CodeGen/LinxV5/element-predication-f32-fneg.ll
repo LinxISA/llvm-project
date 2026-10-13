@@ -83,8 +83,7 @@ exit:
 ; TILE-DAG: [[ACTIVE:%.*]] = and i64 [[LOW_OUTER]], 4294967295
 ; TILE-DAG: call i64 @llvm.linx.experimental.ew.tcmp.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, <32 x float> [[A]], <32 x float> [[B]], i64 0, i64 [[ACTIVE]])
 ; TILE-DAG: call <32 x float> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, i64 0, <32 x float> [[A]], <32 x float> [[B]], i64 {{.*}}, i64 0, i64 0, i64 1)
-; TILE-DAG: [[NEG_ACTIVE:%.*]] = and i64 [[LOW_OUTER]], 4294967295
-; TILE-DAG: [[NEGTILE:%.*]] = call <32 x float> @llvm.linx.experimental.ew.tneg.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, <32 x float> [[B]], i64 [[NEG_ACTIVE]])
+; TILE-DAG: [[NEGTILE:%.*]] = call <32 x float> @llvm.linx.experimental.ew.tneg.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, <32 x float> [[B]], i64 [[ACTIVE]])
 ; TILE-DAG: call <32 x float> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32f32(i64 32, i64 1, i64 1, i64 29, i64 0, <32 x float> [[A]], <32 x float> [[NEGTILE]], i64 {{.*}}, i64 0, i64 0, i64 1)
 ; TILE-DAG: [[NEGZERO:%.*]] = freeze float -0.000000e+00
 ; TILE-DAG: call <32 x float> @llvm.linx.experimental.ew.texpands.v32f32.f32(i64 32, i64 1, i64 1, i64 29, float [[NEGZERO]])
