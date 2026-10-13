@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
+#include <set>
 
 #define DEBUG_TYPE "linxv5-treg-to-offset"
 #define LINX_TREG_TO_OFFSET_NAME "LinxV5 Treg to Offset"
@@ -139,10 +140,13 @@ private:
   // Phase-2 offset rewrite assumes every predecessor leaves the window in the
   // same state, so those classes keep absolute registers.
   DenseSet<const TargetRegisterClass *> SyncConflictRCs;
+  // Clockhands reserves each RC/hand that carries an OPEN B.ASSEMBLE parent.
+  // Keep that hand's queue order exact through Phase 1: CFG rolling would
+  // require copying the in-progress parent or changing its ParentRef distance.
+  DenseSet<const TargetRegisterClass *> PinnedAssembleParentRCs;
   // Exact post-RA INIT definitions for OPEN B.ASSEMBLE parents.  Phase 1 may
   // insert copies, so this map is populated only after copy insertion and
   // after validating that the reserved hand contains no other allocation.
-  DenseSet<Register> AssembleParentRegs;
   DenseMap<const MachineInstr *, DenseMap<Register, unsigned>>
       AssembleParentUseDistances;
 
@@ -158,7 +162,7 @@ private:
     GlobalSlotsInfo.clear();
     RewriteTRDefInfo.clear();
     SyncConflictRCs.clear();
-    AssembleParentRegs.clear();
+    PinnedAssembleParentRCs.clear();
     AssembleParentUseDistances.clear();
   }
 
@@ -1427,7 +1431,8 @@ void LinxV5TRegToOffsetOpt::insertCopy(MachineBasicBlock &MBB) {
     // insert copy
     SlotCalc SC(&MBB, TII, RC, IsScalarRC, IsTileRC);
     SlotStatus ResultSS;
-    const bool CanSynchronizeQueue = !SyncConflictRCs.count(RC);
+    const bool CanSynchronizeQueue =
+        !SyncConflictRCs.count(RC) && !PinnedAssembleParentRCs.count(RC);
     SC.insertCopys(OriginalInstrs, RCsInfo[RC][2],
                    getInitStatus(MBB, LiveInsLastUse, RestLiveouts, RC),
                    CanSynchronizeQueue && isInSyncGroup(&MBB),
@@ -1487,9 +1492,10 @@ void LinxV5TRegToOffsetOpt::legalityCheck(MachineFunction &MF) {
 }
 
 void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
-  AssembleParentRegs.clear();
   AssembleParentUseDistances.clear();
   SmallVector<std::pair<Register, MachineInstr *>, 4> ParentEpochs;
+  DenseSet<const MachineInstr *> ParentRefUses;
+  DenseMap<const MachineInstr *, unsigned> ParentRefProofCounts;
 
   for (MachineBasicBlock &MBB : MF) {
     for (MachineInstr &MI : MBB) {
@@ -1497,6 +1503,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
           !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
                .contains("B.ASSEMBLE"))
         continue;
+      if (LinxV5::getAssembleParentRef(MI) != LinxV5::NoRegister)
+        ParentRefUses.insert(&MI);
       Optional<bool> Last = LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
       if (!Last || *Last)
         continue;
@@ -1504,7 +1512,6 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
         if (MO.isReg() && MO.isDef() && MO.getReg().isPhysical() &&
             LinxV5::Tile_ABSRegClass.contains(MO.getReg())) {
           Register Parent = MO.getReg();
-          AssembleParentRegs.insert(Parent);
           ParentEpochs.emplace_back(Parent, &MI);
         }
       }
@@ -1564,40 +1571,373 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
       OutState[&MBB] = unknownState();
     }
 
+    // Prove parent continuations and ambiguous ordinary uses with an
+    // edge-sensitive execution of the
+    // small scalar subset that controls canonical counted loops.  The proof
+    // is deliberately fail-closed: unrecognized definitions invalidate their
+    // aliases, regmasks invalidate every clobbered constant, unknown branches
+    // explore every successor.  A continuation requires the exact INIT epoch
+    // to be OPEN at one uniform queue distance on every path.  An ordinary
+    // use requires uniformly Closed or the same overwriting definition.
+    // uint64_t arithmetic models the target GR width and therefore preserves
+    // modular overflow exactly.
+    struct UseProof {
+      bool Proven = false;
+      unsigned Distance = 0;
+    };
+    DenseMap<const MachineInstr *, UseProof> UseProofs;
+    auto proveUse = [&](MachineInstr *UseMI, bool RequireOpenParent) {
+      auto Cached = UseProofs.find(UseMI);
+      if (Cached != UseProofs.end())
+        return Cached->second;
+
+      struct PathState {
+        MachineBasicBlock *MBB = nullptr;
+        StateKind Kind = StateKind::Absent;
+        ParentPhase Phase = ParentPhase::None;
+        MachineInstr *Def = nullptr;
+        unsigned Distance = 0;
+        std::map<unsigned, uint64_t> Constants;
+      };
+      SmallVector<PathState, 32> Worklist;
+      PathState Entry;
+      Entry.MBB = &MF.front();
+      Worklist.push_back(std::move(Entry));
+      std::set<std::string> Visited;
+      bool SawUse = false;
+      Optional<StateKind> ReachingUseKind;
+      MachineInstr *ReachingOtherDef = nullptr;
+      Optional<unsigned> ReachingParentDistance;
+      constexpr unsigned MaxPathStates = 65536;
+      unsigned ProcessedStates = 0;
+
+      auto getConstant = [](const PathState &State,
+                            Register Reg) -> Optional<uint64_t> {
+        if (Reg == LinxV5::R0)
+          return uint64_t(0);
+        auto It = State.Constants.find(Reg.id());
+        if (It == State.Constants.end())
+          return None;
+        return It->second;
+      };
+      auto invalidateAliases = [&](PathState &State, Register Def) {
+        if (!Def.isPhysical())
+          return;
+        for (auto It = State.Constants.begin(); It != State.Constants.end();) {
+          if (TRI->regsOverlap(Register(It->first), Def))
+            It = State.Constants.erase(It);
+          else
+            ++It;
+        }
+      };
+      auto makeKey = [](const PathState &State) {
+        std::string Key = std::to_string(State.MBB->getNumber()) + ":" +
+                          std::to_string(static_cast<unsigned>(State.Kind)) +
+                          ":" +
+                          std::to_string(static_cast<unsigned>(State.Phase)) +
+                          ":" + std::to_string(
+                                      reinterpret_cast<uintptr_t>(State.Def)) +
+                          ":" + std::to_string(State.Distance);
+        for (const auto &Entry : State.Constants)
+          Key += ":" + std::to_string(Entry.first) + "=" +
+                 std::to_string(Entry.second);
+        return Key;
+      };
+
+      while (!Worklist.empty()) {
+        if (++ProcessedStates > MaxPathStates) {
+          UseProofs[UseMI] = UseProof();
+          return UseProof();
+        }
+        PathState State = Worklist.pop_back_val();
+        if (!Visited.insert(makeKey(State)).second)
+          continue;
+
+        Optional<bool> CArg;
+        Optional<bool> ConditionalTaken;
+        MachineBasicBlock *ConditionalTarget = nullptr;
+        bool EndedAtUse = false;
+        for (MachineInstr &MI : *State.MBB) {
+          if (&MI == UseMI) {
+            SawUse = true;
+            StateKind UseKind = State.Kind;
+            if (RequireOpenParent) {
+              if (UseKind != StateKind::Parent ||
+                  State.Phase != ParentPhase::Open || State.Def != InitMI) {
+                UseProofs[UseMI] = UseProof();
+                return UseProof();
+              }
+              if (!ReachingParentDistance)
+                ReachingParentDistance = State.Distance;
+              else if (*ReachingParentDistance != State.Distance) {
+                UseProofs[UseMI] = UseProof();
+                return UseProof();
+              }
+            } else {
+              if (!((UseKind == StateKind::Parent &&
+                     State.Phase == ParentPhase::Closed) ||
+                    UseKind == StateKind::Other)) {
+                UseProofs[UseMI] = UseProof();
+                return UseProof();
+              }
+              if (!ReachingUseKind) {
+                ReachingUseKind = UseKind;
+                ReachingOtherDef = State.Def;
+              } else if (*ReachingUseKind != UseKind ||
+                         (UseKind == StateKind::Other &&
+                          ReachingOtherDef != State.Def)) {
+                UseProofs[UseMI] = UseProof();
+                return UseProof();
+              }
+            }
+            EndedAtUse = true;
+            break;
+          }
+
+          const bool IsParentRef =
+              LinxV5::getAssembleParentRef(MI) == Parent;
+          bool KillsTrackedParent = false;
+          for (const MachineOperand &MO : MI.operands())
+            if (MO.isReg() && MO.isUse() && !MO.isImplicit() &&
+                MO.getReg() == Parent)
+              KillsTrackedParent |= MO.isKill();
+          if (IsParentRef && State.Kind == StateKind::Parent) {
+            Optional<bool> Last =
+                LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
+            if (Last && *Last)
+              State.Phase = ParentPhase::Closed;
+          }
+
+          Optional<std::pair<Register, uint64_t>> KnownDef;
+          if (MI.getOpcode() == LinxV5::ORI && MI.getNumOperands() >= 3 &&
+              MI.getOperand(0).isReg() && MI.getOperand(1).isReg() &&
+              MI.getOperand(2).isImm()) {
+            Optional<uint64_t> Src =
+                getConstant(State, MI.getOperand(1).getReg());
+            if (Src)
+              KnownDef = std::make_pair(
+                  MI.getOperand(0).getReg(),
+                  *Src | static_cast<uint64_t>(MI.getOperand(2).getImm()));
+          } else if (MI.getOpcode() == LinxV5::ADDI &&
+                     MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+                     MI.getOperand(1).isReg() && MI.getOperand(2).isImm()) {
+            Optional<uint64_t> Src =
+                getConstant(State, MI.getOperand(1).getReg());
+            if (Src)
+              KnownDef = std::make_pair(
+                  MI.getOperand(0).getReg(),
+                  *Src + static_cast<uint64_t>(MI.getOperand(2).getImm()));
+          } else if (MI.getOpcode() == LinxV5::OR_SW &&
+                     MI.getNumOperands() >= 4 && MI.getOperand(0).isReg() &&
+                     MI.getOperand(1).isReg() && MI.getOperand(2).isReg()) {
+            Optional<uint64_t> LHS =
+                getConstant(State, MI.getOperand(1).getReg());
+            Optional<uint64_t> RHS =
+                getConstant(State, MI.getOperand(2).getReg());
+            if (LHS && RHS) {
+              uint32_t Word = static_cast<uint32_t>(*LHS | *RHS);
+              KnownDef = std::make_pair(
+                  MI.getOperand(0).getReg(),
+                  static_cast<uint64_t>(
+                      static_cast<int64_t>(static_cast<int32_t>(Word))));
+            }
+          }
+
+          bool DefinesCArg = false;
+          Optional<bool> NewCArg;
+          const bool ModelsCArg =
+              MI.getOpcode() == LinxV5::SETC_EQI ||
+              MI.getOpcode() == LinxV5::SETC_NEI ||
+              MI.getOpcode() == LinxV5::SETC_GEI;
+          if (ModelsCArg &&
+              MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+              MI.getOperand(1).isImm()) {
+            Optional<uint64_t> Src =
+                getConstant(State, MI.getOperand(0).getReg());
+            if (Src) {
+              int64_t Imm = MI.getOperand(1).getImm();
+              bool Equal = *Src == static_cast<uint64_t>(Imm);
+              if (MI.getOpcode() == LinxV5::SETC_EQI)
+                NewCArg = Equal;
+              else if (MI.getOpcode() == LinxV5::SETC_NEI)
+                NewCArg = !Equal;
+              else
+                NewCArg = static_cast<int64_t>(*Src) >= Imm;
+            }
+          }
+
+          if ((MI.getOpcode() == LinxV5::BEQ ||
+               MI.getOpcode() == LinxV5::BNE) &&
+              MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+              MI.getOperand(1).isReg() && MI.getOperand(2).isMBB()) {
+            ConditionalTarget = MI.getOperand(2).getMBB();
+            Optional<uint64_t> LHS =
+                getConstant(State, MI.getOperand(0).getReg());
+            Optional<uint64_t> RHS =
+                getConstant(State, MI.getOperand(1).getReg());
+            if (LHS && RHS) {
+              bool Equal = *LHS == *RHS;
+              ConditionalTaken =
+                  MI.getOpcode() == LinxV5::BEQ ? Equal : !Equal;
+            }
+          } else if (MI.getOpcode() == LinxV5::PseudoBRCondCARG &&
+                     MI.getNumOperands() >= 1 && MI.getOperand(0).isMBB()) {
+            ConditionalTarget = MI.getOperand(0).getMBB();
+            ConditionalTaken = CArg;
+          }
+
+          for (const MachineOperand &MO : MI.operands()) {
+            if (MO.isReg() && MO.isDef()) {
+              invalidateAliases(State, MO.getReg());
+              if (MO.getReg().isPhysical() &&
+                  TRI->regsOverlap(MO.getReg(), LinxV5::CARG))
+                DefinesCArg = true;
+            } else if (MO.isRegMask()) {
+              for (auto It = State.Constants.begin();
+                   It != State.Constants.end();) {
+                if (MO.clobbersPhysReg(Register(It->first)))
+                  It = State.Constants.erase(It);
+                else
+                  ++It;
+              }
+              DefinesCArg |= MO.clobbersPhysReg(LinxV5::CARG);
+            }
+          }
+          if (KnownDef)
+            State.Constants[KnownDef->first.id()] = KnownDef->second;
+          // SETC is the only modeled producer.  Every other explicit or
+          // implicit CARG definition, including a regmask clobber, destroys
+          // the previous predicate so a later branch explores both edges.
+          if (DefinesCArg)
+            CArg = None;
+          if (ModelsCArg)
+            CArg = NewCArg;
+
+          if (MI.isImplicitDef()) {
+            for (const MachineOperand &MO : MI.operands())
+              if (MO.isReg() && MO.isDef() && MO.getReg() == Parent) {
+                State.Kind = StateKind::ExplicitUndef;
+                State.Phase = ParentPhase::None;
+                State.Def = nullptr;
+                State.Distance = 0;
+              }
+            continue;
+          }
+          if (MI.getOpcode() != LinxV5::PseudoEmptyTile) {
+            for (const MachineOperand &MO : MI.operands()) {
+              if (!MO.isReg() || !MO.isDef() || MO.isImplicit())
+                continue;
+              Register Def = MO.getReg();
+              if (!Def.isPhysical() || !ParentRC->contains(Def))
+                continue;
+              if (&MI == InitMI && Def == Parent) {
+                State.Kind = StateKind::Parent;
+                State.Phase = ParentPhase::Open;
+                State.Def = InitMI;
+                State.Distance = 1;
+              } else if (Def == Parent) {
+                State.Kind = StateKind::Other;
+                State.Phase = ParentPhase::None;
+                State.Def = &MI;
+                State.Distance = 1;
+              } else if (State.Kind == StateKind::Parent) {
+                if (++State.Distance > ParentRC->getNumRegs()) {
+                  UseProofs[UseMI] = UseProof();
+                  return UseProof();
+                }
+              }
+            }
+          }
+          if (KillsTrackedParent && State.Kind == StateKind::Parent &&
+              State.Phase == ParentPhase::Closed) {
+            State.Kind = StateKind::Absent;
+            State.Phase = ParentPhase::None;
+            State.Def = nullptr;
+            State.Distance = 0;
+          }
+        }
+        if (EndedAtUse)
+          continue;
+
+        for (MachineBasicBlock *Succ : State.MBB->successors()) {
+          if (ConditionalTarget && ConditionalTaken) {
+            if (*ConditionalTaken && Succ != ConditionalTarget)
+              continue;
+            if (!*ConditionalTaken && Succ == ConditionalTarget)
+              continue;
+          }
+          PathState Next = State;
+          Next.MBB = Succ;
+          Worklist.push_back(std::move(Next));
+        }
+      }
+      UseProof Proof;
+      Proof.Proven = SawUse;
+      if (ReachingParentDistance)
+        Proof.Distance = *ReachingParentDistance;
+      UseProofs[UseMI] = Proof;
+      return Proof;
+    };
+
     auto transfer = [&](MachineBasicBlock &MBB, ParentState State,
                         bool RecordUses) -> ParentState {
       for (MachineInstr &MI : MBB) {
         // Resolve sources against the pre-instruction queue. INIT may reuse
         // the physical register number that still names an older source.
-        bool UsesParent = false;
+        const bool UsesParentRef =
+            LinxV5::getAssembleParentRef(MI) == Parent;
+        bool UsesParentRegister = false;
         bool KillsParent = false;
         for (const MachineOperand &MO : MI.operands()) {
           if (!MO.isReg() || !MO.isUse() || MO.isImplicit() ||
               MO.getReg() != Parent)
             continue;
-          UsesParent = true;
+          UsesParentRegister = true;
           KillsParent |= MO.isKill();
-          if (RecordUses && State.Kind == StateKind::Parent)
-            AssembleParentUseDistances[&MI][Parent] = State.Distance;
         }
-        if (RecordUses && UsesParent && State.Kind == StateKind::Conflict)
-          report_fatal_error(
-              "B.ASSEMBLE parent has conflicting relative distances at a CFG "
-              "join");
+        if (RecordUses && UsesParentRef) {
+          UseProof Proof = proveUse(&MI, /*RequireOpenParent=*/true);
+          if (Proof.Proven) {
+            if (++ParentRefProofCounts[&MI] != 1)
+              report_fatal_error(
+                  "B.ASSEMBLE continuation matches multiple parent epochs");
+            AssembleParentUseDistances[&MI][Parent] = Proof.Distance;
+          }
+        }
 
         // A TCOPY/TMOV consumes its source as ordinary published tile data.
         // An OPEN parent still names the in-progress assembly generation, so
         // copying it would manufacture a second architectural identity even
         // when the destination uses another physical hand.  A Maybe phase is
         // equally unsafe because at least one predecessor keeps it OPEN.
-        if (UsesParent &&
+        if (UsesParentRegister &&
             (MI.getOpcode() == LinxV5::PseudoTCOPY ||
              MI.getOpcode() == LinxV5::PseudoTCOPYDesc) &&
             State.Kind == StateKind::Parent &&
-            (State.Phase == ParentPhase::Open ||
-             State.Phase == ParentPhase::Maybe))
+            State.Phase == ParentPhase::Open)
           report_fatal_error(
               "cannot copy an OPEN B.ASSEMBLE parent source before LAST");
+
+        // A physical hand may be reused by several independent assembly
+        // generations.  Only the B.ASSEMBLE ParentRef operand continues the
+        // generation tracked by this dataflow instance.  Every other use is
+        // an ordinary tile source and is legal only after every reaching path
+        // has LAST-closed the tracked generation.  This keeps a closed child
+        // usable as the writer for its next hierarchy level without mistaking
+        // that source for the child's old ParentRef epoch.
+        if (RecordUses && UsesParentRegister && !UsesParentRef &&
+            !proveUse(&MI, /*RequireOpenParent=*/false).Proven) {
+          LLVM_DEBUG(dbgs() << "OPEN assembly parent ordinary use for epoch "
+                            << printReg(Parent, TRI) << " defined by "
+                            << *InitMI << "at " << MI);
+          if (State.Kind == StateKind::Conflict)
+            report_fatal_error(
+                "B.ASSEMBLE parent has conflicting relative distances at a "
+                "CFG join");
+          report_fatal_error(
+              "cannot use an OPEN B.ASSEMBLE parent as an ordinary tile "
+              "source before LAST");
+        }
 
         // LAST consumes the OPEN parent at its pre-state distance and only
         // then publishes it as ordinary data.
@@ -1727,6 +2067,13 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
     for (MachineBasicBlock &MBB : MF)
       (void)transfer(MBB, InState[&MBB], /*RecordUses=*/true);
   }
+
+  for (const MachineInstr *MI : ParentRefUses) {
+    if (ParentRefProofCounts.lookup(MI) != 1)
+      report_fatal_error(
+          "B.ASSEMBLE continuation requires one exact OPEN parent epoch at "
+          "a uniform relative distance");
+  }
 }
 
 bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
@@ -1734,6 +2081,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   TRI = static_cast<const LinxV5RegisterInfo *>(MF.getSubtarget().getRegisterInfo());
   MRI = &MF.getRegInfo();
   SyncConflictRCs.clear();
+  PinnedAssembleParentRCs.clear();
 
 #ifndef NDEBUG
   verifyGPR(MF);
@@ -1768,6 +2116,49 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
       {&LinxV5::LTRRegClass, {LinxV5::T, LinxV5::TOS1, LinxV5::T4}},
       {&LinxV5::LURRegClass, {LinxV5::U, LinxV5::UOS1, LinxV5::U4}},
   };
+
+  // Parent lifetime tracking is sound only when both assembly controls are
+  // positional immediate operands.  Reject unresolved controls before Phase
+  // 1 can roll or copy the Local tile queue and lose the parent identity.
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm() ||
+          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+               .contains("B.ASSEMBLE"))
+        continue;
+      if (!LinxV5::getAssembleControlBit(MI, /*InitIdx=*/0) ||
+          !LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1))
+        report_fatal_error(
+            "B.ASSEMBLE Init/Last controls must be immediate operands");
+    }
+  }
+
+  // OPEN assembly parents have already been assigned dedicated physical
+  // hands by Clockhands.  Discover those hands before Phase 1 so CFG queue
+  // synchronization cannot manufacture a COPY of an in-progress parent.
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm() ||
+          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+               .contains("B.ASSEMBLE"))
+        continue;
+      Optional<bool> Last = LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
+      if (!Last || *Last)
+        continue;
+      for (const MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.isDef() || !MO.getReg().isPhysical())
+          continue;
+        for (const TargetRegisterClass *RC :
+             {&LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
+              &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass}) {
+          if (RC->contains(MO.getReg())) {
+            PinnedAssembleParentRCs.insert(RC);
+            break;
+          }
+        }
+      }
+    }
+  }
 
   unsigned OldNumCopy = NumCopy;
 
@@ -2003,7 +2394,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             // block we couldn't pick a pred for). Ordinary uses retain their
             // absolute register.  OPEN assembly parents are never allowed to
             // fall back: their use must have a solved reaching-INIT distance.
-            if (AssembleParentRegs.count(OriginalReg))
+            if (LinxV5::getAssembleParentRef(MI) == OriginalReg)
               report_fatal_error(
                   "OPEN B.ASSEMBLE parent use lacks solved relative distance");
             continue;
