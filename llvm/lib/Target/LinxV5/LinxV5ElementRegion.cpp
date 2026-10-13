@@ -62,6 +62,10 @@ constexpr StringLiteral S32M32View =
     "pto.element.view:v1;dtype=s32;rows=32;cols=1;layout=cube_m32";
 constexpr StringLiteral F32M32View =
     "pto.element.view:v1;dtype=f32;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral U64M32View =
+    "pto.element.view:v1;dtype=u64;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral S64M32View =
+    "pto.element.view:v1;dtype=s64;rows=32;cols=1;layout=cube_m32";
 constexpr StringLiteral U32M32x2View =
     "pto.element.view:v1;dtype=u32;rows=32;cols=2;layout=cube_m32";
 constexpr StringLiteral S32M32x2View =
@@ -79,7 +83,7 @@ struct ElementProfile {
   unsigned Rows = 32;
   unsigned Cols = 1;
   uint64_t Bytes = 128;
-  bool isSigned() const { return DataType == 17; }
+  bool isSigned() const { return DataType == 16 || DataType == 17; }
   bool isFloat() const { return DataType == 1 || DataType == 4; }
 };
 
@@ -89,14 +93,18 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
                                                LLVMContext &Context) {
   bool Existing32 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 128 &&
                     (DataType == 25 || DataType == 17 || DataType == 1);
+  bool NativeI64 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 256 &&
+                   (DataType == 24 || DataType == 16);
   bool Dense64 = Count == 64 && Rows == 32 && Cols == 2 &&
                  ((Bytes == 128 && (DataType == 4 || DataType == 26)) ||
                   (Bytes == 256 && (DataType == 25 || DataType == 17)));
-  if (!Existing32 && !Dense64)
+  if (!Existing32 && !NativeI64 && !Dense64)
     return None;
   Type *Scalar = DataType == 1    ? Type::getFloatTy(Context)
                  : DataType == 4  ? Type::getHalfTy(Context)
                  : DataType == 26 ? Type::getInt16Ty(Context)
+                 : (DataType == 24 || DataType == 16)
+                     ? Type::getInt64Ty(Context)
                                   : Type::getInt32Ty(Context);
   return ElementProfile{
       Scalar, FixedVectorType::get(Scalar, Count), DataType, Count, Rows, Cols,
@@ -105,7 +113,8 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
 
 static Optional<ElementProfile> elementProfile(uint64_t DataType,
                                                LLVMContext &Context) {
-  return elementProfile(DataType, 32, 32, 1, 128, Context);
+  uint64_t Bytes = DataType == 16 || DataType == 24 ? 256 : 128;
+  return elementProfile(DataType, 32, 32, 1, Bytes, Context);
 }
 
 static Optional<ElementProfile> elementViewProfile(StringRef Text,
@@ -116,6 +125,10 @@ static Optional<ElementProfile> elementViewProfile(StringRef Text,
     return elementProfile(17, 32, 32, 1, 128, Context);
   if (Text == F32M32View)
     return elementProfile(1, 32, 32, 1, 128, Context);
+  if (Text == U64M32View)
+    return elementProfile(24, 32, 32, 1, 256, Context);
+  if (Text == S64M32View)
+    return elementProfile(16, 32, 32, 1, 256, Context);
   if (Text == U32M32x2View)
     return elementProfile(25, 64, 32, 2, 256, Context);
   if (Text == S32M32x2View)
@@ -902,6 +915,8 @@ static bool isElementCarrier(Value *V) {
   if (!Ty || (Ty->getNumElements() != 32 && Ty->getNumElements() != 64))
     return false;
   Type *Scalar = Ty->getElementType();
+  if (Scalar->isIntegerTy(64))
+    return Ty->getNumElements() == 32;
   return Scalar->isIntegerTy(16) || Scalar->isIntegerTy(32) ||
          Scalar->isHalfTy() || Scalar->isFloatTy();
 }
@@ -1967,8 +1982,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       }
       if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
         if (!Freeze->getType()->isIntegerTy(32) &&
+            !Freeze->getType()->isIntegerTy(64) &&
             !Freeze->getType()->isFloatTy() && !Freeze->getType()->isHalfTy())
-          return Fail(&I, "freeze requires scalar i32 data or f32 data");
+          return Fail(&I, "freeze requires admitted scalar numeric data");
         continue;
       }
       if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
@@ -2062,12 +2078,16 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       }
       const bool DenseU16Access =
           AccessTy->isIntegerTy(16) && Plan.Count == 64;
-      if ((!DenseU16Access && !AccessTy->isIntegerTy(32) && !AccessTy->isFloatTy() &&
+      const bool NativeI64Access =
+          AccessTy->isIntegerTy(64) && Plan.Count == 32;
+      if ((!DenseU16Access && !NativeI64Access &&
+           !AccessTy->isIntegerTy(32) && !AccessTy->isFloatTy() &&
            !AccessTy->isHalfTy()) ||
           (isa<AtomicRMWInst>(I) && !AccessTy->isIntegerTy(32)))
         return Fail(&I,
-                    "memory profile requires scalar U16/i32/f16/f32 accesses "
-                    "with U16 using the logical64 profile");
+                    "memory profile requires scalar i64/U16/i32/f16/f32 "
+                    "accesses with i64 using logical32 and U16 using "
+                    "logical64");
       // Reads may be indexed by arbitrary element values; overlapping atomic
       // adds are intentional. Ordinary writes still need injective unit-stride
       // streams. Mixed atomic/non-atomic objects are checked separately below.
@@ -2077,7 +2097,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       auto *GEP = dyn_cast<GetElementPtrInst>(Pointer);
       bool UniformBase = L.isLoopInvariant(Pointer) ||
                          (GEP && GEP->getNumIndices() == 1 &&
-                          (GEP->getSourceElementType()->isIntegerTy(16) ||
+                          (GEP->getSourceElementType()->isIntegerTy(64) ||
+                           GEP->getSourceElementType()->isIntegerTy(16) ||
                            GEP->getSourceElementType()->isIntegerTy(32) ||
                            GEP->getSourceElementType()->isFloatTy() ||
                            GEP->getSourceElementType()->isHalfTy()) &&
@@ -2592,6 +2613,7 @@ class ElementTileLegalizer {
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
+  uint64_t NativeI64RegionType = 0;
   DenseMap<std::pair<Value *, uint64_t>, Value *> RetypedIndices;
   DenseMap<std::pair<Value *, uint64_t>, DenseMap<unsigned, Value *>>
       ByteOffsets;
@@ -2807,6 +2829,12 @@ class ElementTileLegalizer {
            Ty->getElementType()->isIntegerTy(Width);
   }
 
+  static bool isI64LeafVector(Value *V) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && Ty->getNumElements() == 32 &&
+           Ty->getElementType()->isIntegerTy(64);
+  }
+
   static bool isF32Vector(Value *V) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
     return Ty && (Ty->getNumElements() == 32 || Ty->getNumElements() == 64) &&
@@ -2943,7 +2971,8 @@ class ElementTileLegalizer {
              isF32Vector(V) || isF16Vector(V) ||
              fail(V, "unsupported undefined element type");
     if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
-      if (!isVector(Freeze, 32) && !isF32Vector(Freeze) && !isF16Vector(Freeze))
+      if (!isVector(Freeze, 32) && !isI64LeafVector(Freeze) &&
+          !isF32Vector(Freeze) && !isF16Vector(Freeze))
         return fail(V, "freeze requires admitted Tile data");
       return validate(Freeze->getOperand(0));
     }
@@ -2967,7 +2996,8 @@ class ElementTileLegalizer {
       if (!Base || !Base->getType()->isPointerTy() ||
           Base->getType()->getPointerAddressSpace() != 0 ||
           GEP->getNumIndices() != 1 ||
-          (!GEP->getSourceElementType()->isIntegerTy(32) &&
+          (!GEP->getSourceElementType()->isIntegerTy(64) &&
+           !GEP->getSourceElementType()->isIntegerTy(32) &&
            !GEP->getSourceElementType()->isIntegerTy(16) &&
            !GEP->getSourceElementType()->isFloatTy() &&
            !GEP->getSourceElementType()->isHalfTy()) ||
@@ -2983,7 +3013,7 @@ class ElementTileLegalizer {
       if (isa<FPMathOperator>(Select) && Select->getFastMathFlags().any())
         return fail(V, "floating select requires no fast-math");
       if ((!isVector(V, 1) && !isVector(V, 16) && !isVector(V, 32) &&
-           !isF32Vector(V) && !isF16Vector(V)) ||
+           !isI64LeafVector(V) && !isF32Vector(V) && !isF16Vector(V)) ||
           !isVector(Select->getCondition(), 1))
         return fail(V, "select requires an i1 mask and admitted Tile values");
       return validate(Select->getCondition()) &&
@@ -2991,10 +3021,11 @@ class ElementTileLegalizer {
     }
     if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
       if (!isVector(Cmp->getOperand(0), 32) &&
+          !isI64LeafVector(Cmp->getOperand(0)) &&
           !(isVector(Cmp->getOperand(0), 64) &&
             (getSplatValue(Cmp->getOperand(0)) ||
              getSplatValue(Cmp->getOperand(1)))))
-        return fail(V, "comparison requires i32 Tiles or an i64 scalar operand");
+        return fail(V, "comparison requires i32 Tiles or logical32 i64 Tiles");
       return validate(Cmp->getOperand(0)) && validate(Cmp->getOperand(1));
     }
     if (isa<FCmpInst>(V))
@@ -3155,7 +3186,7 @@ class ElementTileLegalizer {
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_gather) {
       if (!isVector(&VP, 16) && !isVector(&VP, 32) && !isF32Vector(&VP) &&
-          !isF16Vector(&VP))
+          !isF16Vector(&VP) && !isI64LeafVector(&VP))
         return fail(&VP, "VP gather requires admitted data");
       if (!isa<GetElementPtrInst>(VP.getArgOperand(0)))
         return fail(&VP, "VP memory requires an explicit element GEP");
@@ -3164,6 +3195,7 @@ class ElementTileLegalizer {
     if (VP.getIntrinsicID() == Intrinsic::vp_scatter) {
       if (!isVector(VP.getArgOperand(0), 16) &&
           !isVector(VP.getArgOperand(0), 32) &&
+          !isI64LeafVector(VP.getArgOperand(0)) &&
           !isF32Vector(VP.getArgOperand(0)) &&
           !isF16Vector(VP.getArgOperand(0)))
         return fail(&VP, "VP scatter requires admitted data");
@@ -3245,8 +3277,9 @@ class ElementTileLegalizer {
                    B.getInt64(DType), B.getInt64(29), Scalar});
     }
     Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
-    const uint64_t DType =
-        Ty->getScalarSizeInBits() == 32 ? (PreferredType == 17 ? 17 : 25) : 24;
+    const uint64_t DType = Ty->getScalarSizeInBits() == 32
+                               ? (PreferredType == 17 ? 17 : 25)
+                               : (PreferredType == 16 ? 16 : 24);
     if (Ty->getNumElements() == 64 &&
         (Ty->getScalarSizeInBits() == 32 ||
          Ty->getScalarSizeInBits() == 64) &&
@@ -3371,8 +3404,14 @@ class ElementTileLegalizer {
         Pred = ICmpInst::getSwappedPredicate(Pred);
       }
       unsigned Width = L->getType()->getScalarSizeInBits();
-      uint64_t DType = Width == 32 ? (ICmpInst::isSigned(Pred) ? 17 : 25)
-                                    : (ICmpInst::isSigned(Pred) ? 16 : 24);
+      const bool SignedPredicate = ICmpInst::isSigned(Pred);
+      const bool SignNeutral =
+          Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_NE;
+      uint64_t DType = Width == 32
+                           ? (SignedPredicate ? 17 : 25)
+                           : (SignNeutral && NativeI64RegionType != 0
+                                  ? NativeI64RegionType
+                                  : (SignedPredicate ? 16 : 24));
       uint64_t Selector = 0;
       switch (Pred) {
       case ICmpInst::ICMP_EQ: Selector = 0; break;
@@ -3390,12 +3429,14 @@ class ElementTileLegalizer {
                      : B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
         R = call(Intrinsic::linx_experimental_ew_tcmps_gpr, {L->getType()},
                  {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
-                  B.getInt64(29), value(L), Scalar, B.getInt64(Selector)},
+                  B.getInt64(29), value(L, DType), Scalar,
+                  B.getInt64(Selector)},
                  "pto.mask.compare");
       } else {
         R = call(Intrinsic::linx_experimental_ew_tcmp_gpr, {L->getType()},
                  {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
-                  B.getInt64(29), value(L), value(RHS), B.getInt64(Selector)},
+                  B.getInt64(29), value(L, DType), value(RHS, DType),
+                  B.getInt64(Selector)},
                  "pto.mask.compare");
       }
     } else {
@@ -3414,7 +3455,8 @@ class ElementTileLegalizer {
   Value *binary(unsigned Op, Value *L, Value *R, Value *Active,
                 uint64_t PreferredType = 0) {
     unsigned Code = 0;
-    uint64_t DType = 25;
+    bool Wide = L->getType()->getScalarType()->isIntegerTy(64);
+    uint64_t DType = Wide ? 24 : 25;
     switch (Op) {
     case Instruction::FAdd:
       DType = L->getType()->getScalarType()->isHalfTy() ? 4 : 1;
@@ -3427,14 +3469,14 @@ class ElementTileLegalizer {
     case Instruction::Add: Code = 0; break;
     case Instruction::Sub: Code = 1; break;
     case Instruction::Mul: Code = 2; break;
-    case Instruction::SDiv: DType = 17; LLVM_FALLTHROUGH;
+    case Instruction::SDiv: DType = Wide ? 16 : 17; LLVM_FALLTHROUGH;
     case Instruction::UDiv: Code = 3; break;
     case Instruction::URem: Code = 4; break;
     case Instruction::And: Code = 5; break;
     case Instruction::Or: Code = 6; break;
     case Instruction::Xor: Code = 7; break;
     case Instruction::Shl: Code = 8; break;
-    case Instruction::AShr: DType = 17; LLVM_FALLTHROUGH;
+    case Instruction::AShr: DType = Wide ? 16 : 17; LLVM_FALLTHROUGH;
     case Instruction::LShr: Code = 9; break;
     case Instruction::SRem: {
       Value *Q = binary(Instruction::SDiv, L, R, Active);
@@ -3447,9 +3489,10 @@ class ElementTileLegalizer {
     // S32 descriptor directly. Division/remainder/right-shift signedness
     // remains determined by the LLVM opcode, never by a downstream descriptor
     // hint.
-    if (DType != 1 && DType != 4 && PreferredType == 17 &&
+    if (DType != 1 && DType != 4 &&
+        (PreferredType == 16 || PreferredType == 17) &&
         (Code <= 2 || (Code >= 5 && Code <= 8)))
-      DType = 17;
+      DType = Wide ? 16 : 17;
     return call(
         Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
         {B.getInt64(32),
@@ -3546,8 +3589,9 @@ class ElementTileLegalizer {
     // TLEA requires source operation/backing type equality, unlike the
     // width-compatible arithmetic inputs. A typed add of zero preserves bits
     // and publishes the required S32/U32 descriptor before extending it.
-    assert((RequiredType == 17 || RequiredType == 25) &&
-           "only narrow index retyping is admitted");
+    assert((RequiredType == 16 || RequiredType == 17 || RequiredType == 24 ||
+            RequiredType == 25) &&
+           "only integer element retyping is admitted");
     unsigned Count = cast<FixedVectorType>(Tile->getType())->getNumElements();
     uint64_t FullMask = Count == 64 ? ~uint64_t(0) : uint64_t(0xffffffff);
     Value *Zero = value(Constant::getNullValue(Tile->getType()));
@@ -3596,6 +3640,9 @@ class ElementTileLegalizer {
     if (It != Data.end())
       return It->second;
     auto *Ty = cast<FixedVectorType>(V->getType());
+    if (Ty->getElementType()->isIntegerTy(64) && PreferredType == 0 &&
+        NativeI64RegionType != 0)
+      PreferredType = NativeI64RegionType;
     Value *R = nullptr;
     if (auto Descriptor = getViewDescriptor(V)) {
       Value *Source = Descriptor->Marker->getArgOperand(0);
@@ -3657,11 +3704,14 @@ class ElementTileLegalizer {
       uint64_t SelectType = isF16Vector(V)    ? 4
                             : isVector(V, 16) ? 26
                             : isF32Vector(V)  ? 1
-                                              : (PreferredType == 17 ? 17 : 25);
+                            : isI64LeafVector(V)
+                                ? (PreferredType == 16 ? 16 : 24)
+                                : (PreferredType == 17 ? 17 : 25);
       R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
                {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SelectType),
                 B.getInt64(29), mask(Select->getCondition()), B.getInt64(0),
-                value(Select->getTrueValue()), value(Select->getFalseValue())});
+                value(Select->getTrueValue(), SelectType),
+                value(Select->getFalseValue(), SelectType)});
     } else if (isIntrinsic(dyn_cast<CallInst>(V),
                            Intrinsic::linx_experimental_element_atomic_add)) {
       auto *Atomic = cast<CallInst>(V);
@@ -3695,7 +3745,9 @@ class ElementTileLegalizer {
         uint64_t ValueType = isF16Vector(VP)    ? 4
                              : isVector(VP, 16) ? 26
                              : isF32Vector(VP)  ? 1
-                                                : 25;
+                             : isI64LeafVector(VP)
+                                 ? (PreferredType == 16 ? 16 : 24)
+                                 : 25;
         R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
                  {Ty, A.Offset->getType()},
                  {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(ValueType),
@@ -3795,6 +3847,17 @@ public:
   }
 
   void emit() {
+    NativeI64RegionType = 0;
+    for (CallInst *Publication : Publications)
+      if (auto Descriptor = getViewDescriptor(Publication)) {
+        uint64_t DType = Descriptor->Profile.DataType;
+        if (DType == 16 || DType == 24) {
+          assert((NativeI64RegionType == 0 ||
+                  NativeI64RegionType == DType) &&
+                 "one native64 region requires one publication signedness");
+          NativeI64RegionType = DType;
+        }
+      }
     // Visit memory roots in their original order. Recursive pure operands are
     // cached, so a gather is neither duplicated nor moved past a prior effect.
     for (Instruction *I : Owned) {
@@ -3814,8 +3877,9 @@ public:
         Address A = address(Scatter->getArgOperand(1));
         Value *Source = value(Scatter->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
-        assert((SourceType == 17 || SourceType == 25 || SourceType == 26 ||
-                SourceType == 1 || SourceType == 4) &&
+        assert((SourceType == 16 || SourceType == 17 || SourceType == 24 ||
+                SourceType == 25 || SourceType == 26 || SourceType == 1 ||
+                SourceType == 4) &&
                "scatter source descriptor must have an admitted type");
         unsigned Count =
             cast<FixedVectorType>(Source->getType())->getNumElements();
@@ -3833,13 +3897,14 @@ public:
       B.SetInsertPoint(I);
       B.SetCurrentDebugLocation(I->getDebugLoc());
       if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
-        value(VP);
+        value(VP, NativeI64RegionType);
       } else {
         Address A = address(VP->getArgOperand(1));
         Value *Source = value(VP->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
-        assert((SourceType == 17 || SourceType == 25 || SourceType == 26 ||
-                SourceType == 1 || SourceType == 4) &&
+        assert((SourceType == 16 || SourceType == 17 || SourceType == 24 ||
+                SourceType == 25 || SourceType == 26 || SourceType == 1 ||
+                SourceType == 4) &&
                "scatter source descriptor must have an admitted type");
         unsigned Count =
             cast<FixedVectorType>(Source->getType())->getNumElements();
