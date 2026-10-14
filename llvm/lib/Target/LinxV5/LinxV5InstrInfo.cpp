@@ -821,6 +821,7 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
                {"== 21", LinxV5Op::ArgFormat::CUBE_M32},
                {"== 22", LinxV5Op::ArgFormat::CUBE_M16}};
   bool HasConditionalLayout = false;
+  Optional<unsigned> ConditionalActual;
   for (const ConditionalLayout &Case : Cases) {
     size_t Pos = Text.find(Case.Needle);
     if (Pos == StringRef::npos)
@@ -829,11 +830,18 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
     Optional<unsigned> Actual = getInlineAsmOperandImmediate(MI, Text, Pos);
     if (!Actual)
       return None;
+    if (ConditionalActual && *ConditionalActual != *Actual)
+      return None;
+    ConditionalActual = *Actual;
     unsigned Expected = 0;
     StringRef(Case.Needle).drop_front(3).getAsInteger(10, Expected);
     if (Actual && *Actual == Expected)
       return Case.Result;
   }
+  if (HasConditionalLayout && ConditionalActual &&
+      *ConditionalActual == LinxV5Op::ArgFormat::ND2N8 &&
+      Text.contains("B.DATR ND2N8"))
+    return LinxV5Op::ArgFormat::ND2N8;
   // Do not select text from an inactive conditional branch.  The complete
   // layout must be statically resolved before a typed COPY can be emitted.
   if (HasConditionalLayout)
@@ -1171,6 +1179,8 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
       Layout = LinxV5Op::ArgFormat::CUBE_M32;
     else if (Layout == LinxV5Op::ArgFormat::ND2M16)
       Layout = LinxV5Op::ArgFormat::CUBE_M16;
+    else if (Layout == LinxV5Op::ArgFormat::ND2N8)
+      Layout = LinxV5Op::ArgFormat::ND2N8;
     else if (Layout != LinxV5Op::ArgFormat::NORM &&
              Layout != LinxV5Op::ArgFormat::CUBE_M32 &&
              Layout != LinxV5Op::ArgFormat::CUBE_M16)

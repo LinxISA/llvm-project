@@ -1466,9 +1466,40 @@ LinxV5ClockhandsColoring::findOpenAssembleParents(MachineFunction &MF) {
   return Parents;
 }
 
+static SmallVector<Register>
+findLoopInvariantN8Tiles(MachineFunction &MF, MachineLoopInfo &MLI) {
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  SmallVector<Register> Tiles;
+  for (unsigned I = 0, E = MRI.getNumVirtRegs(); I != E; ++I) {
+    Register Reg = Register::index2VirtReg(I);
+    if (MRI.getRegClassOrNull(Reg) != &LinxV5::Tile_ABSRegClass ||
+        !MRI.hasOneDef(Reg))
+      continue;
+    MachineInstr *Def = MRI.getOneDef(Reg)->getParent();
+    Optional<LinxV5::TileDescriptor> Descriptor =
+        LinxV5::tryGetTileRegDescriptor(
+            *Def->getParent(), std::next(Def->getIterator()), Reg);
+    if (!Descriptor ||
+        LinxV5Op::tileDataLayoutCubeLayout(Descriptor->Layout) !=
+            LinxV5Op::CubeLayoutClass::N8)
+      continue;
+    bool LoopInvariant = llvm::any_of(
+        MRI.use_instructions(Reg), [&](const MachineInstr &Use) {
+          MachineLoop *Loop = MLI.getLoopFor(Use.getParent());
+          return Loop && !Loop->contains(Def->getParent());
+        });
+    if (LoopInvariant)
+      Tiles.push_back(Reg);
+  }
+  return Tiles;
+}
+
 void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
   SmallVector<Register> OpenParents = findOpenAssembleParents(MF);
-  if (!EnableTileClockHand && OpenParents.empty()) {
+  SmallVector<Register> LoopInvariantN8 =
+      findLoopInvariantN8Tiles(MF, *MLI);
+  if (!EnableTileClockHand && OpenParents.empty() &&
+      LoopInvariantN8.empty()) {
     assignMultiOutput(MF);
     return;
   }
@@ -1478,6 +1509,14 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
   SmallVector<const TargetRegisterClass *> CurRCs = {
       &LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
       &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass};
+
+  if (!LoopInvariantN8.empty()) {
+    for (Register Reg : LoopInvariantN8)
+      assign(Reg, &LinxV5::Tile_NRRegClass);
+    llvm::erase_if(CurRCs, [](const TargetRegisterClass *RC) {
+      return RC == &LinxV5::Tile_NRRegClass;
+    });
+  }
 
   if (!OpenParents.empty()) {
     // Keep one hand available for writer temporaries.  Parent values with
@@ -1569,6 +1608,10 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
     });
   }
 
+  if (CurRCs.empty())
+    report_fatal_error(
+        "Local tile hand reservations leave no writer hand");
+
   const TargetRegisterClass *LoopRC = CurRCs.back();
   const TargetRegisterClass *AcrossRC =
       CurRCs.size() > 1 ? CurRCs[CurRCs.size() - 2] : CurRCs.back();
@@ -1583,7 +1626,7 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
   // but standard RA must not place them in a hand reserved by an OPEN parent.
   // N is excluded from parent coloring above and remains the dedicated writer
   // hand for every such residual value.
-  if (!OpenParents.empty()) {
+  if (!OpenParents.empty() || !LoopInvariantN8.empty()) {
     assert(!CurRCs.empty() && "OPEN parents must leave a writer hand");
     const TargetRegisterClass *WriterRC = CurRCs.back();
     for (unsigned I = 0, E = MRI->getNumVirtRegs(); I != E; ++I) {

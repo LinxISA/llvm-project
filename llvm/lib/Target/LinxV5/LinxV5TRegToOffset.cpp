@@ -1209,30 +1209,15 @@ void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
   if (needSyncTo.empty())
     return;
 
-  // An ABI seed describes the existing incoming t#1; it is not an allocation.
-  // Preserve that fact through scalar-only blocks.  If the complete
-  // tail-aligned live-out sequence already matches the successor contract,
-  // publishing the imported value again would add a forbidden callee-entry
-  // TMOV without changing any relative age.  Ordinary queue values still use
-  // the established rolling path, retaining descriptor-copy coverage at PHIs.
+  // Queue operands are relative to the newest publication.  If the complete
+  // tail-aligned live-out sequence, including descriptor identities and every
+  // interior/trailing hole, already matches the successor contract, all
+  // relative ages already agree. Republishing those values changes no
+  // observable ordering and is both unnecessary and invalid for persistent
+  // layouts such as CUBE_N8 that have no direct-Local TMOV selector.
   SmallVector<LinxRegOp> ExistingLiveouts = getLiveouts();
-  if (ExistingLiveouts == needSyncTo) {
-    bool FoundFirstLiveout = false;
-    bool HasImportedValue = false;
-    bool AllValuesAreImports = true;
-    unsigned Index = tailsi();
-    for (unsigned I = 0; I != TRNumber; ++I) {
-      const TRCopyRange &Slot = LiveSlots[Index];
-      FoundFirstLiveout |= Slot.IsLiveout;
-      if (FoundFirstLiveout && Slot.IsLiveout) {
-        HasImportedValue |= Slot.IsLocalTileABIImport;
-        AllValuesAreImports &= Slot.IsLocalTileABIImport;
-      }
-      Index = Index == TRNumber - 1 ? 0 : Index + 1;
-    }
-    if (HasImportedValue && AllValuesAreImports)
-      return;
-  }
+  if (ExistingLiveouts == needSyncTo)
+    return;
 
   // An OPEN assembly parent itself cannot be copied, but ordinary live-outs
   // may be rotated past it.  This is required when an INIT is conditional:
