@@ -28,6 +28,8 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -53,6 +55,60 @@ static cl::opt<bool> EnableBFIOpt(
 
 STATISTIC(NumStoreReg, "Number of store regs to stack slots");
 STATISTIC(NumTileSpill, "Number of jcore-tile reg spills");
+
+Optional<LinxV5::LocalTileABIInfo>
+LinxV5::getLocalTileABIInfo(const Function &F) {
+  Attribute Attr = F.getFnAttribute("linx-local-tile-abi");
+  if (!Attr.isValid())
+    return None;
+
+  if (!F.getAttributes().hasRetAttr(Attribute::InReg))
+    report_fatal_error(
+        "linx-local-tile-abi requires an explicit inreg return marker");
+
+  SmallVector<StringRef, 3> Fields;
+  Attr.getValueAsString().split(Fields, ':');
+  if (Fields.size() != 3)
+    report_fatal_error("malformed linx-local-tile-abi attribute");
+
+  unsigned ArgumentIndex = 0;
+  unsigned PhysicalCols = 0;
+  unsigned ValidCols = 0;
+  if (Fields[0].getAsInteger(10, ArgumentIndex) ||
+      Fields[1].getAsInteger(10, PhysicalCols) ||
+      Fields[2].getAsInteger(10, ValidCols))
+    report_fatal_error("non-numeric linx-local-tile-abi attribute");
+
+  const bool SupportedProfile =
+      (PhysicalCols == 128 && (ValidCols == 128 || ValidCols == 32)) ||
+      (PhysicalCols == 2048 && ValidCols == 2048);
+  if (!SupportedProfile || ArgumentIndex >= F.arg_size())
+    report_fatal_error("unsupported linx-local-tile-abi profile");
+
+  auto *ArgumentTy = dyn_cast<FixedVectorType>(
+      F.getFunctionType()->getParamType(ArgumentIndex));
+  auto *ReturnTy = dyn_cast<FixedVectorType>(F.getReturnType());
+  auto IsExactType = [&](FixedVectorType *Ty) {
+    return Ty && Ty->getElementType()->isIntegerTy(32) &&
+           Ty->getNumElements() == PhysicalCols;
+  };
+  if (!IsExactType(ArgumentTy) || !IsExactType(ReturnTy))
+    report_fatal_error(
+        "linx-local-tile-abi type does not match its U32 NORM profile");
+
+  Optional<unsigned> SizeCode =
+      LinxV5SizeCode::sizeCodeForBytes(uint64_t{PhysicalCols} * 4);
+  if (!SizeCode)
+    report_fatal_error("linx-local-tile-abi capacity is not encodable");
+
+  LocalTileABIInfo Info;
+  Info.ArgumentIndex = ArgumentIndex;
+  Info.Descriptor = TileDescriptor{
+      LinxV5Op::DataType::U32, LinxV5Op::ArgFormat::NORM,
+      /*ValidRow=*/1, ValidCols, PhysicalCols, *SizeCode,
+      /*PackedPredicate=*/false};
+  return Info;
+}
 STATISTIC(NumTileReload, "Number of jcore-tile reg reloads");
 
 static inline MachineOperand *getAsmOperand(MachineInstr *MI, unsigned Val) {
@@ -1003,6 +1059,15 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
 
 static Optional<LinxV5::TileDescriptor>
 getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
+  if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed)
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(3).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(1).getImm()), false});
+
   if ((MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        MI.getOpcode() == LinxV5::PseudoPCOPYDesc))
     return checkedTileDescriptor(
@@ -1420,6 +1485,12 @@ void LinxV5InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     DL = I->getDebugLoc();
 
   MachineFunction *MF = MBB.getParent();
+  if ((MF->getInfo<LinxV5MachineFunctionInfo>()->hasLocalTileABICall() ||
+       LinxV5::getLocalTileABIInfo(MF->getFunction())) &&
+      LinxV5::Tile_ABSRegClass.hasSubClassEq(RC))
+    report_fatal_error(
+        "linx-local-tile-abi cannot spill a Local Tile payload in an ABI "
+        "callee or across its call boundary");
   if (LinxV5::Shared_ABSRegClass.hasSubClassEq(RC))
     report_fatal_error(
         "Shared register spill is required, but Shared spill is not "

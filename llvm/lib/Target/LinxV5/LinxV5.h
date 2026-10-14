@@ -80,6 +80,12 @@ struct LinxV5ElementTileLegalizationPass
   static bool isRequired() { return true; }
 };
 
+struct LinxV5LocalTileABIPromotionPass
+    : PassInfoMixin<LinxV5LocalTileABIPromotionPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
 struct LinxV5GenericElementPreparePass
     : PassInfoMixin<LinxV5GenericElementPreparePass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

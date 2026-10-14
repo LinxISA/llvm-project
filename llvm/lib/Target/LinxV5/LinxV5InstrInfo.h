@@ -22,6 +22,7 @@
 
 namespace llvm {
 
+class Function;
 class LinxV5Subtarget;
 
 class LinxV5InstrInfo : public LinxV5GenInstrInfo {
@@ -145,6 +146,16 @@ struct TileDescriptor {
            PackedPredicate == Other.PackedPredicate;
   }
 };
+
+struct LocalTileABIInfo {
+  unsigned ArgumentIndex = 0;
+  TileDescriptor Descriptor;
+};
+
+/// Parse and validate the closed Local-Tile call-boundary contract carried by
+/// `linx-local-tile-abi`. Invalid or partial contracts fail closed; absence of
+/// the attribute returns None.
+Optional<LocalTileABIInfo> getLocalTileABIInfo(const Function &F);
 
 SingleAsm parseSingleAsm(MachineInstr *MI);
 

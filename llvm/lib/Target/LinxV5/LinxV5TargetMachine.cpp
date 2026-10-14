@@ -196,6 +196,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       [](ModulePassManager &MPM, OptimizationLevel) {
         FunctionPassManager FPM;
         if (EnableGenericElement) {
+          MPM.addPass(LinxV5LocalTileABIPromotionPass());
           FPM.addPass(LinxV5GenericElementPreparePass());
           FPM.addPass(LinxV5ElementPredicationPass());
           FPM.addPass(LinxV5ElementTileLegalizationPass());

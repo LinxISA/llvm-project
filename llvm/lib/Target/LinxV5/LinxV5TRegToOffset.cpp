@@ -21,6 +21,8 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
@@ -89,13 +91,15 @@ struct TRCopyRange {
   MachineInstr *AssembleParentDef;
   bool IsLiveout;
   bool IsAssembleParent;
+  bool IsLocalTileABIImport;
   size_t Idx;
   TRCopyRange()
       : LastUse(nullptr), AssembleParentDef(nullptr), IsLiveout(false),
-        IsAssembleParent(false), Idx(0) {}
+        IsAssembleParent(false), IsLocalTileABIImport(false), Idx(0) {}
   TRCopyRange(LinxRegOp &RO, bool liveout)
       : RegOp(RO), LastUse(nullptr), AssembleParentDef(nullptr),
-        IsLiveout(liveout), IsAssembleParent(false), Idx(0) {}
+        IsLiveout(liveout), IsAssembleParent(false),
+        IsLocalTileABIImport(false), Idx(0) {}
 };
 
 struct SlotStatus {
@@ -251,6 +255,171 @@ static TRegIndexState::iterator findExactIdentity(TRegIndexState &State,
 static TRegIndexState::iterator findLatestRegister(TRegIndexState &State,
                                                    Register Reg);
 static void eraseRegisterIdentities(TRegIndexState &State, Register Reg);
+static void resetStateAtLocalTileABISeed(
+    MachineInstr &MI, const TargetRegisterClass *RC,
+    TRegIndexState &State, unsigned &CurIdx,
+    const MachineRegisterInfo *MRI);
+
+static Optional<LinxV5::TileDescriptor>
+getLocalTileABISeedDescriptor(const MachineInstr &MI) {
+  if (MI.getOpcode() != LinxV5::PseudoLocalTileABISeed ||
+      MI.getNumOperands() < 7)
+    return None;
+  for (unsigned I : {1u, 2u, 3u, 4u, 5u, 6u})
+    if (!MI.getOperand(I).isImm())
+      return None;
+  return LinxV5::TileDescriptor{
+      static_cast<unsigned>(MI.getOperand(5).getImm()),
+      static_cast<unsigned>(MI.getOperand(6).getImm()),
+      static_cast<unsigned>(MI.getOperand(3).getImm()),
+      static_cast<unsigned>(MI.getOperand(2).getImm()),
+      static_cast<unsigned>(MI.getOperand(4).getImm()),
+      static_cast<unsigned>(MI.getOperand(1).getImm()), false};
+}
+
+static Function *getLocalTileABICallee(MachineFunction &MF,
+                                       const MachineInstr &MI) {
+  if (!MI.isCall())
+    return nullptr;
+  for (const MachineOperand &MO : MI.operands()) {
+    StringRef Name;
+    if (MO.isGlobal())
+      Name = MO.getGlobal()->getName();
+    else if (MO.isSymbol())
+      Name = MO.getSymbolName();
+    if (Name.empty())
+      continue;
+    Function *F = MF.getMMI().getModule()->getFunction(Name);
+    if (F && LinxV5::getLocalTileABIInfo(*F))
+      return F;
+  }
+  return nullptr;
+}
+
+static void addLocalTileABISeed(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator At,
+                                const LinxV5InstrInfo &TII,
+                                const LinxV5::TileDescriptor &Descriptor) {
+  BuildMI(MBB, At, DebugLoc(), TII.get(LinxV5::PseudoLocalTileABISeed))
+      .addReg(LinxV5::Tile_T1, RegState::Define)
+      .addImm(Descriptor.SizeCode)
+      .addImm(Descriptor.ValidCol)
+      .addImm(Descriptor.ValidRow)
+      .addImm(Descriptor.PhysicalCol)
+      .addImm(Descriptor.DataType)
+      .addImm(Descriptor.Layout);
+}
+
+static void addLocalTileABIExport(MachineBasicBlock &MBB,
+                                  MachineBasicBlock::iterator At,
+                                  const LinxV5InstrInfo &TII,
+                                  const LinxV5::TileDescriptor &Descriptor) {
+  Optional<LinxV5::TileDescriptor> Actual =
+      LinxV5::tryGetTileRegDescriptor(MBB, At, LinxV5::Tile_T1);
+  if (!Actual || !(*Actual == Descriptor))
+    report_fatal_error(
+        "linx-local-tile-abi export source descriptor does not match the "
+        "declared dtype/layout/capacity/valid shape");
+  // This is intentionally a self-copy. Even if register allocation already
+  // chose the ABI hand, the call boundary must publish one newest queue value.
+  BuildMI(MBB, At, DebugLoc(), TII.get(LinxV5::PseudoTCOPYDesc))
+      .addReg(LinxV5::Tile_T1, RegState::Define)
+      .addImm(Descriptor.SizeCode)
+      .addReg(LinxV5::Tile_T1, RegState::Kill)
+      .addImm(Descriptor.ValidCol)
+      .addImm(Descriptor.ValidRow)
+      .addImm(Descriptor.PhysicalCol)
+      .addImm(Descriptor.DataType)
+      .addImm(Descriptor.Layout);
+}
+
+static void verifyLocalTileABICallLiveness(MachineFunction &MF,
+                                           const TargetRegisterInfo &TRI) {
+  auto RejectOtherLocal = [&](const LivePhysRegs &Live, StringRef Where) {
+    for (MCPhysReg Reg : LinxV5::Tile_ABSRegClass) {
+      if (Reg == LinxV5::Tile_T1 || !Live.contains(Reg))
+        continue;
+      report_fatal_error(Twine("linx-local-tile-abi has another live Local ") +
+                         "Tile " + Where);
+    }
+  };
+
+  for (MachineBasicBlock &MBB : MF) {
+    LivePhysRegs Live(TRI);
+    Live.addLiveOuts(MBB);
+    for (MachineInstr &MI : reverse(MBB)) {
+      const bool IsABICall = getLocalTileABICallee(MF, MI) != nullptr;
+      if (IsABICall)
+        RejectOtherLocal(Live, "after call");
+      Live.stepBackward(MI);
+      if (IsABICall)
+        RejectOtherLocal(Live, "before call");
+    }
+  }
+}
+
+static void prepareLocalTileABIBoundaries(MachineFunction &MF,
+                                          const LinxV5InstrInfo &TII,
+                                          const TargetRegisterInfo &TRI) {
+  verifyLocalTileABICallLiveness(MF, TRI);
+
+  if (Optional<LinxV5::LocalTileABIInfo> ABI =
+          LinxV5::getLocalTileABIInfo(MF.getFunction())) {
+    MachineBasicBlock &Entry = MF.front();
+    addLocalTileABISeed(Entry, Entry.begin(), TII, ABI->Descriptor);
+  }
+
+  for (MachineBasicBlock &MBB : MF) {
+    for (auto I = MBB.begin(); I != MBB.end();) {
+      MachineInstr &MI = *I++;
+      if (Function *Callee = getLocalTileABICallee(MF, MI)) {
+        LinxV5::LocalTileABIInfo ABI =
+            *LinxV5::getLocalTileABIInfo(*Callee);
+        addLocalTileABIExport(MBB, MI.getIterator(), TII, ABI.Descriptor);
+        if (!MI.readsRegister(LinxV5::Tile_T1, &TRI))
+          MI.addOperand(MF, MachineOperand::CreateReg(
+                                LinxV5::Tile_T1, /*isDef=*/false,
+                                /*isImp=*/true));
+        if (!MI.definesRegister(LinxV5::Tile_T1, &TRI))
+          MI.addOperand(MF, MachineOperand::CreateReg(
+                                LinxV5::Tile_T1, /*isDef=*/true,
+                                /*isImp=*/true));
+        addLocalTileABISeed(MBB, I, TII, ABI.Descriptor);
+      }
+    }
+  }
+
+  if (Optional<LinxV5::LocalTileABIInfo> ABI =
+          LinxV5::getLocalTileABIInfo(MF.getFunction()))
+    for (MachineBasicBlock &MBB : MF)
+      for (MachineInstr &MI : make_early_inc_range(MBB))
+        if (MI.isReturn()) {
+          auto ExportAt = MI.getIterator();
+          auto TargetSetup = ExportAt;
+          while (TargetSetup != MBB.begin()) {
+            --TargetSetup;
+            if (TargetSetup->isDebugInstr() || TargetSetup->isCFIInstruction())
+              continue;
+            break;
+          }
+          if (TargetSetup == ExportAt ||
+              (TargetSetup->getOpcode() != LinxV5::C_SETC_TGT &&
+               TargetSetup->getOpcode() != LinxV5::SETC_TGT))
+            report_fatal_error(
+                "linx-local-tile-abi return lacks adjacent target setup");
+          // A Tile export starts a new architectural block.  Emit it before
+          // SETC.TGT so the return target is established in the final block
+          // immediately consumed by RET, rather than being cleared by TMOV.
+          addLocalTileABIExport(MBB, TargetSetup, TII, ABI->Descriptor);
+        }
+}
+
+static void eraseLocalTileABISeeds(MachineFunction &MF) {
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : make_early_inc_range(MBB))
+      if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed)
+        MI.eraseFromParent();
+}
 
 char LinxV5TRegToOffsetOpt::ID = 0;
 
@@ -345,6 +514,7 @@ static void initSlot(TRCopyRange *Slot) {
   Slot->RegOp = LinxRegOp();
   Slot->IsLiveout = false;
   Slot->IsAssembleParent = false;
+  Slot->IsLocalTileABIImport = false;
   Slot->AssembleParentDef = nullptr;
   Slot->LastUse = nullptr;
 }
@@ -446,6 +616,8 @@ static unsigned getTSlotOccupation(MachineInstr &MI,
   // allocates nor publishes a Local tile queue entry.
   if (MI.getOpcode() == LinxV5::PseudoEmptyTile)
     return 0;
+  if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed)
+    return 0;
 
   unsigned Occ = 0;
   for (auto &MO : MI.operands()) {
@@ -491,6 +663,7 @@ public:
     TRI = MBB->getParent()->getSubtarget().getRegisterInfo();
   }
   void init(SlotStatus *SS);
+  void resetAtLocalTileABIBoundary(const TRLiveRange &Seed);
   SmallVector<TRCopyRange *>
   allocNewSlot(SmallVectorImpl<const TRLiveRange *> &LRs);
   SmallVector<LinxRegOp> getLiveouts(bool EnableVerify);
@@ -578,6 +751,29 @@ void SlotCalc::init(SlotStatus *SS) {
     PreIdx = HeadIdx;
     TailIdx = 0;
   }
+}
+
+void SlotCalc::resetAtLocalTileABIBoundary(const TRLiveRange &Seed) {
+  LiveSlots.clear();
+  LiveSlots.resize(TRNumber);
+  TailIdx = 0;
+  HeadIdx = TRNumber;
+  PreIdx = HeadIdx;
+
+  if (!Seed.DefMO || !isRC(Seed.DefMO->getReg(), RC,
+                           &MBB->getParent()->getRegInfo()))
+    return;
+  Optional<LinxV5::TileDescriptor> Descriptor =
+      getLocalTileABISeedDescriptor(*Seed.MI);
+  if (!Descriptor)
+    report_fatal_error("malformed Local Tile ABI seed");
+  TRCopyRange &Slot = LiveSlots[TRNumber - 1];
+  Slot.RegOp = LinxRegOp(Seed.DefMO->getReg(), Descriptor->SizeCode);
+  Slot.RegOp.Descriptor = *Descriptor;
+  Slot.LastUse = Seed.LastUse;
+  Slot.IsLiveout = Seed.IsLiveout;
+  Slot.IsLocalTileABIImport = true;
+  Slot.Idx = HeadIdx - 1;
 }
 
 bool SlotCalc::isKill(TRCopyRange &Slot, const MachineInstr *MI) {
@@ -787,6 +983,7 @@ bool SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
   // A proved-CLOSED parent is ordinary payload after a real copy.  The new
   // queue entry must not inherit stale protection for the old INIT epoch.
   head().IsAssembleParent = false;
+  head().IsLocalTileABIImport = false;
   head().AssembleParentDef = nullptr;
   if (&Slot != &head())
     initSlot(&Slot);
@@ -1012,6 +1209,31 @@ void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
   if (needSyncTo.empty())
     return;
 
+  // An ABI seed describes the existing incoming t#1; it is not an allocation.
+  // Preserve that fact through scalar-only blocks.  If the complete
+  // tail-aligned live-out sequence already matches the successor contract,
+  // publishing the imported value again would add a forbidden callee-entry
+  // TMOV without changing any relative age.  Ordinary queue values still use
+  // the established rolling path, retaining descriptor-copy coverage at PHIs.
+  SmallVector<LinxRegOp> ExistingLiveouts = getLiveouts();
+  if (ExistingLiveouts == needSyncTo) {
+    bool FoundFirstLiveout = false;
+    bool HasImportedValue = false;
+    bool AllValuesAreImports = true;
+    unsigned Index = tailsi();
+    for (unsigned I = 0; I != TRNumber; ++I) {
+      const TRCopyRange &Slot = LiveSlots[Index];
+      FoundFirstLiveout |= Slot.IsLiveout;
+      if (FoundFirstLiveout && Slot.IsLiveout) {
+        HasImportedValue |= Slot.IsLocalTileABIImport;
+        AllValuesAreImports &= Slot.IsLocalTileABIImport;
+      }
+      Index = Index == TRNumber - 1 ? 0 : Index + 1;
+    }
+    if (HasImportedValue && AllValuesAreImports)
+      return;
+  }
+
   // An OPEN assembly parent itself cannot be copied, but ordinary live-outs
   // may be rotated past it.  This is required when an INIT is conditional:
   // the first loop entry has no parent while a backedge has one, so the
@@ -1176,6 +1398,12 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
     const TRLiveRange &OI = *OII;
     MachineInstr *MI = OI.MI;
     LLVM_DEBUG(dbgs() << "iterating " << *MI);
+    if (MI->getOpcode() == LinxV5::PseudoLocalTileABISeed) {
+      resetAtLocalTileABIBoundary(OI);
+      ++OII;
+      LLVM_DEBUG(printLiveSlots(); dbgs() << "\n");
+      continue;
+    }
     // SIMT Block will insert rolling liveout copy before terminator Inst.
     if (MI->isTerminator())
       break;
@@ -1978,6 +2206,10 @@ void LinxV5TRegToOffsetOpt::simulateAndValidateQueues(MachineFunction &MF) {
       }
 
       for (MachineInstr &MI : MBB) {
+        if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed) {
+          resetStateAtLocalTileABISeed(MI, RC, State, CurIdx, MRI);
+          continue;
+        }
         if (MI.isKill()) {
           Register Reg = MI.getOperand(0).getReg();
           if (isRC(Reg, RC, MRI))
@@ -3612,6 +3844,8 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   CanonicalEntryLiveIns.clear();
   CanonicalRewriteEntryStates.clear();
 
+  prepareLocalTileABIBoundaries(MF, *TII, *TRI);
+
 #ifndef NDEBUG
   verifyGPR(MF);
 #else
@@ -3764,8 +3998,10 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   legalityCheck(MF);
 
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
-  if (!EnableReg2Offset)
+  if (!EnableReg2Offset) {
+    eraseLocalTileABISeeds(MF);
     return true;
+  }
 
   // Snapshot every Local-tile operand's logical queue identity before Phase
   // 2 mutates predecessor register operands.  Descriptor resolution walks
@@ -3858,6 +4094,8 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     DoneMBBs.push_back(MBB);
   }
 
+  eraseLocalTileABISeeds(MF);
+
   return true;
 }
 
@@ -3929,6 +4167,24 @@ static TRegIndexState::iterator findLatestRegister(TRegIndexState &State,
 static void eraseRegisterIdentities(TRegIndexState &State, Register Reg) {
   llvm::erase_if(State,
                  [&](const auto &Entry) { return Entry.first.Reg == Reg; });
+}
+
+static void resetStateAtLocalTileABISeed(
+    MachineInstr &MI, const TargetRegisterClass *RC,
+    TRegIndexState &State, unsigned &CurIdx,
+    const MachineRegisterInfo *MRI) {
+  State.clear();
+  CurIdx = RC->getNumRegs();
+  if (MI.getNumOperands() == 0 || !MI.getOperand(0).isReg() ||
+      !isRC(MI.getOperand(0).getReg(), RC, MRI))
+    return;
+  Optional<LinxV5::TileDescriptor> Descriptor =
+      getLocalTileABISeedDescriptor(MI);
+  if (!Descriptor)
+    report_fatal_error("malformed Local Tile ABI seed");
+  LinxRegOp Imported(MI.getOperand(0).getReg(), Descriptor->SizeCode);
+  Imported.Descriptor = *Descriptor;
+  State.emplace_back(Imported, CurIdx - 1);
 }
 
 void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
@@ -4102,6 +4358,10 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
   LLVM_DEBUG(dbgs() << ">> preform rewrite \n");
 
   for (MachineInstr &MI : MBB) {
+    if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed) {
+      resetStateAtLocalTileABISeed(MI, RC, TRegIdx, CurIdx, MRI);
+      continue;
+    }
     if (MI.isKill()) {
       Register Reg = MI.getOperand(0).getReg();
       if (isRC(Reg, RC, MRI))
@@ -4134,6 +4394,10 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
     SmallVector<MachineOperand *, 2> TRDefs;
     for (MachineOperand &MO : MI.operands()) {
       if (!MO.isReg()) {
+        continue;
+      } else if (MO.isImplicit() && (MI.isCall() || MI.isReturn())) {
+        // ABI dependencies constrain scheduling/liveness but have no encoded
+        // Local register operand to rewrite.
         continue;
       } else if (MO.isUse()) {
         if (isRC(MO.getReg(), RC, MRI)) {

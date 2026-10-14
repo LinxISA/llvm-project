@@ -3497,6 +3497,15 @@ def PseudoPCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
          uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
          BstartDataType:$DataType, BArgFormat:$Layout)>;
 
+// Post-RA metadata only: seed one closed Local-Tile value imported across an
+// outlined C call boundary. TRegToOffset consumes this pseudo while resetting
+// its queue model; no ISA allocation or instruction is emitted for the seed.
+let isCodeGenOnly = 1, hasSideEffects = 1 in
+def PseudoLocalTileABISeed : Pseudo<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileSizeWithBracket:$TileSize,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout), []>;
+
 let isCodeGenOnly = 1, hasSideEffects = 1 in {
 def PseudoV5GMOV : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins BstartDataType:$DataType, PE_MASK_Op:$PE_MASK,

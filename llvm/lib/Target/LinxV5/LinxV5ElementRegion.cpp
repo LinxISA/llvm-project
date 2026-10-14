@@ -12,6 +12,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -41,6 +42,7 @@
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LCSSA.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -976,6 +978,14 @@ static bool isTypedTileImport(Value *V, SmallPtrSetImpl<Value *> &Seen) {
       return true; // Checked by the owning token's complete legalization plan.
     return isTypedTileImport(View->Marker->getArgOperand(0), Seen);
   }
+  if (auto *Arg = dyn_cast<Argument>(V))
+    if (Arg->getParent()->hasFnAttribute("linx-local-tile-abi") &&
+        Arg->getType()->isVectorTy())
+      return true;
+  if (auto *Call = dyn_cast<CallBase>(V))
+    if (Call->getCalledFunction() &&
+        Call->getCalledFunction()->hasFnAttribute("linx-local-tile-abi"))
+      return true;
   if (isTileCarrierProducer(V) || isa<UndefValue>(V) || isa<PoisonValue>(V))
     return true;
   if (auto *Phi = dyn_cast<PHINode>(V)) {
@@ -2751,6 +2761,9 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
 // Tile values cross the region boundary through whole-carrier register inputs.
 // Match operand constraints, including the outputs that precede input operands.
 static bool isWholeTileConsumer(const CallBase &Call, Value *Carrier) {
+  if (Call.getCalledFunction() &&
+      Call.getCalledFunction()->hasFnAttribute("linx-local-tile-abi"))
+    return isElementCarrier(Carrier);
   if (!Call.isInlineAsm() || !isElementCarrier(Carrier))
     return false;
   auto *Asm = cast<InlineAsm>(Call.getCalledOperand());
@@ -2783,6 +2796,9 @@ static bool hasWholeCarrierConsumers(Value *V, SmallPtrSetImpl<Value *> &Seen) {
     if (!I)
       return false;
     if (I->getMetadata(PredicatedOwnerMD))
+      continue;
+    if (isa<ReturnInst>(I) &&
+        I->getFunction()->hasFnAttribute("linx-local-tile-abi"))
       continue;
     if (auto *Phi = dyn_cast<PHINode>(I)) {
       if (isTypedTileImport(Phi) && hasWholeCarrierConsumers(Phi, Seen))
@@ -3205,7 +3221,7 @@ class ElementTileLegalizer {
             V, "NORM region cannot mix layout, shape, or scalarized views");
       Value *Source = View->Marker->getArgOperand(0);
       auto *I = dyn_cast<Instruction>(Source);
-      if (I && !OwnedSet.contains(I))
+      if ((I && !OwnedSet.contains(I)) || isa<Argument>(Source))
         return isTypedTileImport(Source) ||
                fail(V, "NORM import requires an explicit Tile producer");
       return validateNorm(Source);
@@ -3308,7 +3324,9 @@ class ElementTileLegalizer {
     if (auto View = getViewDescriptor(V)) {
       Value *Source = View->Marker->getArgOperand(0);
       auto *I = dyn_cast<Instruction>(Source);
-      R = I && !OwnedSet.contains(I) ? Source : valueNorm(Source);
+      R = (I && !OwnedSet.contains(I)) || isa<Argument>(Source)
+              ? Source
+              : valueNorm(Source);
     } else if (Value *Scalar = getSplatValue(V)) {
       if (Ty->getElementType()->isIntegerTy(1))
         R = normCompare(normSplat(Scalar), normSplat(B.getInt32(0)), 1);
@@ -4344,6 +4362,9 @@ public:
           if (UserI && OwnedSet.contains(UserI))
             continue;
           External = true;
+          if (isa_and_nonnull<ReturnInst>(UserI) &&
+              F.hasFnAttribute("linx-local-tile-abi"))
+            continue;
           if (auto *Phi = dyn_cast_or_null<PHINode>(UserI)) {
             if (isTypedTileImport(Phi) && Consumers(Phi))
               continue;
@@ -5901,6 +5922,82 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
   return true;
 }
 
+static void verifyLocalTileCallBoundaries(Function &F, DominatorTree &DT) {
+  SmallVector<CallInst *, 4> Calls;
+  for (Instruction &I : instructions(F))
+    if (auto *Call = dyn_cast<CallInst>(&I))
+      if (Call->getCalledFunction() &&
+          Call->getCalledFunction()->hasFnAttribute("linx-local-tile-abi")) {
+        if (!Call->getAttributes().hasRetAttr(Attribute::InReg))
+          diagnose(F, Call, "Local Tile ABI call result requires inreg");
+        Calls.push_back(Call);
+      }
+  if (Calls.empty())
+    return;
+  for (Instruction &I : instructions(F)) {
+    Type *MemoryType = nullptr;
+    if (auto *Load = dyn_cast<LoadInst>(&I))
+      MemoryType = Load->getType();
+    if (auto *Store = dyn_cast<StoreInst>(&I))
+      MemoryType = Store->getValueOperand()->getType();
+    if (MemoryType && MemoryType->isVectorTy())
+      diagnose(F, &I,
+               "Local Tile ABI left an unpromoted vector payload access");
+  }
+  SmallVector<Value *, 16> Carriers;
+  for (Argument &A : F.args())
+    if (A.getType()->isVectorTy())
+      Carriers.push_back(&A);
+  for (Instruction &I : instructions(F))
+    if (I.getType()->isVectorTy())
+      Carriers.push_back(&I);
+  for (CallInst *Call : Calls)
+    for (Value *Carrier : Carriers) {
+      auto *Definition = dyn_cast<Instruction>(Carrier);
+      if (Carrier == Call || (Definition && !DT.dominates(Definition, Call)))
+        continue;
+      SmallPtrSet<BasicBlock *, 1> Kills;
+      if (Definition)
+        Kills.insert(Definition->getParent());
+      for (User *U : Carrier->users()) {
+        auto *Use = dyn_cast<Instruction>(U);
+        if (!Use || Use == Call || isa<DbgInfoIntrinsic>(Use))
+          continue;
+        bool Live = false;
+        if (auto *Phi = dyn_cast<PHINode>(Use)) {
+          for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+            if (Phi->getIncomingValue(I) != Carrier)
+              continue;
+            BasicBlock *Edge = Phi->getIncomingBlock(I);
+            if (Edge == Call->getParent()) {
+              Live = true;
+              break;
+            }
+            SmallVector<BasicBlock *, 4> Starts(successors(Call->getParent()));
+            Live |= !Starts.empty() && isPotentiallyReachableFromMany(Starts, Edge, &Kills, &DT);
+          }
+        } else if (Use->getParent() == Call->getParent()) {
+          Live = Call->comesBefore(Use);
+          if (!Live && !Definition) {
+            SmallVector<BasicBlock *, 4> Starts(successors(Call->getParent()));
+            Live = !Starts.empty() && isPotentiallyReachableFromMany(Starts, Use->getParent(),
+                                                  nullptr, &DT);
+          }
+        } else {
+          // Re-executing the defining block creates the next dynamic value;
+          // paths through that block do not keep this generation live.
+          SmallVector<BasicBlock *, 4> Starts(successors(Call->getParent()));
+          Live = !Starts.empty() && isPotentiallyReachableFromMany(Starts, Use->getParent(),
+                                                &Kills, &DT);
+        }
+        if (Live)
+          diagnose(
+              F, Call,
+              "Local Tile ABI cannot preserve another live Tile across a call");
+      }
+    }
+}
+
 static bool verifyNoResidualElementContracts(Function &F) {
   for (Instruction &I : instructions(F)) {
     if (hasElementRegionLoopMetadata(I))
@@ -6009,6 +6106,250 @@ FunctionPass *llvm::createLinxV5ElementRegionVerifierPass() {
 }
 
 PreservedAnalyses
+LinxV5LocalTileABIPromotionPass::run(Module &M, ModuleAnalysisManager &) {
+  struct Candidate {
+    Function *F;
+    unsigned Index;
+    uint64_t DataOffset;
+    ElementProfile Profile;
+    SmallVector<CallInst *, 8> Calls;
+  };
+  SmallVector<Candidate, 4> Candidates;
+  const DataLayout &DL = M.getDataLayout();
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.hasFnAttribute("linx-local-tile-abi"))
+      continue;
+    Optional<unsigned> Index;
+    Optional<ElementProfile> Profile;
+    Optional<uint64_t> DataOffset;
+    for (Instruction &I : instructions(F)) {
+      auto *A = dyn_cast<CallInst>(&I);
+      StringRef Text;
+      if (!A || !getAnnotationString(*A, Text) ||
+          !Text.startswith("pto.element.view:v2;"))
+        continue;
+      auto P = elementViewProfile(Text, F.getContext());
+      int64_t Offset = 0;
+      auto *Arg = dyn_cast<Argument>(
+          GetPointerBaseWithConstantOffset(A->getArgOperand(0), Offset, DL));
+      if (!P || P->Layout != 0 || !Arg)
+        continue;
+      if (Offset < 0 || (DataOffset && *DataOffset != uint64_t(Offset)) ||
+          (Index && *Index != Arg->getArgNo()) ||
+          (Profile && (Profile->Count != P->Count || Profile->Cols != P->Cols)))
+        diagnose(F, A,
+                 "Local Tile ABI requires one exact mutable row reference");
+      Index = Arg->getArgNo();
+      DataOffset = Offset;
+      Profile = *P;
+    }
+    if (!Index)
+      continue;
+    if ((!F.hasLocalLinkage() && !F.hasLinkOnceODRLinkage()) || F.isVarArg() ||
+        !F.getReturnType()->isVoidTy() || F.hasAddressTaken())
+      diagnose(F, nullptr,
+               "Local Tile ABI requires a direct internal void helper");
+    SmallPtrSet<Value *, 16> Seen;
+    std::function<bool(Value *)> ExactUses = [&](Value *P) {
+      if (!Seen.insert(P).second)
+        return true;
+      int64_t Offset = 0;
+      Value *Canonical = P;
+      while (auto *A = dyn_cast<CallInst>(Canonical)) {
+        StringRef Text;
+        if (!getAnnotationString(*A, Text))
+          break;
+        Canonical = A->getArgOperand(0);
+      }
+      bool IsData = GetPointerBaseWithConstantOffset(Canonical, Offset, DL) ==
+                        F.getArg(*Index) &&
+                    Offset >= 0 && uint64_t(Offset) == *DataOffset;
+      for (User *U : P->users()) {
+        if (auto *L = dyn_cast<LoadInst>(U))
+          if (IsData && L->getPointerOperand() == P && !L->isVolatile() &&
+              !L->isAtomic() && L->getType() == Profile->VectorTy)
+            continue;
+        if (auto *S = dyn_cast<StoreInst>(U))
+          if (IsData && S->getPointerOperand() == P && !S->isVolatile() &&
+              !S->isAtomic() &&
+              S->getValueOperand()->getType() == Profile->VectorTy)
+            continue;
+        if (auto *G = dyn_cast<GetElementPtrInst>(U))
+          if (G->hasAllConstantIndices() && ExactUses(G))
+            continue;
+        if (auto *C = dyn_cast<BitCastInst>(U))
+          if (ExactUses(C))
+            continue;
+        if (auto *A = dyn_cast<CallInst>(U)) {
+          StringRef Text;
+          if (getAnnotationString(*A, Text) && A->getArgOperand(0) == P &&
+              ExactUses(A))
+            continue;
+          if (isa<DbgInfoIntrinsic>(A))
+            continue;
+        }
+        return false;
+      }
+      return true;
+    };
+    if (!ExactUses(F.getArg(*Index)))
+      diagnose(F, nullptr,
+               "Local Tile reference escapes exact carrier accesses");
+    for (Instruction &I : instructions(F))
+      if (auto *Call = dyn_cast<CallBase>(&I))
+        if (!Call->isInlineAsm() && !isa<IntrinsicInst>(Call))
+          diagnose(F, &I, "Local Tile ABI rejects nested ordinary calls");
+    Candidate C{&F, *Index, *DataOffset, *Profile, {}};
+    for (User *U : F.users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != &F ||
+          Call->getFunction() == &F || Call->isMustTailCall() ||
+          Call->hasOperandBundles())
+        diagnose(F, nullptr,
+                 "Local Tile ABI rejects indirect or recursive calls");
+      int64_t Offset = 0;
+      auto *Object = dyn_cast<AllocaInst>(GetPointerBaseWithConstantOffset(
+          Call->getArgOperand(*Index), Offset, DL));
+      auto *Count =
+          Object ? dyn_cast<ConstantInt>(Object->getArraySize()) : nullptr;
+      if (!Object || !Count || Offset != 0 || !Count->isOne() ||
+          Object->getAlign() < Align(32) ||
+          DL.getTypeAllocSize(Object->getAllocatedType()) !=
+              *DataOffset + Profile->Bytes)
+        diagnose(*Call->getFunction(), Call,
+                 "Local Tile ABI requires one exact aligned local carrier");
+      for (unsigned I = 0; I < Call->arg_size(); ++I)
+        if (I != *Index && Call->getArgOperand(I)->getType()->isPointerTy() &&
+            getUnderlyingObject(Call->getArgOperand(I)) == Object)
+          diagnose(*Call->getFunction(), Call,
+                   "Local Tile reference aliases another call argument");
+
+      SmallPtrSet<Value *, 16> PrivatePointers;
+      std::function<bool(Value *)> StaysPrivate = [&](Value *Pointer) {
+        if (!PrivatePointers.insert(Pointer).second)
+          return true;
+        for (User *U : Pointer->users()) {
+          if (auto *Load = dyn_cast<LoadInst>(U)) {
+            if (Load->getPointerOperand() == Pointer)
+              continue;
+          }
+          if (auto *Store = dyn_cast<StoreInst>(U)) {
+            if (Store->getPointerOperand() == Pointer &&
+                Store->getValueOperand() != Pointer)
+              continue;
+          }
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && StaysPrivate(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (StaysPrivate(Cast))
+              continue;
+          }
+          if (auto *UseCall = dyn_cast<CallInst>(U)) {
+            StringRef Text;
+            if (getAnnotationString(*UseCall, Text) && StaysPrivate(UseCall))
+              continue;
+            if (isa<DbgInfoIntrinsic>(UseCall) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_start) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_end))
+              continue;
+            if (UseCall->getCalledFunction() == &F &&
+                UseCall->getArgOperand(*Index) == Pointer)
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!StaysPrivate(Object))
+        diagnose(*Call->getFunction(), Call,
+                 "Local Tile ABI requires caller-private nonescaping storage");
+      C.Calls.push_back(Call);
+    }
+    if (C.Calls.empty())
+      diagnose(F, nullptr,
+               "Local Tile reference helper lacks direct local callers");
+    Candidates.push_back(std::move(C));
+  }
+  for (Candidate &C : Candidates) {
+    Function &F = *C.F;
+    SmallVector<Type *, 8> Parameters(F.getFunctionType()->param_begin(),
+                                      F.getFunctionType()->param_end());
+    Parameters[C.Index] = C.Profile.VectorTy;
+    Function *NF = Function::Create(
+        FunctionType::get(C.Profile.VectorTy, Parameters, false),
+        GlobalValue::InternalLinkage, F.getName() + ".pto.local", &M);
+    NF->setCallingConv(CallingConv::C);
+    BasicBlock *Entry =
+        BasicBlock::Create(M.getContext(), "tile.abi.entry", NF);
+    IRBuilder<> B(Entry);
+    auto *StorageType =
+        ArrayType::get(B.getInt8Ty(), C.DataOffset + C.Profile.Bytes);
+    AllocaInst *Storage = B.CreateAlloca(StorageType, nullptr, "tile.abi.ref");
+    Storage->setAlignment(Align(256));
+    ValueToValueMapTy Map;
+    for (Argument &A : F.args()) {
+      Argument *NewArg = NF->getArg(A.getArgNo());
+      NewArg->setName(A.getName());
+      Map[&A] = A.getArgNo() == C.Index ? static_cast<Value *>(Storage)
+                                        : static_cast<Value *>(NewArg);
+    }
+    Value *DataPointer =
+        B.CreateInBoundsGEP(B.getInt8Ty(), Storage, B.getInt64(C.DataOffset));
+    B.CreateStore(NF->getArg(C.Index), DataPointer)->setAlignment(Align(32));
+    SmallVector<ReturnInst *, 4> Returns;
+    CloneFunctionInto(NF, &F, Map, CloneFunctionChangeType::LocalChangesOnly,
+                      Returns);
+    NF->setLinkage(GlobalValue::InternalLinkage);
+    NF->setCallingConv(CallingConv::C);
+    NF->setComdat(nullptr);
+    NF->addRetAttr(Attribute::InReg);
+    NF->addFnAttr("linx-local-tile-abi",
+                  (Twine(C.Index) + ":" + Twine(C.Profile.Count) + ":" +
+                   Twine(C.Profile.Cols))
+                      .str());
+    B.CreateBr(cast<BasicBlock>(Map[&F.getEntryBlock()]));
+    for (ReturnInst *R : Returns) {
+      IRBuilder<> RB(R);
+      LoadInst *V =
+          RB.CreateLoad(C.Profile.VectorTy, DataPointer, "tile.abi.result");
+      V->setAlignment(Align(32));
+      RB.CreateRet(V);
+      R->eraseFromParent();
+    }
+    for (CallInst *Call : C.Calls) {
+      IRBuilder<> CB(Call);
+      SmallVector<Value *, 8> Args(Call->args());
+      Value *Pointer = CB.CreateInBoundsGEP(CB.getInt8Ty(), Args[C.Index],
+                                            CB.getInt64(C.DataOffset));
+      LoadInst *V =
+          CB.CreateLoad(C.Profile.VectorTy, Pointer, "tile.abi.input");
+      V->setAlignment(Align(32));
+      Args[C.Index] = V;
+      CallInst *Result = CB.CreateCall(NF, Args, "tile.abi.return");
+      Result->setCallingConv(NF->getCallingConv());
+      SmallVector<AttributeSet, 8> ArgumentAttributes;
+      for (unsigned I = 0; I < Call->arg_size(); ++I)
+        ArgumentAttributes.push_back(
+            I == C.Index ? AttributeSet()
+                         : Call->getAttributes().getParamAttrs(I));
+      Result->setAttributes(
+          AttributeList::get(M.getContext(), Call->getAttributes().getFnAttrs(),
+                             AttributeSet::get(M.getContext(),
+                                 {Attribute::get(M.getContext(), Attribute::InReg)}),
+                             ArgumentAttributes));
+      Result->setDebugLoc(Call->getDebugLoc());
+      CB.CreateStore(Result, Pointer)->setAlignment(Align(32));
+      Call->eraseFromParent();
+    }
+    F.eraseFromParent();
+  }
+  return Candidates.empty() ? PreservedAnalyses::all()
+                            : PreservedAnalyses::none();
+}
+
+PreservedAnalyses
 LinxV5ElementRegionPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
   (void)AM;
   return prepareViews(F) ? PreservedAnalyses::none()
@@ -6052,8 +6393,9 @@ PreservedAnalyses LinxV5ElementRegionPass::run(Function &F,
 }
 
 PreservedAnalyses
-LinxV5ElementRegionVerifierPass::run(Function &F, FunctionAnalysisManager &) {
+LinxV5ElementRegionVerifierPass::run(Function &F, FunctionAnalysisManager &AM) {
   verifyNoResidualElementContracts(F);
+  verifyLocalTileCallBoundaries(F, AM.getResult<DominatorTreeAnalysis>(F));
   return PreservedAnalyses::all();
 }
 
@@ -6176,8 +6518,26 @@ LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
   for (Instruction &I : instructions(F))
     HasRegion |= isIntrinsic(dyn_cast<CallInst>(&I),
                              Intrinsic::linx_experimental_element_region);
-  if (!HasRegion)
-    return prepareViews(F) ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  if (!HasRegion) {
+    bool ViewsChanged = prepareViews(F);
+    if (ViewsChanged)
+      AM.invalidate(F, PreservedAnalyses::none());
+    bool HasTileCall = false;
+    for (Instruction &I : instructions(F))
+      if (auto *Call = dyn_cast<CallBase>(&I))
+        HasTileCall |=
+            Call->getCalledFunction() &&
+            Call->getCalledFunction()->hasFnAttribute("linx-local-tile-abi");
+    if (HasTileCall) {
+      FunctionPassManager Promote;
+      Promote.addPass(SROAPass());
+      Promote.addPass(InstCombinePass());
+      Promote.run(F, AM);
+      return PreservedAnalyses::none();
+    }
+    return ViewsChanged ? PreservedAnalyses::none()
+                        : PreservedAnalyses::all();
+  }
   bool ViewsChanged = prepareViews(F, /*RestoreFullCarrier=*/true);
   if (ViewsChanged)
     AM.invalidate(F, PreservedAnalyses::none());

@@ -4367,15 +4367,31 @@ static Optional<unsigned> preAssignMask(const ArgTy &Args) {
 void LinxV5TargetLowering::analyzeInputArgs(
     MachineFunction &MF, CCState &CCInfo,
     const SmallVectorImpl<ISD::InputArg> &Ins, bool IsRet,
-    bool isFuncBlock) const {
+    bool isFuncBlock, const Function *ABIContractFunction) const {
   unsigned NumArgs = Ins.size();
   FunctionType *FType = MF.getFunction().getFunctionType();
+  const Function &ContractFunction =
+      ABIContractFunction ? *ABIContractFunction : MF.getFunction();
+  Optional<LinxV5::LocalTileABIInfo> LocalTileABI =
+      LinxV5::getLocalTileABIInfo(ContractFunction);
 
   Optional<unsigned> FirstMaskArgument;
 
   for (unsigned i = 0; i != NumArgs; ++i) {
     MVT ArgVT = Ins[i].VT;
     ISD::ArgFlagsTy ArgFlags = Ins[i].Flags;
+
+    bool IsLocalTileABIValue = IsRet && LocalTileABI && i == 0;
+    if (!IsRet && LocalTileABI && Ins[i].isOrigArg())
+      IsLocalTileABIValue =
+          Ins[i].getOrigArgIndex() == LocalTileABI->ArgumentIndex;
+    if (IsLocalTileABIValue) {
+      if (!ArgVT.isVector())
+        report_fatal_error("linx-local-tile-abi value was split or legalized");
+      CCInfo.addLoc(CCValAssign::getReg(
+          i, ArgVT, LinxV5::Tile_T1, ArgVT, CCValAssign::Full));
+      continue;
+    }
 
     Type *ArgTy = nullptr;
     if (IsRet)
@@ -4407,6 +4423,11 @@ void LinxV5TargetLowering::analyzeOutputArgs(
     const SmallVectorImpl<ISD::OutputArg> &Outs, bool IsRet,
     CallLoweringInfo *CLI, bool isFuncBlock) const {
   unsigned NumArgs = Outs.size();
+  const Function *ContractFunction = &MF.getFunction();
+  if (CLI && CLI->CB && CLI->CB->getCalledFunction())
+    ContractFunction = CLI->CB->getCalledFunction();
+  Optional<LinxV5::LocalTileABIInfo> LocalTileABI =
+      LinxV5::getLocalTileABIInfo(*ContractFunction);
 
   Optional<unsigned> FirstMaskArgument;
 
@@ -4414,6 +4435,18 @@ void LinxV5TargetLowering::analyzeOutputArgs(
     MVT ArgVT = Outs[i].VT;
     ISD::ArgFlagsTy ArgFlags = Outs[i].Flags;
     Type *OrigTy = CLI ? CLI->getArgs()[Outs[i].OrigArgIndex].Ty : nullptr;
+
+    bool IsLocalTileABIValue = IsRet && LocalTileABI && i == 0;
+    if (!IsRet && LocalTileABI)
+      IsLocalTileABIValue =
+          Outs[i].OrigArgIndex == LocalTileABI->ArgumentIndex;
+    if (IsLocalTileABIValue) {
+      if (!ArgVT.isVector())
+        report_fatal_error("linx-local-tile-abi value was split or legalized");
+      CCInfo.addLoc(CCValAssign::getReg(
+          i, ArgVT, LinxV5::Tile_T1, ArgVT, CCValAssign::Full));
+      continue;
+    }
 
     LinxV5ABI::ABI ABI = MF.getSubtarget<LinxV5Subtarget>().getTargetABI();
     bool Result = false;
@@ -4594,6 +4627,10 @@ SDValue LinxV5TargetLowering::LowerFormalArguments(
     const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &DL,
     SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const {
   MachineFunction &MF = DAG.getMachineFunction();
+  Optional<LinxV5::LocalTileABIInfo> LocalTileABI =
+      LinxV5::getLocalTileABIInfo(MF.getFunction());
+  if (LocalTileABI && CallConv != CallingConv::C)
+    report_fatal_error("linx-local-tile-abi requires the C calling convention");
 
   switch (CallConv) {
   case CallingConv::C:
@@ -4805,6 +4842,35 @@ LinxV5TargetLowering::LowerCall(CallLoweringInfo &CLI,
   MVT XLenVT = Subtarget.getXLenVT();
 
   MachineFunction &MF = DAG.getMachineFunction();
+  const Function *LocalTileABICallee =
+      CLI.CB ? CLI.CB->getCalledFunction() : nullptr;
+  if (!LocalTileABICallee)
+    if (auto *GA = dyn_cast<GlobalAddressSDNode>(Callee))
+      LocalTileABICallee = dyn_cast<Function>(GA->getGlobal());
+  Optional<LinxV5::LocalTileABIInfo> LocalTileABI =
+      LocalTileABICallee
+          ? LinxV5::getLocalTileABIInfo(*LocalTileABICallee)
+          : Optional<LinxV5::LocalTileABIInfo>();
+  bool RequestsLocalTileReturn = llvm::any_of(Ins, [](const ISD::InputArg &In) {
+    return In.Flags.isInReg() &&
+           (In.VT == MVT::v128i32 || In.VT == MVT::v2048i32);
+  });
+  if (RequestsLocalTileReturn && !LocalTileABI && CLI.CB &&
+      !CLI.CB->isInlineAsm())
+    report_fatal_error(Twine("inreg Local Tile return requires "
+                             "linx-local-tile-abi on callee ") +
+                       (LocalTileABICallee ? LocalTileABICallee->getName()
+                                           : StringRef("<indirect>")));
+  if (LocalTileABI) {
+    if (!RequestsLocalTileReturn)
+      report_fatal_error(
+          "linx-local-tile-abi call requires an explicit inreg return marker");
+    if (CallConv != CallingConv::C)
+      report_fatal_error(
+          "linx-local-tile-abi requires the C calling convention");
+    IsTailCall = false;
+    MF.getInfo<LinxV5MachineFunctionInfo>()->setHasLocalTileABICall();
+  }
 
   // Analyze the operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
@@ -5011,7 +5077,8 @@ LinxV5TargetLowering::LowerCall(CallLoweringInfo &CLI,
   // Assign locations to each value returned by this call.
   SmallVector<CCValAssign, 16> RVLocs;
   CCState RetCCInfo(CallConv, IsVarArg, MF, RVLocs, *DAG.getContext());
-  analyzeInputArgs(MF, RetCCInfo, Ins, /*IsRet=*/true, IsFunctionBlock);
+  analyzeInputArgs(MF, RetCCInfo, Ins, /*IsRet=*/true, IsFunctionBlock,
+                   LocalTileABICallee);
 
   // Copy all of the result registers out of their specified physreg.
   for (auto &VA : RVLocs) {
@@ -5047,10 +5114,24 @@ bool LinxV5TargetLowering::CanLowerReturn(
   CCState CCInfo(CallConv, IsVarArg, MF, RVLocs, Context);
 
   Optional<unsigned> FirstMaskArgument;
+  Optional<LinxV5::LocalTileABIInfo> LocalTileABI =
+      LinxV5::getLocalTileABIInfo(MF.getFunction());
+  if (LocalTileABI && CallConv != CallingConv::C)
+    return false;
 
   for (unsigned i = 0, e = Outs.size(); i != e; ++i) {
     MVT VT = Outs[i].VT;
     ISD::ArgFlagsTy ArgFlags = Outs[i].Flags;
+    // SelectionDAG queries CanLowerReturn for a direct call's result using the
+    // caller MachineFunction, so the callee attribute is not available here.
+    // Admit only the two physical carriers used by the closed ABI; LowerCall
+    // and LowerReturn still require and validate the callee/function contract.
+    if ((VT == MVT::v128i32 || VT == MVT::v2048i32) && i == 0 &&
+        ArgFlags.isInReg()) {
+      CCInfo.addLoc(CCValAssign::getReg(
+          i, VT, LinxV5::Tile_T1, VT, CCValAssign::Full));
+      continue;
+    }
     LinxV5ABI::ABI ABI = MF.getSubtarget<LinxV5Subtarget>().getTargetABI();
     bool Result = false;
     if (MF.getSubtarget<LinxV5Subtarget>().isSIMT())
@@ -5076,6 +5157,16 @@ LinxV5TargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
                                   const SDLoc &DL, SelectionDAG &DAG) const {
   const MachineFunction &MF = DAG.getMachineFunction();
   const LinxV5Subtarget &STI = MF.getSubtarget<LinxV5Subtarget>();
+  Optional<LinxV5::LocalTileABIInfo> LocalTileABI =
+      LinxV5::getLocalTileABIInfo(MF.getFunction());
+  bool RequestsLocalTileReturn = llvm::any_of(
+      Outs, [](const ISD::OutputArg &Out) {
+        return Out.Flags.isInReg() &&
+               (Out.VT == MVT::v128i32 || Out.VT == MVT::v2048i32);
+      });
+  if (RequestsLocalTileReturn && !LocalTileABI)
+    report_fatal_error(
+        "inreg Local Tile return requires linx-local-tile-abi");
 
   // Stores the assignment of the return value to a location.
   SmallVector<CCValAssign, 16> RVLocs;

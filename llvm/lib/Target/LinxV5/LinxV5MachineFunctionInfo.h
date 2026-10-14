@@ -55,6 +55,9 @@ public:
 
   bool isClockhandsAllocation() const { return IsClockhandsAllocation; }
 
+  void setHasLocalTileABICall() { HasLocalTileABICall = true; }
+  bool hasLocalTileABICall() const { return HasLocalTileABICall; }
+
 private:
   /// FrameIndex for start of varargs area
   int VarArgsFrameIndex = 0;
@@ -72,6 +75,7 @@ private:
   bool TemplateEpilogue = false;
 
   bool IsClockhandsAllocation = false;
+  bool HasLocalTileABICall = false;
 
   /// Registers that have been sign extended from i32.
   SmallVector<Register, 8> SExt32Registers;

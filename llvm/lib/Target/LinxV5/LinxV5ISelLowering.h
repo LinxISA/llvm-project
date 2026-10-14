@@ -276,7 +276,8 @@ public:
 private:
   void analyzeInputArgs(MachineFunction &MF, CCState &CCInfo,
                         const SmallVectorImpl<ISD::InputArg> &Ins, bool IsRet,
-                        bool isFuncBlock) const;
+                        bool isFuncBlock,
+                        const Function *ABIContractFunction = nullptr) const;
   void analyzeOutputArgs(MachineFunction &MF, CCState &CCInfo,
                          const SmallVectorImpl<ISD::OutputArg> &Outs,
                          bool IsRet, CallLoweringInfo *CLI,
