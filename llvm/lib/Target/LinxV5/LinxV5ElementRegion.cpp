@@ -33,6 +33,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -2306,9 +2307,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       // A scalar NoAlias answer for a[i] and a[i+1] is not a proof about
       // different iterations. Ask about entire underlying objects instead.
       MemoryLocation AObject(getUnderlyingObject(A.Ptr),
-                             LocationSize::beforeOrAfterPointer());
+                             LocationSize::beforeOrAfterPointer(), A.AATags);
       MemoryLocation BObject(getUnderlyingObject(B.Ptr),
-                             LocationSize::beforeOrAfterPointer());
+                             LocationSize::beforeOrAfterPointer(), B.AATags);
       bool HasAtomic =
           isa<AtomicRMWInst>(Memory[I]) || isa<AtomicRMWInst>(Memory[J]);
       if (AA.alias(AObject, BObject) != AliasResult::NoAlias &&
@@ -6103,6 +6104,285 @@ FunctionPass *llvm::createLinxV5ElementRegionPass() {
 
 FunctionPass *llvm::createLinxV5ElementRegionVerifierPass() {
   return new LinxV5ElementRegionVerifierLegacyPass();
+}
+
+PreservedAnalyses
+LinxV5ElementCallContextPass::run(Module &M, ModuleAnalysisManager &AM) {
+  struct Candidate {
+    Function *F;
+    Argument *Closure;
+    Argument *Source;
+    LoadInst *DestinationBase;
+    int64_t FieldOffset;
+    SmallVector<CallInst *, 8> Calls;
+  };
+
+  auto &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  const DataLayout &DL = M.getDataLayout();
+  SmallVector<Candidate, 4> Candidates;
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.isVarArg() ||
+        (!F.hasLocalLinkage() && !F.hasLinkOnceODRLinkage()) ||
+        F.hasAddressTaken())
+      continue;
+
+    SmallPtrSet<BasicBlock *, 16> RegionBlocks;
+    for (Loop *L : FAM.getResult<LoopAnalysis>(F).getLoopsInPreorder())
+      if (getElementRegionToken(*L))
+        RegionBlocks.insert(L->block_begin(), L->block_end());
+    if (RegionBlocks.empty())
+      continue;
+
+    LoadInst *DestinationBase = nullptr;
+    Argument *Closure = nullptr;
+    int64_t FieldOffset = 0;
+    bool Valid = true;
+    for (BasicBlock *BB : RegionBlocks)
+      for (Instruction &I : *BB) {
+        auto *Store = dyn_cast<StoreInst>(&I);
+        if (!Store)
+          continue;
+        auto *Base = dyn_cast<LoadInst>(
+            getUnderlyingObject(Store->getPointerOperand()));
+        int64_t Offset = 0;
+        auto *Arg = Base ? dyn_cast<Argument>(
+                              GetPointerBaseWithConstantOffset(
+                                  Base->getPointerOperand(), Offset, DL))
+                         : nullptr;
+        if (!Base || Base->isVolatile() || Base->isAtomic() || !Arg ||
+            !Arg->getType()->isPointerTy() || Offset < 0 ||
+            (DestinationBase && DestinationBase != Base) ||
+            (Closure && Closure != Arg) ||
+            (DestinationBase && FieldOffset != Offset)) {
+          Valid = false;
+          break;
+        }
+        DestinationBase = Base;
+        Closure = Arg;
+        FieldOffset = Offset;
+      }
+    if (!Valid || !DestinationBase || !Closure)
+      continue;
+
+    Argument *Source = nullptr;
+    for (BasicBlock *BB : RegionBlocks) {
+      for (Instruction &I : *BB) {
+        auto *Load = dyn_cast<LoadInst>(&I);
+        if (!Load || Load == DestinationBase)
+          continue;
+        Value *Base = getUnderlyingObject(Load->getPointerOperand());
+        if (Base == DestinationBase)
+          continue;
+        auto *Arg = dyn_cast<Argument>(Base);
+        if (!Arg || !Arg->getType()->isPointerTy() || Arg == Closure ||
+            (Source && Source != Arg)) {
+          Valid = false;
+          break;
+        }
+        Source = Arg;
+      }
+      if (!Valid)
+        break;
+    }
+    if (!Valid || !Source)
+      continue;
+
+    SmallPtrSet<Value *, 8> SeenClosureUses;
+    std::function<bool(Value *)> HasExactClosureUses = [&](Value *P) {
+      if (!SeenClosureUses.insert(P).second)
+        return true;
+      for (User *U : P->users()) {
+        if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+          if (GEP->hasAllConstantIndices() && HasExactClosureUses(GEP))
+            continue;
+        }
+        if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+          if (HasExactClosureUses(Cast))
+            continue;
+        }
+        if (U == DestinationBase &&
+            DestinationBase->getPointerOperand() == P)
+          continue;
+        if (isa<DbgInfoIntrinsic>(U))
+          continue;
+        return false;
+      }
+      return true;
+    };
+    if (!HasExactClosureUses(Closure))
+      continue;
+
+    Candidate C{&F, Closure, Source, DestinationBase, FieldOffset, {}};
+    for (User *U : F.users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != &F ||
+          Call->getFunction() == &F || Call->isMustTailCall() ||
+          Call->hasOperandBundles()) {
+        Valid = false;
+        break;
+      }
+      C.Calls.push_back(Call);
+    }
+    if (Valid && !C.Calls.empty())
+      Candidates.push_back(std::move(C));
+  }
+
+  unsigned CloneID = 0;
+  bool Changed = false;
+  for (Candidate &C : Candidates) {
+    Function &F = *C.F;
+    for (CallInst *Call : C.Calls) {
+      Function &Caller = *Call->getFunction();
+      int64_t ClosureOffset = 0;
+      auto *ClosureObject = dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(
+              Call->getArgOperand(C.Closure->getArgNo()), ClosureOffset, DL));
+      if (!ClosureObject || ClosureOffset != 0)
+        continue;
+
+      SmallVector<StoreInst *, 2> FieldStores;
+      for (Instruction &I : instructions(Caller)) {
+        auto *Store = dyn_cast<StoreInst>(&I);
+        if (!Store)
+          continue;
+        int64_t Offset = 0;
+        if (GetPointerBaseWithConstantOffset(Store->getPointerOperand(), Offset,
+                                             DL) == ClosureObject &&
+            Offset == C.FieldOffset)
+          FieldStores.push_back(Store);
+      }
+      if (FieldStores.size() != 1)
+        continue;
+      StoreInst *FieldStore = FieldStores.front();
+      int64_t DestinationOffset = 0;
+      auto *DestinationObject = dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(FieldStore->getValueOperand(),
+                                           DestinationOffset, DL));
+      if (!DestinationObject || DestinationOffset != 0 ||
+          !FAM.getResult<DominatorTreeAnalysis>(Caller).dominates(FieldStore,
+                                                                  Call))
+        continue;
+
+      SmallPtrSet<Value *, 16> SeenClosure;
+      std::function<bool(Value *)> ClosureStaysPrivate = [&](Value *P) {
+        if (!SeenClosure.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && ClosureStaysPrivate(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (ClosureStaysPrivate(Cast))
+              continue;
+          }
+          if (U == FieldStore && FieldStore->getPointerOperand() == P)
+            continue;
+          if (auto *UseCall = dyn_cast<CallInst>(U)) {
+            if (isa<DbgInfoIntrinsic>(UseCall) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_start) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_end))
+              continue;
+            if (UseCall == Call &&
+                UseCall->getArgOperand(C.Closure->getArgNo()) == P)
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!ClosureStaysPrivate(ClosureObject))
+        continue;
+
+      SmallPtrSet<Value *, 32> SeenDestination;
+      std::function<bool(Value *)> DestinationStaysPrivate = [&](Value *P) {
+        if (!SeenDestination.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && DestinationStaysPrivate(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (DestinationStaysPrivate(Cast))
+              continue;
+          }
+          if (auto *Load = dyn_cast<LoadInst>(U))
+            if (Load->getPointerOperand() == P)
+              continue;
+          if (auto *Store = dyn_cast<StoreInst>(U)) {
+            if (Store->getPointerOperand() == P)
+              continue;
+            if (Store == FieldStore && Store->getValueOperand() == P)
+              continue;
+          }
+          if (auto *UseCall = dyn_cast<CallInst>(U)) {
+            if (isa<DbgInfoIntrinsic>(UseCall) || isa<MemIntrinsic>(UseCall) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_start) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_end))
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!DestinationStaysPrivate(DestinationObject))
+        continue;
+
+      Value *SourceObject =
+          getUnderlyingObject(Call->getArgOperand(C.Source->getArgNo()));
+      if (SourceObject == DestinationObject || SourceObject == ClosureObject)
+        continue;
+      MemoryLocation DestinationLocation(
+          DestinationObject, LocationSize::beforeOrAfterPointer());
+      MemoryLocation SourceLocation(SourceObject,
+                                    LocationSize::beforeOrAfterPointer());
+      if (FAM.getResult<AAManager>(Caller).alias(DestinationLocation,
+                                                SourceLocation) !=
+          AliasResult::NoAlias)
+        continue;
+
+      ValueToValueMapTy Map;
+      Function *Clone = CloneFunction(&F, Map);
+      Clone->setName(F.getName() + ".pto.context." + Twine(CloneID++));
+      Clone->setLinkage(GlobalValue::InternalLinkage);
+      Clone->setComdat(nullptr);
+      auto *CloneDestinationBase =
+          cast<LoadInst>(Map.lookup(C.DestinationBase));
+      auto *CloneSource = cast<Argument>(Map.lookup(C.Source));
+      MDBuilder MDB(M.getContext());
+      MDNode *Domain = MDB.createAnonymousAliasScopeDomain(
+          "linx.pto.element.call.context");
+      MDNode *Scope = MDB.createAnonymousAliasScope(
+          Domain, "linx.pto.element.private.destination");
+      MDNode *ScopeList = MDNode::get(M.getContext(), {Scope});
+      for (Instruction &I : instructions(Clone)) {
+        Value *Pointer = nullptr;
+        if (auto *Load = dyn_cast<LoadInst>(&I))
+          Pointer = Load->getPointerOperand();
+        else if (auto *Store = dyn_cast<StoreInst>(&I))
+          Pointer = Store->getPointerOperand();
+        if (!Pointer)
+          continue;
+        Value *Base = getUnderlyingObject(Pointer);
+        if (Base == CloneDestinationBase)
+          I.setMetadata(LLVMContext::MD_alias_scope,
+                        MDNode::concatenate(
+                            I.getMetadata(LLVMContext::MD_alias_scope),
+                            ScopeList));
+        else if (Base == CloneSource)
+          I.setMetadata(LLVMContext::MD_noalias,
+                        MDNode::concatenate(
+                            I.getMetadata(LLVMContext::MD_noalias), ScopeList));
+      }
+      Call->setCalledFunction(Clone);
+      Changed = true;
+    }
+    if (F.use_empty() && F.isDiscardableIfUnused())
+      F.eraseFromParent();
+  }
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
 PreservedAnalyses

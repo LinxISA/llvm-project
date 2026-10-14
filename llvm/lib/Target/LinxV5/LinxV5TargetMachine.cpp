@@ -160,6 +160,15 @@ bool LinxV5TargetMachine::isNoopAddrSpaceCast(unsigned SrcAS,
 
 void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerPipelineParsingCallback(
+      [](StringRef Name, ModulePassManager &MPM,
+         ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "linx-v5-element-call-context") {
+          MPM.addPass(LinxV5ElementCallContextPass());
+          return true;
+        }
+        return false;
+      });
+  PB.registerPipelineParsingCallback(
       [](StringRef Name, FunctionPassManager &FPM,
          ArrayRef<PassBuilder::PipelineElement>) {
         if (Name == "linx-v5-element-region-prepare") {
@@ -196,6 +205,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       [](ModulePassManager &MPM, OptimizationLevel) {
         FunctionPassManager FPM;
         if (EnableGenericElement) {
+          MPM.addPass(LinxV5ElementCallContextPass());
           MPM.addPass(LinxV5LocalTileABIPromotionPass());
           FPM.addPass(LinxV5GenericElementPreparePass());
           FPM.addPass(LinxV5ElementPredicationPass());
