@@ -1,8 +1,8 @@
 ; RUN: split-file %s %t
 ; RUN: not --crash llc -mtriple=linx64v5 -enable-all-vector-as-tilereg=true %t/cmp.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=CMP
 ; RUN: not --crash llc -mtriple=linx64v5 -enable-all-vector-as-tilereg=true %t/select.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=SELECT
-; CMP: NORM TCMP requires numeric U32 sources and packed predicate capacity
-; SELECT: NORM TSEL requires a packed predicate and matching U32 row carriers
+; CMP: NORM TCMP requires matching numeric sources and packed predicate capacity
+; SELECT: NORM TSEL requires a packed predicate and matching numeric carriers
 
 ;--- cmp.ll
 ; Packed words may not be reinterpreted as the comparison's numeric row.

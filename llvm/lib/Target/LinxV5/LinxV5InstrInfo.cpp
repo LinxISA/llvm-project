@@ -952,11 +952,17 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
   uint64_t CapacityBits =
       (uint64_t{1} << (Descriptor.SizeCode + 6)) * 8;
   if (Descriptor.PackedPredicate) {
+    bool SupportedShape =
+        (Descriptor.ValidRow == 1 &&
+         (Descriptor.PhysicalCol == 128 ||
+          Descriptor.PhysicalCol == 2048)) ||
+        ((Descriptor.ValidRow == 1 || Descriptor.ValidRow == 16) &&
+         Descriptor.PhysicalCol == 32);
     if (Descriptor.DataType != LinxV5Op::DataType::U8 ||
         Descriptor.Layout != LinxV5Op::ArgFormat::NORM ||
-        Descriptor.ValidRow != 1 ||
-        (Descriptor.PhysicalCol != 128 && Descriptor.PhysicalCol != 2048) ||
-        CapacityBits / 8 < Descriptor.PhysicalCol)
+        !SupportedShape ||
+        CapacityBits / 8 <
+            uint64_t{Descriptor.ValidRow} * Descriptor.PhysicalCol)
       report_fatal_error("invalid packed NORM predicate COPY descriptor");
     return Descriptor;
   }
@@ -1083,16 +1089,25 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
       MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
     if (MI.getOperand(1).getReg() != LinxV5::R0 ||
         MI.getOperand(3).getReg() != LinxV5::R0 ||
-        MI.getOperand(2).getImm() != 1 || MI.getOperand(6).getImm() != 0)
+        MI.getOperand(6).getImm() != 0)
       return None;
+    unsigned Rows = MI.getOperand(2).getImm();
     unsigned Cols = MI.getOperand(4).getImm();
+    unsigned DType = MI.getOperand(5).getImm();
     unsigned PhysicalCols = MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI
                                 ? MI.getOperand(11).getImm()
                                 : Cols;
-    if (PhysicalCols != 128 && PhysicalCols != 2048)
+    bool U32Row =
+        Rows == 1 && DType == LinxV5Op::DataType::U32 &&
+        ((PhysicalCols == 128 && (Cols == 32 || Cols == 128)) ||
+         (PhysicalCols == 2048 && Cols == 2048));
+    bool F32Tile = DType == LinxV5Op::DataType::FP32 &&
+                   PhysicalCols == 32 && Cols == 32 &&
+                   (Rows == 1 || Rows == 16);
+    if (!U32Row && !F32Tile)
       return None;
     return checkedTileDescriptor(LinxV5::TileDescriptor{
-        LinxV5Op::DataType::U8, LinxV5Op::ArgFormat::NORM, 1, Cols,
+        LinxV5Op::DataType::U8, LinxV5Op::ArgFormat::NORM, Rows, Cols,
         PhysicalCols, static_cast<unsigned>(MI.getOperand(7).getImm()), true});
   }
 

@@ -101,12 +101,17 @@ elementProfile(uint64_t DataType, unsigned Count, unsigned Rows, unsigned Cols,
   bool Dense64 = Count == 64 && Rows == 32 && Cols == 2 &&
                  ((Bytes == 128 && (DataType == 4 || DataType == 26)) ||
                   (Bytes == 256 && (DataType == 25 || DataType == 17)));
-  bool NormRow = Layout == 0 && DataType == 25 && Rows == 1 &&
-                 (Cols == Count || (Count == 128 && Cols == 32)) &&
-                 (Count == 128 || Count == 2048) &&
+  bool NormU32Row = Layout == 0 && DataType == 25 && Rows == 1 &&
+                    (Cols == Count || (Count == 128 && Cols == 32)) &&
+                    (Count == 128 || Count == 2048) &&
+                    Bytes == uint64_t(Count) * 4;
+  bool NormF32 = Layout == 0 && DataType == 1 &&
+                 ((Count == 512 && Rows == 16 && Cols == 32) ||
+                  (Count == 32 && Rows == 1 && Cols == 32)) &&
                  Bytes == uint64_t(Count) * 4;
-  if ((!Existing32 && !NativeI64 && !Dense64 && !NormRow) ||
-      (Layout != 29 && !NormRow))
+  bool NormTile = NormU32Row || NormF32;
+  if ((!Existing32 && !NativeI64 && !Dense64 && !NormTile) ||
+      (Layout != 29 && !NormTile))
     return None;
   Type *Scalar = DataType == 1    ? Type::getFloatTy(Context)
                  : DataType == 4  ? Type::getHalfTy(Context)
@@ -128,6 +133,12 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
 
 static Optional<ElementProfile> elementViewProfile(StringRef Text,
                                                    LLVMContext &Context) {
+  if (Text == "pto.element.view:v2;dtype=f32;layout=norm;physical_rows=16;"
+              "physical_cols=32;valid_rows=16;valid_cols=32")
+    return elementProfile(1, 512, 16, 32, 2048, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=f32;layout=norm;physical_rows=1;"
+              "physical_cols=32;valid_rows=1;valid_cols=32")
+    return elementProfile(1, 32, 1, 32, 128, Context, 0);
   if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
               "physical_cols=128;valid_rows=1;valid_cols=128")
     return elementProfile(25, 128, 1, 128, 512, Context, 0);
@@ -937,6 +948,9 @@ static bool isElementCarrier(Value *V) {
     return false;
   if (Ty->getNumElements() == 128 || Ty->getNumElements() == 2048)
     return Ty->getElementType()->isIntegerTy(32);
+  if (Ty->getNumElements() == 512)
+    return Ty->getElementType()->isFloatTy() ||
+           Ty->getElementType()->isIntegerTy(32);
   if (Ty->getNumElements() != 32 && Ty->getNumElements() != 64)
     return false;
   Type *Scalar = Ty->getElementType();
@@ -1084,8 +1098,11 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       if (auto View = getViewDescriptor(&I))
         if (View->Profile.Layout == 0) {
           const auto &P = View->Profile;
-          if (P.Cols != Plan.Count ||
-              (Norm && (Norm->Count != P.Count || Norm->Cols != P.Cols)))
+          if (P.Rows > UINT64_MAX / P.Cols ||
+              uint64_t(P.Rows) * P.Cols != Plan.Count ||
+              (Norm && (Norm->Count != P.Count || Norm->Rows != P.Rows ||
+                        Norm->Cols != P.Cols ||
+                        Norm->DataType != P.DataType)))
             return Fail(&I, "NORM carrier requires its exact valid domain");
           Norm = P;
           Plan.CarrierCount = P.Count;
@@ -1095,8 +1112,13 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       continue;
     if (!isElementCarrier(&Phi) ||
         cast<FixedVectorType>(Phi.getType())->getNumElements() !=
-            Plan.CarrierCount)
-      return Fail(&Phi, "loop-carried recurrences are not yet supported");
+            Plan.CarrierCount) {
+      std::string Detail;
+      raw_string_ostream OS(Detail);
+      Phi.print(OS);
+      return Fail(&Phi, Twine("loop-carried recurrence is not supported: ") +
+                            OS.str());
+    }
     Value *Final = Phi.getIncomingValueForBlock(L.getLoopLatch());
     SmallPtrSet<Value *, 16> Seen;
     auto Descriptor = carrierDescriptor(Final, L, Seen);
@@ -2063,9 +2085,15 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           }
       if (auto Descriptor = getViewDescriptor(&I)) {
         Value *Source = Descriptor->Marker->getArgOperand(0);
-        unsigned ValidCount = Descriptor->Profile.Layout == 0
-                                  ? Descriptor->Profile.Cols
-                                  : Descriptor->Profile.Count;
+        unsigned ValidCount = Descriptor->Profile.Count;
+        if (Descriptor->Profile.Layout == 0) {
+          if (Descriptor->Profile.Rows >
+              std::numeric_limits<unsigned>::max() /
+                  Descriptor->Profile.Cols)
+            return Fail(&I, "typed carrier valid domain overflows");
+          ValidCount =
+              Descriptor->Profile.Rows * Descriptor->Profile.Cols;
+        }
         if (Plan.Count != ValidCount ||
             Plan.CarrierCount != Descriptor->Profile.Count)
           return Fail(&I, "typed carrier requires its exact valid domain");
@@ -2138,9 +2166,10 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
         if (Binary->getType()->isFloatTy() || Binary->getType()->isHalfTy()) {
           if ((Binary->getOpcode() != Instruction::FAdd &&
-               Binary->getOpcode() != Instruction::FSub) ||
+               Binary->getOpcode() != Instruction::FSub &&
+               Binary->getOpcode() != Instruction::FMul) ||
               Binary->getFastMathFlags().any())
-            return Fail(&I, "floating arithmetic requires f32 fadd/fsub "
+            return Fail(&I, "floating arithmetic requires f32 add/sub/mul "
                             "without fast-math");
         } else if (!Binary->getType()->isIntegerTy() ||
                    VPIntrinsic::getForOpcode(Binary->getOpcode()) ==
@@ -2182,8 +2211,20 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                               Cast->getDestTy()->isIntegerTy(32)) ||
                              (Cast->getSrcTy()->isIntegerTy(32) &&
                               Cast->getDestTy()->isFloatTy()));
-        if (!Bits32 && (!Cast->getSrcTy()->isIntegerTy() ||
-                        !Cast->getDestTy()->isIntegerTy()))
+        auto *SourceVector = dyn_cast<FixedVectorType>(Cast->getSrcTy());
+        auto *DestVector = dyn_cast<FixedVectorType>(Cast->getDestTy());
+        const bool F32NormCarrierBits =
+            Cast->getOpcode() == Instruction::BitCast && Norm &&
+            Norm->DataType == 1 && SourceVector && DestVector &&
+            SourceVector->getNumElements() == Norm->Count &&
+            DestVector->getNumElements() == Norm->Count &&
+            ((SourceVector->getElementType()->isIntegerTy(32) &&
+              DestVector->getElementType()->isFloatTy()) ||
+             (SourceVector->getElementType()->isFloatTy() &&
+              DestVector->getElementType()->isIntegerTy(32)));
+        if (!Bits32 && !F32NormCarrierBits &&
+            (!Cast->getSrcTy()->isIntegerTy() ||
+             !Cast->getDestTy()->isIntegerTy()))
           return Fail(&I, "only integer casts are supported in this IR stage");
         continue;
       }
@@ -2789,6 +2830,19 @@ static bool isWholeTileConsumer(const CallBase &Call, Value *Carrier) {
   return Found;
 }
 
+static bool isBitPreservingF32TileCast(const Instruction *I,
+                                       const Value *Source) {
+  auto *Cast = dyn_cast_or_null<BitCastInst>(I);
+  auto *SourceTy = dyn_cast<FixedVectorType>(Source->getType());
+  auto *DestTy = Cast ? dyn_cast<FixedVectorType>(Cast->getType()) : nullptr;
+  return Cast && Cast->getOperand(0) == Source && SourceTy && DestTy &&
+         SourceTy->getNumElements() == DestTy->getNumElements() &&
+         ((SourceTy->getElementType()->isFloatTy() &&
+           DestTy->getElementType()->isIntegerTy(32)) ||
+          (SourceTy->getElementType()->isIntegerTy(32) &&
+           DestTy->getElementType()->isFloatTy()));
+}
+
 static bool hasWholeCarrierConsumers(Value *V, SmallPtrSetImpl<Value *> &Seen) {
   if (!Seen.insert(V).second)
     return true;
@@ -2805,6 +2859,9 @@ static bool hasWholeCarrierConsumers(Value *V, SmallPtrSetImpl<Value *> &Seen) {
       if (isTypedTileImport(Phi) && hasWholeCarrierConsumers(Phi, Seen))
         continue;
     }
+    if (isBitPreservingF32TileCast(I, V) &&
+        hasWholeCarrierConsumers(I, Seen))
+      continue;
     if (auto *Call = dyn_cast<CallBase>(I)) {
       if (isWholeTileConsumer(*Call, V) ||
           (getViewDescriptor(Call) && hasWholeCarrierConsumers(Call, Seen)))
@@ -2813,6 +2870,96 @@ static bool hasWholeCarrierConsumers(Value *V, SmallPtrSetImpl<Value *> &Seen) {
     return false;
   }
   return true;
+}
+
+static void rewriteF32ViewConsumerBitcasts(Function &F) {
+  SmallVector<BitCastInst *, 4> Bridges;
+  for (Instruction &I : instructions(F)) {
+    auto *Cast = dyn_cast<BitCastInst>(&I);
+    if (!Cast || !isBitPreservingF32TileCast(Cast, Cast->getOperand(0)))
+      continue;
+    auto View = getViewDescriptor(stripCarrierLCSSA(Cast->getOperand(0)));
+    if (!View || View->Profile.DataType != 1 || View->Profile.Layout != 0)
+      continue;
+    bool ExactConsumers = !Cast->use_empty();
+    for (User *U : Cast->users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      ExactConsumers &= Call && isWholeTileConsumer(*Call, Cast);
+    }
+    if (ExactConsumers)
+      Bridges.push_back(Cast);
+  }
+
+  for (BitCastInst *Cast : Bridges) {
+    SmallVector<CallInst *, 2> Consumers;
+    for (User *U : Cast->users())
+      Consumers.push_back(cast<CallInst>(U));
+    for (CallInst *Call : Consumers) {
+      auto *OldAsm = cast<InlineAsm>(Call->getCalledOperand());
+      SmallVector<Type *, 8> Parameters;
+      for (unsigned I = 0; I != Call->arg_size(); ++I) {
+        if (Call->getArgOperand(I) == Cast)
+          Call->setArgOperand(I, Cast->getOperand(0));
+        Parameters.push_back(Call->getArgOperand(I)->getType());
+      }
+      auto *CallType = FunctionType::get(Call->getType(), Parameters, false);
+      InlineAsm *NewAsm = InlineAsm::get(
+          CallType, OldAsm->getAsmString(), OldAsm->getConstraintString(),
+          OldAsm->hasSideEffects(), OldAsm->isAlignStack(),
+          OldAsm->getDialect(), OldAsm->canThrow());
+      Call->mutateFunctionType(CallType);
+      Call->setCalledOperand(NewAsm);
+    }
+    Cast->eraseFromParent();
+  }
+}
+
+static bool rewriteF32ViewImportBitcasts(Function &F) {
+  SmallVector<std::tuple<CallInst *, BitCastInst *, CallInst *>, 4> Bridges;
+  for (Instruction &I : instructions(F)) {
+    auto View = getViewDescriptor(&I);
+    if (!View || View->Profile.DataType != 1 || View->Profile.Layout != 0)
+      continue;
+    auto *Cast = dyn_cast<BitCastInst>(View->Marker->getArgOperand(0));
+    auto *Producer =
+        Cast ? dyn_cast<CallInst>(Cast->getOperand(0)) : nullptr;
+    if (!Cast || !Producer || !Producer->isInlineAsm() ||
+        !isBitPreservingF32TileCast(Cast, Producer) ||
+        !isTypedTileImport(Producer) ||
+        !Producer->hasOneUse() || !Cast->hasOneUse())
+      continue;
+    Bridges.emplace_back(View->Marker, Cast, Producer);
+  }
+
+  for (const auto &Bridge : Bridges) {
+    CallInst *View = std::get<0>(Bridge);
+    BitCastInst *Cast = std::get<1>(Bridge);
+    CallInst *Producer = std::get<2>(Bridge);
+    auto *OldAsm = cast<InlineAsm>(Producer->getCalledOperand());
+    SmallVector<Value *, 8> Arguments(Producer->args());
+    SmallVector<Type *, 8> Parameters;
+    for (Value *Argument : Arguments)
+      Parameters.push_back(Argument->getType());
+    auto *CallType =
+        FunctionType::get(Cast->getType(), Parameters, false);
+    InlineAsm *NewAsm = InlineAsm::get(
+        CallType, OldAsm->getAsmString(), OldAsm->getConstraintString(),
+        OldAsm->hasSideEffects(), OldAsm->isAlignStack(),
+        OldAsm->getDialect(), OldAsm->canThrow());
+    SmallVector<OperandBundleDef, 1> Bundles;
+    Producer->getOperandBundlesAsDefs(Bundles);
+    CallInst *TypedProducer = CallInst::Create(
+        CallType, NewAsm, Arguments, Bundles, Producer->getName(), Producer);
+    TypedProducer->setCallingConv(Producer->getCallingConv());
+    TypedProducer->setTailCallKind(Producer->getTailCallKind());
+    TypedProducer->setAttributes(Producer->getAttributes());
+    TypedProducer->setDebugLoc(Producer->getDebugLoc());
+    TypedProducer->copyMetadata(*Producer);
+    View->setArgOperand(0, TypedProducer);
+    Cast->eraseFromParent();
+    Producer->eraseFromParent();
+  }
+  return !Bridges.empty();
 }
 
 // The first physical profile uses 32 M32 rows and one column. Logical mask SSA
@@ -2906,6 +3053,7 @@ class ElementTileLegalizer {
     switch (ID) {
     case Intrinsic::vp_fadd: return Instruction::FAdd;
     case Intrinsic::vp_fsub: return Instruction::FSub;
+    case Intrinsic::vp_fmul: return Instruction::FMul;
     case Intrinsic::vp_add: return Instruction::Add;
     case Intrinsic::vp_sub: return Instruction::Sub;
     case Intrinsic::vp_mul: return Instruction::Mul;
@@ -3210,13 +3358,15 @@ class ElementTileLegalizer {
       return true;
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
     if (!Ty || Ty->getNumElements() != NormProfile->Count ||
-        (!Ty->getElementType()->isIntegerTy(32) &&
+        (Ty->getElementType() != NormProfile->ScalarTy &&
          !Ty->getElementType()->isIntegerTy(1)))
-      return fail(V, "NORM pure Tile expressions require one U32 row profile");
+      return fail(V,
+                  "NORM pure Tile expression type does not match its profile");
     if (auto View = getViewDescriptor(V)) {
       const auto &P = View->Profile;
-      if (P.Layout != 0 || P.DataType != 25 || P.Count != NormProfile->Count ||
-          P.Rows != 1 || P.Cols != NormProfile->Cols ||
+      if (P.Layout != 0 || P.DataType != NormProfile->DataType ||
+          P.Count != NormProfile->Count || P.Rows != NormProfile->Rows ||
+          P.Cols != NormProfile->Cols ||
           View->ScalarizedLaneZero)
         return fail(
             V, "NORM region cannot mix layout, shape, or scalarized views");
@@ -3229,8 +3379,11 @@ class ElementTileLegalizer {
     }
     if (Value *Scalar = getSplatValue(V)) {
       auto *I = dyn_cast<Instruction>(Scalar);
-      return (!I || !OwnedSet.contains(I)) ||
-             fail(V, "NORM uniform source must be outside the region");
+      return (!(Ty->getElementType()->isIntegerTy(1) &&
+                NormProfile->DataType == 1) ||
+              fail(V, "NORM FP32 does not admit a scalar predicate Tile")) &&
+             ((!I || !OwnedSet.contains(I)) ||
+              fail(V, "NORM uniform source must be outside the region"));
     }
     if (isa<UndefValue>(V) || isa<PoisonValue>(V))
       return true;
@@ -3239,7 +3392,7 @@ class ElementTileLegalizer {
         return fail(V, "NORM vector producer lacks its typed view boundary");
     if (auto *C = dyn_cast<Constant>(V)) {
       APInt Initial, Step;
-      return (Ty->getElementType()->isIntegerTy(32) &&
+      return (NormProfile->DataType == 25 &&
               constantProgression(C, Initial, Step) &&
               (Step.isZero() || Step.isOne() || Step.isAllOnes())) ||
              fail(V, "NORM constant requires a scalar splat or U32 unit-step "
@@ -3247,50 +3400,110 @@ class ElementTileLegalizer {
     }
     if (auto *Freeze = dyn_cast<FreezeInst>(V))
       return validateNorm(Freeze->getOperand(0));
+    if (auto *Cast = dyn_cast<BitCastInst>(V)) {
+      auto *SourceTy = dyn_cast<FixedVectorType>(Cast->getSrcTy());
+      if (NormProfile->DataType != 1 || !SourceTy ||
+          !SourceTy->getElementType()->isIntegerTy(32) ||
+          SourceTy->getNumElements() != NormProfile->Count ||
+          !Ty->getElementType()->isFloatTy())
+        return fail(V,
+                    "NORM carrier bitcast must preserve exact FP32 storage");
+      Value *Source = Cast->getOperand(0);
+      auto *SourceI = dyn_cast<Instruction>(Source);
+      return ((!SourceI || !OwnedSet.contains(SourceI)) &&
+              isTypedTileImport(Source)) ||
+             fail(V,
+                  "NORM carrier bitcast requires an external Tile producer");
+    }
     if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
-      if (Cmp->isSigned() ||
+      if (NormProfile->DataType != 25 || Cmp->isSigned() ||
           !Cmp->getOperand(0)->getType()->getScalarType()->isIntegerTy(32))
         return fail(V, "NORM comparisons require U32 numeric operands");
       return validateNorm(Cmp->getOperand(0)) &&
              validateNorm(Cmp->getOperand(1));
     }
+    if (auto *Cmp = dyn_cast<FCmpInst>(V)) {
+      if (NormProfile->DataType != 1 ||
+          !floatComparisonSelector(Cmp->getPredicate()))
+        return fail(V, "NORM FP32 comparison predicate has no native mapping");
+      return validateNorm(Cmp->getOperand(0)) &&
+             validateNorm(Cmp->getOperand(1));
+    }
     if (auto *Select = dyn_cast<SelectInst>(V))
-      return (Ty->getElementType()->isIntegerTy(32) ||
+      return (Ty->getElementType() == NormProfile->ScalarTy ||
               fail(V, "NORM predicate selection is not yet supported")) &&
              validateNorm(Select->getCondition()) &&
              validateNorm(Select->getTrueValue()) &&
              validateNorm(Select->getFalseValue());
-    if (auto *Binary = dyn_cast<BinaryOperator>(V))
+    if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      auto *EVL = dyn_cast<ConstantInt>(VP->getVectorLengthParam());
+      if (!EVL || !EVL->equalsInt(NormProfile->Rows * NormProfile->Cols) ||
+          !hasFullyActiveMask(*VP))
+        return fail(V, "NORM Tile operation requires its full valid domain");
+      if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
+        return (Cmp->getIntrinsicID() == Intrinsic::vp_fcmp &&
+                NormProfile->DataType == 1 &&
+                floatComparisonSelector(Cmp->getPredicate()) &&
+                validateNorm(Cmp->getArgOperand(0)) &&
+                validateNorm(Cmp->getArgOperand(1))) ||
+               fail(V, "NORM FP32 comparison has no exact native mapping");
+      auto Op = binaryOpcode(VP->getIntrinsicID());
+      if (NormProfile->DataType == 1 && Op &&
+          (*Op == Instruction::FAdd || *Op == Instruction::FMul) &&
+          !VP->getFastMathFlags().any())
+        return validateNorm(VP->getArgOperand(0)) &&
+               validateNorm(VP->getArgOperand(1));
+      return fail(V, "NORM VP operation has no exact native mapping");
+    }
+    if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
       if (Ty->getElementType()->isIntegerTy(1) &&
           Binary->getOpcode() == Instruction::Xor &&
-          match(Binary->getOperand(1), m_AllOnes()))
+          match(Binary->getOperand(1), m_AllOnes()) &&
+          NormProfile->DataType == 25)
         return validateNorm(Binary->getOperand(0));
+      if (NormProfile->DataType == 1 &&
+          (Binary->getOpcode() == Instruction::FAdd ||
+           Binary->getOpcode() == Instruction::FMul) &&
+          !Binary->getFastMathFlags().any())
+        return validateNorm(Binary->getOperand(0)) &&
+               validateNorm(Binary->getOperand(1));
+    }
     if (auto *Cast = dyn_cast<ZExtInst>(V))
-      if (Cast->getSrcTy()->getScalarType()->isIntegerTy(1) &&
+      if (NormProfile->DataType == 25 &&
+          Cast->getSrcTy()->getScalarType()->isIntegerTy(1) &&
           Cast->getDestTy()->getScalarType()->isIntegerTy(32))
         return validateNorm(Cast->getOperand(0));
-    if (auto *I = dyn_cast<Instruction>(V))
-      LLVM_DEBUG(dbgs() << "unsupported NORM expression: " << *I << "\n");
-    return fail(V, "NORM pure Tile profile supports comparison, select, and "
-                   "index expressions");
+    std::string Detail;
+    raw_string_ostream OS(Detail);
+    V->print(OS);
+    return fail(V, Twine("NORM pure Tile profile does not support: ") +
+                       OS.str());
   }
 
   Value *normSplat(Value *Scalar, uint64_t Step = 0) {
-    Scalar = B.CreateZExtOrTrunc(B.CreateFreeze(Scalar), B.getInt64Ty());
+    Scalar = B.CreateFreeze(Scalar);
+    if (NormProfile->DataType == 25)
+      Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
     if (Step == 0)
       return call(Intrinsic::linx_experimental_ew_texpands_row,
-                  {NormProfile->VectorTy, B.getInt64Ty()},
-                  {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
-                   B.getInt64(0), Scalar, B.getInt64(NormProfile->Count)},
+                  {NormProfile->VectorTy, Scalar->getType()},
+                  {B.getInt64(NormProfile->Rows),
+                   B.getInt64(NormProfile->Cols),
+                   B.getInt64(NormProfile->DataType), B.getInt64(0), Scalar,
+                   B.getInt64(NormProfile->Count / NormProfile->Rows)},
                   "pto.norm.splat");
+    assert(NormProfile->DataType == 25 &&
+           "only U32 NORM profiles admit index sequences");
     assert((Step == 1 || Step == UINT32_MAX) && "NORM unit sequence preflight");
     // RowMajor TCI takes direction (0 ascending, 1 descending), whereas
     // CUBE TCI takes packed signed steps. It cannot generate a scalar splat.
     return call(Intrinsic::linx_experimental_ew_tci_row,
                 {NormProfile->VectorTy},
-                {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
-                 B.getInt64(0), Scalar, B.getInt64(Step == 1 ? 0 : 1),
-                 B.getInt64(NormProfile->Count)},
+                {B.getInt64(NormProfile->Rows),
+                 B.getInt64(NormProfile->Cols),
+                 B.getInt64(NormProfile->DataType), B.getInt64(0), Scalar,
+                 B.getInt64(Step == 1 ? 0 : 1),
+                 B.getInt64(NormProfile->Count / NormProfile->Rows)},
                 "pto.norm.index");
   }
 
@@ -3302,9 +3515,11 @@ class ElementTileLegalizer {
         B.getInt32Ty(), std::max(32u, NormProfile->Count / 4));
     return call(Intrinsic::linx_experimental_ew_tcmp_row,
                 {MaskTy, L->getType(), R->getType()},
-                {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
-                 B.getInt64(0), L, R, B.getInt64(Selector),
-                 B.getInt64(NormProfile->Count)},
+                {B.getInt64(NormProfile->Rows),
+                 B.getInt64(NormProfile->Cols),
+                 B.getInt64(NormProfile->DataType), B.getInt64(0), L, R,
+                 B.getInt64(Selector),
+                 B.getInt64(NormProfile->Count / NormProfile->Rows)},
                 "pto.norm.predicate");
   }
 
@@ -3312,9 +3527,19 @@ class ElementTileLegalizer {
     return call(
         Intrinsic::linx_experimental_ew_tsel_row,
         {Yes->getType(), Mask->getType(), Yes->getType(), No->getType()},
-        {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
-         B.getInt64(0), Mask, Yes, No, B.getInt64(NormProfile->Count)},
+        {B.getInt64(NormProfile->Rows), B.getInt64(NormProfile->Cols),
+         B.getInt64(NormProfile->DataType), B.getInt64(0), Mask, Yes, No,
+         B.getInt64(NormProfile->Count / NormProfile->Rows)},
         "pto.norm.select");
+  }
+
+  Value *normBinary(Value *L, Value *R, unsigned Selector) {
+    return call(Intrinsic::linx_experimental_ew_tbinary, {L->getType()},
+                {B.getInt64(NormProfile->Rows),
+                 B.getInt64(NormProfile->Cols),
+                 B.getInt64(NormProfile->DataType), B.getInt64(0),
+                 B.getInt64(Selector), L, R},
+                "pto.norm.binary");
   }
 
   Value *valueNorm(Value *V) {
@@ -3330,11 +3555,14 @@ class ElementTileLegalizer {
               : valueNorm(Source);
     } else if (Value *Scalar = getSplatValue(V)) {
       if (Ty->getElementType()->isIntegerTy(1))
-        R = normCompare(normSplat(Scalar), normSplat(B.getInt32(0)), 1);
+        R = normCompare(normSplat(Scalar),
+                        normSplat(Constant::getNullValue(
+                            NormProfile->ScalarTy)),
+                        1);
       else
         R = normSplat(Scalar);
     } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
-      R = normSplat(B.getInt32(0));
+      R = normSplat(Constant::getNullValue(NormProfile->ScalarTy));
       if (Ty->getElementType()->isIntegerTy(1))
         R = normCompare(R, R, 1);
     } else if (auto *C = dyn_cast<Constant>(V)) {
@@ -3344,6 +3572,8 @@ class ElementTileLegalizer {
       R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
     } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
       R = valueNorm(Freeze->getOperand(0));
+    } else if (auto *Cast = dyn_cast<BitCastInst>(V)) {
+      R = B.CreateBitCast(Cast->getOperand(0), Ty, "pto.norm.bits");
     } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
       unsigned Selector;
       switch (Cmp->getPredicate()) {
@@ -3370,13 +3600,31 @@ class ElementTileLegalizer {
       }
       R = normCompare(valueNorm(Cmp->getOperand(0)),
                       valueNorm(Cmp->getOperand(1)), Selector);
+    } else if (auto *Cmp = dyn_cast<FCmpInst>(V)) {
+      R = normCompare(valueNorm(Cmp->getOperand(0)),
+                      valueNorm(Cmp->getOperand(1)),
+                      *floatComparisonSelector(Cmp->getPredicate()));
     } else if (auto *Select = dyn_cast<SelectInst>(V)) {
       R = normSelect(valueNorm(Select->getCondition()),
                      valueNorm(Select->getTrueValue()),
                      valueNorm(Select->getFalseValue()));
+    } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
+        R = normCompare(valueNorm(Cmp->getArgOperand(0)),
+                        valueNorm(Cmp->getArgOperand(1)),
+                        *floatComparisonSelector(Cmp->getPredicate()));
+      else {
+        unsigned Op = *binaryOpcode(VP->getIntrinsicID());
+        R = normBinary(valueNorm(VP->getArgOperand(0)),
+                       valueNorm(VP->getArgOperand(1)),
+                       Op == Instruction::FAdd ? 0 : 2);
+      }
     } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
-      Value *Source = Binary->getOperand(0);
-      if (auto *Cmp = dyn_cast<ICmpInst>(Source)) {
+      if (NormProfile->DataType == 1) {
+        R = normBinary(valueNorm(Binary->getOperand(0)),
+                       valueNorm(Binary->getOperand(1)),
+                       Binary->getOpcode() == Instruction::FAdd ? 0 : 2);
+      } else if (auto *Cmp = dyn_cast<ICmpInst>(Binary->getOperand(0))) {
         unsigned Selector;
         switch (Cmp->getInversePredicate()) {
         case ICmpInst::ICMP_EQ:
@@ -3405,7 +3653,8 @@ class ElementTileLegalizer {
       } else {
         Value *Zero = normSplat(B.getInt32(0));
         Value *One = normSplat(B.getInt32(1));
-        R = normCompare(normSelect(valueNorm(Source), Zero, One), Zero, 1);
+        R = normCompare(
+            normSelect(valueNorm(Binary->getOperand(0)), Zero, One), Zero, 1);
       }
     } else if (auto *Cast = dyn_cast<ZExtInst>(V)) {
       R = normSelect(valueNorm(Cast->getOperand(0)), normSplat(B.getInt32(1)),
@@ -3614,6 +3863,49 @@ class ElementTileLegalizer {
            validate(Scatter.getArgOperand(2));
   }
 
+  bool hasExclusiveTypedTileUses(Value *Root) {
+    SmallPtrSet<Value *, 16> Seen;
+    bool Published = false;
+    std::function<bool(Value *)> Walk = [&](Value *V) {
+      if (!Seen.insert(V).second)
+        return true;
+      for (User *U : V->users()) {
+        auto *I = dyn_cast<Instruction>(U);
+        if (!I)
+          return false;
+        if (auto Descriptor = getViewDescriptor(I)) {
+          if (Descriptor->Marker->getArgOperand(0) != V ||
+              !Descriptor->Profile.VectorTy->getElementType()->isIntegerTy(64))
+            return false;
+          Published = true;
+          continue;
+        }
+        if (auto *Call = dyn_cast<CallBase>(I))
+          if (isWholeTileConsumer(*Call, V)) {
+            Published = true;
+            continue;
+          }
+        if (isa<PHINode>(I) || isa<SelectInst>(I) || isa<FreezeInst>(I) ||
+            isa<CastInst>(I)) {
+          if (!Walk(I))
+            return false;
+          continue;
+        }
+        if (auto *VP = dyn_cast<VPIntrinsic>(I)) {
+          if (!binaryOpcode(VP->getIntrinsicID()) &&
+              VP->getIntrinsicID() != Intrinsic::vp_trunc)
+            return false;
+          if (!Walk(VP))
+            return false;
+          continue;
+        }
+        return false;
+      }
+      return true;
+    };
+    return Walk(Root) && Published;
+  }
+
   bool validateVP(VPIntrinsic &VP) {
     auto *EVL = dyn_cast<ConstantInt>(VP.getVectorLengthParam());
     auto *ResultTy = dyn_cast<FixedVectorType>(VP.getType());
@@ -3657,7 +3949,8 @@ class ElementTileLegalizer {
       bool MaskLogic = isVector(&VP, 1) &&
                        (*Op == Instruction::And || *Op == Instruction::Or ||
                         *Op == Instruction::Xor);
-      bool FloatOpcode = *Op == Instruction::FAdd || *Op == Instruction::FSub;
+      bool FloatOpcode = *Op == Instruction::FAdd || *Op == Instruction::FSub ||
+                         *Op == Instruction::FMul;
       bool FloatArithmetic =
           (isF32Vector(&VP) || isF16Vector(&VP)) && FloatOpcode;
       if (FloatOpcode && !FloatArithmetic)
@@ -3677,6 +3970,16 @@ class ElementTileLegalizer {
             (getSplatValue(VP.getArgOperand(0)) ||
              getSplatValue(VP.getArgOperand(1)));
         if (NativeScale)
+          return validate(VP.getArgOperand(0)) &&
+                 validate(VP.getArgOperand(1));
+        const bool NativePublishedArithmetic =
+            isI64LeafVector(&VP) && hasExclusiveTypedTileUses(&VP) &&
+            (*Op == Instruction::Add || *Op == Instruction::Sub ||
+             *Op == Instruction::Mul || *Op == Instruction::And ||
+             *Op == Instruction::Or || *Op == Instruction::Xor ||
+             *Op == Instruction::Shl || *Op == Instruction::LShr ||
+             *Op == Instruction::AShr);
+        if (NativePublishedArithmetic)
           return validate(VP.getArgOperand(0)) &&
                  validate(VP.getArgOperand(1));
         Constant *Folded = foldAffineI64VPBinary(VP);
@@ -3976,6 +4279,10 @@ class ElementTileLegalizer {
     case Instruction::FSub:
       DType = L->getType()->getScalarType()->isHalfTy() ? 4 : 1;
       Code = 1;
+      break;
+    case Instruction::FMul:
+      DType = L->getType()->getScalarType()->isHalfTy() ? 4 : 1;
+      Code = 2;
       break;
     case Instruction::Add: Code = 0; break;
     case Instruction::Sub: Code = 1; break;
@@ -4370,6 +4677,8 @@ public:
             if (isTypedTileImport(Phi) && Consumers(Phi))
               continue;
           }
+          if (isBitPreservingF32TileCast(UserI, V) && Consumers(UserI))
+            continue;
           if (auto *Call = dyn_cast_or_null<CallBase>(UserI)) {
             auto View = getViewDescriptor(Call);
             auto Publication = getViewDescriptor(I);
@@ -6681,7 +6990,9 @@ LinxV5ElementRegionVerifierPass::run(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses
 LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
-  bool Changed = false;
+  bool Changed = rewriteF32ViewImportBitcasts(F);
+  if (Changed)
+    AM.invalidate(F, PreservedAnalyses::none());
   for (;;) {
     auto &LI = AM.getResult<LoopAnalysis>(F);
     Loop *Selected = nullptr;
@@ -6749,10 +7060,11 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     auto *Token = TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
     if (!Count ||
         (Count->getZExtValue() != 32 && Count->getZExtValue() != 64 &&
-         Count->getZExtValue() != 128 && Count->getZExtValue() != 2048) ||
+         Count->getZExtValue() != 128 && Count->getZExtValue() != 512 &&
+         Count->getZExtValue() != 2048) ||
         !Token || !Tokens.insert(Token).second)
       diagnose(F, Sentinel,
-               "Tile legalization: requires a unique predicated 32-element domain");
+               "Tile legalization: requires a unique admitted predicated domain");
     SmallVector<Instruction *, 64> Owned;
     for (Instruction &I : instructions(F))
       if (I.getMetadata(PredicatedOwnerMD) == Token)
@@ -6777,6 +7089,7 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
   }
   // Preflight every region before publishing any target IR. Consumption of the
   // sentinel is the last step, after all token-owned VP/vector-pointer IR is gone.
+  rewriteF32ViewConsumerBitcasts(F);
   for (unsigned I = 0; I < Plans.size(); ++I) {
     Plans[I]->emit();
     Sentinels[I]->eraseFromParent();

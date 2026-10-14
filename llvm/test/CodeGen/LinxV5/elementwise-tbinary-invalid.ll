@@ -6,9 +6,9 @@
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/dynamic-opcode.ll 2>&1 | FileCheck %s --check-prefix=DYNAMIC
 
 ; OPCODE: invalid LinxV5 element binary opcode operand
-; LAYOUT: element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles
-; SHAPE: element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles
-; DTYPE: element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles
+; LAYOUT: element binary requires an exact U32/S32 CUBE_M32 or FP32 NORM profile
+; SHAPE: element binary requires an exact U32/S32 CUBE_M32 or FP32 NORM profile
+; DTYPE: element binary requires an exact U32/S32 CUBE_M32 or FP32 NORM profile
 ; DYNAMIC: LinxV5 element binary opcode operand must be a compile-time constant
 
 ;--- bad-opcode.ll

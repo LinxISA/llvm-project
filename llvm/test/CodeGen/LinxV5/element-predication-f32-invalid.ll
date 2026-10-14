@@ -1,6 +1,6 @@
 ; RUN: split-file %s %t
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/fast-add.ll 2>&1 | FileCheck %s --check-prefix=FASTADD
-; FASTADD: floating arithmetic requires f32 fadd/fsub without fast-math
+; FASTADD: floating arithmetic requires f32 add/sub/mul without fast-math
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/one.ll 2>&1 | FileCheck %s --check-prefix=ONE
 ; ONE: floating comparison predicate has no exact native mapping
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/fast-cmp.ll 2>&1 | FileCheck %s --check-prefix=FASTCMP

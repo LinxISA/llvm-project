@@ -273,6 +273,55 @@ extern "C" void s64_equal_choose(const s64 *__restrict left,
 // OBJ: BSTART.TEPL TSEL, S64
 // OBJ: BSTART.TLSU TSTORE, S64
 
+extern "C" void u64_native_arithmetic(const u64 *left,
+                                       const u64 *right,
+                                       u64 *output) {
+  u64_elements result;
+  auto &values = u64_view(result);
+#pragma pto element for
+  for (u32 element = 0; element < 32; ++element) {
+    const u64 sum = left[element] + right[element];
+    const u64 shift = right[element] & 63u;
+    values[element] = (sum * 3u) << shift;
+  }
+  store_u64(output, result);
+}
+
+// IR-LABEL: define{{.*}} @u64_native_arithmetic(
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 0,
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 2,
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 5,
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 8,
+// OBJ-LABEL: <u64_native_arithmetic>:
+// OBJ: BSTART.TEPL TADD, U64
+// OBJ: BSTART.TEPL TMUL, U64
+// OBJ: BSTART.TEPL TAND, U64
+// OBJ: BSTART.TEPL TSHL, U64
+// OBJ: BSTART.TLSU TSTORE, U64
+
+extern "C" void s64_native_arithmetic(const s64 *left,
+                                       const s64 *right,
+                                       s64 *output) {
+  s64_elements result;
+  auto &values = s64_view(result);
+#pragma pto element for
+  for (u32 element = 0; element < 32; ++element) {
+    const s64 difference = left[element] - right[element];
+    values[element] = (difference ^ s64(0x55aa55aa55aa55aaUL)) >> 3;
+  }
+  store_s64(output, result);
+}
+
+// IR-LABEL: define{{.*}} @s64_native_arithmetic(
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 16, i64 29, i64 1,
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 16, i64 29, i64 9,
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 16, i64 29, i64 7,
+// OBJ-LABEL: <s64_native_arithmetic>:
+// OBJ: BSTART.TEPL TSUB, S64
+// OBJ: BSTART.TEPL TSHR, S64
+// OBJ: BSTART.TEPL TXOR, S64
+// OBJ: BSTART.TLSU TSTORE, S64
+
 extern "C" void s64_to_s32(const s64 *__restrict input,
                             s32 *__restrict output, u32 valid) {
   s64_elements source;

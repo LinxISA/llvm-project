@@ -6,7 +6,7 @@
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/cmp-unmasked.ll 2>&1 | FileCheck %s --check-prefix=CMPUNMASKED
 ; CMPUNMASKED: TCMP GPR requires exact 32x1
 ; RUN: not --crash llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -filetype=null %t/expand-f64.ll 2>&1 | FileCheck %s --check-prefix=EXPANDF64
-; EXPANDF64: FP32 TEXPANDS requires exact 32x1 CUBE_M32 f32 Tile and scalar
+; EXPANDF64: FP32 TEXPANDS requires an exact admitted f32 Tile and scalar
 
 ;--- mul.ll
 define void @bad(ptr %ap, ptr %bp, ptr %out, i64 %mask) {

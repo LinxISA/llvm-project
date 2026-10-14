@@ -1602,11 +1602,16 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
   EVT RHSVT = Op.getOperand(8).getValueType();
   const bool IntegerProfile = DataType == LinxV5Op::DataType::U32 ||
                               DataType == LinxV5Op::DataType::S32;
-  if (Rows != 32 || Cols != 1 || !IntegerProfile ||
-      Layout != 29 || ResultVT != MVT::v32i32 || LHSVT != ResultVT ||
-      RHSVT != ResultVT)
+  const bool F32Norm =
+      DataType == LinxV5Op::DataType::FP32 && Layout == 0 &&
+      ((Rows == 16 && Cols == 32 && ResultVT == MVT::v512f32) ||
+       (Rows == 1 && Cols == 32 && ResultVT == MVT::v32f32));
+  const bool IntegerCube = Rows == 32 && Cols == 1 && IntegerProfile &&
+                           Layout == 29 && ResultVT == MVT::v32i32;
+  if ((!IntegerCube && !F32Norm) || LHSVT != ResultVT || RHSVT != ResultVT)
     report_fatal_error(
-        "element binary requires U32/S32 CUBE_M32 <32 x i32> Tiles");
+        "element binary requires an exact U32/S32 CUBE_M32 or FP32 NORM "
+        "profile");
 
   static constexpr uint64_t PTOSelectors[] = {
       LinxV5Op::TileOPTEPL::TADD, LinxV5Op::TileOPTEPL::TSUB,
@@ -2191,30 +2196,43 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
   if (ExplicitRow) {
     PhysicalCols = getV5ConstantOperand(Op.getOperand(9),
                                         "NORM physical columns", 2048, false);
+    uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "NORM rows", 16,
+                                        false);
     uint64_t ValidCols = getV5ConstantOperand(
         Op.getOperand(3), "NORM valid columns", 2048, false);
-    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
-        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
-        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
-        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
-          (PhysicalCols == 2048 && ValidCols == 2048)))
-      report_fatal_error("unsupported NORM U32 row descriptor");
+    uint64_t DType =
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31);
+    bool U32Row =
+        Rows == 1 && DType == LinxV5Op::DataType::U32 &&
+        ((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+         (PhysicalCols == 2048 && ValidCols == 2048));
+    bool F32Tile = DType == LinxV5Op::DataType::FP32 &&
+                   PhysicalCols == 32 && ValidCols == 32 &&
+                   (Rows == 1 || Rows == 16);
+    if (getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        (!U32Row && !F32Tile))
+      report_fatal_error("unsupported NORM numeric descriptor");
   }
 
   if (ExplicitRow) {
+    uint64_t Rows = cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue();
+    uint64_t DType = cast<ConstantSDNode>(Op.getOperand(4))->getZExtValue();
+    unsigned PhysicalElements = Rows * PhysicalCols;
     auto IsData = [&](EVT T) {
-      return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
-             T.getVectorNumElements() == PhysicalCols;
+      return T.isFixedLengthVector() &&
+             T.getScalarType() ==
+                 (DType == LinxV5Op::DataType::FP32 ? MVT::f32 : MVT::i32) &&
+             T.getVectorNumElements() == PhysicalElements;
     };
     auto IsPredicate = [&](EVT T) {
       return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
-             T.getVectorNumElements() == std::max(32u, PhysicalCols / 4);
+             T.getVectorNumElements() == std::max(32u, PhysicalElements / 4);
     };
     if (!IsPredicate(Op.getValueType()) ||
         !IsData(Op.getOperand(6).getValueType()) ||
         !IsData(Op.getOperand(7).getValueType()))
-      report_fatal_error("NORM TCMP requires numeric U32 sources and packed "
-                         "predicate capacity");
+      report_fatal_error("NORM TCMP requires matching numeric sources and "
+                         "packed predicate capacity");
   }
   getV5ConstantOperand(Op.getOperand(2), "TCMP rows", 32, false);
   getV5ConstantOperand(Op.getOperand(3), "TCMP cols", 2048, false);
@@ -2308,31 +2326,44 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSel(SDLoc &DL, SDValue Op,
   if (ExplicitRow) {
     PhysicalCols = getV5ConstantOperand(Op.getOperand(9),
                                         "NORM physical columns", 2048, false);
+    uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "NORM rows", 16,
+                                        false);
     uint64_t ValidCols = getV5ConstantOperand(
         Op.getOperand(3), "NORM valid columns", 2048, false);
-    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
-        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
-        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
-        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
-          (PhysicalCols == 2048 && ValidCols == 2048)))
-      report_fatal_error("unsupported NORM U32 row descriptor");
+    uint64_t DType =
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31);
+    bool U32Row =
+        Rows == 1 && DType == LinxV5Op::DataType::U32 &&
+        ((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+         (PhysicalCols == 2048 && ValidCols == 2048));
+    bool F32Tile = DType == LinxV5Op::DataType::FP32 &&
+                   PhysicalCols == 32 && ValidCols == 32 &&
+                   (Rows == 1 || Rows == 16);
+    if (getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        (!U32Row && !F32Tile))
+      report_fatal_error("unsupported NORM numeric descriptor");
   }
 
   if (ExplicitRow) {
+    uint64_t Rows = cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue();
+    uint64_t DType = cast<ConstantSDNode>(Op.getOperand(4))->getZExtValue();
+    unsigned PhysicalElements = Rows * PhysicalCols;
     auto IsData = [&](EVT T) {
-      return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
-             T.getVectorNumElements() == PhysicalCols;
+      return T.isFixedLengthVector() &&
+             T.getScalarType() ==
+                 (DType == LinxV5Op::DataType::FP32 ? MVT::f32 : MVT::i32) &&
+             T.getVectorNumElements() == PhysicalElements;
     };
     auto IsPredicate = [&](EVT T) {
       return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
-             T.getVectorNumElements() == std::max(32u, PhysicalCols / 4);
+             T.getVectorNumElements() == std::max(32u, PhysicalElements / 4);
     };
     if (!IsData(Op.getValueType()) ||
         !IsPredicate(Op.getOperand(6).getValueType()) ||
         !IsData(Op.getOperand(7).getValueType()) ||
         !IsData(Op.getOperand(8).getValueType()))
       report_fatal_error("NORM TSEL requires a packed predicate and matching "
-                         "U32 row carriers");
+                         "numeric carriers");
   }
   getV5ConstantOperand(Op.getOperand(2), "TSEL rows", 32, false);
   getV5ConstantOperand(Op.getOperand(3), "TSEL cols", 2048, false);
@@ -2422,14 +2453,22 @@ SDValue LinxV5TargetLowering::lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
   if (ExplicitRow) {
     PhysicalCols = getV5ConstantOperand(Op.getOperand(7),
                                         "NORM physical columns", 2048, false);
+    uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "NORM rows", 16,
+                                        false);
     uint64_t ValidCols = getV5ConstantOperand(
         Op.getOperand(3), "NORM valid columns", 2048, false);
-    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
-        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
-        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
-        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
-          (PhysicalCols == 2048 && ValidCols == 2048)))
-      report_fatal_error("unsupported NORM U32 row descriptor");
+    uint64_t DType =
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31);
+    bool U32Row =
+        Rows == 1 && DType == LinxV5Op::DataType::U32 &&
+        ((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+         (PhysicalCols == 2048 && ValidCols == 2048));
+    bool F32Tile = DType == LinxV5Op::DataType::FP32 &&
+                   PhysicalCols == 32 && ValidCols == 32 &&
+                   (Rows == 1 || Rows == 16);
+    if (getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        (!U32Row && !F32Tile))
+      report_fatal_error("unsupported NORM numeric descriptor");
   }
 
   const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TEXPANDS rows", 32, false);
@@ -2446,14 +2485,20 @@ SDValue LinxV5TargetLowering::lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
        Op.getValueType().getScalarType() != MVT::i32 ||
        Op.getOperand(6).getValueType() != MVT::i64))
     report_fatal_error("integer TEXPANDS requires an exact full NORM U32 row");
-  if (DType == LinxV5Op::DataType::FP32 &&
-      (Rows != 32 || Cols != 1 || Layout != 29 ||
-       Op.getValueType() != MVT::v32f32 ||
-       Op.getOperand(6).getValueType() != MVT::f32))
-    report_fatal_error("FP32 TEXPANDS requires exact 32x1 CUBE_M32 f32 Tile and scalar");
+  if (DType == LinxV5Op::DataType::FP32) {
+    bool AdmittedProfile =
+        (Rows == 32 && Cols == 1 && Layout == 29 &&
+         Op.getValueType() == MVT::v32f32) ||
+        (ExplicitRow && Layout == 0 && Cols == 32 && PhysicalCols == 32 &&
+         ((Rows == 1 && Op.getValueType() == MVT::v32f32) ||
+          (Rows == 16 && Op.getValueType() == MVT::v512f32)));
+    if (!AdmittedProfile || Op.getOperand(6).getValueType() != MVT::f32)
+      report_fatal_error(
+          "FP32 TEXPANDS requires an exact admitted f32 Tile and scalar");
+  }
   SDValue Chain = Op.getOperand(0);
   SDValue Scalar = Op.getOperand(6);
-  if (ExplicitRow) {
+  if (ExplicitRow && DType == LinxV5Op::DataType::U32) {
     // Keep an explicit source binding even for zero. Its temporary belongs to
     // the register allocator; no physical scratch register is borrowed.
     Register BoundScalar =
