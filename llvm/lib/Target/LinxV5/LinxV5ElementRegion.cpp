@@ -1722,15 +1722,10 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                              : nullptr;
             if (!Step || !Step->isOne())
               return false;
-            bool Overflow = false;
-            Current.uadd_ov(Step->getValue(), Overflow);
-            if (Overflow)
+            if (Current.isMaxValue())
               return false;
-            if (Next->hasNoSignedWrap()) {
-              Current.sadd_ov(Step->getValue(), Overflow);
-              if (Overflow)
-                return false;
-            }
+            if (Next->hasNoSignedWrap() && Current.isMaxSignedValue())
+              return false;
             return true;
           };
           SmallPtrSet<Value *, 32> Active;
