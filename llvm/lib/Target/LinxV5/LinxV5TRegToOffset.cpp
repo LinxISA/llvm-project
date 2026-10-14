@@ -604,9 +604,18 @@ static MachineOperand *getAssembleParentRefOperand(MachineInstr &MI) {
 
 static bool isAssembleParentDefinition(const MachineInstr &MI,
                                        const MachineOperand &MO) {
-  return MO.isDef() && MI.isInlineAsm() &&
-         StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
-             .contains("B.ASSEMBLE");
+  if (!MO.isDef() || !MI.isInlineAsm() ||
+      !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+           .contains("B.ASSEMBLE"))
+    return false;
+  // INIT_LAST publishes an ordinary completed Tile in the same instruction;
+  // it never becomes the persistent parent of a later continuation.  Keep it
+  // in the normal queue identity/age model so it can legally serve as a
+  // writer while other assembly generations remain OPEN.  An unresolved Last
+  // operand stays conservative and is treated as an OPEN parent.
+  Optional<bool> Last =
+      LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
+  return !Last || !*Last;
 }
 
 static unsigned getTSlotOccupation(MachineInstr &MI,

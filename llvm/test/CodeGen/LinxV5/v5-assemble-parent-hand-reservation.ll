@@ -212,6 +212,13 @@ merge:
 ; OFFSET: B.ASSEMBLE ${3:c}, ${4:c}{{.*}}$tile_tos1
 ; OFFSET: TSTORE{{.*}}$tile_tos1
 ;
+; The INIT_LAST result is an ordinary completed writer.  It must publish on
+; the unreserved N hand, acquire a normal queue identity, and then be consumed
+; through a relative N offset while the three T/M/U parents stay OPEN.
+; OFFSET-LABEL: name: completed_writer_is_not_parent
+; OFFSET: B.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1{{.*}}def $tile_n{{.*}}$tile_nos1{{.*}}1{{.*}}1
+; OFFSET: B.IOT $1, $0{{.*}}killed $tile_tos1{{.*}}$tile_nos1
+;
 ; POS4-LABEL: name: four_nonoverlap_parents
 ; POS4-COUNT-4: class: tile_tr
 ;
