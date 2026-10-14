@@ -531,14 +531,15 @@ static ConstantRange widenParentRangeAtLoopHeader(
   return Widened;
 }
 
-static ParentPhaseResult analyzeAssembleParentPhases(
+static ParentPhaseResult analyzeAssembleParentPhasesWithLoopScope(
     MachineFunction &MF, MachineLoopInfo &MLI, const TargetRegisterInfo &TRI,
-    Register ParentA, Register ParentB = Register()) {
+    Register ParentA, Register ParentB, bool IncludeAncestorLoops) {
   std::set<ParentRangeLocation> RelevantLocations;
   std::map<ParentSpillAccess, ParentRangeLocation> SpillLocations;
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   std::map<ParentRangeLocation, SmallVector<APInt, 4>> ComparisonEndpoints;
   std::map<ParentRangeLocation, SmallVector<ParentRangeLocation, 2>> ScalarDependencies;
+  SmallVector<MachineInstr *, 64> RangeTransferInstructions;
   // Every 64-bit value is a legal endpoint, including DenseMap's reserved
   // empty/tombstone keys (-1 and -2).
   std::map<ParentRangeLocation, std::set<uint64_t>> ComparisonEndpointMembership;
@@ -571,12 +572,73 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     SpillLocations.emplace(Access, Location);
     return Location;
   };
-  for (MachineBasicBlock &MBB : MF)
+
+  // Range facts are needed only to prove termination through CFG cycles that
+  // directly carry this parent's events.  Seed preprocessing from each
+  // event's innermost loop.  The phase walk below still traverses the full CFG
+  // and therefore checks an OPEN parent crossing an enclosing loop, while
+  // unrelated enclosing-loop counters and reused physical registers cannot
+  // pollute the event loop's comparison endpoints.
+  DenseSet<MachineBasicBlock *> RangeProofBlocks;
+  for (MachineBasicBlock &MBB : MF) {
+    bool HasParentEvent = false;
     for (MachineInstr &MI : MBB) {
-      // Charge the instruction, its two possible seed endpoints, and one
-      // scalar/spill dependency edges.
-      if (!consumePreprocessWork(5))
+      AssembleParentEvent A = getAssembleParentEvent(MI, ParentA);
+      AssembleParentEvent B = ParentB ? getAssembleParentEvent(MI, ParentB)
+                                      : AssembleParentEvent();
+      if (A.Defines || A.References || B.Defines || B.References) {
+        HasParentEvent = true;
+        break;
+      }
+    }
+    if (!HasParentEvent)
+      continue;
+    MachineLoop *Loop = MLI.getLoopFor(&MBB);
+    if (!Loop)
+      continue;
+    if (IncludeAncestorLoops)
+      while (Loop->getParentLoop())
+        Loop = Loop->getParentLoop();
+    RangeProofBlocks.insert(Loop->block_begin(), Loop->block_end());
+  }
+  for (MachineBasicBlock &MBB : MF) {
+    if (!RangeProofBlocks.count(&MBB))
+      continue;
+    for (MachineInstr &MI : MBB) {
+      bool IsScalarTransfer =
+          MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+          MI.getOperand(1).isReg() &&
+          (MI.getOpcode() == TargetOpcode::COPY ||
+           MI.getOpcode() == LinxV5::ADDI ||
+           MI.getOpcode() == LinxV5::SUBI ||
+           MI.getOpcode() == LinxV5::ORI ||
+           MI.getOpcode() == LinxV5::OR_SW);
+      Optional<ParentSpillAccess> Load =
+          MI.getNumOperands() && MI.getOperand(0).isReg()
+              ? getParentSpillAccess(MI, MFI, true)
+              : None;
+      Optional<ParentSpillAccess> Store =
+          MI.getNumOperands() && MI.getOperand(0).isReg()
+              ? getParentSpillAccess(MI, MFI, false)
+              : None;
+      bool IsComparison =
+          (MI.getOpcode() == LinxV5::SETC_EQI_BR ||
+           MI.getOpcode() == LinxV5::SETC_NEI_BR ||
+           MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
+          MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+          MI.getOperand(1).isImm();
+
+      // Tile-heavy straight-line bodies may contain tens of thousands of
+      // instructions that cannot affect scalar range propagation.  Charge
+      // only the scalar transfers, private spill accesses, and comparisons
+      // that enter this proof.  The unchanged budget still bounds dependency
+      // graphs and endpoint propagation rather than rejecting irrelevant Tile
+      // work before analysis begins.
+      if ((IsScalarTransfer || Load || Store || IsComparison) &&
+          !consumePreprocessWork(5))
         return ParentPhaseResult::UnableToProve;
+      if (IsScalarTransfer || Load || Store)
+        RangeTransferInstructions.push_back(&MI);
       if (MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
           MI.getOperand(1).isReg()) {
         bool Copy = MI.getOpcode() == TargetOpcode::COPY;
@@ -598,18 +660,14 @@ static ParentPhaseResult analyzeAssembleParentPhases(
               MI.getOperand(2).getReg().id());
       }
       if (MI.getNumOperands() && MI.getOperand(0).isReg()) {
-        if (auto Load = getParentSpillAccess(MI, MFI, true))
+        if (Load)
           ScalarDependencies[MI.getOperand(0).getReg().id()].push_back(
               spillLocation(*Load));
-        if (auto Store = getParentSpillAccess(MI, MFI, false))
+        if (Store)
           ScalarDependencies[spillLocation(*Store)].push_back(
               MI.getOperand(0).getReg().id());
       }
-      if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
-           MI.getOpcode() == LinxV5::SETC_NEI_BR ||
-           MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
-          MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
-          MI.getOperand(1).isImm()) {
+      if (IsComparison) {
         unsigned Reg = MI.getOperand(0).getReg().id();
         RelevantLocations.insert(Reg);
         APInt Endpoint(64, static_cast<uint64_t>(MI.getOperand(1).getImm()));
@@ -617,6 +675,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
         addEndpoint(Reg, Endpoint + 1);
       }
     }
+  }
 
   std::map<std::pair<ParentRangeLocation, ParentRangeLocation>, bool>
       DependencyPathCache;
@@ -649,11 +708,11 @@ static ParentPhaseResult analyzeAssembleParentPhases(
   bool RelevantChanged = true;
   while (RelevantChanged) {
     RelevantChanged = false;
-    for (MachineBasicBlock &MBB : MF) {
-      for (MachineInstr &MI : MBB) {
-        if (!consumePreprocessWork(1))
-          return ParentPhaseResult::UnableToProve;
-        if (MI.getNumOperands() && MI.getOperand(0).isReg()) {
+    for (MachineInstr *Transfer : RangeTransferInstructions) {
+      MachineInstr &MI = *Transfer;
+      if (!consumePreprocessWork(1))
+        return ParentPhaseResult::UnableToProve;
+      if (MI.getNumOperands() && MI.getOperand(0).isReg()) {
           Optional<ParentRangeLocation> Def, Src;
           if (auto Load = getParentSpillAccess(MI, MFI, true)) {
             Def = MI.getOperand(0).getReg().id();
@@ -670,12 +729,12 @@ static ParentPhaseResult analyzeAssembleParentPhases(
             for (const APInt &Endpoint : Endpoints)
               RelevantChanged |= addEndpoint(*Src, Endpoint);
           }
-        }
-        if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
-            !RelevantLocations.count(MI.getOperand(0).getReg().id()))
-          continue;
-        unsigned DefReg = MI.getOperand(0).getReg().id();
-        if ((MI.getOpcode() == TargetOpcode::COPY ||
+      }
+      if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
+          !RelevantLocations.count(MI.getOperand(0).getReg().id()))
+        continue;
+      unsigned DefReg = MI.getOperand(0).getReg().id();
+      if ((MI.getOpcode() == TargetOpcode::COPY ||
              MI.getOpcode() == LinxV5::ORI ||
              MI.getOpcode() == LinxV5::ADDI ||
              MI.getOpcode() == LinxV5::SUBI) &&
@@ -725,7 +784,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
               RelevantChanged |= addEndpoint(SrcReg, SourceEndpoint);
             }
           }
-        } else if (MI.getOpcode() == LinxV5::OR_SW &&
+      } else if (MI.getOpcode() == LinxV5::OR_SW &&
                  MI.getNumOperands() >= 4 && MI.getOperand(1).isReg() &&
                  MI.getOperand(1).getReg() == LinxV5::R0 &&
                  MI.getOperand(2).isReg() && MI.getOperand(3).isImm() &&
@@ -747,7 +806,6 @@ static ParentPhaseResult analyzeAssembleParentPhases(
               if (Endpoint.trunc(32).sext(64) == Endpoint)
                 RelevantChanged |= addEndpoint(Source.id(), Endpoint);
           }
-        }
       }
     }
   }
@@ -1003,6 +1061,24 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     }
   }
   return ParentPhaseResult::Disjoint;
+}
+
+static ParentPhaseResult analyzeAssembleParentPhases(
+    MachineFunction &MF, MachineLoopInfo &MLI, const TargetRegisterInfo &TRI,
+    Register ParentA, Register ParentB = Register()) {
+  ParentPhaseResult Local = analyzeAssembleParentPhasesWithLoopScope(
+      MF, MLI, TRI, ParentA, ParentB, /*IncludeAncestorLoops=*/false);
+  if (Local == ParentPhaseResult::Disjoint)
+    return Local;
+
+  // Omitting enclosing-loop facts is conservative: it can leave infeasible
+  // paths in the phase walk, but cannot manufacture a proof of disjointness.
+  // Retry a non-proof with every enclosing event loop before diagnosing the
+  // parent.  This preserves outer-loop and preheader-dependent legality while
+  // keeping the common self-contained inner loop independent of sibling-loop
+  // physical-register reuse.
+  return analyzeAssembleParentPhasesWithLoopScope(
+      MF, MLI, TRI, ParentA, ParentB, /*IncludeAncestorLoops=*/true);
 }
 
 void ColoringInChain::updateRCSlotIndex(

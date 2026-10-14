@@ -1,0 +1,93 @@
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-clockhands -o /dev/null %s 2>&1 | FileCheck %s
+#
+# The parent opens in one outer-loop iteration and closes in the next. Its
+# events live in a nested one-trip loop, while the deciding counter is seeded
+# in the preheader and advanced by the enclosing loop. A sibling loop reuses
+# r4 for an unrelated bound. Local event-loop facts alone retain infeasible
+# init/continuation paths, so analysis must conservatively retry with enclosing
+# loop facts without importing sibling physical-register endpoints up front.
+# The outer-crossing OPEN lifetime remains invalid after that retry.
+#
+# CHECK: LLVM ERROR: B.ASSEMBLE continuation may execute without an OPEN parent
+--- |
+  define void @assemble_parent_phase_nested_scope() { ret void }
+...
+---
+name:            assemble_parent_phase_nested_scope
+alignment:       2
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs, preferred-register: '' }
+  - { id: 1, class: tile_abs, preferred-register: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    %1:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %0:tile_abs = IMPLICIT_DEF
+    $r6 = ORI $r0, 0
+    PseudoBR %bb.1
+
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.10(0x40000000)
+    liveins: $r6
+    SETC_LTI_BR $r6, 2, %bb.2
+    PseudoBR %bb.10
+
+  bb.2:
+    successors: %bb.3(0x80000000)
+    $r4 = ORI $r0, 0
+    PseudoBR %bb.3
+
+  bb.3:
+    successors: %bb.4(0x40000000), %bb.5(0x40000000)
+    liveins: $r4, $r6
+    SETC_LTI_BR $r4, 3, %bb.4
+    PseudoBR %bb.5
+
+  bb.4:
+    successors: %bb.3(0x80000000)
+    liveins: $r4, $r6
+    $r4 = ADDI $r4, 1
+    PseudoBR %bb.3
+
+  bb.5:
+    successors: %bb.6(0x80000000)
+    liveins: $r6
+    $r4 = ORI $r0, 0
+    PseudoBR %bb.6
+
+  bb.6:
+    successors: %bb.7(0x40000000), %bb.8(0x40000000)
+    liveins: $r4, $r6
+    SETC_EQI_BR $r6, 0, %bb.7
+    PseudoBR %bb.8
+
+  bb.7:
+    successors: %bb.9(0x80000000)
+    liveins: $r4, $r6
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %0, 720905, %1, 13, 2, 13, 1, 13, 0
+    PseudoBR %bb.9
+
+  bb.8:
+    successors: %bb.9(0x80000000)
+    liveins: $r4, $r6
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %0, 720905, %1, 13, 0, 13, 1
+    PseudoBR %bb.9
+
+  bb.9:
+    successors: %bb.6(0x10000000), %bb.11(0x70000000)
+    liveins: $r4, $r6
+    $r4 = ADDI $r4, 1
+    SETC_LTI_BR $r4, 1, %bb.6
+    PseudoBR %bb.11
+
+  bb.11:
+    successors: %bb.1(0x80000000)
+    liveins: $r6
+    $r6 = ADDI $r6, 1
+    PseudoBR %bb.1
+
+  bb.10:
+    PseudoRET
+...
