@@ -484,6 +484,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     Register ParentA, Register ParentB = Register()) {
   std::set<unsigned> RelevantRegs;
   std::map<unsigned, SmallVector<APInt, 4>> ComparisonEndpoints;
+  std::map<unsigned, SmallVector<unsigned, 2>> ScalarDependencies;
   // Every 64-bit value is a legal endpoint, including DenseMap's reserved
   // empty/tombstone keys (-1 and -2).
   std::map<unsigned, std::set<uint64_t>> ComparisonEndpointMembership;
@@ -509,9 +510,30 @@ static ParentPhaseResult analyzeAssembleParentPhases(
   };
   for (MachineBasicBlock &MBB : MF)
     for (MachineInstr &MI : MBB) {
-      // Charge the instruction and its two possible seed endpoints.
-      if (!consumePreprocessWork(3))
+      // Charge the instruction, its two possible seed endpoints, and one
+      // scalar dependency edge.
+      if (!consumePreprocessWork(4))
         return ParentPhaseResult::UnableToProve;
+      if (MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+          MI.getOperand(1).isReg()) {
+        bool Copy = MI.getOpcode() == TargetOpcode::COPY;
+        bool Immediate =
+            (MI.getOpcode() == LinxV5::ADDI ||
+             MI.getOpcode() == LinxV5::SUBI ||
+             MI.getOpcode() == LinxV5::ORI) &&
+            MI.getNumOperands() >= 3 && MI.getOperand(2).isImm() &&
+            (MI.getOpcode() != LinxV5::ORI || MI.getOperand(2).getImm() == 0);
+        if (Copy || Immediate)
+          ScalarDependencies[MI.getOperand(0).getReg().id()].push_back(
+              MI.getOperand(1).getReg().id());
+        else if (MI.getOpcode() == LinxV5::OR_SW &&
+                 MI.getNumOperands() >= 4 &&
+                 MI.getOperand(1).getReg() == LinxV5::R0 &&
+                 MI.getOperand(2).isReg() && MI.getOperand(3).isImm() &&
+                 MI.getOperand(3).getImm() == 0)
+          ScalarDependencies[MI.getOperand(0).getReg().id()].push_back(
+              MI.getOperand(2).getReg().id());
+      }
       if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
            MI.getOpcode() == LinxV5::SETC_NEI_BR ||
            MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
@@ -524,6 +546,32 @@ static ParentPhaseResult analyzeAssembleParentPhases(
         addEndpoint(Reg, Endpoint + 1);
       }
     }
+
+  std::map<std::pair<unsigned, unsigned>, bool> DependencyPathCache;
+  auto hasDependencyPath = [&](unsigned From, unsigned To) -> Optional<bool> {
+    auto Key = std::make_pair(From, To);
+    auto Cached = DependencyPathCache.find(Key);
+    if (Cached != DependencyPathCache.end())
+      return Cached->second;
+    SmallVector<unsigned, 16> Pending{From};
+    std::set<unsigned> Visited;
+    while (!Pending.empty()) {
+      if (!consumePreprocessWork(1))
+        return None;
+      unsigned Reg = Pending.pop_back_val();
+      if (Reg == To)
+        return DependencyPathCache[Key] = true;
+      if (!Visited.insert(Reg).second)
+        continue;
+      auto It = ScalarDependencies.find(Reg);
+      if (It == ScalarDependencies.end())
+        continue;
+      if (!consumePreprocessWork(It->second.size()))
+        return None;
+      Pending.append(It->second.begin(), It->second.end());
+    }
+    return DependencyPathCache[Key] = false;
+  };
 
   bool RelevantChanged = true;
   while (RelevantChanged) {
@@ -559,6 +607,18 @@ static ParentPhaseResult analyzeAssembleParentPhases(
           // already describe the loop bound; repeatedly inverting ADDI/SUBI
           // would manufacture an unbounded endpoint sequence.
           if (Propagate && SrcReg != DefReg) {
+            if (!Adjustment.isZero()) {
+              Optional<bool> Cyclic = hasDependencyPath(SrcReg, DefReg);
+              if (!Cyclic)
+                return ParentPhaseResult::UnableToProve;
+              // Thresholds are widening hints, not reachability facts.
+              // Inverting a nonzero-offset cycle creates an unbounded set,
+              // including when physical registers are reused by disjoint
+              // loops. Drop that propagation conservatively; copy edges
+              // still carry the original comparison boundaries.
+              if (*Cyclic)
+                continue;
+            }
             // Charge endpoint propagation before copying or traversing the
             // list: a small instruction cycle can grow this list indefinitely.
             if (!consumePreprocessWork(ComparisonEndpoints[DefReg].size()))

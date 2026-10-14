@@ -1,45 +1,8 @@
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("    %1:tile_abs", "    $r5 = ORI $r0, 0\n" * 16384 + "    %1:tile_abs", 1))' %S/v5-assemble-parent-phase-offset-cycle.mir %t.mir
 # RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
-# RUN:   -run-pass=linxv5-clockhands -o /dev/null %s 2>&1 \
+# RUN:   -run-pass=linxv5-clockhands -o /dev/null %t.mir 2>&1 \
 # RUN:   | FileCheck %s
 #
-# The nonzero-offset two-register recurrence continually maps comparison
-# endpoints around r4 -> r5 -> r4.  Phase preprocessing must stop at its fixed
-# work budget and return a stable diagnostic instead of hanging.
-#
+# Even a finite dependency graph must respect the unchanged 65536-work budget.
+# The generated straight-line prefix exhausts preprocessing before path proof.
 # CHECK: LLVM ERROR: unable to prove bounded B.ASSEMBLE parent phase behavior
---- |
-  define void @assemble_parent_phase_preprocess_cap() { ret void }
-...
----
-name:            assemble_parent_phase_preprocess_cap
-alignment:       2
-tracksRegLiveness: true
-registers:
-  - { id: 0, class: tile_abs, preferred-register: '' }
-  - { id: 1, class: tile_abs, preferred-register: '' }
-body:             |
-  bb.0:
-    successors: %bb.1(0x80000000)
-    %1:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
-    %0:tile_abs = IMPLICIT_DEF
-    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %0, 720905, %1, 13, 2, 13, 1, 13, 0
-    $r4 = ORI $r0, 0
-    PseudoBR %bb.1
-
-  bb.1:
-    successors: %bb.2(0x40000000), %bb.3(0x40000000)
-    liveins: $r4
-    $r5 = ADDI $r4, 7
-    $r4 = COPY $r5
-    SETC_LTI_BR $r4, 100, %bb.2
-    PseudoBR %bb.3
-
-  bb.2:
-    successors: %bb.1(0x80000000)
-    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720905, %0, 720905, %1, 13, 0, 13, 0
-    PseudoBR %bb.1
-
-  bb.3:
-    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %0, 720905, %1, 13, 0, 13, 1
-    PseudoRET
-...
