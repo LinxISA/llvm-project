@@ -898,6 +898,38 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
   return Descriptor;
 }
 
+// These reductions encode source geometry in B.DIM but publish a different
+// result rectangle (PTO spec 8f589b7, row/column reduction contracts).
+static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
+                                                        StringRef Text) {
+  size_t Start = Text.find("BSTART.");
+  if (Start == StringRef::npos)
+    return None;
+  StringRef Header = Text.drop_front(Start).split('\n').first;
+  if (!Header.consume_front("BSTART.TEPL") &&
+      !Header.consume_front("BSTART.SFU"))
+    return None;
+  StringRef Operation = Header.split(',').first.trim();
+  Optional<unsigned> Selector;
+  if (Operation.startswith("${") && Operation.endswith(":c}")) {
+    Selector = getInlineAsmOperandImmediate(
+        MI, Text, Operation.data() - Text.data() + Operation.find(':'));
+  } else {
+    unsigned Value;
+    if (!Operation.getAsInteger(0, Value))
+      Selector = Value;
+    else
+      Selector = StringSwitch<Optional<unsigned>>(Operation)
+                     .Case("TROWSUM", 64)
+                     .Case("TROWARGMAX", 76)
+                     .Case("TCOLSUM", 80)
+                     .Default(None);
+  }
+  if (Selector && (*Selector == 64 || *Selector == 76 || *Selector == 80))
+    return Selector;
+  return None;
+}
+
 static Optional<LinxV5::TileDescriptor>
 getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
@@ -928,6 +960,29 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   // additional columns.  Public CUBE TCI forms carry LB2 explicitly.
   if (!HasPhysicalCol)
     *PhysicalCol = *ValidCol;
+  if (Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text)) {
+    const bool Cube = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+                      *Layout == LinxV5Op::ArgFormat::CUBE_M32;
+    if (!Cube && *Layout != LinxV5Op::ArgFormat::NORM)
+      return None;
+    if (*Reduction == 76)
+      *DataType = LinxV5Op::DataType::U32;
+    if (*Reduction == 80) {
+      *ValidRow = 1;
+      if (Cube) {
+        unsigned Bits = getTileDataTypeBits(*DataType);
+        if (!Bits)
+          return None;
+        unsigned CellBits = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 64 : 32;
+        unsigned CellCols = std::max(1u, CellBits / Bits);
+        *PhysicalCol = alignTo(*ValidCol, CellCols);
+      }
+    } else {
+      *ValidCol = 1;
+      if (!Cube)
+        *PhysicalCol = 1;
+    }
+  }
   return checkedTileDescriptor(LinxV5::TileDescriptor{
       *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
 }
