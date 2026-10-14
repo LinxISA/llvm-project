@@ -1,4 +1,4 @@
-// RUN: not %clang --target=linx64v5 -mlxbc -std=c11 -O0 -emit-llvm -S -o /dev/null %s 2>&1 | FileCheck %s
+// RUN: not %clang --target=linx64v5 -mlxbc -std=c11 -O2 -emit-llvm -S -o /dev/null %s 2>&1 | FileCheck %s
 
 typedef unsigned int tile_size(32) tile32;
 
@@ -15,4 +15,4 @@ void rejected(tile32 *out, const tile32 *indices, unsigned int valid) {
   }
 }
 
-// CHECK: error: cannot compile this unsupported Linx element-wise loop form yet
+// CHECK: error: PTO element region: calls are not in the P1a arithmetic region
