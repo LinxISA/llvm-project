@@ -2,12 +2,6 @@
 ; RUN:   -enable-all-vector-as-tilereg=true \
 ; RUN:   -linxv5-enable-clock-hand-opt=true \
 ; RUN:   -stop-after=linxv5-clockhands -o - | FileCheck %s
-; RUN: llc < %s -mtriple=linx64v5 -mcpu=janus \
-; RUN:   -enable-all-vector-as-tilereg=true \
-; RUN:   -linxv5-enable-clock-hand-opt=true -o - | FileCheck %s --check-prefix=ASM
-; RUN: llc < %s -mtriple=linx64v5 -mcpu=janus \
-; RUN:   -enable-all-vector-as-tilereg=true \
-; RUN:   -linxv5-enable-clock-hand-opt=false -o - | FileCheck %s --check-prefix=ASM
 
 target triple = "linx64v5"
 
@@ -23,11 +17,9 @@ target triple = "linx64v5"
 ; CHECK: bb.5.merge:
 ; CHECK: PseudoVCall_PAR_RegListIn_0d1u_StackI_noDsrc_noDst @copyout{{.*}}%[[TILE]]
 ;
-; ASM-LABEL: tile_phi:
-; ASM: VPAR copyin
-; ASM: VPAR copyin
-; ASM: TCOPY
-; ASM: VPAR copyout
+; This fixture intentionally stops at clockhands. The legacy vcall payload has
+; no Tile descriptor and therefore is not a valid full-lowering input; typed
+; PHI lowering is covered separately by tile-copy-descriptor-phi.ll.
 
 define void @tile_phi(ptr %lhs, ptr %rhs, ptr %out, i1 %cond) {
 entry:
