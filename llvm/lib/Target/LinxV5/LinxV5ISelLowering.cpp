@@ -4851,6 +4851,8 @@ LinxV5TargetLowering::LowerCall(CallLoweringInfo &CLI,
       LocalTileABICallee
           ? LinxV5::getLocalTileABIInfo(*LocalTileABICallee)
           : Optional<LinxV5::LocalTileABIInfo>();
+  const bool DiscardLocalTileResult =
+      LocalTileABI && CLI.CB && CLI.CB->use_empty();
   bool RequestsLocalTileReturn = llvm::any_of(Ins, [](const ISD::InputArg &In) {
     return In.Flags.isInReg() &&
            (In.VT == MVT::v128i32 || In.VT == MVT::v2048i32);
@@ -5082,6 +5084,15 @@ LinxV5TargetLowering::LowerCall(CallLoweringInfo &CLI,
 
   // Copy all of the result registers out of their specified physreg.
   for (auto &VA : RVLocs) {
+    if (DiscardLocalTileResult && VA.getLocReg() == LinxV5::Tile_T1) {
+      // The call and its scalar/GM side effects remain on Chain.  Avoid
+      // materializing an unused wide value: without a consuming Tile
+      // instruction there is no Tile register class to refine the generic
+      // vector preference, and InstrEmitter would otherwise try to copy the
+      // physical ABI hand into an incompatible ordinary vector class.
+      InVals.push_back(DAG.getUNDEF(VA.getValVT()));
+      continue;
+    }
     // Copy the value out
     SDValue RetValue =
         DAG.getCopyFromReg(Chain, DL, VA.getLocReg(), VA.getLocVT(), Glue);

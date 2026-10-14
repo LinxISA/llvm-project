@@ -47,6 +47,12 @@
 ; POSITIVE: B.IOT t#1, mask=1111, last, ->t<8KB>
 ; POSITIVE: BSTART.STD CALL, helper2048
 ; POSITIVE: BSTART.TLSU TSTORE, U32
+; POSITIVE-LABEL: unused_result_caller:
+; POSITIVE: BSTART.TLSU TLOAD, U32
+; POSITIVE: BSTART.TLSU TMOV, U32
+; POSITIVE: BSTART.STD CALL, helper128
+; POSITIVE: BSTART.TLSU TLOAD, U32
+; POSITIVE: BSTART.TLSU TSTORE, U32
 ; POSITIVE-LABEL: helper128:
 ; POSITIVE: BSTART.TLSU TMOV, U32
 ; POSITIVE: B.IOT t#1, mask=1111, last, ->t<512B>
@@ -87,6 +93,18 @@ entry:
   %c = call <2048 x i32> asm sideeffect "BSTART.TLSU TLOAD, ${2:D}\0AB.DIM zero, ${4:c}, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT mask=1111, last, ->$0<${3:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i,i,i,i,i,~{memory}"(ptr @in2048, i32 25, i32 7, i32 2048, i32 1, i32 2048)
   %cr = call inreg <2048 x i32> @helper2048(<2048 x i32> %c)
   call void asm sideeffect "BSTART.TLSU TSTORE, ${2:D}\0AB.DIM zero, ${3:c}, ->lb0\0AB.DIM zero, ${4:c}, ->lb1\0AB.DIM zero, ${5:c}, ->lb2\0AB.IOT $1, mask=1111, last\0AB.IOR [$0], []\0A", "r,@2Tr,i,i,i,i,~{memory}"(ptr @out2048, <2048 x i32> %cr, i32 25, i32 2048, i32 1, i32 2048)
+  ret void
+}
+
+; A caller may need only the helper's scalar/GM side effects.  The Tile return
+; is still exported by the callee, but an unused SSA result must not ask the
+; instruction emitter to create an incompatible generic vector vreg.
+define void @unused_result_caller() {
+entry:
+  %a = call <128 x i32> asm sideeffect "BSTART.TLSU TLOAD, ${2:D}\0AB.DIM zero, ${4:c}, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT mask=1111, last, ->$0<${3:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i,i,i,i,i,~{memory}"(ptr @in128, i32 25, i32 3, i32 128, i32 1, i32 128)
+  %ignored = call inreg <128 x i32> @helper128(<128 x i32> %a)
+  %b = call <128 x i32> asm sideeffect "BSTART.TLSU TLOAD, ${2:D}\0AB.DIM zero, ${4:c}, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT mask=1111, last, ->$0<${3:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i,i,i,i,i,~{memory}"(ptr @in128, i32 25, i32 3, i32 128, i32 1, i32 128)
+  call void asm sideeffect "BSTART.TLSU TSTORE, ${2:D}\0AB.DIM zero, ${3:c}, ->lb0\0AB.DIM zero, ${4:c}, ->lb1\0AB.DIM zero, ${5:c}, ->lb2\0AB.IOT $1, mask=1111, last\0AB.IOR [$0], []\0A", "r,@2Tr,i,i,i,i,~{memory}"(ptr @out128, <128 x i32> %b, i32 25, i32 128, i32 1, i32 128)
   ret void
 }
 
