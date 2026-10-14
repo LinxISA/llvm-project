@@ -88,6 +88,7 @@ enum NodeType : unsigned {
   EW_TCVT_GPR_MASKED,
   EW_TLEA,
   EW_TCI,
+  EW_TCI_ROW,
   EW_TCMPS_GPR,
   EW_TCMPS_GPR_MASKED,
   EW_MGATHER_GPR_MASKED,
@@ -98,17 +99,21 @@ enum NodeType : unsigned {
   EW_MGATHER_ADD_MASKED,
   EW_MSCATTER_ADD,
   EW_TCMP,
+  EW_TCMP_ROW,
   EW_TCMP_GPR,
   EW_TCMP_GPR_MASKED,
   EW_TSEL,
+  EW_TSEL_ROW,
   EW_TSEL_GPR,
   EW_TEXPANDS,
+  EW_TEXPANDS_ROW,
   BLK_MATMUL_AC,
   BLK_MATMULMX,
   BLK_MATMULMXB,
   BLK_MATMULMX_AC,
   BLK_MATMULMXB_AC,
-  // v5: TMATMUL with a Shared Right operand (32-bit B.IOS binder, B not in B.IOT).
+  // v5: TMATMUL with a Shared Right operand (32-bit B.IOS binder, B not in
+  // B.IOT).
   BLK_MATMUL_SHARED,
   BLK_TLOAD,
   BLK_TSTORE,
@@ -329,8 +334,8 @@ private:
                                   SelectionDAG &DAG) const;
   SDValue lowerElementwiseTBinaryGPRMasked(SDLoc &DL, SDValue Op,
                                            SelectionDAG &DAG) const;
-  SDValue lowerElementwiseTCI(SDLoc &DL, SDValue Op,
-                              SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCI(SDLoc &DL, SDValue Op, SelectionDAG &DAG,
+                              bool ExplicitRow = false) const;
   SDValue lowerElementwiseTCMPSGPR(SDLoc &DL, SDValue Op,
                                    SelectionDAG &DAG, bool Masked = false) const;
   SDValue lowerElementwiseMGatherGPRMasked(SDLoc &DL, SDValue Op,
@@ -347,16 +352,16 @@ private:
                                            SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterAdd(SDLoc &DL, SDValue Op,
                                       SelectionDAG &DAG) const;
-  SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
-                               SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op, SelectionDAG &DAG,
+                               bool ExplicitRow = false) const;
   SDValue lowerElementwiseTCmpGPR(SDLoc &DL, SDValue Op,
                                   SelectionDAG &DAG, bool Masked = false) const;
-  SDValue lowerElementwiseTSel(SDLoc &DL, SDValue Op,
-                               SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTSel(SDLoc &DL, SDValue Op, SelectionDAG &DAG,
+                               bool ExplicitRow = false) const;
   SDValue lowerElementwiseTSelGPR(SDLoc &DL, SDValue Op,
                                   SelectionDAG &DAG) const;
-  SDValue lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
-                                   SelectionDAG &DAG) const;
+  SDValue lowerElementwiseTExpands(SDLoc &DL, SDValue Op, SelectionDAG &DAG,
+                                   bool ExplicitRow = false) const;
   SDValue lowerTemplateBLKMX(unsigned Opcode, SDLoc &DL, SDValue Op,
                              unsigned VUseNum, SelectionDAG &DAG) const;
   // v5: lower blk_matmul_shared. Like lowerTemplateBLK but pushes only the A

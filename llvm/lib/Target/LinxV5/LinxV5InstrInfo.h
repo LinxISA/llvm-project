@@ -135,11 +135,14 @@ struct TileDescriptor {
   unsigned ValidCol = 0;
   unsigned PhysicalCol = 0;
   unsigned SizeCode = 0;
+  // The initial packed predicate profile retains exactly one physical row.
+  bool PackedPredicate = false;
 
   bool operator==(const TileDescriptor &Other) const {
     return DataType == Other.DataType && Layout == Other.Layout &&
            ValidRow == Other.ValidRow && ValidCol == Other.ValidCol &&
-           PhysicalCol == Other.PhysicalCol && SizeCode == Other.SizeCode;
+           PhysicalCol == Other.PhysicalCol && SizeCode == Other.SizeCode &&
+           PackedPredicate == Other.PackedPredicate;
   }
 };
 

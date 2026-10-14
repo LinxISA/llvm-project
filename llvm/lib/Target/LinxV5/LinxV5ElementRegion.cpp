@@ -55,7 +55,7 @@ using namespace llvm::PatternMatch;
 
 namespace {
 
-constexpr StringLiteral ViewPrefix = "pto.element.view:v1;";
+constexpr StringLiteral ViewPrefix = "pto.element.view:";
 constexpr StringLiteral U32M32View =
     "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32";
 constexpr StringLiteral S32M32View =
@@ -83,14 +83,14 @@ struct ElementProfile {
   unsigned Rows = 32;
   unsigned Cols = 1;
   uint64_t Bytes = 128;
+  uint64_t Layout = 29;
   bool isSigned() const { return DataType == 16 || DataType == 17; }
   bool isFloat() const { return DataType == 1 || DataType == 4; }
 };
 
-static Optional<ElementProfile> elementProfile(uint64_t DataType,
-                                               unsigned Count, unsigned Rows,
-                                               unsigned Cols, uint64_t Bytes,
-                                               LLVMContext &Context) {
+static Optional<ElementProfile>
+elementProfile(uint64_t DataType, unsigned Count, unsigned Rows, unsigned Cols,
+               uint64_t Bytes, LLVMContext &Context, uint64_t Layout = 29) {
   bool Existing32 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 128 &&
                     (DataType == 25 || DataType == 17 || DataType == 1);
   bool NativeI64 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 256 &&
@@ -98,7 +98,12 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
   bool Dense64 = Count == 64 && Rows == 32 && Cols == 2 &&
                  ((Bytes == 128 && (DataType == 4 || DataType == 26)) ||
                   (Bytes == 256 && (DataType == 25 || DataType == 17)));
-  if (!Existing32 && !NativeI64 && !Dense64)
+  bool NormRow = Layout == 0 && DataType == 25 && Rows == 1 &&
+                 (Cols == Count || (Count == 128 && Cols == 32)) &&
+                 (Count == 128 || Count == 2048) &&
+                 Bytes == uint64_t(Count) * 4;
+  if ((!Existing32 && !NativeI64 && !Dense64 && !NormRow) ||
+      (Layout != 29 && !NormRow))
     return None;
   Type *Scalar = DataType == 1    ? Type::getFloatTy(Context)
                  : DataType == 4  ? Type::getHalfTy(Context)
@@ -106,9 +111,10 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
                  : (DataType == 24 || DataType == 16)
                      ? Type::getInt64Ty(Context)
                                   : Type::getInt32Ty(Context);
-  return ElementProfile{
-      Scalar, FixedVectorType::get(Scalar, Count), DataType, Count, Rows, Cols,
-      Bytes};
+  return ElementProfile{Scalar,   FixedVectorType::get(Scalar, Count),
+                        DataType, Count,
+                        Rows,     Cols,
+                        Bytes,    Layout};
 }
 
 static Optional<ElementProfile> elementProfile(uint64_t DataType,
@@ -119,6 +125,15 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
 
 static Optional<ElementProfile> elementViewProfile(StringRef Text,
                                                    LLVMContext &Context) {
+  if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
+              "physical_cols=128;valid_rows=1;valid_cols=128")
+    return elementProfile(25, 128, 1, 128, 512, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
+              "physical_cols=128;valid_rows=1;valid_cols=32")
+    return elementProfile(25, 128, 1, 32, 512, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
+              "physical_cols=2048;valid_rows=1;valid_cols=2048")
+    return elementProfile(25, 2048, 1, 2048, 8192, Context, 0);
   if (Text == U32M32View)
     return elementProfile(25, 32, 32, 1, 128, Context);
   if (Text == S32M32View)
@@ -398,7 +413,7 @@ static bool prepareViews(Function &F, bool RestoreFullCarrier = false) {
       Args.push_back(ConstantInt::get(I64, Plan.Profile.DataType));
       Args.push_back(ConstantInt::get(I64, Plan.Profile.Rows));
       Args.push_back(ConstantInt::get(I64, Plan.Profile.Cols));
-      Args.push_back(ConstantInt::get(I64, 29));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.Layout));
       return Args;
     };
 
@@ -505,8 +520,8 @@ static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
     return None;
   unsigned Count = CarrierTy->getNumElements();
   auto Profile = elementProfile(Fields[4], Count, Fields[5], Fields[6],
-                                Fields[3], V->getContext());
-  if (!Profile || Fields[7] != 29 || V->getType() != Profile->VectorTy)
+                                Fields[3], V->getContext(), Fields[7]);
+  if (!Profile || V->getType() != Profile->VectorTy)
     return None;
   return ViewDescriptor{Call, static_cast<uint64_t>(Fields[0]),
                         static_cast<uint64_t>(Fields[1]), Fields[2],
@@ -519,7 +534,9 @@ static bool sameCarrierStorage(const ViewDescriptor &A,
                                const ViewDescriptor &B) {
   return A.StorageID == B.StorageID && A.Offset == B.Offset &&
          A.Range == B.Range && A.Profile.DataType == B.Profile.DataType &&
-         A.ScalarizedLaneZero == B.ScalarizedLaneZero;
+         A.ScalarizedLaneZero == B.ScalarizedLaneZero &&
+         A.Profile.Rows == B.Profile.Rows && A.Profile.Cols == B.Profile.Cols &&
+         A.Profile.Layout == B.Profile.Layout;
 }
 
 static MDNode *getElementRegionToken(const Loop &L) {
@@ -710,7 +727,8 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
 struct PredicatedRegion {
   Loop *L = nullptr;
   PHINode *Induction = nullptr;
-  unsigned Count = 0;
+  unsigned Count = 0;        // Valid logical iterations.
+  unsigned CarrierCount = 0; // Physical SSA vector lanes.
   SmallVector<BasicBlock *, 16> Order;
   DenseMap<PHINode *, ViewDescriptor> Accumulators;
   DenseMap<Value *, ViewDescriptor> Publications;
@@ -912,7 +930,11 @@ static void planPositiveB32Representation(Function &F, ScalarEvolution &SE,
 
 static bool isElementCarrier(Value *V) {
   auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-  if (!Ty || (Ty->getNumElements() != 32 && Ty->getNumElements() != 64))
+  if (!Ty)
+    return false;
+  if (Ty->getNumElements() == 128 || Ty->getNumElements() == 2048)
+    return Ty->getElementType()->isIntegerTy(32);
+  if (Ty->getNumElements() != 32 && Ty->getNumElements() != 64)
     return false;
   Type *Scalar = Ty->getElementType();
   if (Scalar->isIntegerTy(64))
@@ -1044,11 +1066,25 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
   if (!Plan.Induction || !Plan.Count || Plan.Count > 4096)
     return Fail(L.getHeader()->getTerminator(),
                 "requires a proven 1..4096 trip count and zero-based unit induction");
+  Plan.CarrierCount = Plan.Count;
+  Optional<ElementProfile> Norm;
+  for (BasicBlock *BB : L.blocks())
+    for (Instruction &I : *BB)
+      if (auto View = getViewDescriptor(&I))
+        if (View->Profile.Layout == 0) {
+          const auto &P = View->Profile;
+          if (P.Cols != Plan.Count ||
+              (Norm && (Norm->Count != P.Count || Norm->Cols != P.Cols)))
+            return Fail(&I, "NORM carrier requires its exact valid domain");
+          Norm = P;
+          Plan.CarrierCount = P.Count;
+        }
   for (PHINode &Phi : L.getHeader()->phis()) {
     if (&Phi == Plan.Induction)
       continue;
     if (!isElementCarrier(&Phi) ||
-        cast<FixedVectorType>(Phi.getType())->getNumElements() != Plan.Count)
+        cast<FixedVectorType>(Phi.getType())->getNumElements() !=
+            Plan.CarrierCount)
       return Fail(&Phi, "loop-carried recurrences are not yet supported");
     Value *Final = Phi.getIncomingValueForBlock(L.getLoopLatch());
     SmallPtrSet<Value *, 16> Seen;
@@ -1914,9 +1950,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           Plan.ProvenDeadTraps.insert(Call);
           continue;
         }
-      bool Carrier =
-          isElementCarrier(&I) &&
-          cast<FixedVectorType>(I.getType())->getNumElements() == Plan.Count;
+      bool Carrier = isElementCarrier(&I) &&
+                     cast<FixedVectorType>(I.getType())->getNumElements() ==
+                         Plan.CarrierCount;
       if (!I.getType()->isVoidTy() && !I.getType()->isIntegerTy() &&
           !I.getType()->isPointerTy() && !I.getType()->isFloatTy() &&
           !I.getType()->isHalfTy() && !Carrier)
@@ -1956,8 +1992,12 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
           }
       if (auto Descriptor = getViewDescriptor(&I)) {
         Value *Source = Descriptor->Marker->getArgOperand(0);
-        if (Plan.Count != Descriptor->Profile.Count)
-          return Fail(&I, "typed carrier requires its exact full domain");
+        unsigned ValidCount = Descriptor->Profile.Layout == 0
+                                  ? Descriptor->Profile.Cols
+                                  : Descriptor->Profile.Count;
+        if (Plan.Count != ValidCount ||
+            Plan.CarrierCount != Descriptor->Profile.Count)
+          return Fail(&I, "typed carrier requires its exact valid domain");
         if (!CertifyElementZeroView(*Descriptor))
           return Fail(
               &I,
@@ -2222,7 +2262,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   for (CallInst *View : Plan.GuardedElementZeroViews)
     View->setMetadata(ScalarizedLaneZeroMD, nullptr);
   IRBuilder<> B(L.getLoopPreheader()->getTerminator());
-  auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.Count);
+  auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.CarrierCount);
   Value *False = Constant::getNullValue(MaskTy);
   Value *True = Constant::getAllOnesValue(MaskTy);
   Value *EVL = B.getInt32(Plan.Count);
@@ -2247,7 +2287,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   Type *InductionTy = Plan.PositiveB32Values.contains(Plan.Induction)
                           ? B.getInt32Ty()
                           : Plan.Induction->getType();
-  for (unsigned I = 0; I < Plan.Count; ++I)
+  for (unsigned I = 0; I < Plan.CarrierCount; ++I)
     Indices.push_back(ConstantInt::get(InductionTy, I));
   if (Plan.PositiveB32Values.contains(Plan.Induction))
     PositiveB32Values[Plan.Induction] = ConstantVector::get(Indices);
@@ -2266,7 +2306,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     if (Ty->isIntegerTy() && Ty->getIntegerBitWidth() > 1 &&
         Ty->getIntegerBitWidth() < 32)
       Ty = B.getInt32Ty();
-    return FixedVectorType::get(Ty, Plan.Count);
+    return FixedVectorType::get(Ty, Plan.CarrierCount);
   };
   auto Widen = [&](Value *V) -> Value * {
     auto It = Values.find(V);
@@ -2278,9 +2318,10 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     if (V->getType()->isIntegerTy() && V->getType()->getIntegerBitWidth() > 1 &&
         V->getType()->getIntegerBitWidth() < 32)
       Scalar = B.CreateZExt(V, B.getInt32Ty(), "pto.narrow.uniform");
-    Value *Wide = isElementCarrier(V)
-                      ? V
-                      : B.CreateVectorSplat(Plan.Count, Scalar, "pto.uniform");
+    Value *Wide =
+        isElementCarrier(V)
+            ? V
+            : B.CreateVectorSplat(Plan.CarrierCount, Scalar, "pto.uniform");
     if (isElementCarrier(V) && isa<PHINode>(V)) {
       if (auto Descriptor = getViewDescriptor(stripCarrierLCSSA(V))) {
         auto *Marker = Descriptor->Marker;
@@ -2309,7 +2350,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     Value *Scalar = B.CreateTrunc(V, B.getInt32Ty(), "pto.b32.import");
     if (auto *Import = dyn_cast<Instruction>(Scalar))
       ScalarNarrowImports.insert(Import);
-    Value *Wide = B.CreateVectorSplat(Plan.Count, Scalar, "pto.b32.uniform");
+    Value *Wide =
+        B.CreateVectorSplat(Plan.CarrierCount, Scalar, "pto.b32.uniform");
     PositiveB32Values[V] = Wide;
     return Wide;
   };
@@ -2329,14 +2371,14 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   };
   auto Narrow = [&](Value *V, unsigned Width, Value *Mask) -> Value * {
     Value *Bits =
-        ConstantVector::getSplat(ElementCount::getFixed(Plan.Count),
+        ConstantVector::getSplat(ElementCount::getFixed(Plan.CarrierCount),
                                  B.getInt32((uint64_t(1) << Width) - 1));
     return EmitVP(Intrinsic::vp_and, V->getType(), {V, Bits, Mask, EVL});
   };
   auto SignExtendNarrow = [&](Value *V, unsigned Width,
                               Value *Mask) -> Value * {
-    Value *Shift = ConstantVector::getSplat(ElementCount::getFixed(Plan.Count),
-                                            B.getInt32(32 - Width));
+    Value *Shift = ConstantVector::getSplat(
+        ElementCount::getFixed(Plan.CarrierCount), B.getInt32(32 - Width));
     Value *Left =
         EmitVP(Intrinsic::vp_shl, V->getType(), {V, Shift, Mask, EVL});
     return EmitVP(Intrinsic::vp_ashr, V->getType(), {Left, Shift, Mask, EVL});
@@ -2358,7 +2400,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     if (!L.isLoopInvariant(Pointer))
       return Wide;
     Value *Zero = Constant::getNullValue(
-        FixedVectorType::get(B.getInt32Ty(), Plan.Count));
+        FixedVectorType::get(B.getInt32Ty(), Plan.CarrierCount));
     return B.Insert(GetElementPtrInst::Create(B.getInt32Ty(), Wide, {Zero}),
                     "pto.uniform.address");
   };
@@ -2375,10 +2417,9 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         continue;
       B.SetCurrentDebugLocation(I.getDebugLoc());
       Value *Result = nullptr;
-      Type *WideTy =
-          isa<LoadInst>(I) && I.getType()->isIntegerTy(16)
-              ? FixedVectorType::get(I.getType(), Plan.Count)
-              : WideType(&I);
+      Type *WideTy = isa<LoadInst>(I) && I.getType()->isIntegerTy(16)
+                         ? FixedVectorType::get(I.getType(), Plan.CarrierCount)
+                         : WideType(&I);
       bool PositiveB32Result = Plan.PositiveB32Values.contains(&I);
       if (auto Descriptor = getViewDescriptor(&I)) {
         auto *Marker = Descriptor->Marker;
@@ -2433,7 +2474,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Value *Right = Widen(Intrinsic->getArgOperand(1));
         Value *Shift = Widen(Intrinsic->getArgOperand(2));
         Value *WidthMask = ConstantVector::getSplat(
-            ElementCount::getFixed(Plan.Count), B.getInt32(31));
+            ElementCount::getFixed(Plan.CarrierCount), B.getInt32(31));
         Value *Zero = Constant::getNullValue(WideTy);
         Value *Normalized = EmitVP(Intrinsic::vp_and, WideTy,
                                    {Shift, WidthMask, Mask, EVL});
@@ -2535,7 +2576,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                      Plan.PositiveB32Values.contains(Index)) {
             Value *Narrow = WidenPositiveB32(Index);
             Indices.push_back(B.CreateZExt(
-                Narrow, FixedVectorType::get(B.getInt64Ty(), Plan.Count),
+                Narrow, FixedVectorType::get(B.getInt64Ty(), Plan.CarrierCount),
                 "pto.b32.gep"));
           } else {
             Indices.push_back(Widen(Index));
@@ -2642,7 +2683,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       I->setMetadata(PredicatedOwnerMD, Token);
   findRegionSentinel(F, Token)->setMetadata(
       PredicatedDomainMD,
-      MDNode::get(F.getContext(), ConstantAsMetadata::get(B.getInt32(Plan.Count))));
+      MDNode::get(F.getContext(),
+                  ConstantAsMetadata::get(B.getInt32(Plan.CarrierCount))));
   deleteDeadLoop(&L, &DT, &SE, &LI);
 }
 
@@ -2709,6 +2751,7 @@ class ElementTileLegalizer {
   SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
   DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
   unsigned DomainCount;
+  Optional<ElementProfile> NormProfile;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
   DenseMap<Value *, Value *> ActiveMasks;
@@ -3085,7 +3128,218 @@ class ElementTileLegalizer {
     return validateImportTypes(V, DType, Seen);
   }
 
+  bool validateNorm(Value *V) {
+    if (!Validated.insert(V).second)
+      return true;
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    if (!Ty || Ty->getNumElements() != NormProfile->Count ||
+        (!Ty->getElementType()->isIntegerTy(32) &&
+         !Ty->getElementType()->isIntegerTy(1)))
+      return fail(V, "NORM pure Tile expressions require one U32 row profile");
+    if (auto View = getViewDescriptor(V)) {
+      const auto &P = View->Profile;
+      if (P.Layout != 0 || P.DataType != 25 || P.Count != NormProfile->Count ||
+          P.Rows != 1 || P.Cols != NormProfile->Cols ||
+          View->ScalarizedLaneZero)
+        return fail(
+            V, "NORM region cannot mix layout, shape, or scalarized views");
+      Value *Source = View->Marker->getArgOperand(0);
+      auto *I = dyn_cast<Instruction>(Source);
+      if (I && !OwnedSet.contains(I))
+        return isTypedTileImport(Source) ||
+               fail(V, "NORM import requires an explicit Tile producer");
+      return validateNorm(Source);
+    }
+    if (Value *Scalar = getSplatValue(V)) {
+      auto *I = dyn_cast<Instruction>(Scalar);
+      return (!I || !OwnedSet.contains(I)) ||
+             fail(V, "NORM uniform source must be outside the region");
+    }
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V))
+      return true;
+    if (auto *I = dyn_cast<Instruction>(V))
+      if (!OwnedSet.contains(I))
+        return fail(V, "NORM vector producer lacks its typed view boundary");
+    if (auto *C = dyn_cast<Constant>(V)) {
+      APInt Initial, Step;
+      return (Ty->getElementType()->isIntegerTy(32) &&
+              constantProgression(C, Initial, Step) &&
+              (Step.isZero() || Step.isOne() || Step.isAllOnes())) ||
+             fail(V, "NORM constant requires a scalar splat or U32 unit-step "
+                     "index");
+    }
+    if (auto *Freeze = dyn_cast<FreezeInst>(V))
+      return validateNorm(Freeze->getOperand(0));
+    if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      if (Cmp->isSigned() ||
+          !Cmp->getOperand(0)->getType()->getScalarType()->isIntegerTy(32))
+        return fail(V, "NORM comparisons require U32 numeric operands");
+      return validateNorm(Cmp->getOperand(0)) &&
+             validateNorm(Cmp->getOperand(1));
+    }
+    if (auto *Select = dyn_cast<SelectInst>(V))
+      return (Ty->getElementType()->isIntegerTy(32) ||
+              fail(V, "NORM predicate selection is not yet supported")) &&
+             validateNorm(Select->getCondition()) &&
+             validateNorm(Select->getTrueValue()) &&
+             validateNorm(Select->getFalseValue());
+    if (auto *Binary = dyn_cast<BinaryOperator>(V))
+      if (Ty->getElementType()->isIntegerTy(1) &&
+          Binary->getOpcode() == Instruction::Xor &&
+          match(Binary->getOperand(1), m_AllOnes()))
+        return validateNorm(Binary->getOperand(0));
+    if (auto *Cast = dyn_cast<ZExtInst>(V))
+      if (Cast->getSrcTy()->getScalarType()->isIntegerTy(1) &&
+          Cast->getDestTy()->getScalarType()->isIntegerTy(32))
+        return validateNorm(Cast->getOperand(0));
+    if (auto *I = dyn_cast<Instruction>(V))
+      LLVM_DEBUG(dbgs() << "unsupported NORM expression: " << *I << "\n");
+    return fail(V, "NORM pure Tile profile supports comparison, select, and "
+                   "index expressions");
+  }
+
+  Value *normSplat(Value *Scalar, uint64_t Step = 0) {
+    Scalar = B.CreateZExtOrTrunc(B.CreateFreeze(Scalar), B.getInt64Ty());
+    if (Step == 0)
+      return call(Intrinsic::linx_experimental_ew_texpands_row,
+                  {NormProfile->VectorTy, B.getInt64Ty()},
+                  {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
+                   B.getInt64(0), Scalar, B.getInt64(NormProfile->Count)},
+                  "pto.norm.splat");
+    assert((Step == 1 || Step == UINT32_MAX) && "NORM unit sequence preflight");
+    // RowMajor TCI takes direction (0 ascending, 1 descending), whereas
+    // CUBE TCI takes packed signed steps. It cannot generate a scalar splat.
+    return call(Intrinsic::linx_experimental_ew_tci_row,
+                {NormProfile->VectorTy},
+                {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
+                 B.getInt64(0), Scalar, B.getInt64(Step == 1 ? 0 : 1),
+                 B.getInt64(NormProfile->Count)},
+                "pto.norm.index");
+  }
+
+  Value *normCompare(Value *L, Value *R, unsigned Selector) {
+    // Predicate payload stays bit-packed. Its raw allocation also satisfies
+    // the U8 descriptor extent required by identity TMOV, so allocator copies
+    // remain legal (PTO 8f589b7 TileDescriptorConfigured).
+    auto *MaskTy = FixedVectorType::get(
+        B.getInt32Ty(), std::max(32u, NormProfile->Count / 4));
+    return call(Intrinsic::linx_experimental_ew_tcmp_row,
+                {MaskTy, L->getType(), R->getType()},
+                {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
+                 B.getInt64(0), L, R, B.getInt64(Selector),
+                 B.getInt64(NormProfile->Count)},
+                "pto.norm.predicate");
+  }
+
+  Value *normSelect(Value *Mask, Value *Yes, Value *No) {
+    return call(
+        Intrinsic::linx_experimental_ew_tsel_row,
+        {Yes->getType(), Mask->getType(), Yes->getType(), No->getType()},
+        {B.getInt64(1), B.getInt64(NormProfile->Cols), B.getInt64(25),
+         B.getInt64(0), Mask, Yes, No, B.getInt64(NormProfile->Count)},
+        "pto.norm.select");
+  }
+
+  Value *valueNorm(Value *V) {
+    if (Value *Existing = Data.lookup(V))
+      return Existing;
+    auto *Ty = cast<FixedVectorType>(V->getType());
+    Value *R = nullptr;
+    if (auto View = getViewDescriptor(V)) {
+      Value *Source = View->Marker->getArgOperand(0);
+      auto *I = dyn_cast<Instruction>(Source);
+      R = I && !OwnedSet.contains(I) ? Source : valueNorm(Source);
+    } else if (Value *Scalar = getSplatValue(V)) {
+      if (Ty->getElementType()->isIntegerTy(1))
+        R = normCompare(normSplat(Scalar), normSplat(B.getInt32(0)), 1);
+      else
+        R = normSplat(Scalar);
+    } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+      R = normSplat(B.getInt32(0));
+      if (Ty->getElementType()->isIntegerTy(1))
+        R = normCompare(R, R, 1);
+    } else if (auto *C = dyn_cast<Constant>(V)) {
+      APInt Initial, Step;
+      bool Affine = constantProgression(C, Initial, Step);
+      assert(Affine && "NORM constant preflight");
+      R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
+    } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      R = valueNorm(Freeze->getOperand(0));
+    } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      unsigned Selector;
+      switch (Cmp->getPredicate()) {
+      case ICmpInst::ICMP_EQ:
+        Selector = 0;
+        break;
+      case ICmpInst::ICMP_NE:
+        Selector = 1;
+        break;
+      case ICmpInst::ICMP_ULT:
+        Selector = 2;
+        break;
+      case ICmpInst::ICMP_UGT:
+        Selector = 3;
+        break;
+      case ICmpInst::ICMP_ULE:
+        Selector = 4;
+        break;
+      case ICmpInst::ICMP_UGE:
+        Selector = 5;
+        break;
+      default:
+        llvm_unreachable("NORM comparison preflight");
+      }
+      R = normCompare(valueNorm(Cmp->getOperand(0)),
+                      valueNorm(Cmp->getOperand(1)), Selector);
+    } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+      R = normSelect(valueNorm(Select->getCondition()),
+                     valueNorm(Select->getTrueValue()),
+                     valueNorm(Select->getFalseValue()));
+    } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      Value *Source = Binary->getOperand(0);
+      if (auto *Cmp = dyn_cast<ICmpInst>(Source)) {
+        unsigned Selector;
+        switch (Cmp->getInversePredicate()) {
+        case ICmpInst::ICMP_EQ:
+          Selector = 0;
+          break;
+        case ICmpInst::ICMP_NE:
+          Selector = 1;
+          break;
+        case ICmpInst::ICMP_ULT:
+          Selector = 2;
+          break;
+        case ICmpInst::ICMP_UGT:
+          Selector = 3;
+          break;
+        case ICmpInst::ICMP_ULE:
+          Selector = 4;
+          break;
+        case ICmpInst::ICMP_UGE:
+          Selector = 5;
+          break;
+        default:
+          llvm_unreachable("NORM predicate inverse preflight");
+        }
+        R = normCompare(valueNorm(Cmp->getOperand(0)),
+                        valueNorm(Cmp->getOperand(1)), Selector);
+      } else {
+        Value *Zero = normSplat(B.getInt32(0));
+        Value *One = normSplat(B.getInt32(1));
+        R = normCompare(normSelect(valueNorm(Source), Zero, One), Zero, 1);
+      }
+    } else if (auto *Cast = dyn_cast<ZExtInst>(V)) {
+      R = normSelect(valueNorm(Cast->getOperand(0)), normSplat(B.getInt32(1)),
+                     normSplat(B.getInt32(0)));
+    } else {
+      llvm_unreachable("NORM pure Tile preflight");
+    }
+    return Data[V] = R;
+  }
+
   bool validate(Value *V) {
+    if (NormProfile)
+      return validateNorm(V);
     if (!Validated.insert(V).second)
       return true;
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
@@ -3843,6 +4097,8 @@ class ElementTileLegalizer {
   }
 
   Value *value(Value *V, uint64_t PreferredType = 0) {
+    if (NormProfile)
+      return valueNorm(V);
     auto It = Data.find(V);
     if (It != Data.end())
       return It->second;
@@ -4002,8 +4258,12 @@ public:
       : F(F), Owned(Instructions.begin(), Instructions.end()),
         ImportedPhiTypes(ImportedPhiTypes), DomainCount(DomainCount),
         B(F.getContext()) {
-    for (Instruction *I : Owned)
+    for (Instruction *I : Owned) {
       OwnedSet.insert(I);
+      if (auto View = getViewDescriptor(I))
+        if (View->Profile.Layout == 0)
+          NormProfile = View->Profile;
+    }
   }
 
   bool preflight() {
@@ -4069,6 +4329,9 @@ public:
             return false;
           continue;
         }
+        if (NormProfile)
+          return fail(
+              I, "NORM element regions support pure Tile expressions only");
         auto *VP = dyn_cast<VPIntrinsic>(I);
         if (!VP || !validateVP(*VP))
           return fail(I, "unsupported token-owned side effect");
@@ -5803,7 +6066,8 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     auto *TokenArg = dyn_cast<MetadataAsValue>(Sentinel->getArgOperand(0));
     auto *Token = TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
     if (!Count ||
-        (Count->getZExtValue() != 32 && Count->getZExtValue() != 64) ||
+        (Count->getZExtValue() != 32 && Count->getZExtValue() != 64 &&
+         Count->getZExtValue() != 128 && Count->getZExtValue() != 2048) ||
         !Token || !Tokens.insert(Token).second)
       diagnose(F, Sentinel,
                "Tile legalization: requires a unique predicated 32-element domain");

@@ -1388,6 +1388,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTCI_EW_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TCI_ROW: {
+    ReplaceNode(Node, selectElementwiseSimple(DL, CurDAG, Node,
+                                              LinxV5::PseudoTCI_EW_Row_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_TCMPS_GPR_MASKED: {
     ReplaceNode(Node, selectElementwiseSimple(
                           DL, CurDAG, Node, LinxV5::PseudoTCMPS_GPR_Masked));
@@ -1445,6 +1450,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTCMP_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TCMP_ROW: {
+    ReplaceNode(Node, selectElementwiseTCmp(DL, CurDAG, Node,
+                                            LinxV5::PseudoTCMP_Row_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_TCMP_GPR_MASKED: {
     ReplaceNode(Node, selectElementwiseSimple(
                           DL, CurDAG, Node, LinxV5::PseudoTCMP_GPR_Masked));
@@ -1460,6 +1470,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTSEL_SizeI));
     return;
   }
+  case LinxV5ISD::EW_TSEL_ROW: {
+    ReplaceNode(Node, selectElementwiseTSel(DL, CurDAG, Node,
+                                            LinxV5::PseudoTSEL_Row_SizeI));
+    return;
+  }
   case LinxV5ISD::EW_TSEL_GPR: {
     ReplaceNode(Node, selectElementwiseSimple(
                           DL, CurDAG, Node, LinxV5::PseudoTSEL_GPR_SizeI));
@@ -1468,6 +1483,11 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   case LinxV5ISD::EW_TEXPANDS: {
     ReplaceNode(Node, selectElementwiseTExpands(
                           DL, CurDAG, Node, LinxV5::PseudoTEXPANDS_SizeI));
+    return;
+  }
+  case LinxV5ISD::EW_TEXPANDS_ROW: {
+    ReplaceNode(Node, selectElementwiseTExpands(
+                          DL, CurDAG, Node, LinxV5::PseudoTEXPANDS_Row_SizeI));
     return;
   }
   case LinxV5ISD::BLK_MATMUL_SHARED: {

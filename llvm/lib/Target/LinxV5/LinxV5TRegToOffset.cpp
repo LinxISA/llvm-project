@@ -367,7 +367,8 @@ static bool isAssembleParentDef(const TRLiveRange &LR) {
 
 static bool isSelfTileCopyOf(const MachineInstr &MI, Register Reg) {
   return (MI.getOpcode() == LinxV5::PseudoTCOPY ||
-          MI.getOpcode() == LinxV5::PseudoTCOPYDesc) &&
+          (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+           MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) &&
          MI.getNumOperands() > 2 && MI.getOperand(0).isReg() &&
          MI.getOperand(2).isReg() && MI.getOperand(0).getReg() == Reg &&
          MI.getOperand(2).getReg() == Reg;
@@ -652,7 +653,9 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
       }
       const LinxV5::TileDescriptor &Descriptor = *DonorDescriptor;
       SourceIdx = Donor->Idx;
-      BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoTCOPYDesc))
+      BuildMI(*MBB, Before, DebugLoc(),
+              TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                                  : LinxV5::PseudoTCOPYDesc))
           .addReg(ReserveReg, RegState::Define | RegState::Dead)
           .addImm(Descriptor.SizeCode)
           .addReg(Donor->RegOp.Reg)
@@ -698,7 +701,8 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
           report_fatal_error(
               "Local tile COPY descriptor SizeCode disagrees with allocator");
         BuildMI(*MBB, Before, DebugLoc(),
-                TII->get(LinxV5::PseudoTCOPYDesc))
+                TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                                    : LinxV5::PseudoTCOPYDesc))
             .addReg(TR, RegState::Define)
             .addImm(RegSizeCode)
             .addReg(TR, RegState::Kill)
@@ -727,7 +731,8 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
         HeadIdx - *SourceIdx < 1 || HeadIdx - *SourceIdx > TRNumber)
       report_fatal_error(
           "compiler-inserted Local tile copy lacks one exact source slot");
-    if (BuiltCopy.getOpcode() != LinxV5::PseudoTCOPYDesc ||
+    if ((BuiltCopy.getOpcode() != LinxV5::PseudoTCOPYDesc &&
+         BuiltCopy.getOpcode() != LinxV5::PseudoPCOPYDesc) ||
         BuiltCopy.getNumOperands() <= 2 || !BuiltCopy.getOperand(2).isReg())
       report_fatal_error(
           "compiler-inserted Local tile copy has no trackable source operand");
@@ -1774,7 +1779,8 @@ void LinxV5TRegToOffsetOpt::appendQueueFillers(
     const LinxV5::TileDescriptor &Descriptor = *Donor->RegOp.Descriptor;
     MachineInstrBuilder Copy =
         BuildMI(MBB, InsertAt, DebugLoc(),
-                TII->get(LinxV5::PseudoTCOPYDesc))
+                TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                                    : LinxV5::PseudoTCOPYDesc))
             .addReg(ReserveReg, RegState::Define | RegState::Dead)
             .addImm(Descriptor.SizeCode)
             .addReg(Donor->RegOp.Reg)
@@ -3316,9 +3322,9 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
         // equally unsafe because at least one predecessor keeps it OPEN.
         if (UsesParentRegister &&
             (MI.getOpcode() == LinxV5::PseudoTCOPY ||
-             MI.getOpcode() == LinxV5::PseudoTCOPYDesc) &&
-            State.Kind == StateKind::Parent &&
-            State.Phase == ParentPhase::Open)
+             (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+              MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) &&
+            State.Kind == StateKind::Parent && State.Phase == ParentPhase::Open)
           report_fatal_error(
               "cannot copy an OPEN B.ASSEMBLE parent source before LAST");
 
@@ -3419,7 +3425,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
 
             if (State.Kind == StateKind::Parent) {
               const bool IsOrdinaryQueueRotationCopy =
-                  MI.getOpcode() == LinxV5::PseudoTCOPYDesc &&
+                  (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+                   MI.getOpcode() == LinxV5::PseudoPCOPYDesc) &&
                   MI.getNumOperands() > 2 && MI.getOperand(0).isReg() &&
                   MI.getOperand(2).isReg() &&
                   MI.getOperand(0).getReg() == MI.getOperand(2).getReg() &&
@@ -3864,7 +3871,9 @@ bool hasImplicitDef(const TRegIndexState &TRegIdx) {
 
 static Optional<LinxV5::TileDescriptor>
 getTCOPYDescriptor(const MachineInstr &MI) {
-  if (MI.getOpcode() != LinxV5::PseudoTCOPYDesc || MI.getNumOperands() < 8)
+  if ((MI.getOpcode() != LinxV5::PseudoTCOPYDesc &&
+       MI.getOpcode() != LinxV5::PseudoPCOPYDesc) ||
+      MI.getNumOperands() < 8)
     return None;
   for (unsigned I : {1u, 3u, 4u, 5u, 6u, 7u})
     if (!MI.getOperand(I).isImm())
@@ -3876,6 +3885,7 @@ getTCOPYDescriptor(const MachineInstr &MI) {
   Descriptor.PhysicalCol = MI.getOperand(5).getImm();
   Descriptor.DataType = MI.getOperand(6).getImm();
   Descriptor.Layout = MI.getOperand(7).getImm();
+  Descriptor.PackedPredicate = MI.getOpcode() == LinxV5::PseudoPCOPYDesc;
   return Descriptor;
 }
 

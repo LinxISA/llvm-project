@@ -387,6 +387,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_TCVT_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TLEA)
     MAKE_CASE(LinxV5ISD::EW_TCI)
+    MAKE_CASE(LinxV5ISD::EW_TCI_ROW)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_GPR_MASKED)
@@ -397,11 +398,14 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_MGATHER_ADD_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_ADD)
     MAKE_CASE(LinxV5ISD::EW_TCMP)
+    MAKE_CASE(LinxV5ISD::EW_TCMP_ROW)
     MAKE_CASE(LinxV5ISD::EW_TCMP_GPR)
     MAKE_CASE(LinxV5ISD::EW_TCMP_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_TSEL)
+    MAKE_CASE(LinxV5ISD::EW_TSEL_ROW)
     MAKE_CASE(LinxV5ISD::EW_TSEL_GPR)
     MAKE_CASE(LinxV5ISD::EW_TEXPANDS)
+    MAKE_CASE(LinxV5ISD::EW_TEXPANDS_ROW)
     MAKE_CASE(LinxV5ISD::BLK_MATMUL_AC)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMX)
     MAKE_CASE(LinxV5ISD::BLK_MATMULMXB)
@@ -954,6 +958,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTLEA(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tci:
       return lowerElementwiseTCI(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tci_row:
+      return lowerElementwiseTCI(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmps_gpr_masked:
       return lowerElementwiseTCMPSGPR(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmps_gpr:
@@ -974,16 +980,22 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseMScatterAdd(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tcmp:
       return lowerElementwiseTCmp(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tcmp_row:
+      return lowerElementwiseTCmp(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmp_gpr_masked:
       return lowerElementwiseTCmpGPR(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmp_gpr:
       return lowerElementwiseTCmpGPR(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_tsel:
       return lowerElementwiseTSel(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_tsel_row:
+      return lowerElementwiseTSel(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tsel_gpr:
       return lowerElementwiseTSelGPR(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_texpands:
       return lowerElementwiseTExpands(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_texpands_row:
+      return lowerElementwiseTExpands(DL, Op, DAG, true);
     case Intrinsic::linx_blk_matmul_shared:
       return lowerTemplateBLKShared(DL, Op, DAG);
     case Intrinsic::linx_blk_matmul_ac:
@@ -1783,24 +1795,39 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCVTGPRMasked(
                      DAG.getVTList(ResultVT, MVT::Other), Ops);
 }
 
-SDValue LinxV5TargetLowering::lowerElementwiseTCI(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxV5TargetLowering::lowerElementwiseTCI(SDLoc &DL, SDValue Op,
+                                                  SelectionDAG &DAG,
+                                                  bool ExplicitRow) const {
+  unsigned PhysicalCols = 0;
+  if (ExplicitRow) {
+    PhysicalCols = getV5ConstantOperand(Op.getOperand(8),
+                                        "NORM physical columns", 2048, false);
+    uint64_t ValidCols = getV5ConstantOperand(
+        Op.getOperand(3), "NORM valid columns", 2048, false);
+    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
+        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+          (PhysicalCols == 2048 && ValidCols == 2048)))
+      report_fatal_error("unsupported NORM U32 row descriptor");
+  }
+
   uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TCI rows", 32, false);
-  uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TCI columns", 32, false);
+  uint64_t Cols =
+      getV5ConstantOperand(Op.getOperand(3), "TCI columns", 2048, false);
   uint64_t DType = getV5ConstantOperand(Op.getOperand(4), "TCI data type", 31);
   uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TCI layout", 31);
   EVT ResultVT = Op.getValueType();
   if (!ResultVT.isFixedLengthVector() ||
       !ResultVT.getScalarType().isInteger() || Rows > UINT64_MAX / Cols ||
-      Rows * Cols != ResultVT.getVectorNumElements() ||
+      (ExplicitRow ? PhysicalCols : Rows * Cols) !=
+          ResultVT.getVectorNumElements() ||
       (Layout != 0 && Layout != 29) || (Layout == 29 && Rows != 32) ||
-      ((DType == LinxV5Op::DataType::S32 ||
-        DType == LinxV5Op::DataType::U32)
+      ((DType == LinxV5Op::DataType::S32 || DType == LinxV5Op::DataType::U32)
            ? ResultVT.getScalarSizeInBits() != 32
-           : (DType == LinxV5Op::DataType::S64 ||
-              DType == LinxV5Op::DataType::U64)
-                 ? ResultVT.getScalarSizeInBits() != 64
-                 : true))
+       : (DType == LinxV5Op::DataType::S64 || DType == LinxV5Op::DataType::U64)
+           ? ResultVT.getScalarSizeInBits() != 64
+           : true))
     report_fatal_error(
         "TCI requires an exact-shape integer S32/U32/S64/U64 Tile");
   SmallVector<SDValue> Ops = {Op.getOperand(0)};
@@ -1814,8 +1841,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCI(
                                       DL, MVT::i64));
   Ops.push_back(Op.getOperand(6));
   Ops.push_back(Op.getOperand(7));
-  return DAG.getNode(LinxV5ISD::EW_TCI, DL,
-                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+  if (ExplicitRow)
+    Ops.push_back(DAG.getTargetConstant(PhysicalCols, DL, MVT::i64));
+  return DAG.getNode(ExplicitRow ? LinxV5ISD::EW_TCI_ROW : LinxV5ISD::EW_TCI,
+                     DL, DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTCMPSGPR(
@@ -2155,10 +2184,40 @@ SDValue LinxV5TargetLowering::lowerElementwiseMScatterAdd(
                      DAG.getVTList(MVT::Other), Ops);
 }
 
-SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxV5TargetLowering::lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
+                                                   SelectionDAG &DAG,
+                                                   bool ExplicitRow) const {
+  unsigned PhysicalCols = 0;
+  if (ExplicitRow) {
+    PhysicalCols = getV5ConstantOperand(Op.getOperand(9),
+                                        "NORM physical columns", 2048, false);
+    uint64_t ValidCols = getV5ConstantOperand(
+        Op.getOperand(3), "NORM valid columns", 2048, false);
+    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
+        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+          (PhysicalCols == 2048 && ValidCols == 2048)))
+      report_fatal_error("unsupported NORM U32 row descriptor");
+  }
+
+  if (ExplicitRow) {
+    auto IsData = [&](EVT T) {
+      return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
+             T.getVectorNumElements() == PhysicalCols;
+    };
+    auto IsPredicate = [&](EVT T) {
+      return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
+             T.getVectorNumElements() == std::max(32u, PhysicalCols / 4);
+    };
+    if (!IsPredicate(Op.getValueType()) ||
+        !IsData(Op.getOperand(6).getValueType()) ||
+        !IsData(Op.getOperand(7).getValueType()))
+      report_fatal_error("NORM TCMP requires numeric U32 sources and packed "
+                         "predicate capacity");
+  }
   getV5ConstantOperand(Op.getOperand(2), "TCMP rows", 32, false);
-  getV5ConstantOperand(Op.getOperand(3), "TCMP cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "TCMP cols", 2048, false);
   getV5ConstantOperand(Op.getOperand(4), "TCMP data type", 31);
   getV5ConstantOperand(Op.getOperand(5), "TCMP layout", 31);
   getV5ConstantOperand(Op.getOperand(8), "TCMP mode", 7);
@@ -2176,14 +2235,22 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(
   Ops.push_back(DAG.getTargetConstant(
       LinxV5Op::ArgFormat::NORM, DL,
       MVT::i64));
-  Ops.push_back(DAG.getTargetConstant(
-      calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
+  // Predicate vectors are packed, but Local allocations still have the
+  // architectural 128-byte minimum. Do not widen them to U32 lane storage.
+  uint64_t PredicateBytes =
+      std::max(uint64_t(128), (Op.getValueType().getFixedSizeInBits() + 7) / 8);
+  if (!isPowerOf2_64(PredicateBytes))
+    report_fatal_error("TCMP predicate capacity must be a power of two");
+  Ops.push_back(
+      DAG.getTargetConstant(Log2_64(PredicateBytes) - 6, DL, MVT::i64));
   Ops.push_back(Op.getOperand(6));
   Ops.push_back(Op.getOperand(7));
   Ops.push_back(DAG.getTargetConstant(
       getV5ConstantOperand(Op.getOperand(8), "TCMP mode", 7), DL, MVT::i64));
-  return DAG.getNode(LinxV5ISD::EW_TCMP, DL,
-                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+  if (ExplicitRow)
+    Ops.push_back(DAG.getTargetConstant(PhysicalCols, DL, MVT::i64));
+  return DAG.getNode(ExplicitRow ? LinxV5ISD::EW_TCMP_ROW : LinxV5ISD::EW_TCMP,
+                     DL, DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTCmpGPR(
@@ -2234,10 +2301,41 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmpGPR(
                      DAG.getVTList(MVT::i64, MVT::Other), Ops);
 }
 
-SDValue LinxV5TargetLowering::lowerElementwiseTSel(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxV5TargetLowering::lowerElementwiseTSel(SDLoc &DL, SDValue Op,
+                                                   SelectionDAG &DAG,
+                                                   bool ExplicitRow) const {
+  unsigned PhysicalCols = 0;
+  if (ExplicitRow) {
+    PhysicalCols = getV5ConstantOperand(Op.getOperand(9),
+                                        "NORM physical columns", 2048, false);
+    uint64_t ValidCols = getV5ConstantOperand(
+        Op.getOperand(3), "NORM valid columns", 2048, false);
+    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
+        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+          (PhysicalCols == 2048 && ValidCols == 2048)))
+      report_fatal_error("unsupported NORM U32 row descriptor");
+  }
+
+  if (ExplicitRow) {
+    auto IsData = [&](EVT T) {
+      return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
+             T.getVectorNumElements() == PhysicalCols;
+    };
+    auto IsPredicate = [&](EVT T) {
+      return T.isFixedLengthVector() && T.getScalarType() == MVT::i32 &&
+             T.getVectorNumElements() == std::max(32u, PhysicalCols / 4);
+    };
+    if (!IsData(Op.getValueType()) ||
+        !IsPredicate(Op.getOperand(6).getValueType()) ||
+        !IsData(Op.getOperand(7).getValueType()) ||
+        !IsData(Op.getOperand(8).getValueType()))
+      report_fatal_error("NORM TSEL requires a packed predicate and matching "
+                         "U32 row carriers");
+  }
   getV5ConstantOperand(Op.getOperand(2), "TSEL rows", 32, false);
-  getV5ConstantOperand(Op.getOperand(3), "TSEL cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "TSEL cols", 2048, false);
   getV5ConstantOperand(Op.getOperand(4), "TSEL data type", 31);
   getV5ConstantOperand(Op.getOperand(5), "TSEL layout", 31);
   SmallVector<SDValue> Ops;
@@ -2259,8 +2357,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSel(
   Ops.push_back(Op.getOperand(6));
   Ops.push_back(Op.getOperand(7));
   Ops.push_back(Op.getOperand(8));
-  return DAG.getNode(LinxV5ISD::EW_TSEL, DL,
-                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+  if (ExplicitRow)
+    Ops.push_back(DAG.getTargetConstant(PhysicalCols, DL, MVT::i64));
+  return DAG.getNode(ExplicitRow ? LinxV5ISD::EW_TSEL_ROW : LinxV5ISD::EW_TSEL,
+                     DL, DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseTSelGPR(
@@ -2315,19 +2415,56 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSelGPR(
                      DAG.getVTList(ResultVT, MVT::Other), Ops);
 }
 
-SDValue LinxV5TargetLowering::lowerElementwiseTExpands(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+SDValue LinxV5TargetLowering::lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
+                                                       SelectionDAG &DAG,
+                                                       bool ExplicitRow) const {
+  unsigned PhysicalCols = 0;
+  if (ExplicitRow) {
+    PhysicalCols = getV5ConstantOperand(Op.getOperand(7),
+                                        "NORM physical columns", 2048, false);
+    uint64_t ValidCols = getV5ConstantOperand(
+        Op.getOperand(3), "NORM valid columns", 2048, false);
+    if (getV5ConstantOperand(Op.getOperand(2), "NORM rows", 1, false) != 1 ||
+        getV5ConstantOperand(Op.getOperand(4), "NORM dtype", 31) != 25 ||
+        getV5ConstantOperand(Op.getOperand(5), "NORM layout", 31) != 0 ||
+        !((PhysicalCols == 128 && (ValidCols == 32 || ValidCols == 128)) ||
+          (PhysicalCols == 2048 && ValidCols == 2048)))
+      report_fatal_error("unsupported NORM U32 row descriptor");
+  }
+
   const uint64_t Rows = getV5ConstantOperand(Op.getOperand(2), "TEXPANDS rows", 32, false);
-  const uint64_t Cols = getV5ConstantOperand(Op.getOperand(3), "TEXPANDS cols", 32, false);
+  const uint64_t Cols =
+      getV5ConstantOperand(Op.getOperand(3), "TEXPANDS cols", 2048, false);
   const uint64_t DType = getV5ConstantOperand(Op.getOperand(4), "TEXPANDS data type", 31);
   const uint64_t Layout = getV5ConstantOperand(Op.getOperand(5), "TEXPANDS layout", 31);
+  if (Op.getOperand(6).getValueType().isInteger() &&
+      (DType != LinxV5Op::DataType::U32 || Layout != 0 || Rows != 1 ||
+       (Cols != 128 && Cols != 2048 && !(ExplicitRow && Cols == 32)) ||
+       !Op.getValueType().isFixedLengthVector() ||
+       Op.getValueType().getVectorNumElements() !=
+           (ExplicitRow ? PhysicalCols : Cols) ||
+       Op.getValueType().getScalarType() != MVT::i32 ||
+       Op.getOperand(6).getValueType() != MVT::i64))
+    report_fatal_error("integer TEXPANDS requires an exact full NORM U32 row");
   if (DType == LinxV5Op::DataType::FP32 &&
       (Rows != 32 || Cols != 1 || Layout != 29 ||
        Op.getValueType() != MVT::v32f32 ||
        Op.getOperand(6).getValueType() != MVT::f32))
     report_fatal_error("FP32 TEXPANDS requires exact 32x1 CUBE_M32 f32 Tile and scalar");
+  SDValue Chain = Op.getOperand(0);
+  SDValue Scalar = Op.getOperand(6);
+  if (ExplicitRow) {
+    // Keep an explicit source binding even for zero. Its temporary belongs to
+    // the register allocator; no physical scratch register is borrowed.
+    Register BoundScalar =
+        DAG.getMachineFunction().getRegInfo().createVirtualRegister(
+            &LinxV5::GRNoR0RegClass);
+    Chain = DAG.getCopyToReg(Chain, DL, BoundScalar, Scalar);
+    Scalar = DAG.getCopyFromReg(Chain, DL, BoundScalar, MVT::i64);
+    Chain = Scalar.getValue(1);
+  }
   SmallVector<SDValue> Ops;
-  Ops.push_back(Op.getOperand(0));
+  Ops.push_back(Chain);
   for (unsigned Index : {2u, 3u}) {
     Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
     Ops.push_back(DAG.getTargetConstant(
@@ -2342,9 +2479,12 @@ SDValue LinxV5TargetLowering::lowerElementwiseTExpands(
       MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
       calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
-  Ops.push_back(Op.getOperand(6));
-  return DAG.getNode(LinxV5ISD::EW_TEXPANDS, DL,
-                     DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
+  Ops.push_back(Scalar);
+  if (ExplicitRow)
+    Ops.push_back(DAG.getTargetConstant(PhysicalCols, DL, MVT::i64));
+  return DAG.getNode(ExplicitRow ? LinxV5ISD::EW_TEXPANDS_ROW
+                                 : LinxV5ISD::EW_TEXPANDS,
+                     DL, DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
 /// Intrinsic Ops for blk_matmul_shared:

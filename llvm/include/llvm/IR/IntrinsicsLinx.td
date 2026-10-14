@@ -283,6 +283,12 @@ def int_linx_experimental_ew_tci :
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
 
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_tci_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_tcmps_gpr :
     Intrinsic<[llvm_i64_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
@@ -311,6 +317,13 @@ def int_linx_experimental_ew_tcmp :
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_tcmp_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_tcmp_gpr :
     Intrinsic<[llvm_i64_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
@@ -323,6 +336,13 @@ def int_linx_experimental_ew_tsel :
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
 
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_tsel_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_tsel_gpr :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
@@ -332,7 +352,14 @@ def int_linx_experimental_ew_tsel_gpr :
 def int_linx_experimental_ew_texpands :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-               llvm_anyfloat_ty],
+               llvm_any_ty],
+              [IntrHasSideEffects]>;
+
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_texpands_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_any_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
 def int_linx_blk_matmulmx_ac : Intrinsic<[llvm_anyvector_ty],

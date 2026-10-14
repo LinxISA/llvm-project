@@ -124,6 +124,9 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
   bool Changed = false;
 
   auto CapacityBytes = [](const LinxV5::TileDescriptor &D) -> uint64_t {
+    if (D.PackedPredicate)
+      report_fatal_error(
+          "packed Predicate Tile spilling has no storage-kind-preserving reload");
     if (D.SizeCode < 1 || D.SizeCode > 10)
       report_fatal_error("raw Tile spill SizeCode must be 1..10");
     return uint64_t{1} << (D.SizeCode + 6);

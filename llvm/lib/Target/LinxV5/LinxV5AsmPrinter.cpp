@@ -126,7 +126,8 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
-  if (TmpInst.getOpcode() == LinxV5::PseudoTCOPYDesc) {
+  if ((TmpInst.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+       TmpInst.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
     // PseudoTCOPYDesc operands:
     //   Dst, SizeCode, Src, ValidCol, ValidRow, PhysicalCol, DType, Layout.
     // Emit the physical TMOV bundle here. Sending a synthetic PseudoTMOV to

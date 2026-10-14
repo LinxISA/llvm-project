@@ -352,7 +352,8 @@ static bool isSharedTileReg(const MachineRegisterInfo &MRI, Register Reg) {
 
 unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
   if (MI.getOpcode() == LinxV5::PseudoTCOPY ||
-      MI.getOpcode() == LinxV5::PseudoTCOPYDesc) {
+      (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+       MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
     return MI.getOperand(1).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTADD_Masked_SizeI) {
     return MI.getOperand(7).getImm();
@@ -366,17 +367,21 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI) {
     return MI.getOperand(8).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+  } else if ((MI.getOpcode() == LinxV5::PseudoTCMP_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI)) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI) {
+  } else if ((MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI)) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI) {
+  } else if ((MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI)) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTLEA_SizeI) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI) {
+  } else if ((MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI)) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI) {
     return MI.getOperand(7).getImm();
@@ -890,6 +895,15 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
 
   uint64_t CapacityBits =
       (uint64_t{1} << (Descriptor.SizeCode + 6)) * 8;
+  if (Descriptor.PackedPredicate) {
+    if (Descriptor.DataType != LinxV5Op::DataType::U8 ||
+        Descriptor.Layout != LinxV5Op::ArgFormat::NORM ||
+        Descriptor.ValidRow != 1 ||
+        (Descriptor.PhysicalCol != 128 && Descriptor.PhysicalCol != 2048) ||
+        CapacityBits / 8 < Descriptor.PhysicalCol)
+      report_fatal_error("invalid packed NORM predicate COPY descriptor");
+    return Descriptor;
+  }
   uint64_t RowBits = uint64_t{Descriptor.PhysicalCol} * TypeBits;
   if (!RowBits || CapacityBits % RowBits ||
       CapacityBits / RowBits < Descriptor.ValidRow)
@@ -989,14 +1003,33 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
 
 static Optional<LinxV5::TileDescriptor>
 getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
-  if (MI.getOpcode() == LinxV5::PseudoTCOPYDesc)
+  if ((MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+       MI.getOpcode() == LinxV5::PseudoPCOPYDesc))
+    return checkedTileDescriptor(
+        LinxV5::TileDescriptor{static_cast<unsigned>(MI.getOperand(6).getImm()),
+                               static_cast<unsigned>(MI.getOperand(7).getImm()),
+                               static_cast<unsigned>(MI.getOperand(4).getImm()),
+                               static_cast<unsigned>(MI.getOperand(3).getImm()),
+                               static_cast<unsigned>(MI.getOperand(5).getImm()),
+                               static_cast<unsigned>(MI.getOperand(1).getImm()),
+                               MI.getOpcode() == LinxV5::PseudoPCOPYDesc});
+
+  if (MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI ||
+      MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+    if (MI.getOperand(1).getReg() != LinxV5::R0 ||
+        MI.getOperand(3).getReg() != LinxV5::R0 ||
+        MI.getOperand(2).getImm() != 1 || MI.getOperand(6).getImm() != 0)
+      return None;
+    unsigned Cols = MI.getOperand(4).getImm();
+    unsigned PhysicalCols = MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI
+                                ? MI.getOperand(11).getImm()
+                                : Cols;
+    if (PhysicalCols != 128 && PhysicalCols != 2048)
+      return None;
     return checkedTileDescriptor(LinxV5::TileDescriptor{
-        static_cast<unsigned>(MI.getOperand(6).getImm()),
-        static_cast<unsigned>(MI.getOperand(7).getImm()),
-        static_cast<unsigned>(MI.getOperand(4).getImm()),
-        static_cast<unsigned>(MI.getOperand(3).getImm()),
-        static_cast<unsigned>(MI.getOperand(5).getImm()),
-        static_cast<unsigned>(MI.getOperand(1).getImm())});
+        LinxV5Op::DataType::U8, LinxV5Op::ArgFormat::NORM, 1, Cols,
+        PhysicalCols, static_cast<unsigned>(MI.getOperand(7).getImm()), true});
+  }
 
   if (MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI) {
     if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
@@ -1094,10 +1127,13 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
   case LinxV5::PseudoTBinary_SizeI:
   case LinxV5::PseudoTBinary_GPR_Masked_SizeI:
   case LinxV5::PseudoTNEG_GPR_Masked_SizeI:
+  case LinxV5::PseudoTSEL_Row_SizeI:
   case LinxV5::PseudoTSEL_SizeI:
   case LinxV5::PseudoTSEL_GPR_SizeI:
+  case LinxV5::PseudoTEXPANDS_Row_SizeI:
   case LinxV5::PseudoTEXPANDS_SizeI:
   case LinxV5::PseudoTLEA_SizeI:
+  case LinxV5::PseudoTCI_EW_Row_SizeI:
   case LinxV5::PseudoTCI_EW_SizeI: {
     if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
         !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0)
@@ -1121,8 +1157,22 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
     unsigned SizeCode = MI.getOperand(7).getImm();
     // These pseudos omit LB2 under the common destination-shape contract.
     // Capacity supplies additional physical rows, never extra columns.
+    unsigned PhysicalCol = ValidCol;
+    switch (MI.getOpcode()) {
+    case LinxV5::PseudoTCI_EW_Row_SizeI:
+      PhysicalCol = MI.getOperand(10).getImm();
+      break;
+    case LinxV5::PseudoTSEL_Row_SizeI:
+      PhysicalCol = MI.getOperand(11).getImm();
+      break;
+    case LinxV5::PseudoTEXPANDS_Row_SizeI:
+      PhysicalCol = MI.getOperand(9).getImm();
+      break;
+    default:
+      break;
+    }
     return checkedTileDescriptor(LinxV5::TileDescriptor{
-        DataType, Layout, ValidRow, ValidCol, ValidCol, SizeCode});
+        DataType, Layout, ValidRow, ValidCol, PhysicalCol, SizeCode});
   }
   default:
     break;
@@ -1340,7 +1390,10 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   } else if (LinxV5::Tile_ABS_CGRegClass.contains(DstReg)) {
     LinxV5::TileDescriptor Descriptor =
         LinxV5::getTileRegDescriptor(MBB, MBBI, SrcReg);
-    BuildMI(MBB, MBBI, DL, get(LinxV5::PseudoTCOPYDesc), DstReg)
+    BuildMI(MBB, MBBI, DL,
+            get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                           : LinxV5::PseudoTCOPYDesc),
+            DstReg)
         .addImm(Descriptor.SizeCode)
         .addReg(SrcReg, getKillRegState(KillSrc))
         .addImm(Descriptor.ValidCol)
@@ -1957,7 +2010,8 @@ bool LinxV5InstrInfo::verifyInstruction(const MachineInstr &MI,
     return false;
   }
   if ((MI.getOpcode() == LinxV5::PseudoTCOPY ||
-       MI.getOpcode() == LinxV5::PseudoTCOPYDesc) &&
+       (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+        MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) &&
       MI.getOperand(0).isReg() && MI.getOperand(2).isReg()) {
     Register Dst = MI.getOperand(0).getReg();
     Register Src = MI.getOperand(2).getReg();

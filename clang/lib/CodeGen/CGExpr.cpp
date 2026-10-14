@@ -5210,7 +5210,8 @@ LValue CodeGenFunction::EmitCallExprLValue(const CallExpr *E) {
   if (const FunctionDecl *Callee = E->getDirectCallee()) {
     for (const auto *Annotation : Callee->specific_attrs<AnnotateAttr>()) {
       StringRef Contract = Annotation->getAnnotation();
-      if (!Contract.startswith("pto.element.view:v1;"))
+      if (!Contract.startswith("pto.element.view:v1;") &&
+          !Contract.startswith("pto.element.view:v2;"))
         continue;
 
       llvm::Type *OriginalType = Pointer->getType();

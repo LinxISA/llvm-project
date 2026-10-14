@@ -208,13 +208,16 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
     return;
   }
   if (LinxV5II::isTileOp(TSFlags) ||
-      MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
-      MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+      (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+       MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI) ||
+      (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+       MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI) ||
       MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTLEA_SizeI ||
-      MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+      (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+       MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI) ||
       MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ||
       MI.getOpcode() == LinxV5::PseudoTCMP_GPR ||
       MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI) {
@@ -244,24 +247,30 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
     }
 
     if ((LinxV5II::isTileOpAtTEPL(TSFlags) ||
-         MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
-         MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+         (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+          MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI) ||
+         (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+          MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI) ||
          MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTLEA_SizeI ||
-         MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+         (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+          MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI) ||
          MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ||
          MI.getOpcode() == LinxV5::PseudoTCMP_GPR ||
          MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI) &&
         (LinxV5II::isHeaderOnly(TSFlags) ||
-         MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
-         MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+         (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+          MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI) ||
+         (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+          MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI) ||
          MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI ||
          MI.getOpcode() == LinxV5::PseudoTLEA_SizeI ||
-         MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+         (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+          MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI) ||
          MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ||
          MI.getOpcode() == LinxV5::PseudoTCMP_GPR ||
          MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI)) {
@@ -287,37 +296,43 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
           report_fatal_error("unsupported element binary PTO selector");
         }
       }
-      writeBinaryCodes(OS, Fixups, STI,
-                       {MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
-                            .addOperand(MI.getOperand(5))
-                            .addOperand((MI.getOpcode() ==
-                                                LinxV5::PseudoTBinary_SizeI ||
-                                        MI.getOpcode() ==
-                                                LinxV5::PseudoTBinary_GPR_Masked_SizeI)
-                                            ? MI.getOperand(10)
-                                            : MCOperand::createImm(
-                                MI.getOpcode() == LinxV5::PseudoTSUB_Masked_SizeI
-                                    ? 1
-                                    : MI.getOpcode() == LinxV5::PseudoTCMP_SizeI
-                                          ? 13
-                                          : MI.getOpcode() == LinxV5::PseudoTSEL_SizeI
-                                                ? 26
-                                                : MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI
-                                                      ? 59
-                                                : MI.getOpcode() == LinxV5::PseudoTLEA_SizeI
-                                                      ? LinxV5Op::TileOPTEPL::TLEA
-                                                : MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI
-                                                      ? 27
-                                                : MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI
-                                                      ? 102
-                                                : MI.getOpcode() == LinxV5::PseudoTCMPS_GPR
-                                                      ? 45
-                                                : MI.getOpcode() == LinxV5::PseudoTCMP_GPR
-                                                      ? 13
-                                                : MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI
-                                                      ? 26
-                                                : 0))},
-                       Dummy);
+      writeBinaryCodes(
+          OS, Fixups, STI,
+          {MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+               .addOperand(MI.getOperand(5))
+               .addOperand(
+                   (MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
+                    MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI)
+                       ? MI.getOperand(10)
+                       : MCOperand::createImm(
+                             MI.getOpcode() == LinxV5::PseudoTSUB_Masked_SizeI
+                                 ? 1
+                             : (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI ||
+                                MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI)
+                                 ? 13
+                             : (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+                                MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI)
+                                 ? 26
+                             : (MI.getOpcode() ==
+                                    LinxV5::PseudoTEXPANDS_SizeI ||
+                                MI.getOpcode() ==
+                                    LinxV5::PseudoTEXPANDS_Row_SizeI)
+                                 ? 59
+                             : MI.getOpcode() == LinxV5::PseudoTLEA_SizeI
+                                 ? LinxV5Op::TileOPTEPL::TLEA
+                             : MI.getOpcode() ==
+                                     LinxV5::PseudoTCVT_GPR_Masked_SizeI
+                                 ? 27
+                             : (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+                                MI.getOpcode() ==
+                                    LinxV5::PseudoTCI_EW_Row_SizeI)
+                                 ? 102
+                             : MI.getOpcode() == LinxV5::PseudoTCMPS_GPR ? 45
+                             : MI.getOpcode() == LinxV5::PseudoTCMP_GPR  ? 13
+                             : MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI
+                                 ? 26
+                                 : 0))},
+          Dummy);
       if (MI.getOpcode() == LinxV5::PseudoTBinary_SizeI) {
         writeBinaryCodes(OS, Fixups, STI,
             {MCInstBuilder(LinxV5::BDATR)
@@ -396,18 +411,42 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  .addReg(LinxV5::R0)}, Dummy);
         return;
       }
-      if (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI) {
-        writeBinaryCodes(OS, Fixups, STI,
-            {MCInstBuilder(LinxV5::BDATR).addOperand(MI.getOperand(6))
-                 .addImm(0).addImm(31).addImm(0).addImm(0).addImm(0)
-                 .addImm(0).addImm(0)}, Dummy);
-        writeBinaryCodes(OS, Fixups, STI,
+      if ((MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+           MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI)) {
+        // Legacy RowMajor TCI requires absent/all-zero attributes; only
+        // the CUBE form admits the explicit DTYPE_NONE tuple.
+        if (MI.getOperand(6).getImm() != LinxV5Op::ArgFormat::NORM)
+          writeBinaryCodes(OS, Fixups, STI,
+                           {MCInstBuilder(LinxV5::BDATR)
+                                .addOperand(MI.getOperand(6))
+                                .addImm(0)
+                                .addImm(31)
+                                .addImm(0)
+                                .addImm(0)
+                                .addImm(0)
+                                .addImm(0)
+                                .addImm(0)},
+                           Dummy);
+        writeBinaryCodes(
+            OS, Fixups, STI,
             compressMCInstVec(
-                {MCInstBuilder(LinxV5::B_DIM).addImm(0)
-                     .addOperand(MI.getOperand(3)).addOperand(MI.getOperand(4)),
-                 MCInstBuilder(LinxV5::B_DIM).addImm(1)
-                     .addOperand(MI.getOperand(1)).addOperand(MI.getOperand(2))},
-                STI, Ctx), Dummy);
+                {MCInstBuilder(LinxV5::B_DIM)
+                     .addImm(0)
+                     .addOperand(MI.getOperand(3))
+                     .addOperand(MI.getOperand(4)),
+                 MCInstBuilder(LinxV5::B_DIM)
+                     .addImm(1)
+                     .addOperand(MI.getOperand(1))
+                     .addOperand(MI.getOperand(2)),
+                 MCInstBuilder(LinxV5::B_DIM)
+                     .addImm(2)
+                     .addReg(LinxV5::R0)
+                     .addOperand(MI.getOperand(
+                         MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI
+                             ? 10
+                             : 4))},
+                STI, Ctx),
+            Dummy);
         writeBinaryCodes(OS, Fixups, STI,
             {MCInstBuilder(LinxV5::B_IO).addReg(LinxV5::R0)
                  .addOperand(MI.getOperand(8)).addOperand(MI.getOperand(9))
@@ -498,7 +537,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  .addReg(LinxV5::R0)}, Dummy);
         return;
       }
-      if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+      if ((MI.getOpcode() == LinxV5::PseudoTCMP_SizeI ||
+           MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI)) {
         if (!MI.getOperand(4).isImm())
           report_fatal_error(
               "elementwise TCMP requires a constant CUBE column dimension");
@@ -533,7 +573,9 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  MCInstBuilder(LinxV5::B_DIM)
                      .addOperand(MCOperand::createImm(2))
                      .addOperand(MCOperand::createReg(LinxV5::R0))
-                     .addOperand(MI.getOperand(4))},
+                     .addOperand(MI.getOperand(
+                         MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI ? 11
+                                                                        : 4))},
                 STI, Ctx),
             Dummy);
         writeBinaryCodes(
@@ -548,7 +590,8 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
             Dummy);
         return;
       }
-      if (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI) {
+      if ((MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+           MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI)) {
         writeBinaryCodes(
             OS, Fixups, STI,
             compressMCInstVec(
@@ -563,7 +606,9 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  MCInstBuilder(LinxV5::B_DIM)
                      .addOperand(MCOperand::createImm(2))
                      .addOperand(MCOperand::createReg(LinxV5::R0))
-                     .addOperand(MI.getOperand(4))},
+                     .addOperand(MI.getOperand(
+                         MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI ? 11
+                                                                        : 4))},
                 STI, Ctx),
             Dummy);
         writeBinaryCodes(
@@ -611,9 +656,14 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  .addReg(LinxV5::R0)}, Dummy);
         return;
       }
-      if (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI) {
-        if (!MI.getOperand(6).isImm() || MI.getOperand(6).getImm() == 0)
-          report_fatal_error("elementwise TEXPANDS requires a CUBE layout");
+      if ((MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+           MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI)) {
+        if (!MI.getOperand(6).isImm() ||
+            (MI.getOperand(6).getImm() != LinxV5Op::ArgFormat::NORM &&
+             MI.getOperand(6).getImm() != LinxV5Op::ArgFormat::CUBE_M32 &&
+             MI.getOperand(6).getImm() != LinxV5Op::ArgFormat::CUBE_M16))
+          report_fatal_error(
+              "elementwise TEXPANDS requires a numeric Tile layout");
         writeBinaryCodes(
             OS, Fixups, STI,
             {MCInstBuilder(LinxV5::BDATR)
@@ -636,7 +686,14 @@ void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                  MCInstBuilder(LinxV5::B_DIM)
                      .addOperand(MCOperand::createImm(1))
                      .addOperand(MI.getOperand(1))
-                     .addOperand(MI.getOperand(2))},
+                     .addOperand(MI.getOperand(2)),
+                 MCInstBuilder(LinxV5::B_DIM)
+                     .addImm(2)
+                     .addReg(LinxV5::R0)
+                     .addOperand(MI.getOperand(
+                         MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI
+                             ? 9
+                             : 4))},
                 STI, Ctx),
             Dummy);
         writeBinaryCodes(

@@ -171,7 +171,8 @@ static void verifyTLSUBlockComposition(MachineFunction &MF) {
     bool HasSharedBinder = false;
     for (MachineInstr &MI : MBB) {
       HasLocalTMOV |= MI.getOpcode() == LinxV5::PseudoTCOPY ||
-                      MI.getOpcode() == LinxV5::PseudoTCOPYDesc;
+                      (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+                       MI.getOpcode() == LinxV5::PseudoPCOPYDesc);
       HasSharedBinder |= MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
                          MI.getOpcode() == LinxV5::PseudoV5SharedS2L;
     }

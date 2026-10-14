@@ -3490,6 +3490,13 @@ def PseudoTCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
          uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
          BstartDataType:$DataType, BArgFormat:$Layout)>;
 
+// Identity TMOV preserving a one-row packed Predicate storage descriptor.
+let isCodeGenOnly = 1 in
+def PseudoPCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout)>;
+
 let isCodeGenOnly = 1, hasSideEffects = 1 in {
 def PseudoV5GMOV : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins BstartDataType:$DataType, PE_MASK_Op:$PE_MASK,
@@ -3794,6 +3801,16 @@ class PseudoTEPL_TCVT_GPR_Masked_Base :
 }
 def PseudoTCVT_GPR_Masked_SizeI : PseudoTEPL_TCVT_GPR_Masked_Base;
 
+class PseudoTEPL_TCI_Row_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, GPRSrc:$Start, GPRSrc:$Step2D, uimm16:$PhysicalCols)> {
+  let AsmString = "TCI.EW\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Start, $Step2D, $DstTile$TileSize";
+}
+def PseudoTCI_EW_Row_SizeI : PseudoTEPL_TCI_Row_Base;
+
 class PseudoTEPL_TCI_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3848,6 +3865,19 @@ class PseudoTEPL_TCMP_GPR_Masked_Base :
 }
 def PseudoTCMP_GPR_Masked : PseudoTEPL_TCMP_GPR_Masked_Base;
 
+class PseudoTEPL_TCMP_Row_Base :
+  PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       CmpMode:$CmpMode, uimm16:$PhysicalCols)> {
+  let AsmString = "TCMP\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+
+def PseudoTCMP_Row_SizeI : PseudoTEPL_TCMP_Row_Base;
+
 class PseudoTEPL_TCMP_Base :
   PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3860,6 +3890,19 @@ class PseudoTEPL_TCMP_Base :
 }
 
 def PseudoTCMP_SizeI : PseudoTEPL_TCMP_Base;
+
+class PseudoTEPL_TSEL_Row_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       PRED_TILE_Src_Reg:$MaskTile, TILE_Src_Reg:$TrueTile,
+       TILE_Src_Reg:$FalseTile, uimm16:$PhysicalCols)> {
+  let AsmString = "TSEL\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $MaskTile, $TrueTile, $FalseTile, $DstTile$TileSize";
+}
+
+def PseudoTSEL_Row_SizeI : PseudoTEPL_TSEL_Row_Base;
 
 class PseudoTEPL_TSEL_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
@@ -3884,6 +3927,17 @@ class PseudoTEPL_TSEL_GPR_Base :
   let AsmString = "TSEL.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $MaskLow, $MaskHigh, $TrueTile, $FalseTile, $DstTile$TileSize";
 }
 def PseudoTSEL_GPR_SizeI : PseudoTEPL_TSEL_GPR_Base;
+
+class PseudoTEPL_TEXPANDS_Row_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, GRNoR0:$Scalar, uimm16:$PhysicalCols)> {
+  let AsmString = "TEXPANDS\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Scalar, $DstTile$TileSize";
+}
+
+def PseudoTEXPANDS_Row_SizeI : PseudoTEPL_TEXPANDS_Row_Base;
 
 class PseudoTEPL_TEXPANDS_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
