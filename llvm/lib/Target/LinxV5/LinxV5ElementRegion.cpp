@@ -1239,6 +1239,13 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       return Finish(C->getValue());
     if (auto Bound = SCEVUnsignedMax(SE.getSCEV(V)))
       return Finish(Bound);
+    if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      bool Defined = isGuaranteedNotToBeUndefOrPoison(Freeze->getOperand(0),
+                                                      nullptr, Freeze, &DT);
+      if (Defined)
+        return Finish(UnsignedMax(Freeze->getOperand(0)));
+      return Finish(None);
+    }
     if (auto *Phi = dyn_cast<PHINode>(V)) {
       if (Phi->getNumIncomingValues() != 2)
         return Finish(None);
@@ -1409,7 +1416,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         return Finish(None);
       return Finish(*Left << Amount);
     }
-    case Instruction::And: {
+    case Instruction::And:
+    case Instruction::Or: {
       auto MaxMaskedValue = [](const APInt &Max, const APInt &Mask) {
         APInt Best = Max & Mask;
         for (unsigned Bit = 0; Bit < Max.getBitWidth(); ++Bit) {
@@ -1423,18 +1431,24 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         }
         return Best;
       };
-      if (auto *Mask = dyn_cast<ConstantInt>(Binary->getOperand(0)))
-        return Finish(MaxMaskedValue(*Right, Mask->getValue()));
-      if (auto *Mask = dyn_cast<ConstantInt>(Binary->getOperand(1)))
-        return Finish(MaxMaskedValue(*Left, Mask->getValue()));
+      if (Binary->getOpcode() == Instruction::And) {
+        if (auto *Mask = dyn_cast<ConstantInt>(Binary->getOperand(0)))
+          return Finish(MaxMaskedValue(*Right, Mask->getValue()));
+        if (auto *Mask = dyn_cast<ConstantInt>(Binary->getOperand(1)))
+          return Finish(MaxMaskedValue(*Left, Mask->getValue()));
+      }
       auto RangeFor = [&](Value *Operand, const APInt &Max) {
         if (auto *C = dyn_cast<ConstantInt>(Operand))
           return ConstantRange(C->getValue());
         return Max.isAllOnes() ? ConstantRange::getFull(Width)
                                : ConstantRange(APInt(Width, 0), Max + 1);
       };
-      return Finish(RangeFor(Binary->getOperand(0), *Left)
-                        .binaryAnd(RangeFor(Binary->getOperand(1), *Right))
+      ConstantRange L = RangeFor(Binary->getOperand(0), *Left);
+      ConstantRange R = RangeFor(Binary->getOperand(1), *Right);
+      // OR is not monotone in its unsigned operands: 1|2 exceeds 2|2.
+      // Bound the complete input ranges rather than OR-ing their maxima.
+      return Finish((Binary->getOpcode() == Instruction::And ? L.binaryAnd(R)
+                                                             : L.binaryOr(R))
                         .getUnsignedMax());
     }
     default:
@@ -1676,6 +1690,49 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
             return true;
           }
 
+          // Under freeze, a concrete enumeration must also certify every
+          // induction seed. APInt arithmetic below already checks poison flags.
+          bool RequireDefined = false;
+          auto DefinedPhiSeed = [&](PHINode *Phi, const APInt &Current) {
+            if (llvm::all_of(Phi->incoming_values(),
+                             [](Value *V) { return isa<ConstantInt>(V); }))
+              return true;
+            if ((!Phi->getType()->isIntegerTy(32) &&
+                 !Phi->getType()->isIntegerTy(64)) ||
+                Phi->getNumIncomingValues() != 2 || Current.ugt(65535))
+              return false;
+            Loop *Scope = &L;
+            while (Scope && Scope->getHeader() != Phi->getParent())
+              Scope = Scope->getParentLoop();
+            if (!Scope || !Scope->getLoopPreheader() || !Scope->getLoopLatch())
+              return false;
+            Value *Initial =
+                Phi->getIncomingValueForBlock(Scope->getLoopPreheader());
+            auto *Zero = dyn_cast_or_null<ConstantInt>(Initial);
+            auto *Next = dyn_cast_or_null<BinaryOperator>(
+                Phi->getIncomingValueForBlock(Scope->getLoopLatch()));
+            if (!Zero || !Zero->isZero() || !Next ||
+                Next->getOpcode() != Instruction::Add ||
+                Next->getParent() != Scope->getLoopLatch())
+              return false;
+            auto *Step = Next->getOperand(0) == Phi
+                             ? dyn_cast<ConstantInt>(Next->getOperand(1))
+                         : Next->getOperand(1) == Phi
+                             ? dyn_cast<ConstantInt>(Next->getOperand(0))
+                             : nullptr;
+            if (!Step || !Step->isOne())
+              return false;
+            bool Overflow = false;
+            Current.uadd_ov(Step->getValue(), Overflow);
+            if (Overflow)
+              return false;
+            if (Next->hasNoSignedWrap()) {
+              Current.sadd_ov(Step->getValue(), Overflow);
+              if (Overflow)
+                return false;
+            }
+            return true;
+          };
           SmallPtrSet<Value *, 32> Active;
           std::function<Optional<APInt>(Value *)> Evaluate =
               [&](Value *V) -> Optional<APInt> {
@@ -1690,7 +1747,10 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
             if (auto *Phi = dyn_cast<PHINode>(V)) {
               auto FiniteValue = PhiValues.find(Phi);
               if (FiniteValue != PhiValues.end())
-                return Finish(FiniteValue->second);
+                return Finish(!RequireDefined ||
+                                      DefinedPhiSeed(Phi, FiniteValue->second)
+                                  ? Optional<APInt>(FiniteValue->second)
+                                  : None);
               if (auto *AddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Phi))) {
                 auto Iteration = Iterations.find(AddRec->getLoop());
                 auto *Start = dyn_cast<SCEVConstant>(AddRec->getStart());
@@ -1699,7 +1759,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                 if (Iteration != Iterations.end() && Start && Step) {
                   APInt Result = Step->getAPInt() * Iteration->second;
                   Result += Start->getAPInt();
-                  return Finish(Result);
+                  return Finish(!RequireDefined || DefinedPhiSeed(Phi, Result)
+                                    ? Optional<APInt>(Result)
+                                    : None);
                 }
               }
               if (Phi->getNumIncomingValues() == 1)
@@ -1737,15 +1799,18 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
               auto Condition = Evaluate(Select->getCondition());
               if (!Condition)
                 return Finish(None);
-              return Finish(Evaluate(Select->getOperand(Condition->isZero()
-                                                            ? 2
-                                                            : 1)));
+              return Finish(
+                  Evaluate(Select->getOperand(Condition->isZero() ? 2 : 1)));
             }
-            // Freeze may select any value when its operand is poison.  This
-            // bounded evaluator has no poison lattice, so treating it as an
-            // identity could turn one arbitrary result into a false proof.
-            if (isa<FreezeInst>(I))
-              return Finish(None);
+            if (auto *Freeze = dyn_cast<FreezeInst>(I)) {
+              // Unknown, undef, or poison-producing operand paths stay
+              // unknown. Only a defined concrete value passes through freeze.
+              bool Previous = RequireDefined;
+              RequireDefined = true;
+              auto Operand = Evaluate(Freeze->getOperand(0));
+              RequireDefined = Previous;
+              return Finish(Operand);
+            }
             if (auto *Intrinsic = dyn_cast<IntrinsicInst>(I)) {
               switch (Intrinsic->getIntrinsicID()) {
               case Intrinsic::umin:
