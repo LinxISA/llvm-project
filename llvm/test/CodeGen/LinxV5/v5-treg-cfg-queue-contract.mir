@@ -19,8 +19,50 @@
 # CHECK: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
 # CHECK-NOT: PseudoEmptyTile
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
+#
+# The second case moves the dead publication between the two live values. The
+# backedge must reproduce this interior hole as well; exact liveout equality
+# must not collapse [A, hole, B] into [A, B]. The first two live values use the
+# same physical hand and SizeCode but different complete descriptors.
+# CHECK-LABEL: name: interior_publication_loop_contract
+# CHECK: bb.2:
+# CHECK-COUNT-5: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}
+# CHECK-NOT: PseudoEmptyTile
+# CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
 --- |
   define void @trailing_publication_loop_contract() { ret void }
+  define void @interior_publication_loop_contract() { ret void }
+...
+---
+name: interior_publication_loop_contract
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    dead $tile_n3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    $tile_n2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 1, 29, 1, $r0, $r0
+    PseudoBR %bb.1
+
+  bb.1:
+    successors: %bb.3, %bb.2
+    liveins: $r2, $tile_n1, $tile_n2
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.2
+
+  bb.2:
+    successors: %bb.1
+    liveins: $r2, $tile_n1, $tile_n2
+    $tile_n1 = PseudoTCOPYDesc 1, $tile_n1, 1, 32, 1, 25, 29
+    $tile_n2 = PseudoTCOPYDesc 1, $tile_n2, 1, 32, 1, 1, 29
+    PseudoBR %bb.1
+
+  bb.3:
+    liveins: $tile_n1, $tile_n2
+    dead $tile_n3 = PseudoTCOPYDesc 1, $tile_n1, 1, 32, 1, 25, 29
+    dead $tile_n4 = PseudoTCOPYDesc 1, $tile_n2, 1, 32, 1, 1, 29
+    PseudoRET
 ...
 ---
 name: trailing_publication_loop_contract

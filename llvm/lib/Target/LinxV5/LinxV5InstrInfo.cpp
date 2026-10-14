@@ -1179,11 +1179,10 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
       Layout = LinxV5Op::ArgFormat::CUBE_M32;
     else if (Layout == LinxV5Op::ArgFormat::ND2M16)
       Layout = LinxV5Op::ArgFormat::CUBE_M16;
-    else if (Layout == LinxV5Op::ArgFormat::ND2N8)
-      Layout = LinxV5Op::ArgFormat::ND2N8;
     else if (Layout != LinxV5Op::ArgFormat::NORM &&
              Layout != LinxV5Op::ArgFormat::CUBE_M32 &&
-             Layout != LinxV5Op::ArgFormat::CUBE_M16)
+             Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
+             Layout != LinxV5Op::ArgFormat::ND2N8)
       return None;
     return checkedTileDescriptor(LinxV5::TileDescriptor{
         static_cast<unsigned>(MI.getOperand(7).getImm()), Layout,

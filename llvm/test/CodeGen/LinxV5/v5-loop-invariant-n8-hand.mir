@@ -9,11 +9,17 @@
 # CHECK-LABEL: name: loop_invariant_n8_hand
 # CHECK: { id: [[N8:[0-9]+]], class: tile_nr
 # CHECK: def %[[N8]],
+# CHECK-LABEL: name: two_loop_invariant_n8_values
+# CHECK: { id: [[N8A:[0-9]+]], class: tile_nr
+# CHECK: { id: [[N8B:[0-9]+]], class: tile_nr
+# CHECK: def %[[N8A]],
+# CHECK: def %[[N8B]],
 # CHECK-LABEL: name: loop_local_n8_not_reserved
 # CHECK: class: tile_abs
 # CHECK-NOT: class: tile_nr
 --- |
   define void @loop_invariant_n8_hand() { ret void }
+  define void @two_loop_invariant_n8_values() { ret void }
   define void @loop_local_n8_not_reserved() { ret void }
 ...
 ---
@@ -34,6 +40,33 @@ body:             |
     successors: %bb.1(0x40000000), %bb.2(0x40000000)
     liveins: $r4
     INLINEASM &"opaque.tile.consumer $0", 1, 720905, %0
+    $r4 = ADDI $r4, 1
+    SETC_LTI_BR $r4, 4, %bb.1
+    PseudoBR %bb.2
+
+  bb.2:
+    PseudoRET
+...
+---
+name:            two_loop_invariant_n8_values
+alignment:       2
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs, preferred-register: '' }
+  - { id: 1, class: tile_abs, preferred-register: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2, $r3, $r6, $r7
+    INLINEASM &"BSTART.TLSU TLOAD, ${3:D}\0A.if ${8:c} == 21\0AB.DATR ND2M32.normal, Zero\0A.elseif ${8:c} == 22\0AB.DATR ND2M16.normal, Zero\0A.else\0AB.DATR ND2N8.normal, Zero\0A.endif\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$1,$2], []\0A", 25, 720906, def %0, 2293769, $r2, 2293769, $r3, 13, 7, 13, 6, 13, 32, 13, 128, 13, 0, 13, 23
+    INLINEASM &"BSTART.TLSU TLOAD, ${3:D}\0A.if ${8:c} == 21\0AB.DATR ND2M32.normal, Zero\0A.elseif ${8:c} == 22\0AB.DATR ND2M16.normal, Zero\0A.else\0AB.DATR ND2N8.normal, Zero\0A.endif\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$1,$2], []\0A", 25, 720906, def %1, 2293769, $r6, 2293769, $r7, 13, 7, 13, 6, 13, 32, 13, 128, 13, 0, 13, 23
+    $r4 = ORI $r0, 0
+    PseudoBR %bb.1
+
+  bb.1:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r4
+    INLINEASM &"opaque.tile.consumer $0, $1", 1, 720905, %0, 720905, %1
     $r4 = ADDI $r4, 1
     SETC_LTI_BR $r4, 4, %bb.1
     PseudoBR %bb.2
