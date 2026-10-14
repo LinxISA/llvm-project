@@ -1706,6 +1706,12 @@ bool LinxV5InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
   // Handle a single conditional branch.
   if (NumTerminators == 1 && I->getDesc().isConditionalBranch()) {
+    // PseudoBRCondCARG carries only its target and an implicit CARG use,
+    // unlike the three-operand compare-and-branch instructions modeled by
+    // parseCondBranch().  Leave it intact for its dedicated lowering rather
+    // than reading nonexistent comparison operands.
+    if (I->getOpcode() == LinxV5::PseudoBRCondCARG)
+      return true;
     parseCondBranch(*I, TBB, Cond);
     return false;
   }
@@ -1713,6 +1719,8 @@ bool LinxV5InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   // Handle a conditional branch followed by an unconditional branch.
   if (NumTerminators == 2 && std::prev(I)->getDesc().isConditionalBranch() &&
       I->getDesc().isUnconditionalBranch()) {
+    if (std::prev(I)->getOpcode() == LinxV5::PseudoBRCondCARG)
+      return true;
     parseCondBranch(*std::prev(I), TBB, Cond);
     FBB = getBranchDestBlock(*I);
     return false;

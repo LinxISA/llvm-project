@@ -1,0 +1,46 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-clockhands -o - %s | FileCheck %s
+#
+# Both -1 and -2 are legal endpoints, not container sentinel values.
+# A signed -3/-2 loop keeps one assembly parent OPEN through its middle
+# continuation and closes it on the next iteration.  LTI edge refinement must
+# prove the phase and reserve one Local hand for the parent.
+#
+# CHECK-LABEL: name: assemble_parent_phase_negative_endpoints
+# CHECK: class: tile_tr
+--- |
+  define void @assemble_parent_phase_negative_endpoints() { ret void }
+...
+---
+name:            assemble_parent_phase_negative_endpoints
+alignment:       2
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs, preferred-register: '' }
+  - { id: 1, class: tile_abs, preferred-register: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    %1:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %0:tile_abs = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %0, 720905, %1, 13, 2, 13, 1, 13, 0
+    $r4 = ORI $r0, -3
+    PseudoBR %bb.1
+
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $r4
+    SETC_LTI_BR $r4, -2, %bb.2
+    PseudoBR %bb.3
+
+  bb.2:
+    successors: %bb.1(0x80000000)
+    liveins: $r4
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720905, %0, 720905, %1, 13, 0, 13, 0
+    $r4 = ADDI $r4, 1
+    PseudoBR %bb.1
+
+  bb.3:
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %0, 720905, %1, 13, 0, 13, 1
+    PseudoRET
+...

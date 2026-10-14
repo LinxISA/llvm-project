@@ -2422,29 +2422,57 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
         ParentPhase Phase = ParentPhase::None;
         MachineInstr *Def = nullptr;
         unsigned Distance = 0;
-        std::map<unsigned, uint64_t> Constants;
-        std::map<SpillSlotKey, uint64_t> SpillConstants;
+        std::map<unsigned, std::set<uint64_t>> Constants;
+        std::map<SpillSlotKey, std::set<uint64_t>> SpillConstants;
+        // Exact equalities survive set joins; equal sets alone do not imply
+        // that two registers hold the same value on each concrete path.
+        std::set<std::pair<unsigned, unsigned>> EqualRegisters;
       };
       SmallVector<PathState, 32> Worklist;
       PathState Entry;
       Entry.MBB = &MF.front();
       Worklist.push_back(std::move(Entry));
-      std::set<std::string> Visited;
+      std::map<std::string, PathState> JoinedStates;
       bool SawUse = false;
       Optional<StateKind> ReachingUseKind;
       MachineInstr *ReachingOtherDef = nullptr;
       Optional<unsigned> ReachingParentDistance;
       constexpr unsigned MaxPathStates = 65536;
+      constexpr unsigned MaxTrackedConstants = 16;
       unsigned ProcessedStates = 0;
 
-      auto getConstant = [](const PathState &State,
-                            Register Reg) -> Optional<uint64_t> {
+      auto getConstantSet = [](const PathState &State, Register Reg)
+          -> Optional<std::set<uint64_t>> {
         if (Reg == LinxV5::R0)
-          return uint64_t(0);
+          return std::set<uint64_t>{0};
         auto It = State.Constants.find(Reg.id());
         if (It == State.Constants.end())
           return None;
         return It->second;
+      };
+      auto evaluateImmediatePredicate = [](unsigned Opcode, uint64_t Value,
+                                           uint64_t Immediate)
+          -> Optional<bool> {
+        switch (Opcode) {
+        case LinxV5::SETC_EQI:
+        case LinxV5::SETC_EQI_BR:
+          return Value == Immediate;
+        case LinxV5::SETC_NEI:
+        case LinxV5::SETC_NEI_BR:
+          return Value != Immediate;
+        case LinxV5::SETC_GEI:
+          return static_cast<int64_t>(Value) >=
+                 static_cast<int64_t>(Immediate);
+        case LinxV5::SETC_LTI:
+        case LinxV5::SETC_LTI_BR:
+          return static_cast<int64_t>(Value) <
+                 static_cast<int64_t>(Immediate);
+        case LinxV5::SETC_LTUI:
+        case LinxV5::SETC_LTUI_BR:
+          return Value < Immediate;
+        default:
+          return None;
+        }
       };
       auto invalidateAliases = [&](PathState &State, Register Def) {
         if (!Def.isPhysical())
@@ -2452,6 +2480,14 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
         for (auto It = State.Constants.begin(); It != State.Constants.end();) {
           if (TRI->regsOverlap(Register(It->first), Def))
             It = State.Constants.erase(It);
+          else
+            ++It;
+        }
+        for (auto It = State.EqualRegisters.begin();
+             It != State.EqualRegisters.end();) {
+          if (TRI->regsOverlap(Register(It->first), Def) ||
+              TRI->regsOverlap(Register(It->second), Def))
+            It = State.EqualRegisters.erase(It);
           else
             ++It;
         }
@@ -2464,14 +2500,6 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
                           ":" + std::to_string(
                                       reinterpret_cast<uintptr_t>(State.Def)) +
                           ":" + std::to_string(State.Distance);
-        for (const auto &Entry : State.Constants)
-          Key += ":" + std::to_string(Entry.first) + "=" +
-                 std::to_string(Entry.second);
-        for (const auto &Entry : State.SpillConstants)
-          Key += ":s" + std::to_string(Entry.first.FI) + ":" +
-                 std::to_string(Entry.first.Offset) + ":" +
-                 std::to_string(Entry.first.Size) + "=" +
-                 std::to_string(Entry.second);
         return Key;
       };
 
@@ -2546,7 +2574,12 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
                 RelevantRegs.insert(MI.getOperand(I).getReg().id());
           } else if ((MI.getOpcode() == LinxV5::SETC_EQI ||
                       MI.getOpcode() == LinxV5::SETC_NEI ||
-                      MI.getOpcode() == LinxV5::SETC_GEI) &&
+                      MI.getOpcode() == LinxV5::SETC_GEI ||
+                      MI.getOpcode() == LinxV5::SETC_LTI ||
+                      MI.getOpcode() == LinxV5::SETC_LTUI ||
+                      MI.getOpcode() == LinxV5::SETC_EQI_BR ||
+                      MI.getOpcode() == LinxV5::SETC_NEI_BR ||
+                      MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
                      MI.getNumOperands() >= 1 && MI.getOperand(0).isReg()) {
             RelevantRegs.insert(MI.getOperand(0).getReg().id());
           }
@@ -2559,7 +2592,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
           for (const MachineInstr &MI : MBB) {
             if (MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
                 RelevantRegs.count(MI.getOperand(0).getReg().id()) &&
-                (MI.getOpcode() == LinxV5::ORI ||
+                (MI.getOpcode() == TargetOpcode::COPY ||
+                 MI.getOpcode() == LinxV5::ORI ||
                  MI.getOpcode() == LinxV5::ADDI)) {
               RelevantChanged |=
                   RelevantRegs.insert(MI.getOperand(1).getReg().id()).second;
@@ -2590,8 +2624,69 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
 
       while (!Worklist.empty()) {
         PathState State = Worklist.pop_back_val();
-        if (!Visited.insert(makeKey(State)).second)
-          continue;
+        std::string StateKey = makeKey(State);
+        auto ExistingState = JoinedStates.find(StateKey);
+        if (ExistingState == JoinedStates.end()) {
+          JoinedStates.emplace(StateKey, State);
+        } else {
+          PathState Joined = ExistingState->second;
+          bool Changed = false;
+          for (auto It = Joined.Constants.begin();
+               It != Joined.Constants.end();) {
+            auto Incoming = State.Constants.find(It->first);
+            if (Incoming == State.Constants.end()) {
+              It = Joined.Constants.erase(It);
+              Changed = true;
+              continue;
+            }
+            std::set<uint64_t> Values = It->second;
+            Values.insert(Incoming->second.begin(), Incoming->second.end());
+            if (Values.size() > MaxTrackedConstants) {
+              It = Joined.Constants.erase(It);
+              Changed = true;
+              continue;
+            }
+            if (Values != It->second) {
+              It->second = std::move(Values);
+              Changed = true;
+            }
+            ++It;
+          }
+          for (auto It = Joined.SpillConstants.begin();
+               It != Joined.SpillConstants.end();) {
+            auto Incoming = State.SpillConstants.find(It->first);
+            if (Incoming == State.SpillConstants.end()) {
+              It = Joined.SpillConstants.erase(It);
+              Changed = true;
+              continue;
+            }
+            std::set<uint64_t> Values = It->second;
+            Values.insert(Incoming->second.begin(), Incoming->second.end());
+            if (Values.size() > MaxTrackedConstants) {
+              It = Joined.SpillConstants.erase(It);
+              Changed = true;
+              continue;
+            }
+            if (Values != It->second) {
+              It->second = std::move(Values);
+              Changed = true;
+            }
+            ++It;
+          }
+          for (auto It = Joined.EqualRegisters.begin();
+               It != Joined.EqualRegisters.end();) {
+            if (!State.EqualRegisters.count(*It)) {
+              It = Joined.EqualRegisters.erase(It);
+              Changed = true;
+            } else {
+              ++It;
+            }
+          }
+          if (!Changed)
+            continue;
+          ExistingState->second = Joined;
+          State = std::move(Joined);
+        }
         if (++ProcessedStates > MaxPathStates) {
           LLVM_DEBUG(dbgs() << "B.ASSEMBLE scalar proof state cap for "
                             << printReg(Parent, TRI) << " init " << *InitMI
@@ -2603,6 +2698,12 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
         Optional<bool> CArg;
         Optional<bool> ConditionalTaken;
         MachineBasicBlock *ConditionalTarget = nullptr;
+        Register DirectConditionalReg;
+        Optional<unsigned> DirectConditionalOpcode;
+        uint64_t DirectConditionalValue = 0;
+        Register RegisterConditionalLHS;
+        Register RegisterConditionalRHS;
+        Optional<unsigned> RegisterConditionalOpcode;
         bool EndedAtUse = false;
         for (MachineInstr &MI : *State.MBB) {
           if (&MI == UseMI) {
@@ -2618,7 +2719,15 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
                            << " phase "
                            << static_cast<unsigned>(State.Phase)
                            << " distance " << State.Distance << " use "
-                           << MI);
+                           << MI << "constants";
+                           for (const auto &Entry : State.Constants) {
+                             dbgs() << " " << printReg(Register(Entry.first), TRI)
+                                    << "={";
+                             for (uint64_t Value : Entry.second)
+                               dbgs() << Value << ",";
+                             dbgs() << "}";
+                           }
+                           dbgs() << "\n";);
                 UseProof Failed;
                 Failed.Reached = true;
                 Failed.Complete = true;
@@ -2708,38 +2817,71 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
             }
           }
 
-          Optional<std::pair<Register, uint64_t>> KnownDef;
-          if (MI.getOpcode() == LinxV5::ORI && MI.getNumOperands() >= 3 &&
+          Optional<std::pair<Register, std::set<uint64_t>>> KnownDef;
+          Register EqualSource;
+          if (MI.getOpcode() == TargetOpcode::COPY &&
+              MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
+              MI.getOperand(1).isReg()) {
+            Optional<std::set<uint64_t>> Src =
+                getConstantSet(State, MI.getOperand(1).getReg());
+            if (Src) {
+              KnownDef = std::make_pair(MI.getOperand(0).getReg(), *Src);
+              EqualSource = MI.getOperand(1).getReg();
+            }
+          } else if (MI.getOpcode() == LinxV5::ORI && MI.getNumOperands() >= 3 &&
               MI.getOperand(0).isReg() && MI.getOperand(1).isReg() &&
               MI.getOperand(2).isImm()) {
-            Optional<uint64_t> Src =
-                getConstant(State, MI.getOperand(1).getReg());
-            if (Src)
-              KnownDef = std::make_pair(
-                  MI.getOperand(0).getReg(),
-                  *Src | static_cast<uint64_t>(MI.getOperand(2).getImm()));
+            Optional<std::set<uint64_t>> Src =
+                getConstantSet(State, MI.getOperand(1).getReg());
+            if (Src) {
+              std::set<uint64_t> Values;
+              uint64_t Imm =
+                  static_cast<uint64_t>(MI.getOperand(2).getImm());
+              for (uint64_t Value : *Src)
+                Values.insert(Value | Imm);
+              if (Values.size() <= MaxTrackedConstants)
+                KnownDef = std::make_pair(MI.getOperand(0).getReg(),
+                                          std::move(Values));
+            }
           } else if (MI.getOpcode() == LinxV5::ADDI &&
                      MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
                      MI.getOperand(1).isReg() && MI.getOperand(2).isImm()) {
-            Optional<uint64_t> Src =
-                getConstant(State, MI.getOperand(1).getReg());
-            if (Src)
-              KnownDef = std::make_pair(
-                  MI.getOperand(0).getReg(),
-                  *Src + static_cast<uint64_t>(MI.getOperand(2).getImm()));
+            Optional<std::set<uint64_t>> Src =
+                getConstantSet(State, MI.getOperand(1).getReg());
+            if (Src) {
+              std::set<uint64_t> Values;
+              uint64_t Imm =
+                  static_cast<uint64_t>(MI.getOperand(2).getImm());
+              for (uint64_t Value : *Src)
+                Values.insert(Value + Imm);
+              if (Values.size() <= MaxTrackedConstants)
+                KnownDef = std::make_pair(MI.getOperand(0).getReg(),
+                                          std::move(Values));
+            }
           } else if (MI.getOpcode() == LinxV5::OR_SW &&
                      MI.getNumOperands() >= 4 && MI.getOperand(0).isReg() &&
-                     MI.getOperand(1).isReg() && MI.getOperand(2).isReg()) {
-            Optional<uint64_t> LHS =
-                getConstant(State, MI.getOperand(1).getReg());
-            Optional<uint64_t> RHS =
-                getConstant(State, MI.getOperand(2).getReg());
-            if (LHS && RHS) {
-              uint32_t Word = static_cast<uint32_t>(*LHS | *RHS);
-              KnownDef = std::make_pair(
-                  MI.getOperand(0).getReg(),
-                  static_cast<uint64_t>(
-                      static_cast<int64_t>(static_cast<int32_t>(Word))));
+                     MI.getOperand(1).isReg() &&
+                     MI.getOperand(1).getReg() == LinxV5::R0 &&
+                     MI.getOperand(2).isReg() && MI.getOperand(3).isImm() &&
+                     MI.getOperand(3).getImm() == 0) {
+            // Only the unshifted zero-left form is a signed-word copy.
+            // General OR_SW preserves the full-width left input and shifts
+            // its transformed right input; forget those forms conservatively.
+            Register Source = MI.getOperand(2).getReg();
+            auto SourceValues = getConstantSet(State, Source);
+            if (SourceValues) {
+              std::set<uint64_t> Values;
+              bool IsExactCopy = true;
+              for (uint64_t V : *SourceValues) {
+                uint64_t Word = static_cast<uint64_t>(
+                    static_cast<int64_t>(static_cast<int32_t>(V)));
+                Values.insert(Word);
+                IsExactCopy &= Word == V;
+              }
+              KnownDef = std::make_pair(MI.getOperand(0).getReg(),
+                                        std::move(Values));
+              if (IsExactCopy)
+                EqualSource = Source;
             }
           }
 
@@ -2749,52 +2891,139 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
               MI.getOperand(0).isReg()) {
             auto It = State.SpillConstants.find(*ExactSpillLoad);
             if (It != State.SpillConstants.end())
-              KnownDef = std::make_pair(MI.getOperand(0).getReg(), It->second);
+              KnownDef =
+                  std::make_pair(MI.getOperand(0).getReg(), It->second);
           }
           Optional<SpillSlotKey> ExactSpillStore =
               getExactSpillAccess(MI, /*IsLoad=*/false);
-          Optional<uint64_t> SpillStoreValue;
+          Optional<std::set<uint64_t>> SpillStoreValue;
           if (ExactSpillStore && MI.getNumOperands() >= 1 &&
               MI.getOperand(0).isReg())
             SpillStoreValue =
-                getConstant(State, MI.getOperand(0).getReg());
+                getConstantSet(State, MI.getOperand(0).getReg());
 
           bool DefinesCArg = false;
+          bool RedefinesDirectConditionalSource = false;
           Optional<bool> NewCArg;
           const bool ModelsCArg =
               MI.getOpcode() == LinxV5::SETC_EQI ||
               MI.getOpcode() == LinxV5::SETC_NEI ||
-              MI.getOpcode() == LinxV5::SETC_GEI;
+              MI.getOpcode() == LinxV5::SETC_GEI ||
+              MI.getOpcode() == LinxV5::SETC_LTI ||
+              MI.getOpcode() == LinxV5::SETC_LTUI;
           if (ModelsCArg &&
               MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
               MI.getOperand(1).isImm()) {
-            Optional<uint64_t> Src =
-                getConstant(State, MI.getOperand(0).getReg());
-            if (Src) {
+            Optional<std::set<uint64_t>> Values =
+                getConstantSet(State, MI.getOperand(0).getReg());
+            if (Values) {
               int64_t Imm = MI.getOperand(1).getImm();
-              bool Equal = *Src == static_cast<uint64_t>(Imm);
-              if (MI.getOpcode() == LinxV5::SETC_EQI)
-                NewCArg = Equal;
-              else if (MI.getOpcode() == LinxV5::SETC_NEI)
-                NewCArg = !Equal;
-              else
-                NewCArg = static_cast<int64_t>(*Src) >= Imm;
+              Optional<bool> Uniform;
+              for (uint64_t Value : *Values) {
+                Optional<bool> Result = evaluateImmediatePredicate(
+                    MI.getOpcode(), Value, static_cast<uint64_t>(Imm));
+                assert(Result && "modeled immediate predicate must evaluate");
+                if (!Uniform)
+                  Uniform = *Result;
+                else if (*Uniform != *Result) {
+                  Uniform = None;
+                  break;
+                }
+              }
+              NewCArg = Uniform;
+            }
+            if (MI.getOpcode() == LinxV5::SETC_EQI ||
+                MI.getOpcode() == LinxV5::SETC_NEI ||
+                MI.getOpcode() == LinxV5::SETC_GEI ||
+                MI.getOpcode() == LinxV5::SETC_LTI ||
+                MI.getOpcode() == LinxV5::SETC_LTUI) {
+              DirectConditionalReg = MI.getOperand(0).getReg();
+              DirectConditionalOpcode = MI.getOpcode();
+              DirectConditionalValue =
+                  static_cast<uint64_t>(MI.getOperand(1).getImm());
             }
           }
 
-          if ((MI.getOpcode() == LinxV5::BEQ ||
-               MI.getOpcode() == LinxV5::BNE) &&
+          const bool ModelsDirectBranch =
+              MI.getOpcode() == LinxV5::SETC_EQI_BR ||
+              MI.getOpcode() == LinxV5::SETC_NEI_BR ||
+              MI.getOpcode() == LinxV5::SETC_LTI_BR;
+          if (ModelsDirectBranch &&
+              MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+              MI.getOperand(1).isImm() && MI.getOperand(2).isMBB()) {
+            ConditionalTarget = MI.getOperand(2).getMBB();
+            DirectConditionalReg = MI.getOperand(0).getReg();
+            DirectConditionalOpcode = MI.getOpcode();
+            DirectConditionalValue =
+                static_cast<uint64_t>(MI.getOperand(1).getImm());
+            Optional<std::set<uint64_t>> Values =
+                getConstantSet(State, DirectConditionalReg);
+            if (Values) {
+              uint64_t Imm =
+                  static_cast<uint64_t>(MI.getOperand(1).getImm());
+              Optional<bool> Uniform;
+              for (uint64_t Value : *Values) {
+                Optional<bool> Taken = evaluateImmediatePredicate(
+                    MI.getOpcode(), Value, Imm);
+                assert(Taken && "modeled direct predicate must evaluate");
+                if (!Uniform)
+                  Uniform = *Taken;
+                else if (*Uniform != *Taken) {
+                  Uniform = None;
+                  break;
+                }
+              }
+              ConditionalTaken = Uniform;
+            }
+          } else if (MI.getOpcode() == LinxV5::SETC_LTUI_BR &&
+                     MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
+                     MI.getOperand(2).isMBB()) {
+            // This branch is outside the small signed phase-control subset.
+            // Explore both edges and forget its induction source so an
+            // unrelated high-trip loop cannot manufacture one exact path
+            // state per iteration merely because register allocation reused
+            // the same physical scalar as a modeled phase counter.
+            ConditionalTarget = MI.getOperand(2).getMBB();
+            DirectConditionalReg = Register();
+            DirectConditionalOpcode = None;
+            ConditionalTaken = None;
+            invalidateAliases(State, MI.getOperand(0).getReg());
+          } else if ((MI.getOpcode() == LinxV5::BEQ ||
+                      MI.getOpcode() == LinxV5::BNE) &&
               MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
               MI.getOperand(1).isReg() && MI.getOperand(2).isMBB()) {
             ConditionalTarget = MI.getOperand(2).getMBB();
-            Optional<uint64_t> LHS =
-                getConstant(State, MI.getOperand(0).getReg());
-            Optional<uint64_t> RHS =
-                getConstant(State, MI.getOperand(1).getReg());
+            // This edge is controlled by the register comparison, regardless
+            // of any preceding SETC that left a live predicate in CARG.
+            DirectConditionalReg = Register();
+            DirectConditionalOpcode = None;
+            ConditionalTaken = None;
+            RegisterConditionalLHS = MI.getOperand(0).getReg();
+            RegisterConditionalRHS = MI.getOperand(1).getReg();
+            RegisterConditionalOpcode = MI.getOpcode();
+            Optional<std::set<uint64_t>> LHS =
+                getConstantSet(State, RegisterConditionalLHS);
+            Optional<std::set<uint64_t>> RHS =
+                getConstantSet(State, RegisterConditionalRHS);
             if (LHS && RHS) {
-              bool Equal = *LHS == *RHS;
-              ConditionalTaken =
-                  MI.getOpcode() == LinxV5::BEQ ? Equal : !Equal;
+              Optional<bool> Uniform;
+              bool Mixed = false;
+              for (uint64_t L : *LHS) {
+                for (uint64_t R : *RHS) {
+                  bool Taken =
+                      MI.getOpcode() == LinxV5::BEQ ? L == R : L != R;
+                  if (!Uniform)
+                    Uniform = Taken;
+                  else if (*Uniform != Taken) {
+                    Uniform = None;
+                    Mixed = true;
+                    break;
+                  }
+                }
+                if (Mixed)
+                  break;
+              }
+              ConditionalTaken = Uniform;
             }
           } else if (MI.getOpcode() == LinxV5::PseudoBRCondCARG &&
                      MI.getNumOperands() >= 1 && MI.getOperand(0).isMBB()) {
@@ -2809,11 +3038,17 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
 
           for (const MachineOperand &MO : MI.operands()) {
             if (MO.isReg() && MO.isDef()) {
+              if (DirectConditionalOpcode &&
+                  TRI->regsOverlap(MO.getReg(), DirectConditionalReg))
+                RedefinesDirectConditionalSource = true;
               invalidateAliases(State, MO.getReg());
               if (MO.getReg().isPhysical() &&
                   TRI->regsOverlap(MO.getReg(), LinxV5::CARG))
                 DefinesCArg = true;
             } else if (MO.isRegMask()) {
+              if (DirectConditionalOpcode && DirectConditionalReg.isPhysical() &&
+                  MO.clobbersPhysReg(DirectConditionalReg))
+                RedefinesDirectConditionalSource = true;
               for (auto It = State.Constants.begin();
                    It != State.Constants.end();) {
                 if (MO.clobbersPhysReg(Register(It->first)))
@@ -2821,12 +3056,26 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
                 else
                   ++It;
               }
+              for (auto It = State.EqualRegisters.begin();
+                   It != State.EqualRegisters.end();) {
+                if (MO.clobbersPhysReg(Register(It->first)) ||
+                    MO.clobbersPhysReg(Register(It->second)))
+                  It = State.EqualRegisters.erase(It);
+                else
+                  ++It;
+              }
               DefinesCArg |= MO.clobbersPhysReg(LinxV5::CARG);
             }
           }
           if (KnownDef)
-            if (RelevantRegs.count(KnownDef->first.id()))
+            if (RelevantRegs.count(KnownDef->first.id())) {
               State.Constants[KnownDef->first.id()] = KnownDef->second;
+              if (EqualSource && EqualSource != KnownDef->first &&
+                  !TRI->regsOverlap(EqualSource, KnownDef->first) &&
+                  State.Constants.count(EqualSource.id()))
+                State.EqualRegisters.insert(std::minmax(
+                    KnownDef->first.id(), EqualSource.id()));
+            }
           // SETC is the only modeled producer.  Every other explicit or
           // implicit CARG definition, including a regmask clobber, destroys
           // the previous predicate so a later branch explores both edges.
@@ -2834,6 +3083,12 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
             CArg = None;
           if (ModelsCArg)
             CArg = NewCArg;
+          if ((DefinesCArg && !ModelsCArg && !ModelsDirectBranch) ||
+              RedefinesDirectConditionalSource) {
+            DirectConditionalReg = Register();
+            DirectConditionalOpcode = None;
+            DirectConditionalValue = 0;
+          }
 
           if (MI.isImplicitDef()) {
             for (const MachineOperand &MO : MI.operands())
@@ -2899,6 +3154,90 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
               continue;
           }
           PathState Next = State;
+          if (ConditionalTarget && DirectConditionalOpcode &&
+              Next.Constants.count(DirectConditionalReg.id())) {
+            bool TargetEdge = Succ == ConditionalTarget;
+            std::set<uint64_t> Filtered;
+            for (uint64_t Value :
+                 Next.Constants[DirectConditionalReg.id()]) {
+              Optional<bool> Taken = evaluateImmediatePredicate(
+                  *DirectConditionalOpcode, Value, DirectConditionalValue);
+              assert(Taken && "tracked immediate predicate must evaluate");
+              if (*Taken == TargetEdge)
+                Filtered.insert(Value);
+            }
+            if (Filtered.empty())
+              continue;
+            Next.Constants[DirectConditionalReg.id()] = std::move(Filtered);
+          } else if (ConditionalTarget && RegisterConditionalOpcode) {
+            Optional<std::set<uint64_t>> LHS =
+                getConstantSet(Next, RegisterConditionalLHS);
+            Optional<std::set<uint64_t>> RHS =
+                getConstantSet(Next, RegisterConditionalRHS);
+            if (LHS && RHS) {
+              bool TargetEdge = Succ == ConditionalTarget;
+              bool EqualityEdge =
+                  (*RegisterConditionalOpcode == LinxV5::BEQ) == TargetEdge;
+              if (RegisterConditionalLHS == RegisterConditionalRHS) {
+                if (!EqualityEdge)
+                  continue;
+              } else if (EqualityEdge) {
+                std::set<uint64_t> Intersection;
+                std::set_intersection(
+                    LHS->begin(), LHS->end(), RHS->begin(), RHS->end(),
+                    std::inserter(Intersection, Intersection.begin()));
+                if (Intersection.empty())
+                  continue;
+                Next.Constants[RegisterConditionalLHS.id()] = Intersection;
+                Next.Constants[RegisterConditionalRHS.id()] =
+                    std::move(Intersection);
+              } else if (LHS->size() == 1) {
+                std::set<uint64_t> Filtered = *RHS;
+                Filtered.erase(*LHS->begin());
+                if (Filtered.empty())
+                  continue;
+                Next.Constants[RegisterConditionalRHS.id()] =
+                    std::move(Filtered);
+              } else if (RHS->size() == 1) {
+                std::set<uint64_t> Filtered = *LHS;
+                Filtered.erase(*RHS->begin());
+                if (Filtered.empty())
+                  continue;
+                Next.Constants[RegisterConditionalLHS.id()] =
+                    std::move(Filtered);
+              }
+            }
+          }
+          // Propagate edge restrictions through proven copy equalities.
+          // This retains phase-counter correlations without inferring them
+          // merely from independently joined sets with matching members.
+          bool EqualitiesChanged = true;
+          bool Feasible = true;
+          while (EqualitiesChanged && Feasible) {
+            EqualitiesChanged = false;
+            for (const auto &Equality : Next.EqualRegisters) {
+              auto L = Next.Constants.find(Equality.first);
+              auto R = Next.Constants.find(Equality.second);
+              if (L == Next.Constants.end() || R == Next.Constants.end())
+                continue;
+              std::set<uint64_t> Intersection;
+              std::set_intersection(
+                  L->second.begin(), L->second.end(), R->second.begin(),
+                  R->second.end(),
+                  std::inserter(Intersection, Intersection.begin()));
+              if (Intersection.empty()) {
+                Feasible = false;
+                break;
+              }
+              if (L->second != Intersection || R->second != Intersection) {
+                L->second = Intersection;
+                R->second = std::move(Intersection);
+                EqualitiesChanged = true;
+              }
+            }
+          }
+          if (!Feasible)
+            continue;
           Next.MBB = Succ;
           Worklist.push_back(std::move(Next));
         }

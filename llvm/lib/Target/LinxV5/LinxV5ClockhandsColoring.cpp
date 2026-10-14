@@ -398,8 +398,10 @@ static Optional<std::pair<Register, bool>> findEquivalentBranchSource(
                    MI.getOperand(2).getImm() == 0) {
           Source = MI.getOperand(1).getReg();
         } else if (MI.getOpcode() == LinxV5::OR_SW &&
-                   MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
-                   MI.getOperand(2).isReg()) {
+                   MI.getNumOperands() >= 4 && MI.getOperand(1).isReg() &&
+                   MI.getOperand(1).getReg() == LinxV5::R0 &&
+                   MI.getOperand(2).isReg() && MI.getOperand(3).isImm() &&
+                   MI.getOperand(3).getImm() == 0) {
           Register LHS = MI.getOperand(1).getReg();
           Register RHS = MI.getOperand(2).getReg();
           Source = LHS == LinxV5::R0 ? RHS :
@@ -482,32 +484,54 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     Register ParentA, Register ParentB = Register()) {
   std::set<unsigned> RelevantRegs;
   std::map<unsigned, SmallVector<APInt, 4>> ComparisonEndpoints;
+  // Every 64-bit value is a legal endpoint, including DenseMap's reserved
+  // empty/tombstone keys (-1 and -2).
+  std::map<unsigned, std::set<uint64_t>> ComparisonEndpointMembership;
+  constexpr unsigned MaxPhaseProofWork = 65536;
+  unsigned PreprocessWork = 0;
+  auto consumePreprocessWork = [&](size_t Work) {
+    if (Work > MaxPhaseProofWork - PreprocessWork) {
+      LLVM_DEBUG(dbgs() << "B.ASSEMBLE phase preprocessing cap for "
+                        << printReg(ParentA) << " / " << printReg(ParentB)
+                        << "\n");
+      return false;
+    }
+    PreprocessWork += Work;
+    return true;
+  };
+  auto addEndpoint = [&](unsigned Reg, const APInt &Endpoint) {
+    if (!ComparisonEndpointMembership[Reg]
+             .insert(Endpoint.getZExtValue())
+             .second)
+      return false;
+    ComparisonEndpoints[Reg].push_back(Endpoint);
+    return true;
+  };
   for (MachineBasicBlock &MBB : MF)
     for (MachineInstr &MI : MBB) {
+      // Charge the instruction and its two possible seed endpoints.
+      if (!consumePreprocessWork(3))
+        return ParentPhaseResult::UnableToProve;
       if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
-           MI.getOpcode() == LinxV5::SETC_NEI_BR) &&
+           MI.getOpcode() == LinxV5::SETC_NEI_BR ||
+           MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
           MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
           MI.getOperand(1).isImm()) {
         unsigned Reg = MI.getOperand(0).getReg().id();
         RelevantRegs.insert(Reg);
         APInt Endpoint(64, static_cast<uint64_t>(MI.getOperand(1).getImm()));
-        ComparisonEndpoints[Reg].push_back(Endpoint);
-        ComparisonEndpoints[Reg].push_back(Endpoint + 1);
+        addEndpoint(Reg, Endpoint);
+        addEndpoint(Reg, Endpoint + 1);
       }
     }
 
   bool RelevantChanged = true;
-  auto addEndpoint = [&](unsigned Reg, const APInt &Endpoint) {
-    SmallVectorImpl<APInt> &Endpoints = ComparisonEndpoints[Reg];
-    if (llvm::is_contained(Endpoints, Endpoint))
-      return false;
-    Endpoints.push_back(Endpoint);
-    return true;
-  };
   while (RelevantChanged) {
     RelevantChanged = false;
     for (MachineBasicBlock &MBB : MF) {
       for (MachineInstr &MI : MBB) {
+        if (!consumePreprocessWork(1))
+          return ParentPhaseResult::UnableToProve;
         if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
             !RelevantRegs.count(MI.getOperand(0).getReg().id()))
           continue;
@@ -535,6 +559,10 @@ static ParentPhaseResult analyzeAssembleParentPhases(
           // already describe the loop bound; repeatedly inverting ADDI/SUBI
           // would manufacture an unbounded endpoint sequence.
           if (Propagate && SrcReg != DefReg) {
+            // Charge endpoint propagation before copying or traversing the
+            // list: a small instruction cycle can grow this list indefinitely.
+            if (!consumePreprocessWork(ComparisonEndpoints[DefReg].size()))
+              return ParentPhaseResult::UnableToProve;
             SmallVector<APInt, 4> DefEndpoints =
                 ComparisonEndpoints[DefReg];
             for (const APInt &Endpoint : DefEndpoints) {
@@ -547,8 +575,10 @@ static ParentPhaseResult analyzeAssembleParentPhases(
             }
           }
         } else if (MI.getOpcode() == LinxV5::OR_SW &&
-                 MI.getNumOperands() >= 3 && MI.getOperand(1).isReg() &&
-                 MI.getOperand(2).isReg()) {
+                 MI.getNumOperands() >= 4 && MI.getOperand(1).isReg() &&
+                 MI.getOperand(1).getReg() == LinxV5::R0 &&
+                 MI.getOperand(2).isReg() && MI.getOperand(3).isImm() &&
+                 MI.getOperand(3).getImm() == 0) {
           Register LHS = MI.getOperand(1).getReg();
           Register RHS = MI.getOperand(2).getReg();
           RelevantChanged |= RelevantRegs.insert(LHS.id()).second;
@@ -556,6 +586,10 @@ static ParentPhaseResult analyzeAssembleParentPhases(
           Register Source = LHS == LinxV5::R0 ? RHS :
                             RHS == LinxV5::R0 ? LHS : Register();
           if (Source) {
+            // Charge endpoint propagation before copying or traversing the
+            // list: a small instruction cycle can grow this list indefinitely.
+            if (!consumePreprocessWork(ComparisonEndpoints[DefReg].size()))
+              return ParentPhaseResult::UnableToProve;
             SmallVector<APInt, 4> DefEndpoints =
                 ComparisonEndpoints[DefReg];
             for (const APInt &Endpoint : DefEndpoints)
@@ -572,7 +606,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
   ParentPhaseStateKey Entry{&MF.front(), 0};
   EntryStates.emplace(Entry, ParentRangeEnvironment());
   Worklist.push_back(Entry);
-  constexpr unsigned MaxPathStates = 65536;
+  constexpr unsigned MaxPathStates = MaxPhaseProofWork;
   unsigned ProcessedStates = 0;
 
   while (!Worklist.empty()) {
@@ -641,19 +675,20 @@ static ParentPhaseResult analyzeAssembleParentPhases(
                                                  : Src.sub(Imm);
         KnownDef = std::make_pair(MI.getOperand(0).getReg(), Value);
       } else if (MI.getOpcode() == LinxV5::OR_SW &&
-                 MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
-                 MI.getOperand(1).isReg() && MI.getOperand(2).isReg()) {
-        ConstantRange LHS =
-            getParentRange(Environment, MI.getOperand(1).getReg());
+                 MI.getNumOperands() >= 4 && MI.getOperand(0).isReg() &&
+                 MI.getOperand(1).isReg() &&
+                 MI.getOperand(1).getReg() == LinxV5::R0 &&
+                 MI.getOperand(2).isReg() && MI.getOperand(3).isImm() &&
+                 MI.getOperand(3).getImm() == 0) {
         ConstantRange RHS =
             getParentRange(Environment, MI.getOperand(2).getReg());
-        ConstantRange Value =
-            LHS.truncate(32).binaryOr(RHS.truncate(32)).signExtend(64);
+        ConstantRange Value = RHS.truncate(32).signExtend(64);
         KnownDef = std::make_pair(MI.getOperand(0).getReg(), Value);
       }
 
       if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
-           MI.getOpcode() == LinxV5::SETC_NEI_BR) &&
+           MI.getOpcode() == LinxV5::SETC_NEI_BR ||
+           MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
           MI.getNumOperands() >= 3 && MI.getOperand(0).isReg() &&
           MI.getOperand(1).isImm() && MI.getOperand(2).isMBB()) {
         ConditionalOpcode = MI.getOpcode();
@@ -693,14 +728,22 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     for (MachineBasicBlock *Succ : Key.MBB->successors()) {
       ParentRangeEnvironment SuccessorEnvironment = Environment;
       if (ConditionalTarget && ConditionalOpcode) {
-        bool EqualEdge = (*ConditionalOpcode == LinxV5::SETC_EQI_BR) ==
-                         (Succ == ConditionalTarget);
+        bool TrueEdge = Succ == ConditionalTarget;
         ConstantRange Current =
             getParentRange(SuccessorEnvironment, ConditionalReg);
         ConstantRange Singleton(ConditionalValue);
+        ConstantRange Allowed = Singleton;
+        if (*ConditionalOpcode == LinxV5::SETC_LTI_BR) {
+          CmpInst::Predicate Predicate =
+              TrueEdge ? CmpInst::ICMP_SLT : CmpInst::ICMP_SGE;
+          Allowed =
+              ConstantRange::makeExactICmpRegion(Predicate, ConditionalValue);
+        } else {
+          bool Equal = (*ConditionalOpcode == LinxV5::SETC_EQI_BR) == TrueEdge;
+          Allowed = Equal ? Singleton : Singleton.inverse();
+        }
         Optional<ConstantRange> Narrowed =
-            EqualEdge ? Current.exactIntersectWith(Singleton)
-                      : Current.exactIntersectWith(Singleton.inverse());
+            Current.exactIntersectWith(Allowed);
         if (Narrowed && Narrowed->isEmptySet())
           continue;
         // Removing a point from the middle creates a hole.  Keep the original
@@ -711,9 +754,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
           ConstantRange EquivalentCurrent = getParentRange(
               SuccessorEnvironment, ConditionalEquivalentReg);
           Optional<ConstantRange> EquivalentNarrowed =
-              EqualEdge
-                  ? EquivalentCurrent.exactIntersectWith(Singleton)
-                  : EquivalentCurrent.exactIntersectWith(Singleton.inverse());
+              EquivalentCurrent.exactIntersectWith(Allowed);
           if (EquivalentNarrowed && EquivalentNarrowed->isEmptySet())
             continue;
           if (EquivalentNarrowed)
