@@ -1,0 +1,25 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-clockhands -o - %s \
+# RUN:   | FileCheck %s
+#
+# TROWMAX encodes its 16x32 source geometry in B.DIM but publishes a 16x1
+# FP32 result in the 128-byte destination. Clockhands resolves the destination
+# descriptor on its first visit, before a later COPY can normalize it.
+# CHECK-LABEL: name: row_max_clockhands
+# CHECK: BSTART.TEPL 65, FP32
+# CHECK: BSTART.TLSU TSTORE, FP32
+--- |
+  define void @row_max_clockhands() { ret void }
+...
+---
+name: row_max_clockhands
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs }
+  - { id: 1, class: tile_abs }
+body: |
+  bb.0:
+    %0:tile_abs = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 65, FP32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def %1, 720905, %0, 13, 1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $0, mask=1111, last\0A", 9, 720905, %1
+    PseudoRET
+...

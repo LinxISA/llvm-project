@@ -1005,11 +1005,13 @@ static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
     else
       Selector = StringSwitch<Optional<unsigned>>(Operation)
                      .Case("TROWSUM", 64)
+                     .Case("TROWMAX", 65)
                      .Case("TROWARGMAX", 76)
                      .Case("TCOLSUM", 80)
                      .Default(None);
   }
-  if (Selector && (*Selector == 64 || *Selector == 76 || *Selector == 80))
+  if (Selector && (*Selector == 64 || *Selector == 65 || *Selector == 76 ||
+                   *Selector == 80))
     return Selector;
   return None;
 }
