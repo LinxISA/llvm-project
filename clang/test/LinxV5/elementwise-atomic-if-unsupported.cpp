@@ -1,17 +1,28 @@
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O0 -emit-llvm -S -o - %s 2>&1 | FileCheck %s
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o - %s 2>&1 | FileCheck %s
 
 using tile32 = unsigned int tile_size(32);
 
+__attribute__((annotate(
+                   "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32"),
+               always_inline)) inline tile32 &element_view(tile32 &value) {
+  return value;
+}
+
 void unsupported_order(tile32 &old_values, unsigned int *hist,
                        const tile32 &indices, unsigned int valid_lanes) {
+  tile32 local_indices = indices;
+  tile32 local_output{};
+  auto &index_elements = element_view(local_indices);
+  auto &output_elements = element_view(local_output);
 #pragma linx elementwise
   for (unsigned i = 0; i < 32; ++i) {
     if (i < valid_lanes)
-      old_values[i] =
-          __atomic_fetch_add(&hist[indices[i]], 1u, __ATOMIC_SEQ_CST);
+      output_elements[i] = __atomic_fetch_add(&hist[index_elements[i]], 1u,
+                                              __ATOMIC_SEQ_CST);
     else
-      old_values[i] = 0;
+      output_elements[i] = 0;
   }
+  old_values = local_output;
 }
 
-// CHECK: error: cannot compile this unsupported Linx element-wise loop form yet
+// CHECK: error: PTO element region: requires non-volatile system-scope monotonic atomic add of exact i32 value one
