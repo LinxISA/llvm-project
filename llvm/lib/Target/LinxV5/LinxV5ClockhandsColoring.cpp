@@ -13,6 +13,9 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/Support/MathExtras.h"
 #include <llvm/CodeGen/LiveIntervals.h>
 #include <llvm/CodeGen/MachineFunctionPass.h>
 #include <llvm/CodeGen/MachineRegisterInfo.h>
@@ -299,7 +302,64 @@ static AssembleParentEvent getAssembleParentEvent(MachineInstr &MI,
 
 enum class ParentPhaseResult { Disjoint, Overlap, Invalid, UnableToProve };
 
-using ParentRangeEnvironment = std::map<unsigned, ConstantRange>;
+// Register IDs occupy 32 bits. Higher keys name compiler-private scalar spill
+// locations; keeping both in the same lattice preserves facts across joins and
+// applies the existing loop widening/work budget to memory-carried counters.
+using ParentRangeLocation = uint64_t;
+using ParentRangeEnvironment = std::map<ParentRangeLocation, ConstantRange>;
+static constexpr ParentRangeLocation FirstParentSpillLocation = uint64_t(1) << 32;
+
+struct ParentSpillAccess {
+  int FI;
+  int64_t Offset;
+  bool operator<(const ParentSpillAccess &Other) const {
+    return std::tie(FI, Offset) < std::tie(Other.FI, Other.Offset);
+  }
+};
+
+static Optional<ParentSpillAccess>
+getParentSpillAccess(const MachineInstr &MI, const MachineFrameInfo &MFI,
+                     bool IsLoad) {
+  if (MI.getOpcode() != (IsLoad ? LinxV5::LDI : LinxV5::SDI) ||
+      !MI.hasOneMemOperand())
+    return None;
+  const MachineMemOperand *MMO = *MI.memoperands_begin();
+  if ((IsLoad ? !MMO->isLoad() || MMO->isStore()
+              : !MMO->isStore() || MMO->isLoad()) ||
+      MMO->isAtomic() || MMO->isVolatile() || MMO->getSize() != 8 ||
+      MMO->getAlign() < Align(8))
+    return None;
+  const auto *PSV =
+      dyn_cast_or_null<FixedStackPseudoSourceValue>(MMO->getPseudoValue());
+  if (!PSV || !MFI.isSpillSlotObjectIndex(PSV->getFrameIndex()) ||
+      MFI.isDeadObjectIndex(PSV->getFrameIndex()) || PSV->mayAlias(&MFI))
+    return None;
+  int64_t ObjectSize = MFI.getObjectSize(PSV->getFrameIndex());
+  if (ObjectSize < 8 || MMO->getOffset() < 0 ||
+      MMO->getOffset() > ObjectSize - 8)
+    return None;
+  return ParentSpillAccess{PSV->getFrameIndex(), MMO->getOffset()};
+}
+
+static ConstantRange getParentLocationRange(
+    const ParentRangeEnvironment &Environment, ParentRangeLocation Location) {
+  auto It = Environment.find(Location);
+  return It == Environment.end() ? ConstantRange::getFull(64) : It->second;
+}
+
+static void setParentLocationRange(ParentRangeEnvironment &Environment,
+                                   ParentRangeLocation Location,
+                                   const ConstantRange &Range) {
+  if (Range.isFullSet())
+    Environment.erase(Location);
+  else {
+    auto It = Environment.find(Location);
+    if (It == Environment.end())
+      Environment.emplace(Location, Range);
+    else
+      It->second = Range;
+  }
+}
 
 struct ParentPhaseStateKey {
   MachineBasicBlock *MBB = nullptr;
@@ -314,21 +374,12 @@ static ConstantRange getParentRange(const ParentRangeEnvironment &Environment,
                                     Register Reg) {
   if (Reg == LinxV5::R0)
     return ConstantRange(APInt(64, 0));
-  auto It = Environment.find(Reg.id());
-  return It == Environment.end() ? ConstantRange::getFull(64) : It->second;
+  return getParentLocationRange(Environment, Reg.id());
 }
 
 static void setParentRange(ParentRangeEnvironment &Environment, Register Reg,
                            const ConstantRange &Range) {
-  if (Range.isFullSet())
-    Environment.erase(Reg.id());
-  else {
-    auto It = Environment.find(Reg.id());
-    if (It == Environment.end())
-      Environment.emplace(Reg.id(), Range);
-    else
-      It->second = Range;
-  }
+  setParentLocationRange(Environment, Reg.id(), Range);
 }
 
 // Missing entries mean Top.  Therefore a fact survives a join only when both
@@ -361,8 +412,9 @@ static void invalidateParentRangeAliases(ParentRangeEnvironment &Environment,
     return;
   }
   for (auto It = Environment.begin(); It != Environment.end();) {
-    Register Known(It->first);
-    if (Known.isPhysical() && TRI.regsOverlap(Known, Def))
+    Register Known(static_cast<unsigned>(It->first));
+    if (It->first < FirstParentSpillLocation && Known.isPhysical() &&
+        TRI.regsOverlap(Known, Def))
       It = Environment.erase(It);
     else
       ++It;
@@ -482,12 +534,14 @@ static ConstantRange widenParentRangeAtLoopHeader(
 static ParentPhaseResult analyzeAssembleParentPhases(
     MachineFunction &MF, MachineLoopInfo &MLI, const TargetRegisterInfo &TRI,
     Register ParentA, Register ParentB = Register()) {
-  std::set<unsigned> RelevantRegs;
-  std::map<unsigned, SmallVector<APInt, 4>> ComparisonEndpoints;
-  std::map<unsigned, SmallVector<unsigned, 2>> ScalarDependencies;
+  std::set<ParentRangeLocation> RelevantLocations;
+  std::map<ParentSpillAccess, ParentRangeLocation> SpillLocations;
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  std::map<ParentRangeLocation, SmallVector<APInt, 4>> ComparisonEndpoints;
+  std::map<ParentRangeLocation, SmallVector<ParentRangeLocation, 2>> ScalarDependencies;
   // Every 64-bit value is a legal endpoint, including DenseMap's reserved
   // empty/tombstone keys (-1 and -2).
-  std::map<unsigned, std::set<uint64_t>> ComparisonEndpointMembership;
+  std::map<ParentRangeLocation, std::set<uint64_t>> ComparisonEndpointMembership;
   constexpr unsigned MaxPhaseProofWork = 65536;
   unsigned PreprocessWork = 0;
   auto consumePreprocessWork = [&](size_t Work) {
@@ -500,7 +554,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     PreprocessWork += Work;
     return true;
   };
-  auto addEndpoint = [&](unsigned Reg, const APInt &Endpoint) {
+  auto addEndpoint = [&](ParentRangeLocation Reg, const APInt &Endpoint) {
     if (!ComparisonEndpointMembership[Reg]
              .insert(Endpoint.getZExtValue())
              .second)
@@ -508,11 +562,20 @@ static ParentPhaseResult analyzeAssembleParentPhases(
     ComparisonEndpoints[Reg].push_back(Endpoint);
     return true;
   };
+  auto spillLocation = [&](const ParentSpillAccess &Access) {
+    auto It = SpillLocations.find(Access);
+    if (It != SpillLocations.end())
+      return It->second;
+    ParentRangeLocation Location =
+        FirstParentSpillLocation + SpillLocations.size();
+    SpillLocations.emplace(Access, Location);
+    return Location;
+  };
   for (MachineBasicBlock &MBB : MF)
     for (MachineInstr &MI : MBB) {
       // Charge the instruction, its two possible seed endpoints, and one
-      // scalar dependency edge.
-      if (!consumePreprocessWork(4))
+      // scalar/spill dependency edges.
+      if (!consumePreprocessWork(5))
         return ParentPhaseResult::UnableToProve;
       if (MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
           MI.getOperand(1).isReg()) {
@@ -534,31 +597,41 @@ static ParentPhaseResult analyzeAssembleParentPhases(
           ScalarDependencies[MI.getOperand(0).getReg().id()].push_back(
               MI.getOperand(2).getReg().id());
       }
+      if (MI.getNumOperands() && MI.getOperand(0).isReg()) {
+        if (auto Load = getParentSpillAccess(MI, MFI, true))
+          ScalarDependencies[MI.getOperand(0).getReg().id()].push_back(
+              spillLocation(*Load));
+        if (auto Store = getParentSpillAccess(MI, MFI, false))
+          ScalarDependencies[spillLocation(*Store)].push_back(
+              MI.getOperand(0).getReg().id());
+      }
       if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
            MI.getOpcode() == LinxV5::SETC_NEI_BR ||
            MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
           MI.getNumOperands() >= 2 && MI.getOperand(0).isReg() &&
           MI.getOperand(1).isImm()) {
         unsigned Reg = MI.getOperand(0).getReg().id();
-        RelevantRegs.insert(Reg);
+        RelevantLocations.insert(Reg);
         APInt Endpoint(64, static_cast<uint64_t>(MI.getOperand(1).getImm()));
         addEndpoint(Reg, Endpoint);
         addEndpoint(Reg, Endpoint + 1);
       }
     }
 
-  std::map<std::pair<unsigned, unsigned>, bool> DependencyPathCache;
-  auto hasDependencyPath = [&](unsigned From, unsigned To) -> Optional<bool> {
+  std::map<std::pair<ParentRangeLocation, ParentRangeLocation>, bool>
+      DependencyPathCache;
+  auto hasDependencyPath = [&](ParentRangeLocation From,
+                               ParentRangeLocation To) -> Optional<bool> {
     auto Key = std::make_pair(From, To);
     auto Cached = DependencyPathCache.find(Key);
     if (Cached != DependencyPathCache.end())
       return Cached->second;
-    SmallVector<unsigned, 16> Pending{From};
-    std::set<unsigned> Visited;
+    SmallVector<ParentRangeLocation, 16> Pending{From};
+    std::set<ParentRangeLocation> Visited;
     while (!Pending.empty()) {
       if (!consumePreprocessWork(1))
         return None;
-      unsigned Reg = Pending.pop_back_val();
+      ParentRangeLocation Reg = Pending.pop_back_val();
       if (Reg == To)
         return DependencyPathCache[Key] = true;
       if (!Visited.insert(Reg).second)
@@ -580,8 +653,26 @@ static ParentPhaseResult analyzeAssembleParentPhases(
       for (MachineInstr &MI : MBB) {
         if (!consumePreprocessWork(1))
           return ParentPhaseResult::UnableToProve;
+        if (MI.getNumOperands() && MI.getOperand(0).isReg()) {
+          Optional<ParentRangeLocation> Def, Src;
+          if (auto Load = getParentSpillAccess(MI, MFI, true)) {
+            Def = MI.getOperand(0).getReg().id();
+            Src = spillLocation(*Load);
+          } else if (auto Store = getParentSpillAccess(MI, MFI, false)) {
+            Def = spillLocation(*Store);
+            Src = MI.getOperand(0).getReg().id();
+          }
+          if (Def && RelevantLocations.count(*Def)) {
+            RelevantChanged |= RelevantLocations.insert(*Src).second;
+            if (!consumePreprocessWork(ComparisonEndpoints[*Def].size()))
+              return ParentPhaseResult::UnableToProve;
+            auto Endpoints = ComparisonEndpoints[*Def];
+            for (const APInt &Endpoint : Endpoints)
+              RelevantChanged |= addEndpoint(*Src, Endpoint);
+          }
+        }
         if (MI.getNumOperands() < 2 || !MI.getOperand(0).isReg() ||
-            !RelevantRegs.count(MI.getOperand(0).getReg().id()))
+            !RelevantLocations.count(MI.getOperand(0).getReg().id()))
           continue;
         unsigned DefReg = MI.getOperand(0).getReg().id();
         if ((MI.getOpcode() == TargetOpcode::COPY ||
@@ -590,7 +681,7 @@ static ParentPhaseResult analyzeAssembleParentPhases(
              MI.getOpcode() == LinxV5::SUBI) &&
             MI.getOperand(1).isReg()) {
           unsigned SrcReg = MI.getOperand(1).getReg().id();
-          RelevantChanged |= RelevantRegs.insert(SrcReg).second;
+          RelevantChanged |= RelevantLocations.insert(SrcReg).second;
           bool Propagate = MI.getOpcode() == TargetOpcode::COPY;
           APInt Adjustment(64, 0);
           if (MI.getOpcode() == LinxV5::ORI && MI.getNumOperands() >= 3 &&
@@ -641,8 +732,8 @@ static ParentPhaseResult analyzeAssembleParentPhases(
                  MI.getOperand(3).getImm() == 0) {
           Register LHS = MI.getOperand(1).getReg();
           Register RHS = MI.getOperand(2).getReg();
-          RelevantChanged |= RelevantRegs.insert(LHS.id()).second;
-          RelevantChanged |= RelevantRegs.insert(RHS.id()).second;
+          RelevantChanged |= RelevantLocations.insert(LHS.id()).second;
+          RelevantChanged |= RelevantLocations.insert(RHS.id()).second;
           Register Source = LHS == LinxV5::R0 ? RHS :
                             RHS == LinxV5::R0 ? LHS : Register();
           if (Source) {
@@ -746,6 +837,60 @@ static ParentPhaseResult analyzeAssembleParentPhases(
         KnownDef = std::make_pair(MI.getOperand(0).getReg(), Value);
       }
 
+      if (MI.getNumOperands() && MI.getOperand(0).isReg())
+        if (auto Load = getParentSpillAccess(MI, MFI, true))
+          KnownDef = std::make_pair(MI.getOperand(0).getReg(),
+              getParentLocationRange(Environment, spillLocation(*Load)));
+
+      Optional<std::pair<ParentRangeLocation, ConstantRange>> StoredRange;
+      if (MI.getNumOperands() && MI.getOperand(0).isReg())
+        if (auto Store = getParentSpillAccess(MI, MFI, false))
+          StoredRange = std::make_pair(spillLocation(*Store),
+              getParentRange(Environment, MI.getOperand(0).getReg()));
+      // A partial or unmodeled write into a tracked private spill destroys its
+      // entire value. Other memory cannot alias a non-address-taken spill slot.
+      for (const MachineMemOperand *MMO : MI.memoperands()) {
+        if (!MMO->isStore())
+          continue;
+        const auto *PSV =
+            dyn_cast_or_null<FixedStackPseudoSourceValue>(MMO->getPseudoValue());
+        if (!PSV)
+          continue;
+        uint64_t Size = MMO->getSize();
+        int64_t WriteEnd = 0;
+        bool UnknownRange =
+            Size > uint64_t(INT64_MAX) ||
+            AddOverflow(MMO->getOffset(), static_cast<int64_t>(Size), WriteEnd);
+        int FI = PSV->getFrameIndex();
+        // Out-of-object metadata cannot establish separation from another
+        // frame object. Forget all spill facts rather than assume an FI fence.
+        if (UnknownRange || MFI.isDeadObjectIndex(FI) ||
+            MMO->getOffset() < 0 || WriteEnd > MFI.getObjectSize(FI)) {
+          for (auto It = Environment.lower_bound(FirstParentSpillLocation);
+               It != Environment.end();)
+            It = Environment.erase(It);
+          continue;
+        }
+        for (const auto &Spill : SpillLocations) {
+          if (Spill.first.FI != FI)
+            continue;
+          int64_t SpillEnd;
+          if (UnknownRange ||
+              AddOverflow(Spill.first.Offset, int64_t(8), SpillEnd) ||
+              (MMO->getOffset() < SpillEnd && Spill.first.Offset < WriteEnd))
+            Environment.erase(Spill.second);
+        }
+      }
+      if (StoredRange && RelevantLocations.count(StoredRange->first))
+        setParentLocationRange(Environment, StoredRange->first,
+                               StoredRange->second);
+      // Do not rely on callees preserving frame contents, even for private
+      // spill objects. Register/regmask invalidation below remains separate.
+      if (MI.isCall())
+        for (auto It = Environment.lower_bound(FirstParentSpillLocation);
+             It != Environment.end();)
+          It = Environment.erase(It);
+
       if ((MI.getOpcode() == LinxV5::SETC_EQI_BR ||
            MI.getOpcode() == LinxV5::SETC_NEI_BR ||
            MI.getOpcode() == LinxV5::SETC_LTI_BR) &&
@@ -774,14 +919,15 @@ static ParentPhaseResult analyzeAssembleParentPhases(
           invalidateParentRangeAliases(Environment, TRI, MO.getReg());
         else if (MO.isRegMask())
           for (auto It = Environment.begin(); It != Environment.end();) {
-            Register Known(It->first);
-            if (Known.isPhysical() && MO.clobbersPhysReg(Known))
+            Register Known(static_cast<unsigned>(It->first));
+            if (It->first < FirstParentSpillLocation && Known.isPhysical() &&
+                MO.clobbersPhysReg(Known))
               It = Environment.erase(It);
             else
               ++It;
           }
       }
-      if (KnownDef && RelevantRegs.count(KnownDef->first.id()))
+      if (KnownDef && RelevantLocations.count(KnownDef->first.id()))
         setParentRange(Environment, KnownDef->first, KnownDef->second);
     }
 
