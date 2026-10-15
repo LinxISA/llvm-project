@@ -6539,16 +6539,412 @@ LinxV5ElementCallContextPass::run(Module &M, ModuleAnalysisManager &AM) {
 
   unsigned CloneID = 0;
   bool Changed = false;
+  SmallPtrSet<Function *, 8> ContextCallers;
+  DenseMap<Function *, Function *> ContextOrigins;
+
+  // A reusable private capture may be passed through one outlined caller.
+  // Specialize that caller at its proved root call site; attaching facts to
+  // the original externally callable helper would otherwise be unsound.
+  auto SpecializeCapturedCaller = [&](Candidate &C, CallInst *Inner) {
+    Function *Middle = Inner->getFunction();
+    LLVM_DEBUG(dbgs() << "element capture context: " << C.F->getName()
+                      << " through " << Middle->getName() << '\n');
+    if ((!Middle->hasLocalLinkage() && !Middle->hasLinkOnceODRLinkage()) ||
+        Middle->hasAddressTaken() || Middle->isVarArg())
+      return false;
+    SmallVector<CallInst *, 4> OuterCalls;
+    for (User *U : Middle->users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != Middle ||
+          Call->getFunction() == Middle || Call->isMustTailCall() ||
+          Call->hasOperandBundles())
+        return false;
+      OuterCalls.push_back(Call);
+    }
+    bool Specialized = false;
+    for (CallInst *Outer : OuterCalls) {
+      Function &Root = *Outer->getFunction();
+      DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(Root);
+      auto FindFieldStore = [&](AllocaInst *Object, int64_t Offset,
+                                Instruction *Use) -> StoreInst * {
+        auto *Count = dyn_cast<ConstantInt>(Object->getArraySize());
+        TypeSize ObjectSize = DL.getTypeAllocSize(Object->getAllocatedType());
+        uint64_t PointerSize = DL.getPointerSize();
+        if (!Count || !Count->isOne() || ObjectSize.isScalable() || Offset < 0 ||
+            ObjectSize.getFixedValue() < PointerSize ||
+            uint64_t(Offset) > ObjectSize.getFixedValue() - PointerSize)
+          return nullptr;
+        StoreInst *Found = nullptr;
+        for (Instruction &I : instructions(Root)) {
+          auto *Store = dyn_cast<StoreInst>(&I);
+          if (!Store)
+            continue;
+          int64_t StoreOffset = 0;
+          if (GetPointerBaseWithConstantOffset(Store->getPointerOperand(),
+                                               StoreOffset, DL) != Object)
+            continue;
+          TypeSize StoreSize = DL.getTypeStoreSize(Store->getValueOperand()->getType());
+          if (StoreSize.isScalable() || StoreOffset < 0 ||
+              StoreSize.getFixedValue() > ObjectSize.getFixedValue() ||
+              uint64_t(StoreOffset) > ObjectSize.getFixedValue() -
+                                          StoreSize.getFixedValue())
+            return nullptr;
+          if (uint64_t(StoreOffset) + StoreSize.getFixedValue() <= uint64_t(Offset) ||
+              uint64_t(Offset) + PointerSize <= uint64_t(StoreOffset))
+            continue;
+          // Any overlapping write invalidates the pointer-field proof, even
+          // when its starting offset differs or it precedes initialization.
+          if (StoreOffset != Offset || StoreSize.getFixedValue() != PointerSize)
+            return nullptr;
+          if (Found || Store->isAtomic() || Store->isVolatile() ||
+              !Store->getValueOperand()->getType()->isPointerTy() ||
+              (Store != Use && !DT.dominates(Store, Use)))
+            return nullptr;
+          Found = Store;
+        }
+        return Found;
+      };
+
+      std::function<Value *(Value *)> Resolve = [&](Value *V) -> Value * {
+        int64_t Offset = 0;
+        Value *Base = GetPointerBaseWithConstantOffset(V, Offset, DL);
+        if (auto *Arg = dyn_cast<Argument>(Base)) {
+          if (Arg->getParent() != Middle || Offset != 0)
+            return nullptr;
+          return Outer->getArgOperand(Arg->getArgNo());
+        }
+        auto *Load = dyn_cast<LoadInst>(Base);
+        if (!Load || Offset != 0 || Load->isAtomic() || Load->isVolatile() ||
+            !Load->getType()->isPointerTy())
+          return nullptr;
+        int64_t FieldOffset = 0;
+        Value *AddressBase = GetPointerBaseWithConstantOffset(
+            Load->getPointerOperand(), FieldOffset, DL);
+        Value *ObjectPointer = Resolve(AddressBase);
+        int64_t ObjectOffset = 0;
+        auto *Object = ObjectPointer ? dyn_cast<AllocaInst>(
+            GetPointerBaseWithConstantOffset(ObjectPointer, ObjectOffset, DL))
+                                    : nullptr;
+        if (!Object || ObjectOffset != 0)
+          return nullptr;
+        StoreInst *Store = FindFieldStore(Object, FieldOffset, Outer);
+        return Store ? Store->getValueOperand() : nullptr;
+      };
+
+      Value *ClosurePointer = Resolve(
+          Inner->getArgOperand(C.Closure->getArgNo()));
+      int64_t ClosureOffset = 0;
+      auto *ClosureObject = ClosurePointer ? dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(ClosurePointer, ClosureOffset, DL))
+                                          : nullptr;
+      if (!ClosureObject || ClosureOffset != 0) {
+        LLVM_DEBUG(dbgs() << "element capture: unresolved inner record\n");
+        continue;
+      }
+      StoreInst *FieldStore = FindFieldStore(ClosureObject, C.FieldOffset, Outer);
+      int64_t DestinationOffset = 0;
+      auto *Destination = FieldStore ? dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(FieldStore->getValueOperand(),
+                                           DestinationOffset, DL)) : nullptr;
+      Value *Source = Resolve(Inner->getArgOperand(C.Source->getArgNo()));
+      if (!Destination || DestinationOffset != 0 || !Source) {
+        LLVM_DEBUG(dbgs() << "element capture: unresolved pointer field\n");
+        continue;
+      }
+      Source = getUnderlyingObject(Source);
+      if (Source == Destination || Source == ClosureObject ||
+          FAM.getResult<AAManager>(Root).alias(
+              MemoryLocation(Destination, LocationSize::beforeOrAfterPointer()),
+              MemoryLocation(Source, LocationSize::beforeOrAfterPointer())) !=
+              AliasResult::NoAlias) {
+        LLVM_DEBUG(dbgs() << "element capture: root streams may alias\n");
+        continue;
+      }
+
+      // The inner record's address may only be loaded or passed to the exact
+      // read-only closure parameter already checked during candidate discovery.
+      SmallPtrSet<Value *, 16> SeenInner;
+      std::function<bool(Value *)> ReadOnlyInner = [&](Value *P) {
+        if (!SeenInner.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && ReadOnlyInner(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (ReadOnlyInner(Cast))
+              continue;
+          }
+          if (auto *Load = dyn_cast<LoadInst>(U)) {
+            if (Load->getPointerOperand() == P && !Load->isAtomic() &&
+                !Load->isVolatile())
+              continue;
+          }
+          auto *Call = dyn_cast<CallInst>(U);
+          Function *Called = Call ? Call->getCalledFunction() : nullptr;
+          if (Call && (Called == C.F || ContextOrigins.lookup(Called) == C.F) &&
+              !Call->isMustTailCall() && !Call->hasOperandBundles() &&
+              Call->getArgOperand(C.Closure->getArgNo()) == P)
+            continue;
+          if (isa<DbgInfoIntrinsic>(U))
+            continue;
+          return false;
+        }
+        return true;
+      };
+
+      // A capturing record is immutable after its unique initialization. Its
+      // outlined users may read fields, but may not write, return, or expose
+      // the record's address. Check every use, including other call sites.
+      SmallPtrSet<Value *, 16> SeenCapture;
+      std::function<bool(Value *, int64_t)> ReadOnlyCapture =
+          [&](Value *P, int64_t Offset) {
+        if (!SeenCapture.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            int64_t Delta = 0;
+            if (GetPointerBaseWithConstantOffset(GEP, Delta, DL) ==
+                    getUnderlyingObject(P) &&
+                GEP->hasAllConstantIndices() &&
+                ReadOnlyCapture(GEP, Delta))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (ReadOnlyCapture(Cast, Offset))
+              continue;
+          }
+          if (auto *Load = dyn_cast<LoadInst>(U)) {
+            if (Load->getPointerOperand() != P || Load->isAtomic() ||
+                Load->isVolatile())
+              return false;
+            if (!Load->getType()->isPointerTy())
+              return false;
+            // The root field resolver below records the inner capture's
+            // actual field offset separately for each receiver.
+            continue;
+          }
+          if (isa<DbgInfoIntrinsic>(U))
+            continue;
+          return false;
+        }
+        return true;
+      };
+      SmallPtrSet<Value *, 16> SeenRecord;
+      std::function<bool(Value *)> PrivateRecord = [&](Value *P) {
+        if (!SeenRecord.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && PrivateRecord(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (PrivateRecord(Cast))
+              continue;
+          }
+          if (U == FieldStore && FieldStore->getPointerOperand() == P)
+            continue;
+          if (auto *Store = dyn_cast<StoreInst>(U)) {
+            if (Store->getValueOperand() != P || Store->isAtomic() ||
+                Store->isVolatile())
+              return false;
+            int64_t CaptureOffset = 0;
+            auto *Receiver = dyn_cast<AllocaInst>(
+                GetPointerBaseWithConstantOffset(Store->getPointerOperand(),
+                                                 CaptureOffset, DL));
+            if (!Receiver || FindFieldStore(Receiver, CaptureOffset, Store) != Store)
+              return false;
+            SmallPtrSet<Value *, 16> SeenReceiver;
+            std::function<bool(Value *)> PrivateReceiver = [&](Value *Address) {
+              if (!SeenReceiver.insert(Address).second)
+                return true;
+              for (User *ReceiverUse : Address->users()) {
+                if (auto *GEP = dyn_cast<GetElementPtrInst>(ReceiverUse)) {
+                  if (GEP->hasAllConstantIndices() && PrivateReceiver(GEP))
+                    continue;
+                }
+                if (auto *Cast = dyn_cast<BitCastInst>(ReceiverUse)) {
+                  if (PrivateReceiver(Cast))
+                    continue;
+                }
+                if (auto *Init = dyn_cast<StoreInst>(ReceiverUse)) {
+                  if (Init->getPointerOperand() != Address)
+                    return false;
+                  int64_t InitOffset = 0;
+                  if (GetPointerBaseWithConstantOffset(Address, InitOffset, DL) !=
+                          Receiver ||
+                      FindFieldStore(Receiver, InitOffset, Init) != Init)
+                    return false;
+                  continue;
+                }
+                auto *Use = dyn_cast<CallInst>(ReceiverUse);
+                if (!Use)
+                  return false;
+                if (isa<DbgInfoIntrinsic>(Use) ||
+                    isIntrinsic(Use, Intrinsic::lifetime_start) ||
+                    isIntrinsic(Use, Intrinsic::lifetime_end))
+                  continue;
+                Function *UserF = Use->getCalledFunction();
+                if (!UserF || UserF->isDeclaration() || UserF->isVarArg() ||
+                    UserF->hasAddressTaken() || Use->isMustTailCall() ||
+                    Use->hasOperandBundles() || !DT.dominates(Store, Use))
+                  return false;
+                bool FoundAddress = false;
+                for (unsigned ArgNo = 0; ArgNo < Use->arg_size(); ++ArgNo) {
+                  if (Use->getArgOperand(ArgNo) != Address)
+                    continue;
+                  // Passing a field interior as the record base changes the
+                  // schema; only the exact whole capture object is proved.
+                  int64_t AddressOffset = 0;
+                  if (GetPointerBaseWithConstantOffset(Address, AddressOffset,
+                                                       DL) != Receiver ||
+                      AddressOffset != 0)
+                    return false;
+                  SeenCapture.clear();
+                  if (!ReadOnlyCapture(UserF->getArg(ArgNo), 0))
+                    return false;
+                  FoundAddress = true;
+                }
+                if (!FoundAddress)
+                  return false;
+              }
+              return true;
+            };
+            if (!PrivateReceiver(Receiver))
+              return false;
+            for (Instruction &I : instructions(Root)) {
+              auto *Use = dyn_cast<CallInst>(&I);
+              if (!Use || isa<IntrinsicInst>(Use))
+                continue;
+              for (unsigned ArgNo = 0; ArgNo < Use->arg_size(); ++ArgNo) {
+                if (getUnderlyingObject(Use->getArgOperand(ArgNo)) != Receiver)
+                  continue;
+                Function *UserF = Use->getCalledFunction();
+                if (!UserF || UserF->isDeclaration() || UserF->isVarArg() ||
+                    UserF->hasAddressTaken() || Use->isMustTailCall() ||
+                    Use->hasOperandBundles() ||
+                    !DT.dominates(Store, Use))
+                  return false;
+                SeenCapture.clear();
+                if (!ReadOnlyCapture(UserF->getArg(ArgNo), 0))
+                  return false;
+                for (Instruction &BodyI : instructions(UserF)) {
+                  auto *Load = dyn_cast<LoadInst>(&BodyI);
+                  if (!Load)
+                    continue;
+                  int64_t LoadOffset = 0;
+                  if (GetPointerBaseWithConstantOffset(Load->getPointerOperand(),
+                                                       LoadOffset, DL) !=
+                          UserF->getArg(ArgNo) ||
+                      LoadOffset != CaptureOffset)
+                    continue;
+                  SeenInner.clear();
+                  if (!ReadOnlyInner(Load))
+                    return false;
+                }
+              }
+            }
+            continue;
+          }
+          if (auto *Call = dyn_cast<CallInst>(U)) {
+            if (isa<DbgInfoIntrinsic>(Call) ||
+                isIntrinsic(Call, Intrinsic::lifetime_start) ||
+                isIntrinsic(Call, Intrinsic::lifetime_end))
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!PrivateRecord(ClosureObject)) {
+        LLVM_DEBUG(dbgs() << "element capture: record is not immutable/private\n");
+        continue;
+      }
+
+      SmallVector<CallInst *, 4> InnerCalls;
+      bool AllCallsProved = true;
+      for (Instruction &I : instructions(Middle)) {
+        auto *Sibling = dyn_cast<CallInst>(&I);
+        if (!Sibling || Sibling->getCalledFunction() != C.F)
+          continue;
+        Value *SiblingClosure = Resolve(
+            Sibling->getArgOperand(C.Closure->getArgNo()));
+        Value *SiblingSource = Resolve(
+            Sibling->getArgOperand(C.Source->getArgNo()));
+        int64_t SiblingOffset = 0;
+        if (!SiblingClosure || !SiblingSource ||
+            GetPointerBaseWithConstantOffset(SiblingClosure, SiblingOffset, DL) !=
+                ClosureObject || SiblingOffset != 0 ||
+            FAM.getResult<AAManager>(Root).alias(
+                MemoryLocation(Destination, LocationSize::beforeOrAfterPointer()),
+                MemoryLocation(getUnderlyingObject(SiblingSource),
+                               LocationSize::beforeOrAfterPointer())) !=
+                AliasResult::NoAlias) {
+          AllCallsProved = false;
+          break;
+        }
+        InnerCalls.push_back(Sibling);
+      }
+      if (!AllCallsProved || InnerCalls.empty())
+        continue;
+
+      ValueToValueMapTy MiddleMap;
+      Function *MiddleClone = CloneFunction(Middle, MiddleMap);
+      MiddleClone->setName(Middle->getName() + ".pto.context.caller." +
+                           Twine(CloneID++));
+      MiddleClone->setLinkage(GlobalValue::InternalLinkage);
+      MiddleClone->setComdat(nullptr);
+      for (CallInst *Sibling : InnerCalls) {
+        ValueToValueMapTy InnerMap;
+        Function *InnerClone = CloneFunction(C.F, InnerMap);
+        InnerClone->setName(C.F->getName() + ".pto.context." + Twine(CloneID++));
+        InnerClone->setLinkage(GlobalValue::InternalLinkage);
+        InnerClone->setComdat(nullptr);
+        ContextOrigins[InnerClone] = C.F;
+        MDBuilder MDB(M.getContext());
+        MDNode *Domain = MDB.createAnonymousAliasScopeDomain(
+            "linx.pto.element.call.context");
+        MDNode *Scope = MDB.createAnonymousAliasScope(
+            Domain, "linx.pto.element.private.destination");
+        MDNode *ScopeList = MDNode::get(M.getContext(), {Scope});
+        for (Instruction &I : instructions(InnerClone)) {
+          Value *Pointer = isa<LoadInst>(I) ? cast<LoadInst>(I).getPointerOperand()
+                         : isa<StoreInst>(I) ? cast<StoreInst>(I).getPointerOperand()
+                                            : nullptr;
+          if (!Pointer)
+            continue;
+          Value *Base = getUnderlyingObject(Pointer);
+          unsigned Kind = Base == InnerMap.lookup(C.DestinationBase)
+                              ? LLVMContext::MD_alias_scope
+                          : Base == InnerMap.lookup(C.Source)
+                              ? LLVMContext::MD_noalias : 0;
+          if (Kind)
+            I.setMetadata(Kind, MDNode::concatenate(I.getMetadata(Kind), ScopeList));
+        }
+        cast<CallInst>(MiddleMap.lookup(Sibling))->setCalledFunction(InnerClone);
+      }
+      Outer->setCalledFunction(MiddleClone);
+      ContextCallers.insert(Middle);
+      Specialized = true;
+    }
+    return Specialized;
+  };
   for (Candidate &C : Candidates) {
     Function &F = *C.F;
     for (CallInst *Call : C.Calls) {
+      if (Call->getCalledFunction() != &F)
+        continue;
       Function &Caller = *Call->getFunction();
       int64_t ClosureOffset = 0;
       auto *ClosureObject = dyn_cast<AllocaInst>(
           GetPointerBaseWithConstantOffset(
               Call->getArgOperand(C.Closure->getArgNo()), ClosureOffset, DL));
-      if (!ClosureObject || ClosureOffset != 0)
+      if (!ClosureObject || ClosureOffset != 0) {
+        Changed |= SpecializeCapturedCaller(C, Call);
         continue;
+      }
 
       SmallVector<StoreInst *, 2> FieldStores;
       for (Instruction &I : instructions(Caller)) {
@@ -6688,9 +7084,27 @@ LinxV5ElementCallContextPass::run(Module &M, ModuleAnalysisManager &AM) {
       Call->setCalledFunction(Clone);
       Changed = true;
     }
-    if (F.use_empty() && F.isDiscardableIfUnused())
-      F.eraseFromParent();
   }
+  // Remove only discarded originals of the specialized chain. Leaving their
+  // unproved marked regions around would incorrectly fail later verification.
+  SmallPtrSet<Function *, 8> Originals(ContextCallers.begin(), ContextCallers.end());
+  for (Candidate &C : Candidates)
+    Originals.insert(C.F);
+  SmallVector<Function *, 8> Pending(Originals.begin(), Originals.end());
+  bool Removed;
+  do {
+    Removed = false;
+    for (unsigned Index = 0; Index < Pending.size();) {
+      Function *F = Pending[Index];
+      if (!F->use_empty() || !F->isDiscardableIfUnused()) {
+        ++Index;
+        continue;
+      }
+      Pending.erase(Pending.begin() + Index);
+      F->eraseFromParent();
+      Removed = true;
+    }
+  } while (Removed);
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 
