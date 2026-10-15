@@ -584,6 +584,14 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   addLinkerCompressDebugSectionsOption(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
+  if (Args.hasArg(options::OPT_mlinx_group_runtime) &&
+      getToolChain().getTriple().isLinxV5()) {
+    // LinxV5 compiler-rt carries the worker carrier.  Keep this opt-in and
+    // force extraction from the archive without changing ordinary hosted CRT.
+    CmdArgs.push_back("-u");
+    CmdArgs.push_back("__linx_group_worker_start");
+  }
+
   addHIPRuntimeLibArgs(ToolChain, Args, CmdArgs);
 
   // The profile runtime also needs access to system libraries.
