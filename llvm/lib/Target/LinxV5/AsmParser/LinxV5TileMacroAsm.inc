@@ -489,6 +489,16 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       return false;
     unsigned Offset = Tokens[Pos + 3].Integer;
     Pos += 4;
+    // Multi-cell source views (ADR-0098 SubviewSizeCode 2..12) spell the
+    // extent inside the annotation: [base=..., offset=..., size=N].
+    unsigned SourceSize = 1;
+    if (!IsDestination && tokenIs(Pos, ",") && tokenIs(Pos + 1, "size") &&
+        tokenIs(Pos + 2, "=") && Pos + 3 < Tokens.size() &&
+        Tokens[Pos + 3].Kind == AsmToken::Integer &&
+        Tokens[Pos + 3].Integer >= 1 && Tokens[Pos + 3].Integer <= 12) {
+      SourceSize = Tokens[Pos + 3].Integer;
+      Pos += 4;
+    }
     if (!tokenIs(Pos, "]"))
       {
         if (!IsDestination || !tokenIs(Pos, ",") ||
@@ -527,7 +537,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     Range.Present = true;
     Range.Base = Base;
     Range.Offset = Offset;
-    Range.SizeCode = IsDestination ? Value.SizeCode : 1;
+    Range.SizeCode = IsDestination ? Value.SizeCode : SourceSize;
     return true;
   };
 

@@ -881,10 +881,25 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     unsigned Pos = 0;
     const MCInst *DATR = nullptr;
     const MCInst *FPATR = nullptr;
-    if (Pos < Body.size() && Body[Pos].getOpcode() == LinxV5::BDATR)
-      DATR = &Body[Pos++];
-    if (Pos < Body.size() && Body[Pos].getOpcode() == LinxV5::B_FPATR)
-      FPATR = &Body[Pos++];
+    // B.DATR/B.FPATR are header commands: they may also appear after the
+    // binders (e.g. the row-expand layout selector follows B.IOT/B.SUBVIEW),
+    // so pick the first of each anywhere in the modifier stream and mark the
+    // position consumed below.
+    unsigned DATRIndex = UINT_MAX, FPATRIndex = UINT_MAX;
+    for (unsigned I = 0; I != Body.size(); ++I) {
+      if (Body[I].getOpcode() == LinxV5::BDATR && DATRIndex == UINT_MAX) {
+        DATR = &Body[I];
+        DATRIndex = I;
+      }
+      if (Body[I].getOpcode() == LinxV5::B_FPATR && FPATRIndex == UINT_MAX) {
+        FPATR = &Body[I];
+        FPATRIndex = I;
+      }
+    }
+    while (Pos < Body.size() &&
+           (Body[Pos].getOpcode() == LinxV5::BDATR ||
+            Body[Pos].getOpcode() == LinxV5::B_FPATR))
+      ++Pos;
 
     bool AllowsDATR = false;
     bool RequiresDATR = false;
@@ -1003,6 +1018,10 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     SmallVector<bool, 32> Consumed(Body.size(), false);
     for (unsigned I = 0; I != OperandStart; ++I)
       Consumed[I] = true;
+    if (DATRIndex != UINT_MAX && DATRIndex >= OperandStart)
+      Consumed[DATRIndex] = true;
+    if (FPATRIndex != UINT_MAX && FPATRIndex >= OperandStart)
+      Consumed[FPATRIndex] = true;
     auto commandMatchesKind = [&](unsigned Position,
                                   TileMacroCommandKind Kind) {
       if (Position >= Body.size() || Consumed[Position])
@@ -1041,7 +1060,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
             return false;
           unsigned Member = SourceMembers[SourceSelect];
           if (!(TileMacroBindingMembers[Member].ModifierFlags & 1) ||
-              Modifier.getOperand(3).getImm() != 1)
+              Modifier.getOperand(3).getImm() == 0 ||
+              Modifier.getOperand(3).getImm() > 12)
             return false;
           SourceSeen[SourceSelect] = true;
           ++Position;

@@ -153,6 +153,139 @@ def member_slot(slot: str) -> str:
     }[slot]
 
 
+# PTO #291 elementwise carrier layouts (CUBE_M32/CUBE_M16 sources) are legal
+# B.DATR Layout content for every TEPL form that already models a B.DATR, but
+# the 0.58.7 catalog only spells the Layout dimension for the row-expand
+# family.  TileOP's PTO_ELEMENTWISE_LAYOUT_ASM emits `B.DATR CUBE_M32/CUBE_M16,
+# Null` for CUBE-layout sources of ordinary elementwise/scalar/reduction ops,
+# so without a Layout config the disassembler's fail-closed rule ("a DATR
+# slot with no config target must hold its default") rejects every such
+# bundle's macro folding.  Inject the missing optional Layout configuration
+# into TEPL forms that have a B.DATR target but no Layout target; the
+# matcher, printer and macro parser are generic over the config tables, so no
+# other component changes.
+# CUBE Matrix bundles always carry a B.DATR whose destination-dtype field is
+# the operand dtype (the CCTRL union rides the pad slot per PTO-ISA #236),
+# but the 0.58.7 catalog spells no DstDataType dimension for the TMATMUL/
+# TGEMV families.  The fail-closed rule "a DATR slot without a config
+# target must hold its default" then rejects every CUBE bundle.  Inject an
+# optional DstDataType configuration (DATR DataType target, default = the
+# header operand type) into CUBE forms that target a DATR but lack a
+# DataType slot, mirroring the elementwise Layout enrichment above.
+def enrich_cube_dst_datatype_configs(catalog: dict) -> None:
+    injected = 0
+    for operation in catalog["operations"]:
+        for form in operation["forms"]:
+            expansion = form["expansion"]
+            family = expansion["header"].get("family")
+            if family != "CUBE":
+                continue
+            bindings = expansion["configuration_bindings"]
+            has_datr = any(
+                target["command"] == "B.DATR"
+                for binding in bindings
+                for target in binding["targets"]
+            )
+            has_dsttype = any(
+                target["command"] == "B.DATR"
+                and target["slot"] == "DataType"
+                for binding in bindings
+                for target in binding["targets"]
+            )
+            if not has_datr or has_dsttype:
+                continue
+            form["configuration"].append(
+                {
+                    "binding_kind": "bundle-configuration",
+                    "condition": None,
+                    "configuration_kind": "attribute",
+                    "constraint": None,
+                    "default": "HeaderType",
+                    "field": "DstDataType",
+                    "optional": True,
+                    "ordinal": len(form["configuration"]),
+                    "role": "bundle configuration field",
+                    "size": None,
+                    "syntax": "DstDataType?",
+                    "value_style": "bare-value",
+                }
+            )
+            bindings.append(
+                {
+                    "field": "DstDataType",
+                    "syntax": "DstDataType?",
+                    "targets": [
+                        {
+                            "command": "B.DATR",
+                            "group": None,
+                            "slot": "DataType",
+                        }
+                    ],
+                }
+            )
+            injected += 1
+    if injected:
+        print(
+            f"note: injected optional DstDataType configuration into "
+            f"{injected} CUBE forms (mandatory CUBE B.DATR operand dtype)"
+        )
+
+
+def enrich_elementwise_layout_configs(catalog: dict) -> None:
+    injected = 0
+    for operation in catalog["operations"]:
+        for form in operation["forms"]:
+            expansion = form["expansion"]
+            header = expansion["header"]["command"]
+            if header not in {"BSTART.TEPL", "BSTART.SFU", "BSTART.VEC"}:
+                continue
+            bindings = expansion["configuration_bindings"]
+            has_datr = any(
+                target["command"] == "B.DATR"
+                for binding in bindings
+                for target in binding["targets"]
+            )
+            has_layout = any(
+                target["command"] == "B.DATR" and target["slot"] == "Layout"
+                for binding in bindings
+                for target in binding["targets"]
+            )
+            if not has_datr or has_layout:
+                continue
+            ordinal = len(form["configuration"])
+            form["configuration"].append(
+                {
+                    "binding_kind": "bundle-configuration",
+                    "condition": None,
+                    "configuration_kind": "attribute",
+                    "constraint": None,
+                    "default": None,
+                    "field": "Layout",
+                    "optional": True,
+                    "ordinal": ordinal,
+                    "role": "bundle configuration field",
+                    "size": None,
+                    "syntax": "Layout?",
+                    "value_style": "bare-value",
+                }
+            )
+            bindings.append(
+                {
+                    "field": "Layout",
+                    "syntax": "Layout?",
+                    "targets": [
+                        {"command": "B.DATR", "group": None, "slot": "Layout"}
+                    ],
+                }
+            )
+            injected += 1
+    if injected:
+        print(
+            f"note: injected optional Layout configuration into {injected} "
+            "TEPL forms (PTO #291 elementwise carrier layouts)"
+        )
+
+
 def generate(catalog_path: Path) -> str:
     raw = catalog_path.read_bytes()
     catalog = json.loads(raw)
@@ -160,6 +293,7 @@ def generate(catalog_path: Path) -> str:
         raise ValueError(
             f"expected PTO {EXPECTED_ARCHITECTURE}, found {catalog['architecture_identity']}"
         )
+    enrich_elementwise_layout_configs(catalog)
     operations = catalog["operations"]
     forms = [(operation, form) for operation in operations for form in operation["forms"]]
     if len(operations) != EXPECTED_OPERATIONS:

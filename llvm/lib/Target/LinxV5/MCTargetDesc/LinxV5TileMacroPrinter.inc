@@ -44,10 +44,18 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   const MCInst *FPATR = nullptr;
   const MCInst *Dims[3] = {nullptr, nullptr, nullptr};
   unsigned Pos = 0;
-  if (Pos < Commands.size() && Commands[Pos].getOpcode() == LinxV5::BDATR)
-    DATR = &Commands[Pos++];
-  if (Pos < Commands.size() && Commands[Pos].getOpcode() == LinxV5::B_FPATR)
-    FPATR = &Commands[Pos++];
+  // B.DATR/B.FPATR may follow the binders (e.g. the row-expand layout
+  // selector); take the first of each anywhere in the command stream.
+  for (const MCInst &Command : Commands) {
+    if (Command.getOpcode() == LinxV5::BDATR && !DATR)
+      DATR = &Command;
+    if (Command.getOpcode() == LinxV5::B_FPATR && !FPATR)
+      FPATR = &Command;
+  }
+  while (Pos < Commands.size() &&
+         (Commands[Pos].getOpcode() == LinxV5::BDATR ||
+          Commands[Pos].getOpcode() == LinxV5::B_FPATR))
+    ++Pos;
   while (Pos < Commands.size() &&
          (Commands[Pos].getOpcode() == LinxV5::B_DIM ||
           Commands[Pos].getOpcode() == LinxV5::C_B_DIMI)) {
@@ -102,6 +110,7 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     unsigned Init = 0;
     unsigned Last = 0;
     unsigned WriterSize = 0;
+    unsigned SizeCode = 0;
   };
   struct BoundValue {
     bool Present = false;
@@ -229,6 +238,7 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         Value.Subview.Present = true;
         Value.Subview.Base = Modifier.getOperand(1).getReg();
         Value.Subview.Offset = Modifier.getOperand(2).getImm();
+        Value.Subview.SizeCode = Modifier.getOperand(3).getImm();
         ++Position;
         continue;
       }
@@ -781,9 +791,16 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     case TileMacroBindingKind::GPRListSource:
       break;
     }
-    if (Value.Subview.Present)
+    if (Value.Subview.Present) {
       O << "[base=" << getRegisterName(Value.Subview.Base)
-        << ", offset=" << Value.Subview.Offset << "]";
+        << ", offset=" << Value.Subview.Offset;
+      // Multi-cell views (PTO-ISA ADR-0098 SubviewSizeCode 2..12) cannot be
+      // spelled by the historical single-cell annotation; make the size
+      // explicit so the macro round-trips.
+      if (Value.Subview.SizeCode != 1)
+        O << ", size=" << Value.Subview.SizeCode;
+      O << "]";
+    }
     if (Value.Assemble.Present) {
       O << "[base=" << getRegisterName(Value.Assemble.Base)
         << ", offset=" << Value.Assemble.Offset;
