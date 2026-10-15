@@ -38,6 +38,11 @@ static cl::opt<bool> EnableTileClockHand("linxv5-enable-tile-clock-hand",
                                          cl::desc("Tile Clock Hand Option"),
                                          cl::init(true), cl::Hidden);
 
+static cl::opt<bool> EnableWindowAwareTileColoring(
+    "linxv5-enable-window-aware-tile-coloring",
+    cl::desc("Prefer Tile banks with lower live-window pressure"),
+    cl::init(false), cl::Hidden);
+
 cl::opt<unsigned> RoundNum("linxv5-clock-hand-coloring-round-num",
                            cl::desc("Clock Hand Coloring Round Number"),
                            cl::init(5), cl::Hidden);
@@ -209,7 +214,34 @@ void ColoringInChain::finalFastAssign() {
       unsigned DUL = RU.second.DULs.lookup(RC);
       SortedRCs.emplace_back(RC, DUL);
     }
-    llvm::sort(SortedRCs, [](auto &A, auto &B) { return A.second < B.second; });
+    llvm::sort(SortedRCs, [&](auto &A, auto &B) {
+      return A.second < B.second;
+    });
+
+    if (EnableWindowAwareTileColoring &&
+        (CurRCs[0] == &LinxV5::Tile_TRRegClass ||
+         CurRCs[0] == &LinxV5::SIMT_VTRRegClass)) {
+      LiveInterval &TargetLI = LIS->getInterval(RU.second.Reg);
+      auto windowPressure = [&](const TargetRegisterClass *RC) {
+        unsigned Overlap = 0;
+        unsigned LongOverlap = 0;
+        for (LiveInterval *LI : RCLIs.lookup(RC)) {
+          if (!LI->overlaps(TargetLI))
+            continue;
+          ++Overlap;
+          if (LI->endIndex() > TargetLI.endIndex())
+            ++LongOverlap;
+        }
+        return std::pair<unsigned, unsigned>(LongOverlap, Overlap);
+      };
+      llvm::stable_sort(SortedRCs, [&](auto &A, auto &B) {
+        auto APressure = windowPressure(A.first);
+        auto BPressure = windowPressure(B.first);
+        if (APressure != BPressure)
+          return APressure < BPressure;
+        return A.second < B.second;
+      });
+    }
 
     bool Assigned = false;
     // give priority to the least DUL RegisterClass assign to reduce "COPY"
