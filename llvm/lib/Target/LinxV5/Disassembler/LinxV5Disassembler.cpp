@@ -1068,9 +1068,18 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           continue;
         }
         if (Modifier.getOpcode() == LinxV5::B_ASSEMBLE) {
-          if (Modifier.getNumOperands() != 5 || DestinationMember < 0 ||
+          int AssembleMember = DestinationMember;
+          if (AssembleMember < 0) {
+            for (unsigned Member : SourceMembers)
+              if (TileMacroBindingMembers[Member].ModifierFlags & 12) {
+                AssembleMember = Member;
+                break;
+              }
+          }
+          if (Modifier.getNumOperands() != 5 || AssembleMember < 0 ||
               DestinationSeen ||
-              !(TileMacroBindingMembers[DestinationMember].ModifierFlags & 2))
+              !(TileMacroBindingMembers[AssembleMember].ModifierFlags &
+                (DestinationMember >= 0 ? 2 : 12)))
             return false;
 
           // B.ASSEMBLE is a generation modifier.  Do not restrict folding to
@@ -1081,6 +1090,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           unsigned Last = Modifier.getOperand(1).getImm();
           unsigned RegSrc = Modifier.getOperand(2).getReg();
           unsigned WriterSize = Modifier.getOperand(4).getImm();
+          unsigned PhaseFlag = Last ? 8 : 4;
           unsigned DestinationSize =
               Body[Position - 1].getOpcode() == LinxV5::B_IOT_NoSrc_Dst ||
                       Body[Position - 1].getOpcode() == LinxV5::B_IOT_OneSrc_Dst ||
@@ -1089,14 +1099,20 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
                   : 0;
           if (Init > 1 || Last > 1 || RegSrc < LinxV5::R0 ||
               RegSrc > LinxV5::R23 || WriterSize > 12 ||
-              DestinationSize == 0 || DestinationSize > 12)
+              (DestinationMember >= 0 &&
+               (DestinationSize == 0 || DestinationSize > 12)) ||
+              (DestinationMember < 0 && DestinationSize != 0))
+            return false;
+          if (DestinationMember < 0 &&
+              !(TileMacroBindingMembers[AssembleMember].ModifierFlags &
+                PhaseFlag))
             return false;
 
           // A single binder can carry only one generation phase.  The
           // generation may be continued by later bundles; this local check
           // deliberately preserves the phase in the folded macro rather than
           // pretending that an INIT is an INIT_LAST operation.
-          DestinationSeen = true;
+          DestinationSeen = DestinationMember >= 0;
           ++Position;
           continue;
         }

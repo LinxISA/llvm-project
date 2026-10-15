@@ -372,6 +372,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
   };
   auto matchSimpleOperand = [&](const TileMacroBindingDesc &Binding,
                                 size_t &Pos, BoundValue &Value) {
+    if (Binding.Kind == TileMacroBindingKind::LocalParentSource &&
+        tokenIs(Pos, "[")) {
+      Value.Present = true;
+      return true;
+    }
     bool Destination =
         Binding.Kind == TileMacroBindingKind::LocalDestination ||
         Binding.Kind == TileMacroBindingKind::SharedDestination ||
@@ -400,6 +405,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     switch (Binding.Kind) {
     case TileMacroBindingKind::LocalSource:
     case TileMacroBindingKind::LocalDestination:
+    case TileMacroBindingKind::LocalParentSource:
       Matched = (Prefix == 'T' || Prefix == 'U' || Prefix == 'M' ||
                  Prefix == 'N') &&
                 matchTileRegisterNameHelper(Reg, Name);
@@ -468,10 +474,25 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
         Binding.Kind == TileMacroBindingKind::SharedDestination ||
         Binding.Kind == TileMacroBindingKind::PredicateTileDestination ||
         Binding.Kind == TileMacroBindingKind::PredicateCellDestination;
-    unsigned RequiredFlag = IsDestination ? 2 : 1;
+    bool IsParent = Binding.Kind == TileMacroBindingKind::LocalParentSource;
+    unsigned RequiredFlag = IsDestination ? 2 : IsParent ? 12 : 1;
     if (!(Member.ModifierFlags & RequiredFlag))
       return false;
     ++Pos;
+    if (IsParent) {
+      if (!tokenIs(Pos, "parent") || !tokenIs(Pos + 1, "="))
+        return false;
+      Pos += 2;
+      MCRegister Parent;
+      if (Pos >= Tokens.size() ||
+          !matchTileRegisterNameHelper(Parent, Tokens[Pos].Text))
+        return false;
+      Value.Reg = Parent;
+      ++Pos;
+      if (!tokenIs(Pos, ","))
+        return false;
+      ++Pos;
+    }
     if (!tokenIs(Pos, "base") || !tokenIs(Pos + 1, "="))
       return false;
     Pos += 2;
@@ -501,7 +522,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     }
     if (!tokenIs(Pos, "]"))
       {
-        if (!IsDestination || !tokenIs(Pos, ",") ||
+        if ((!IsDestination && !IsParent) || !tokenIs(Pos, ",") ||
             !tokenIs(Pos + 1, "assemble") || !tokenIs(Pos + 2, "="))
           return false;
         Pos += 3;
@@ -530,10 +551,15 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
         Value.Assemble.WriterSize = Tokens[Pos + 3].Integer;
         Pos += 4;
       }
+    if (IsParent) {
+      unsigned PhaseFlag = Value.Assemble.Last ? 8 : 4;
+      if (!(Member.ModifierFlags & PhaseFlag))
+        return false;
+    }
     if (!tokenIs(Pos, "]"))
       return false;
     ++Pos;
-    RangeValue &Range = IsDestination ? Value.Assemble : Value.Subview;
+    RangeValue &Range = IsDestination || IsParent ? Value.Assemble : Value.Subview;
     Range.Present = true;
     Range.Base = Base;
     Range.Offset = Offset;

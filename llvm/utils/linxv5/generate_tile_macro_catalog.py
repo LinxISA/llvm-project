@@ -11,7 +11,7 @@ from pathlib import Path
 
 EXPECTED_ARCHITECTURE = "0.58.7"
 EXPECTED_OPERATIONS = 118
-EXPECTED_FORMS = 143
+EXPECTED_FORMS = 145
 
 
 def cxx_string(value: str) -> str:
@@ -65,6 +65,7 @@ def shape_kind(form: dict) -> str:
 
 def binding_kind(binding: dict) -> str:
     kinds = {
+        "assemble-parent-reuse": "LocalParentSource",
         "tile-source-binding": "LocalSource",
         "tile-destination-binding": "LocalDestination",
         "shared-tile-binding": (
@@ -286,6 +287,141 @@ def enrich_elementwise_layout_configs(catalog: dict) -> None:
         )
 
 
+def enrich_tcvt_assemble_variants(catalog: dict) -> None:
+    for operation in catalog["operations"]:
+        if operation["spelling"] != "TCVT":
+            continue
+        base = operation["forms"][0]
+        for phase in ("MIDDLE", "LAST"):
+            form = json.loads(json.dumps(base))
+            expansion = form["expansion"]
+            expansion["form_id"] = (
+                f"{base['expansion']['form_id']}-{phase.lower()}"
+            )
+            expansion["macro_format"] = (
+                "TCVT <Row=Derived, Col, ValidRow=Row, ValidCol=Col, "
+                "SrcDataType, DstDataType?, RMode?, Sat?, Canonicalize?, "
+                "Layout?, PadValue?, PEMask=AllPE>, SrcTile0, "
+                f"[parent=ParentRef, offset=0, assemble={phase.lower()}, "
+                "writer=WriterSize]"
+            )
+            form["macro_format"] = expansion["macro_format"]
+            binding = expansion["operand_bindings"][1]
+            binding.clear()
+            binding.update(
+                {
+                    "binding_kind": "assemble-parent-reuse",
+                    "condition": None,
+                    "default": None,
+                    "field": "AssembleParent",
+                    "optional": False,
+                    "ordinal": 1,
+                    "role_kind": "destination",
+                    "syntax": expansion["macro_format"],
+                }
+            )
+            binding["members"] = [
+                {
+                    "command_group": 0,
+                    "condition": None,
+                    "default": None,
+                    "eligible_modifiers": [
+                        {
+                            "evidence_case": "RANGE-MATRIX-TCVT-PARENT",
+                            "modifier": f"B.ASSEMBLE {phase}",
+                        }
+                    ],
+                    "optional": False,
+                    "physical_role": "assemble-parent-ref",
+                    "slot": "Role1",
+                    "syntax": expansion["macro_format"],
+                }
+            ]
+            expansion["operand_commands"][0]["members"][1]["field"] = (
+                "AssembleParent"
+            )
+            split_form = json.loads(json.dumps(base))
+            split_expansion = split_form["expansion"]
+            split_expansion["form_id"] = (
+                f"{base['expansion']['form_id']}-{phase.lower()}-split"
+            )
+            split_expansion["macro_format"] = expansion["macro_format"]
+            split_form["macro_format"] = split_expansion["macro_format"]
+            split_expansion["argument_bindings"] = [
+                {
+                    "kind": "operand-member",
+                    "members": [
+                        {
+                            "command": "B.IOT",
+                            "command_group": 0,
+                            "field": "SrcTile0",
+                            "slot": "Role0",
+                        }
+                    ],
+                    "physical_role": "source0",
+                },
+                {
+                    "kind": "operand-member",
+                    "members": [
+                        {
+                            "command": "B.IOT",
+                            "command_group": 1,
+                            "field": "AssembleParent",
+                            "slot": "Role0",
+                        }
+                    ],
+                    "physical_role": "assemble-parent",
+                },
+                {
+                    "fields": ["DstDataType", "RMode", "Sat", "Canonicalize"],
+                    "kind": "configuration",
+                    "physical_role": "numeric_control",
+                },
+            ]
+            split_expansion["operand_bindings"] = [
+                json.loads(json.dumps(base["expansion"]["operand_bindings"][0])),
+                json.loads(json.dumps(binding)),
+            ]
+            split_expansion["operand_bindings"][1]["members"][0][
+                "command_group"
+            ] = 1
+            split_expansion["operand_bindings"][1]["members"][0]["slot"] = (
+                "Role0"
+            )
+            split_expansion["operand_commands"] = [
+                {
+                    "command": "B.IOT",
+                    "group": 0,
+                    "members": [
+                        {
+                            "condition": None,
+                            "default": None,
+                            "field": "SrcTile0",
+                            "optional": False,
+                            "physical_role": "source0",
+                            "slot": "Role0",
+                        }
+                    ],
+                },
+                {
+                    "command": "B.IOT",
+                    "group": 1,
+                    "members": [
+                        {
+                            "condition": None,
+                            "default": None,
+                            "field": "AssembleParent",
+                            "optional": False,
+                            "physical_role": "assemble-parent-ref",
+                            "slot": "Role0",
+                        }
+                    ],
+                },
+            ]
+            operation["forms"].append(split_form)
+        return
+
+
 def generate(catalog_path: Path) -> str:
     raw = catalog_path.read_bytes()
     catalog = json.loads(raw)
@@ -294,6 +430,7 @@ def generate(catalog_path: Path) -> str:
             f"expected PTO {EXPECTED_ARCHITECTURE}, found {catalog['architecture_identity']}"
         )
     enrich_elementwise_layout_configs(catalog)
+    enrich_tcvt_assemble_variants(catalog)
     operations = catalog["operations"]
     forms = [(operation, form) for operation in operations for form in operation["forms"]]
     if len(operations) != EXPECTED_OPERATIONS:
@@ -368,7 +505,17 @@ def generate(catalog_path: Path) -> str:
                     flags = 0
                     for modifier in member.get("eligible_modifiers", []):
                         name = modifier["modifier"]
-                        flags |= 1 if name == "B.SUBVIEW" else 2 if name.startswith("B.ASSEMBLE") else 0
+                        flags |= (
+                            1
+                            if name == "B.SUBVIEW"
+                            else 4
+                            if name == "B.ASSEMBLE MIDDLE"
+                            else 8
+                            if name == "B.ASSEMBLE LAST"
+                            else 2
+                            if name.startswith("B.ASSEMBLE")
+                            else 0
+                        )
                     absolute_member = len(binding_member_rows)
                     key = (binding["field"], int(member["command_group"]), member["slot"])
                     if key in member_lookup:
@@ -419,7 +566,7 @@ def generate(catalog_path: Path) -> str:
 enum class TileMacroHeaderKind : uint8_t {{ TEPL, TLSU, CUBE, GMOV }};
 enum class TileMacroShapeKind : uint8_t {{ None, Rectangular, Matrix, ValidCol, Weight }};
 enum class TileMacroBindingKind : uint8_t {{
-  LocalSource, LocalDestination, SharedSource, SharedDestination,
+  LocalSource, LocalDestination, LocalParentSource, SharedSource, SharedDestination,
   GPRSource, GPRListSource, GPRDestination, PredicateTileSource,
   PredicateTileDestination, PredicateCellSource, PredicateCellDestination
 }};

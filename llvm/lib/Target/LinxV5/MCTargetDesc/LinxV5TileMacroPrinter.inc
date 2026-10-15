@@ -243,22 +243,36 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         continue;
       }
       if (Modifier.getOpcode() == LinxV5::B_ASSEMBLE &&
-          DestinationMember >= 0) {
+          (DestinationMember >= 0 ||
+           llvm::any_of(SourceMembers, [&](unsigned Member) {
+             return TileMacroBindingMembers[Member].ModifierFlags & 12;
+           }))) {
         if (Modifier.getNumOperands() != 5)
           return false;
-        BoundValue &Value = Members[DestinationMember];
+        int AssembleMember = DestinationMember;
+        if (AssembleMember < 0)
+          for (unsigned Member : SourceMembers)
+            if (TileMacroBindingMembers[Member].ModifierFlags & 12) {
+              AssembleMember = Member;
+              break;
+            }
+        BoundValue &Value = Members[AssembleMember];
         if (Value.Assemble.Present ||
             Modifier.getOperand(2).getReg() < LinxV5::R0 ||
             Modifier.getOperand(2).getReg() > LinxV5::R23 ||
             Modifier.getOperand(3).getImm() < 0 ||
             Modifier.getOperand(3).getImm() > 2047 ||
-            // A folded macro destination must be an allocating binder.
-            // SizeCode=0 is the source-only ParentRef carrier and cannot be
-            // represented by this destination binding.
-            Value.SizeCode == 0 || Value.SizeCode > 12 ||
+            (DestinationMember >= 0 &&
+             (Value.SizeCode == 0 || Value.SizeCode > 12)) ||
+            (DestinationMember < 0 && Value.SizeCode != 0) ||
             Modifier.getOperand(0).getImm() > 1 ||
             Modifier.getOperand(1).getImm() > 1 ||
             Modifier.getOperand(4).getImm() > 12)
+          return false;
+        unsigned PhaseFlag = Modifier.getOperand(1).getImm() ? 8 : 4;
+        if (DestinationMember < 0 &&
+            !(TileMacroBindingMembers[AssembleMember].ModifierFlags &
+              PhaseFlag))
           return false;
         Value.Assemble.Present = true;
         Value.Assemble.Base = Modifier.getOperand(2).getReg();
@@ -751,6 +765,8 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     case TileMacroBindingKind::LocalSource:
       printTile(Value.Reg, false, 0);
       break;
+    case TileMacroBindingKind::LocalParentSource:
+      break;
     case TileMacroBindingKind::LocalDestination:
       printTile(Value.Reg, true, Value.SizeCode);
       break;
@@ -802,7 +818,11 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       O << "]";
     }
     if (Value.Assemble.Present) {
-      O << "[base=" << getRegisterName(Value.Assemble.Base)
+      if (Binding.Kind == TileMacroBindingKind::LocalParentSource)
+        O << "[parent=" << getRegisterName(Value.Reg) << ", base=";
+      else
+        O << "[base=";
+      O << getRegisterName(Value.Assemble.Base)
         << ", offset=" << Value.Assemble.Offset;
       // Keep the historical spelling for the ordinary INIT_LAST writer, but
       // make non-trivial generation phases explicit so INIT/MIDDLE/LAST
