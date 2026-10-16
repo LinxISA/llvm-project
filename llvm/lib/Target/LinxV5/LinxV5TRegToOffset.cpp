@@ -1493,13 +1493,13 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
        {LinxV5::SIMT_VN, LinxV5::SIMT_OSVN1, LinxV5::SIMT_VN4}},
       // Tile Reg
       {&LinxV5::Tile_TRRegClass,
-       {LinxV5::Tile_T, LinxV5::Tile_TOS1, LinxV5::Tile_T8}},
+       {LinxV5::Tile_T, LinxV5::Tile_TOS1, LinxV5::Tile_T16}},
       {&LinxV5::Tile_URRegClass,
-       {LinxV5::Tile_U, LinxV5::Tile_UOS1, LinxV5::Tile_U8}},
+       {LinxV5::Tile_U, LinxV5::Tile_UOS1, LinxV5::Tile_U16}},
       {&LinxV5::Tile_MRRegClass,
-       {LinxV5::Tile_M, LinxV5::Tile_MOS1, LinxV5::Tile_M8}},
+       {LinxV5::Tile_M, LinxV5::Tile_MOS1, LinxV5::Tile_M16}},
       {&LinxV5::Tile_NRRegClass,
-       {LinxV5::Tile_N, LinxV5::Tile_NOS1, LinxV5::Tile_N8}},
+       {LinxV5::Tile_N, LinxV5::Tile_NOS1, LinxV5::Tile_N16}},
       {&LinxV5::TILE_ABS_ACCRegClass,
        {LinxV5::Tile_ACC, LinxV5::Tile_ACCOS1, LinxV5::Tile_ACCOS1}},
       // Scalar Reg

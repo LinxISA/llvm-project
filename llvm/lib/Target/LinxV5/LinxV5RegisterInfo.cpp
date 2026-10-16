@@ -199,10 +199,10 @@ BitVector LinxV5RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // tilerig spilling.
   markSuperRegs(Reserved, LinxV5::R23);
 
-  markSuperRegs(Reserved, LinxV5::Tile_T8);
-  markSuperRegs(Reserved, LinxV5::Tile_U8);
-  markSuperRegs(Reserved, LinxV5::Tile_M8);
-  markSuperRegs(Reserved, LinxV5::Tile_N8);
+  markSuperRegs(Reserved, LinxV5::Tile_T16);
+  markSuperRegs(Reserved, LinxV5::Tile_U16);
+  markSuperRegs(Reserved, LinxV5::Tile_M16);
+  markSuperRegs(Reserved, LinxV5::Tile_N16);
   markSuperRegs(Reserved, LinxV5::Tile_S);
 
   if (TFI->hasFP(MF)) {

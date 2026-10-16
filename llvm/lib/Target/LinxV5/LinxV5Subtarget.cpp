@@ -72,6 +72,11 @@ static cl::opt<cl::boolOrDefault> EnableLegacyISel("linxv5-enable-legacy-isel",
 static cl::opt<bool> EnableContinuousMemOpt("linxv5-enable-continuous-mem-opt",
                                             cl::init(true), cl::Hidden);
 
+static cl::opt<bool> EnableSequentialTileRegAlloc(
+    "linxv5-enable-sequential-tile-reg-allocation", cl::Hidden,
+    cl::desc("Allocate Tile registers in their declared order without hints"),
+    cl::init(false));
+
 static bool boolVal(cl::boolOrDefault Val) { return Val == cl::BOU_TRUE; }
 
 bool LinxV5Subtarget::enableLegacyISel() const {
@@ -97,6 +102,11 @@ bool LinxV5Subtarget::hasCSel() const {
 
 bool LinxV5Subtarget::enableContinuousMemOpt() const {
   return EnableContinuousMemOpt;
+}
+
+unsigned
+LinxV5Subtarget::getTileAllocationOrder(const MachineFunction &MF) const {
+  return EnableSequentialTileRegAlloc ? 1 : 0;
 }
 
 bool LinxV5Subtarget::enableFoldCmpArith() const { return !enableLegacyISel(); }

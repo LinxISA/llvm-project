@@ -87,6 +87,7 @@ public:
   bool enableFoldCmpArith() const;
   bool enableLinkerRelax() const { return EnableLinkerRelax; }
   bool enableContinuousMemOpt() const;
+  unsigned getTileAllocationOrder(const MachineFunction &MF) const;
   MVT getXLenVT() const { return XLenVT; }
   unsigned getXLen() const { return XLen; }
   unsigned getLaneNum() const { return 64; }

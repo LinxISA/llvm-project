@@ -444,8 +444,18 @@ def Tile_ABS  : RegisterClass<"LinxV5", [vAny], 64, (add
   Tile_T15, Tile_U15, Tile_M15, Tile_N15,
   Tile_T16, Tile_U16, Tile_M16, Tile_N16
 )> {
+  let AltOrders = [(add
+    (sequence "Tile_T%u", 1, 16),
+    (sequence "Tile_U%u", 1, 16),
+    (sequence "Tile_M%u", 1, 16),
+    (sequence "Tile_N%u", 1, 16)
+  )];
+  let AltOrderSelect = [{
+    return MF.getSubtarget<LinxV5Subtarget>().getTileAllocationOrder(MF);
+  }];
   let Size = 64;
 }
+
 
 // CodeGen only abs register
 def Tile_ABS_CG  : RegisterClass<"LinxV5", [vAny], 64, (add
