@@ -627,6 +627,23 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
           return false;
       }
     }
+    auto scaleConstraintSatisfied = [&](StringRef Constraint) {
+      bool ScaleA = LinxV5Op::matrixMXTypeNeedsScale(
+          configImm(P, "AType", 32));
+      bool ScaleB = LinxV5Op::matrixMXTypeNeedsScale(
+          configImm(P, "BType", configImm(P, "AType", 32)));
+      return Constraint == "NoMXScale"       ? !ScaleA && !ScaleB
+             : Constraint == "MXScaleAOnly" ? ScaleA && !ScaleB
+             : Constraint == "MXScaleBOnly" ? !ScaleA && ScaleB
+             : Constraint == "BothMXScales" ? ScaleA && ScaleB
+             : Constraint == "AtLeastOneMXScale" ? ScaleA || ScaleB
+                                                    : true;
+    };
+    for (unsigned I = 0; I != Form.NumConfigs; ++I) {
+      const auto &Desc = TileMacroConfigs[Form.FirstConfig + I];
+      if (Desc.Constraint && !scaleConstraintSatisfied(Desc.Constraint))
+        return false;
+    }
     if (tokenIs(Pos, ","))
       ++Pos;
     if (!tokenIs(Pos, ">"))

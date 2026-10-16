@@ -1288,10 +1288,25 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       if (Shape.Last != (I + 1 == IOTPositions.size()))
         return false;
     }
+    bool ScaleA = LinxV5Op::matrixMXTypeNeedsScale(DataType);
+    unsigned BType = DataType;
+    if (!Body.empty() && Body.front().getOpcode() == LinxV5::BDATR)
+      BType = Body.front().getOperand(2).getImm();
+    bool ScaleB = LinxV5Op::matrixMXTypeNeedsScale(BType);
+    auto scaleConstraintSatisfied = [&](StringRef Constraint) {
+      return Constraint == "NoMXScale"       ? !ScaleA && !ScaleB
+             : Constraint == "MXScaleAOnly" ? ScaleA && !ScaleB
+             : Constraint == "MXScaleBOnly" ? !ScaleA && ScaleB
+             : Constraint == "BothMXScales" ? ScaleA && ScaleB
+             : Constraint == "AtLeastOneMXScale" ? ScaleA || ScaleB
+                                                    : true;
+    };
     for (unsigned I = 0; I != Form.NumConfigs; ++I) {
       const auto &Config = TileMacroConfigs[Form.FirstConfig + I];
       if (Config.Constraint && StringRef(Config.Constraint) == "AllPE" &&
           SawMask && CommonMask != 0xf)
+        return false;
+      if (Config.Constraint && !scaleConstraintSatisfied(Config.Constraint))
         return false;
     }
     return true;

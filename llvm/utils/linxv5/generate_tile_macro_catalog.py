@@ -11,7 +11,7 @@ from pathlib import Path
 
 EXPECTED_ARCHITECTURE = "0.58.7"
 EXPECTED_OPERATIONS = 118
-EXPECTED_FORMS = 147
+EXPECTED_FORMS = 164
 
 
 def cxx_string(value: str) -> str:
@@ -431,61 +431,246 @@ def enrich_mx_emitted_order_variants(catalog: dict) -> None:
     Keep the original forms for the normative packed shapes and add exact
     alternatives for the emitted streams; do not relax the generic matcher.
     """
-    for operation in catalog["operations"]:
-        if operation["mnemonic"] == "TMATMUL_MX":
-            base = operation["forms"][2]
-            form = json.loads(json.dumps(base))
-            expansion = form["expansion"]
-            expansion["form_id"] = "pto0587-tmatmul-mx-emitted-shared"
-            expansion["macro_format"] = (
-                "TMATMUL_MX <M=1, N=1, K=1, AType, BType?, RMode?, Sat?, "
-                "PreMode=0, PostMode=0, PostScale=0, RowMax=0, GroupMax=0, "
-                "RowMaxInit=0, FlushToZero=0, TransposeA=0, TransposeB=0, "
-                "CScale=0, PEMask=AllPE>, SharedLeft0, ScaleA, SharedRight0, "
-                "ScaleB, ->DstTile<Size>, ->RowMaxOut<Size>{if RowMax}, "
-                "->GroupMaxOut<Size>{if GroupMax}"
-            )
-            form["macro_format"] = expansion["macro_format"]
-            bindings = [
-                ("SharedLeft0", "shared-tile-binding", "source", "Role0", 0),
-                ("ScaleA", "shared-tile-binding", "source", "Role0", 1),
-                ("SharedRight0", "shared-tile-binding", "source", "Role0", 2),
-                ("ScaleB", "shared-tile-binding", "source", "Role0", 3),
-                ("DstTile", "tile-destination-binding", "destination", "Role0", 4),
-                ("RowMaxOut", "tile-destination-binding", "destination", "Role0", 5),
-                ("GroupMaxOut", "tile-destination-binding", "destination", "Role0", 6),
-            ]
-            expansion["operand_bindings"] = []
-            for field, kind, role, slot, group in bindings:
-                condition = "RowMax" if field == "RowMaxOut" else (
-                    "GroupMax" if field == "GroupMaxOut" else None
-                )
-                expansion["operand_bindings"].append({
-                    "binding_kind": kind,
-                    "command": "B.IOS" if field in {"SharedLeft0", "ScaleA", "SharedRight0", "ScaleB"} else "B.IOT",
+    def set_scale_constraint(form: dict, constraint: str) -> None:
+        for config in form["configuration"]:
+            if config["field"] == "AType":
+                config["constraint"] = constraint
+                return
+        raise ValueError(f"{form['spelling']}: missing AType configuration")
+
+    def add_local_variant(operation: dict, base_index: int, form_id: str,
+                          constraint: str,
+                          leading_commands: list[list[str]],
+                          replaced_fields: set[str]) -> None:
+        form = json.loads(json.dumps(operation["forms"][base_index]))
+        expansion = form["expansion"]
+        expansion["form_id"] = form_id
+        set_scale_constraint(form, constraint)
+
+        binding_by_field = {
+            binding["field"]: binding
+            for binding in expansion["operand_bindings"]
+        }
+        commands = []
+        group = 0
+
+        def append_command(command: str, members: list[tuple[str, str]]) -> None:
+            nonlocal group
+            command_members = []
+            for field, slot in members:
+                binding = binding_by_field[field]
+                binding["command"] = command
+                member = binding["members"][0]
+                member["command_group"] = group
+                member["slot"] = slot
+                command_members.append({
                     "field": field,
-                    "members": [{
-                        "command_group": group,
-                        "condition": condition,
-                        "default": None,
-                        "eligible_modifiers": [],
-                        "optional": condition is not None,
-                        "physical_role": "destination" if role == "destination" else "source",
-                        "slot": slot,
-                        "syntax": field,
-                    }],
-                    "role_kind": role,
-                    "syntax": field,
+                    "slot": slot,
+                    "condition": member.get("condition"),
+                    "default": member.get("default"),
+                    "optional": member.get("optional", False),
                 })
-            expansion["operand_commands"] = [
-                {"command": "B.IOS", "group": group, "members": [{"field": field, "slot": "Role0", "condition": None, "default": None, "optional": False}]}
-                for field, _, _, _, group in bindings[:4]
-            ] + [
-                {"command": "B.IOT", "group": group, "members": [{"field": field, "slot": "Role0", "condition": ("RowMax" if field == "RowMaxOut" else "GroupMax" if field == "GroupMaxOut" else None), "default": None, "optional": field in {"RowMaxOut", "GroupMaxOut"}}]}
-                for field, _, _, _, group in bindings[4:]
+            commands.append({
+                "command": command,
+                "group": group,
+                "members": command_members,
+            })
+            group += 1
+
+        for fields in leading_commands:
+            append_command(
+                "B.IOT",
+                [(field, f"Role{index}") for index, field in enumerate(fields)],
+            )
+
+        for old_command in expansion["operand_commands"]:
+            remaining = [
+                member for member in old_command["members"]
+                if member["field"] not in replaced_fields
             ]
-            operation["forms"].append(form)
-        elif operation["mnemonic"] == "TMATMUL_MX_ACC":
+            if not remaining:
+                continue
+            append_command(
+                old_command["command"],
+                [(member["field"], member["slot"]) for member in remaining],
+            )
+        expansion["operand_commands"] = commands
+        operation["forms"].append(form)
+
+    local_shapes = {
+        "TMATMUL_MX": (0, [
+            ("pto0587-tmatmul-mx-emitted-no-scale", "NoMXScale", [
+                ["SrcTile0", "SrcTile1", "DstTile"],
+            ]),
+        ], {"SrcTile0", "RowScaleTile", "SrcTile1", "ColumnScaleTile", "DstTile"}),
+        "TMATMUL_MX_BIAS": (0, [
+            ("pto0587-tmatmul-mx-bias-emitted-no-scale", "NoMXScale", [
+                ["SrcTile0", "SrcTile1"],
+                ["BiasTile", "DstTile"],
+            ]),
+        ], {"SrcTile0", "RowScaleTile", "SrcTile1", "ColumnScaleTile", "BiasTile", "DstTile"}),
+        "TGEMV_MX": (0, [
+            ("pto0587-tgemv-mx-emitted-no-scale", "NoMXScale", [
+                ["SrcVector", "SrcMatrix", "DstTile"],
+            ]),
+        ], {"SrcVector", "RowScaleTile", "SrcMatrix", "ColumnScaleTile", "DstTile"}),
+        "TGEMV_MX_BIAS": (0, [
+            ("pto0587-tgemv-mx-bias-emitted-no-scale", "NoMXScale", [
+                ["SrcVector", "SrcMatrix"],
+                ["BiasTile", "DstTile"],
+            ]),
+        ], {"SrcVector", "RowScaleTile", "SrcMatrix", "ColumnScaleTile", "BiasTile", "DstTile"}),
+        "TMATMUL_MX_ACC": (0, [
+            ("pto0587-tmatmul-mx-acc-emitted-no-scale", "NoMXScale", [
+                ["AccTile", "SrcTile0"],
+                ["SrcTile1", "DstTile"],
+            ]),
+            ("pto0587-tmatmul-mx-acc-emitted-scale-a", "MXScaleAOnly", [
+                ["AccTile", "SrcTile0"],
+                ["RowScaleTile", "SrcTile1", "DstTile"],
+            ]),
+            ("pto0587-tmatmul-mx-acc-emitted-scale-b", "MXScaleBOnly", [
+                ["AccTile", "SrcTile0"],
+                ["SrcTile1", "ColumnScaleTile", "DstTile"],
+            ]),
+        ], {"AccTile", "SrcTile0", "RowScaleTile", "SrcTile1", "ColumnScaleTile", "DstTile"}),
+        "TGEMV_MX_ACC": (0, [
+            ("pto0587-tgemv-mx-acc-emitted-no-scale", "NoMXScale", [
+                ["AccTile"],
+                ["SrcVector", "SrcMatrix", "DstTile"],
+            ]),
+            ("pto0587-tgemv-mx-acc-emitted-scale-a", "MXScaleAOnly", [
+                ["AccTile"],
+                ["SrcVector", "RowScaleTile"],
+                ["SrcMatrix", "DstTile"],
+            ]),
+            ("pto0587-tgemv-mx-acc-emitted-scale-b", "MXScaleBOnly", [
+                ["AccTile"],
+                ["SrcVector"],
+                ["SrcMatrix", "ColumnScaleTile", "DstTile"],
+            ]),
+        ], {"AccTile", "SrcVector", "RowScaleTile", "SrcMatrix", "ColumnScaleTile", "DstTile"}),
+    }
+
+    for operation in catalog["operations"]:
+        if operation["mnemonic"] in local_shapes:
+            base_index, variants, replaced_fields = local_shapes[operation["mnemonic"]]
+            base = operation["forms"][base_index]
+            set_scale_constraint(
+                base,
+                "BothMXScales" if operation["mnemonic"].endswith("_ACC")
+                else "AtLeastOneMXScale",
+            )
+            for form_id, constraint, commands in variants:
+                add_local_variant(
+                    operation, base_index, form_id, constraint, commands,
+                    replaced_fields,
+                )
+
+    def add_simple_shared_variant(operation: dict, base_index: int,
+                                  form_id: str, constraint: str,
+                                  shared_fields: list[str],
+                                  tail_source: str | None) -> None:
+        form = json.loads(json.dumps(operation["forms"][base_index]))
+        expansion = form["expansion"]
+        expansion["form_id"] = form_id
+        set_scale_constraint(form, constraint)
+        operands = shared_fields + ([tail_source] if tail_source else [])
+        expansion["macro_format"] = (
+            form["macro_format"].split(">,", 1)[0] + ">, " +
+            ", ".join(operands + ["->DstTile<Size>"])
+        )
+        form["macro_format"] = expansion["macro_format"]
+        specs = [
+            (field, "B.IOS", "shared-tile-binding", "source", group, "Role0")
+            for group, field in enumerate(shared_fields)
+        ]
+        final_group = len(specs)
+        if tail_source:
+            specs.append((tail_source, "B.IOT", "tile-source-binding",
+                          "source", final_group, "Role0"))
+            dst_slot = "Role1"
+        else:
+            dst_slot = "Role0"
+        specs.append(("DstTile", "B.IOT", "tile-destination-binding",
+                      "destination", final_group, dst_slot))
+
+        expansion["operand_bindings"] = []
+        for field, command, kind, role, group, slot in specs:
+            expansion["operand_bindings"].append({
+                "binding_kind": kind,
+                "command": command,
+                "field": field,
+                "members": [{
+                    "command_group": group,
+                    "condition": None,
+                    "default": None,
+                    "eligible_modifiers": [],
+                    "optional": False,
+                    "physical_role": (
+                        "destination" if role == "destination" else "source"
+                    ),
+                    "slot": slot,
+                    "syntax": field,
+                }],
+                "role_kind": role,
+                "syntax": field,
+            })
+        expansion["operand_commands"] = []
+        for group, field in enumerate(shared_fields):
+            expansion["operand_commands"].append({
+                "command": "B.IOS",
+                "group": group,
+                "members": [{
+                    "field": field, "slot": "Role0", "condition": None,
+                    "default": None, "optional": False,
+                }],
+            })
+        final_members = []
+        if tail_source:
+            final_members.append({
+                "field": tail_source, "slot": "Role0", "condition": None,
+                "default": None, "optional": False,
+            })
+        final_members.append({
+            "field": "DstTile", "slot": dst_slot, "condition": None,
+            "default": None, "optional": False,
+        })
+        expansion["operand_commands"].append({
+            "command": "B.IOT",
+            "group": final_group,
+            "members": final_members,
+        })
+        operation["forms"].append(form)
+
+    shared_masks = [
+        ("no-scale", "NoMXScale", ["SharedA", "SharedB"]),
+        ("scale-a", "MXScaleAOnly", ["SharedA", "ScaleA", "SharedB"]),
+        ("scale-b", "MXScaleBOnly", ["SharedA", "SharedB", "ScaleB"]),
+        ("both-scales", "BothMXScales",
+         ["SharedA", "ScaleA", "SharedB", "ScaleB"]),
+    ]
+    for operation in catalog["operations"]:
+        mnemonic = operation["mnemonic"]
+        if mnemonic not in {"TMATMUL_MX", "TMATMUL_MX_ACC",
+                            "TMATMUL_MX_BIAS"}:
+            continue
+        tail_source = ("AccTile" if mnemonic.endswith("_ACC") else
+                       "BiasTile" if mnemonic.endswith("_BIAS") else None)
+        for mask_name, constraint, fields in shared_masks:
+            if mask_name == "no-scale":
+                continue
+            if (mask_name == "both-scales" and
+                    mnemonic not in {"TMATMUL_MX", "TMATMUL_MX_ACC"}):
+                continue
+            add_simple_shared_variant(
+                operation, 2,
+                f"pto0587-{mnemonic.lower().replace('_', '-')}-emitted-shared-{mask_name}",
+                constraint, fields, tail_source,
+            )
+
+    for operation in catalog["operations"]:
+        if operation["mnemonic"] == "TMATMUL_MX_ACC":
             base = operation["forms"][1]
             form = json.loads(json.dumps(base))
             expansion = form["expansion"]
