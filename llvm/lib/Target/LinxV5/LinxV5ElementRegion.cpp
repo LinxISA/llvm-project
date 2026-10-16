@@ -12,14 +12,19 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LazyValueInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/Constants.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/ConstantFold.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -28,13 +33,23 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsLinx.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Support/KnownBits.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/LCSSA.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
+
+#include <limits>
 
 using namespace llvm;
 using namespace llvm::PatternMatch;
@@ -43,10 +58,124 @@ using namespace llvm::PatternMatch;
 
 namespace {
 
-constexpr StringLiteral ViewPrefix = "pto.element.view:v1;";
+constexpr StringLiteral ViewPrefix = "pto.element.view:";
 constexpr StringLiteral U32M32View =
     "pto.element.view:v1;dtype=u32;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral S32M32View =
+    "pto.element.view:v1;dtype=s32;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral F32M32View =
+    "pto.element.view:v1;dtype=f32;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral U64M32View =
+    "pto.element.view:v1;dtype=u64;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral S64M32View =
+    "pto.element.view:v1;dtype=s64;rows=32;cols=1;layout=cube_m32";
+constexpr StringLiteral U32M32x2View =
+    "pto.element.view:v1;dtype=u32;rows=32;cols=2;layout=cube_m32";
+constexpr StringLiteral S32M32x2View =
+    "pto.element.view:v1;dtype=s32;rows=32;cols=2;layout=cube_m32";
+constexpr StringLiteral F16M32x2View =
+    "pto.element.view:v1;dtype=f16;rows=32;cols=2;layout=cube_m32";
+constexpr StringLiteral U16M32x2View =
+    "pto.element.view:v1;dtype=u16;rows=32;cols=2;layout=cube_m32";
+
+struct ElementProfile {
+  Type *ScalarTy = nullptr;
+  FixedVectorType *VectorTy = nullptr;
+  uint64_t DataType = 25;
+  unsigned Count = 32;
+  unsigned Rows = 32;
+  unsigned Cols = 1;
+  uint64_t Bytes = 128;
+  uint64_t Layout = 29;
+  bool isSigned() const { return DataType == 16 || DataType == 17; }
+  bool isFloat() const { return DataType == 1 || DataType == 4; }
+};
+
+static Optional<ElementProfile>
+elementProfile(uint64_t DataType, unsigned Count, unsigned Rows, unsigned Cols,
+               uint64_t Bytes, LLVMContext &Context, uint64_t Layout = 29) {
+  bool Existing32 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 128 &&
+                    (DataType == 25 || DataType == 17 || DataType == 1);
+  bool NativeI64 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 256 &&
+                   (DataType == 24 || DataType == 16);
+  bool Dense64 = Count == 64 && Rows == 32 && Cols == 2 &&
+                 ((Bytes == 128 && (DataType == 4 || DataType == 26)) ||
+                  (Bytes == 256 && (DataType == 25 || DataType == 17)));
+  bool NormU32Row = Layout == 0 && DataType == 25 && Rows == 1 &&
+                    (Cols == Count || (Count == 128 && Cols == 32)) &&
+                    (Count == 128 || Count == 2048) &&
+                    Bytes == uint64_t(Count) * 4;
+  bool NormF32 = Layout == 0 && DataType == 1 &&
+                 ((Count == 512 && Rows == 16 && Cols == 32) ||
+                  (Count == 32 && Rows == 1 && Cols == 32)) &&
+                 Bytes == uint64_t(Count) * 4;
+  bool NormTile = NormU32Row || NormF32;
+  if ((!Existing32 && !NativeI64 && !Dense64 && !NormTile) ||
+      (Layout != 29 && !NormTile))
+    return None;
+  Type *Scalar = DataType == 1    ? Type::getFloatTy(Context)
+                 : DataType == 4  ? Type::getHalfTy(Context)
+                 : DataType == 26 ? Type::getInt16Ty(Context)
+                 : (DataType == 24 || DataType == 16)
+                     ? Type::getInt64Ty(Context)
+                                  : Type::getInt32Ty(Context);
+  return ElementProfile{Scalar,   FixedVectorType::get(Scalar, Count),
+                        DataType, Count,
+                        Rows,     Cols,
+                        Bytes,    Layout};
+}
+
+static Optional<ElementProfile> elementProfile(uint64_t DataType,
+                                               LLVMContext &Context) {
+  uint64_t Bytes = DataType == 16 || DataType == 24 ? 256 : 128;
+  return elementProfile(DataType, 32, 32, 1, Bytes, Context);
+}
+
+static Optional<ElementProfile> elementViewProfile(StringRef Text,
+                                                   LLVMContext &Context) {
+  if (Text == "pto.element.view:v2;dtype=f32;layout=norm;physical_rows=16;"
+              "physical_cols=32;valid_rows=16;valid_cols=32")
+    return elementProfile(1, 512, 16, 32, 2048, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=f32;layout=norm;physical_rows=1;"
+              "physical_cols=32;valid_rows=1;valid_cols=32")
+    return elementProfile(1, 32, 1, 32, 128, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
+              "physical_cols=128;valid_rows=1;valid_cols=128")
+    return elementProfile(25, 128, 1, 128, 512, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
+              "physical_cols=128;valid_rows=1;valid_cols=32")
+    return elementProfile(25, 128, 1, 32, 512, Context, 0);
+  if (Text == "pto.element.view:v2;dtype=u32;layout=norm;physical_rows=1;"
+              "physical_cols=2048;valid_rows=1;valid_cols=2048")
+    return elementProfile(25, 2048, 1, 2048, 8192, Context, 0);
+  if (Text == U32M32View)
+    return elementProfile(25, 32, 32, 1, 128, Context);
+  if (Text == S32M32View)
+    return elementProfile(17, 32, 32, 1, 128, Context);
+  if (Text == F32M32View)
+    return elementProfile(1, 32, 32, 1, 128, Context);
+  if (Text == U64M32View)
+    return elementProfile(24, 32, 32, 1, 256, Context);
+  if (Text == S64M32View)
+    return elementProfile(16, 32, 32, 1, 256, Context);
+  if (Text == U32M32x2View)
+    return elementProfile(25, 64, 32, 2, 256, Context);
+  if (Text == S32M32x2View)
+    return elementProfile(17, 64, 32, 2, 256, Context);
+  if (Text == F16M32x2View)
+    return elementProfile(4, 64, 32, 2, 128, Context);
+  if (Text == U16M32x2View)
+    return elementProfile(26, 64, 32, 2, 128, Context);
+  return None;
+}
+
 constexpr StringLiteral RegionLoopMD = "llvm.loop.linx.pto.element.region";
+constexpr StringLiteral InterElementOrderMD =
+    "llvm.loop.linx.pto.element.inter_element_order";
+constexpr StringLiteral IntraElementOrderMD =
+    "llvm.loop.linx.pto.element.intra_element_order";
+constexpr StringLiteral PredicatedOwnerMD = "linx.pto.element.vp.owner";
+constexpr StringLiteral PredicatedDomainMD = "linx.pto.element.vp.domain";
 constexpr StringLiteral ScalarizedLaneZeroMD =
     "linx.pto.element.scalarized_lane_zero";
 
@@ -113,7 +242,7 @@ static bool collectPointerAccesses(Value *Pointer,
   return true;
 }
 
-static bool prepareViews(Function &F) {
+static bool prepareViews(Function &F, bool RestoreFullCarrier = false) {
   SmallVector<CallInst *, 8> Annotations;
   for (Instruction &I : instructions(F)) {
     auto *Call = dyn_cast<CallInst>(&I);
@@ -148,6 +277,7 @@ static bool prepareViews(Function &F) {
     int64_t ByteOffset;
     uint64_t StorageID;
     uint64_t ViewID;
+    ElementProfile Profile;
     SmallVector<Instruction *, 8> Accesses;
   };
 
@@ -162,7 +292,8 @@ static bool prepareViews(Function &F) {
   for (CallInst *Annotation : Annotations) {
     StringRef Text;
     (void)getAnnotationString(*Annotation, Text);
-    if (Text != U32M32View)
+    Optional<ElementProfile> Profile = elementViewProfile(Text, F.getContext());
+    if (!Profile)
       diagnose(F, Annotation,
                Twine("unsupported logical view contract '") + Text + "'");
 
@@ -180,7 +311,7 @@ static bool prepareViews(Function &F) {
       StorageID = NextStorageID++;
 
     PreparedView Plan{Annotation, AnnotatedPointer, Storage, ByteOffset,
-                      StorageID, NextViewID++, {}};
+                      StorageID, NextViewID++, *Profile, {}};
     SmallPtrSet<Value *, 16> Visited;
     Instruction *InvalidUse = nullptr;
     if (!collectPointerAccesses(Annotation, Plan.Accesses, Visited,
@@ -209,7 +340,8 @@ static bool prepareViews(Function &F) {
       uint64_t ObjectBytes = ObjectSize.getZExtValue();
       if (Plan.ByteOffset < 0 ||
           static_cast<uint64_t>(Plan.ByteOffset) > ObjectBytes ||
-          ObjectBytes - static_cast<uint64_t>(Plan.ByteOffset) < 128)
+          ObjectBytes - static_cast<uint64_t>(Plan.ByteOffset) <
+              Plan.Profile.Bytes)
         diagnose(F, Annotation,
                  "logical view requires a proved 128-byte backing range");
       uint64_t Offset = static_cast<uint64_t>(Plan.ByteOffset);
@@ -252,27 +384,25 @@ static bool prepareViews(Function &F) {
         CarrierType = cast<StoreInst>(Access)->getValueOperand()->getType();
       auto *ScalarLoad = dyn_cast<LoadInst>(Access);
       bool IsScalarizedLaneZeroLoad =
-          ScalarLoad && CarrierType->isIntegerTy(32) &&
+          Plan.Profile.DataType == 25 && ScalarLoad && CarrierType->isIntegerTy(32) &&
           !ScalarLoad->isVolatile() && !ScalarLoad->isAtomic();
-      if (!IsScalarizedLaneZeroLoad &&
-          CarrierType !=
-              FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32)) {
+      if (!IsScalarizedLaneZeroLoad && CarrierType != Plan.Profile.VectorTy) {
         std::string Detail;
         raw_string_ostream OS(Detail);
         CarrierType->print(OS);
         OS << " in ";
         Access->print(OS);
+        std::string Expected;
+        raw_string_ostream ExpectedOS(Expected);
+        Plan.Profile.VectorTy->print(ExpectedOS);
         diagnose(F, Access,
                  Twine("view access carrier is ") + OS.str() +
-                     "; expected exact <32 x i32>");
+                     "; expected exact " + ExpectedOS.str());
       }
     }
     Plans.push_back(std::move(Plan));
   }
 
-  Function *View = Intrinsic::getDeclaration(
-      F.getParent(), Intrinsic::linx_experimental_element_view,
-      {FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32)});
   bool Changed = false;
   for (PreparedView &Plan : Plans) {
     if (Plan.Accesses.empty()) {
@@ -282,6 +412,10 @@ static bool prepareViews(Function &F) {
       continue;
     }
 
+    Function *View = Intrinsic::getDeclaration(
+        F.getParent(), Intrinsic::linx_experimental_element_view,
+        {Plan.Profile.VectorTy});
+
     auto BuildArgs = [&](Value *Carrier) {
       SmallVector<Value *, 9> Args;
       Args.push_back(Carrier);
@@ -289,17 +423,38 @@ static bool prepareViews(Function &F) {
       Args.push_back(ConstantInt::get(I64, Plan.ViewID));
       Args.push_back(ConstantInt::get(I64, Plan.StorageID));
       Args.push_back(ConstantInt::getSigned(I64, Plan.ByteOffset));
-      Args.push_back(ConstantInt::get(I64, 128));
-      Args.push_back(ConstantInt::get(I64, 25));
-      Args.push_back(ConstantInt::get(I64, 32));
-      Args.push_back(ConstantInt::get(I64, 1));
-      Args.push_back(ConstantInt::get(I64, 29));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.Bytes));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.DataType));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.Rows));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.Cols));
+      Args.push_back(ConstantInt::get(I64, Plan.Profile.Layout));
       return Args;
     };
 
     for (Instruction *Access : Plan.Accesses) {
       if (auto *Load = dyn_cast<LoadInst>(Access)) {
         if (Load->getType()->isIntegerTy(32)) {
+          if (RestoreFullCarrier) {
+            // InstCombine may scalarize a guarded element-zero access before
+            // view preparation. Restore the proven local 128-byte carrier so
+            // SROA can recover the original Tile SSA, not a Tile-to-GPR load.
+            // Do not transfer scalar range/noundef metadata to unread elements.
+            IRBuilder<> Builder(Load);
+            auto *Carrier = Builder.CreateAlignedLoad(
+                Plan.Profile.VectorTy, Load->getPointerOperand(), Align(32),
+                "pto.element.full.carrier");
+            Carrier->setDebugLoc(Load->getDebugLoc());
+            auto *Marker = Builder.CreateCall(View, BuildArgs(Carrier),
+                                              "pto.element.view");
+            Marker->setMetadata(ScalarizedLaneZeroMD,
+                                MDNode::get(F.getContext(), {}));
+            auto *ElementZero = Builder.CreateExtractElement(
+                Marker, Builder.getInt32(0), "pto.element.zero");
+            Load->replaceAllUsesWith(ElementZero);
+            Load->eraseFromParent();
+            Changed = true;
+            continue;
+          }
           IRBuilder<> LoadBuilder(Load->getNextNode());
           auto *VectorTy =
               FixedVectorType::get(Type::getInt32Ty(F.getContext()), 32);
@@ -355,6 +510,7 @@ struct ViewDescriptor {
   int64_t Offset = 0;
   uint64_t Range = 0;
   bool ScalarizedLaneZero = false;
+  ElementProfile Profile;
 };
 
 static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
@@ -369,13 +525,32 @@ static Optional<ViewDescriptor> getViewDescriptor(Value *V) {
       return None;
     Fields.push_back(C->getSExtValue());
   }
-  if (Fields[3] != 128 || Fields[4] != 25 || Fields[5] != 32 ||
-      Fields[6] != 1 || Fields[7] != 29)
+  if (Fields[3] < 0 || Fields[5] < 0 || Fields[6] < 0 ||
+      static_cast<uint64_t>(Fields[5]) > std::numeric_limits<unsigned>::max() ||
+      static_cast<uint64_t>(Fields[6]) > std::numeric_limits<unsigned>::max())
+    return None;
+  auto *CarrierTy = dyn_cast<FixedVectorType>(V->getType());
+  if (!CarrierTy)
+    return None;
+  unsigned Count = CarrierTy->getNumElements();
+  auto Profile = elementProfile(Fields[4], Count, Fields[5], Fields[6],
+                                Fields[3], V->getContext(), Fields[7]);
+  if (!Profile || V->getType() != Profile->VectorTy)
     return None;
   return ViewDescriptor{Call, static_cast<uint64_t>(Fields[0]),
                         static_cast<uint64_t>(Fields[1]), Fields[2],
                         static_cast<uint64_t>(Fields[3]),
-                        Call->getMetadata(ScalarizedLaneZeroMD) != nullptr};
+                        Call->getMetadata(ScalarizedLaneZeroMD) != nullptr,
+                        *Profile};
+}
+
+static bool sameCarrierStorage(const ViewDescriptor &A,
+                               const ViewDescriptor &B) {
+  return A.StorageID == B.StorageID && A.Offset == B.Offset &&
+         A.Range == B.Range && A.Profile.DataType == B.Profile.DataType &&
+         A.ScalarizedLaneZero == B.ScalarizedLaneZero &&
+         A.Profile.Rows == B.Profile.Rows && A.Profile.Cols == B.Profile.Cols &&
+         A.Profile.Layout == B.Profile.Layout;
 }
 
 static MDNode *getElementRegionToken(const Loop &L) {
@@ -391,6 +566,43 @@ static MDNode *getElementRegionToken(const Loop &L) {
       return dyn_cast_or_null<MDNode>(Property->getOperand(1));
   }
   return nullptr;
+}
+
+static bool hasExactLoopStringProperty(const Loop &L, StringRef PropertyName,
+                                       StringRef PropertyValue) {
+  MDNode *LoopID = L.getLoopID();
+  if (!LoopID)
+    return false;
+  unsigned Matches = 0;
+  for (const MDOperand &Operand : drop_begin(LoopID->operands())) {
+    auto *Property = dyn_cast_or_null<MDNode>(Operand.get());
+    if (!Property || Property->getNumOperands() == 0)
+      continue;
+    auto *Name = dyn_cast_or_null<MDString>(Property->getOperand(0));
+    if (!Name || Name->getString() != PropertyName)
+      continue;
+    if (Property->getNumOperands() != 2)
+      return false;
+    auto *Value = dyn_cast_or_null<MDString>(Property->getOperand(1));
+    if (!Value || Value->getString() != PropertyValue)
+      return false;
+    ++Matches;
+  }
+  return Matches == 1;
+}
+
+static bool hasUnorderedSourceContract(const Loop &L) {
+  return hasExactLoopStringProperty(L, InterElementOrderMD, "unordered") &&
+         hasExactLoopStringProperty(L, IntraElementOrderMD, "source");
+}
+
+static bool hasExactStringMetadata(const Instruction &I, StringRef Kind,
+                                   StringRef Value) {
+  MDNode *MD = I.getMetadata(Kind);
+  if (!MD || MD->getNumOperands() != 1)
+    return false;
+  auto *Text = dyn_cast_or_null<MDString>(MD->getOperand(0));
+  return Text && Text->getString() == Value;
 }
 
 static bool hasElementRegionLoopMetadata(const Instruction &I) {
@@ -421,6 +633,47 @@ static CallInst *findRegionSentinel(Function &F, MDNode *Token) {
   return nullptr;
 }
 
+static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L,
+                                  SmallPtrSetImpl<Value *> &Active) {
+  if (!Active.insert(V).second)
+    return false;
+  auto Finish = [&](bool Result) {
+    Active.erase(V);
+    return Result;
+  };
+  if (auto *Add = dyn_cast<BinaryOperator>(V)) {
+    if (Add->getOpcode() != Instruction::Add || !L.contains(Add))
+      return Finish(false);
+    Value *Other = nullptr;
+    if (Add->getOperand(0) == IV)
+      Other = Add->getOperand(1);
+    else if (Add->getOperand(1) == IV)
+      Other = Add->getOperand(0);
+    auto *Step = dyn_cast_or_null<ConstantInt>(Other);
+    return Finish(Step && Step->isOne());
+  }
+  if (auto *Phi = dyn_cast<PHINode>(V)) {
+    if (Phi == IV || !L.contains(Phi) || Phi->getNumIncomingValues() == 0)
+      return Finish(false);
+    for (Value *Incoming : Phi->incoming_values())
+      if (!isMergedUnitSuccessor(Incoming, IV, L, Active))
+        return Finish(false);
+    return Finish(true);
+  }
+  if (auto *Select = dyn_cast<SelectInst>(V))
+    return Finish(L.contains(Select) &&
+                  isMergedUnitSuccessor(Select->getTrueValue(), IV, L,
+                                        Active) &&
+                  isMergedUnitSuccessor(Select->getFalseValue(), IV, L,
+                                        Active));
+  return Finish(false);
+}
+
+static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L) {
+  SmallPtrSet<Value *, 8> Active;
+  return isMergedUnitSuccessor(V, IV, L, Active);
+}
+
 static PHINode *findUnitInduction(Loop &L, ScalarEvolution &SE) {
   for (PHINode &Phi : L.getHeader()->phis()) {
     if (!Phi.getType()->isIntegerTy())
@@ -431,6 +684,24 @@ static PHINode *findUnitInduction(Loop &L, ScalarEvolution &SE) {
     const auto *Start = dyn_cast<SCEVConstant>(AR->getStart());
     const auto *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
     if (Start && Step && Start->getAPInt().isZero() && Step->getAPInt().isOne())
+      return &Phi;
+  }
+  BasicBlock *Preheader = L.getLoopPreheader();
+  BasicBlock *Latch = L.getLoopLatch();
+  if (!Preheader || !Latch)
+    return nullptr;
+  for (PHINode &Phi : L.getHeader()->phis()) {
+    if (!Phi.getType()->isIntegerTy() || Phi.getNumIncomingValues() != 2)
+      continue;
+    int PreheaderIndex = Phi.getBasicBlockIndex(Preheader);
+    int LatchIndex = Phi.getBasicBlockIndex(Latch);
+    auto *Start = PreheaderIndex >= 0
+                      ? dyn_cast<ConstantInt>(
+                            Phi.getIncomingValue(PreheaderIndex))
+                      : nullptr;
+    Value *Next = LatchIndex >= 0 ? Phi.getIncomingValue(LatchIndex) : nullptr;
+    if (Start && Start->isZero() && Next &&
+        isMergedUnitSuccessor(Next, &Phi, L))
       return &Phi;
   }
   return nullptr;
@@ -455,6 +726,12 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
                         ? dyn_cast<ICmpInst>(Branch->getCondition())
                         : nullptr;
     if (Compare) {
+      bool TrueInside = L.contains(Branch->getSuccessor(0));
+      bool FalseInside = L.contains(Branch->getSuccessor(1));
+      if (TrueInside == FalseInside)
+        Compare = nullptr;
+    }
+    if (Compare) {
       Value *LHS = Compare->getOperand(0);
       Value *RHS = Compare->getOperand(1);
       auto StripCasts = [](Value *V) {
@@ -470,6 +747,8 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
       LHS = StripCasts(LHS);
       RHS = StripCasts(RHS);
       ICmpInst::Predicate Predicate = Compare->getPredicate();
+      if (!L.contains(Branch->getSuccessor(0)))
+        Predicate = ICmpInst::getInversePredicate(Predicate);
       if (SE.getSCEV(LHS) != SE.getSCEV(IV) &&
           SE.getSCEV(RHS) == SE.getSCEV(IV)) {
         std::swap(LHS, RHS);
@@ -487,6 +766,39 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
         }
       }
     }
+  }
+  const auto *IVAddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(IV));
+  const bool StructuralIV =
+      !IVAddRec || IVAddRec->getLoop() != &L || !IVAddRec->isAffine();
+  if (StructuralIV) {
+    auto *Branch = dyn_cast<BranchInst>(L.getLoopLatch()->getTerminator());
+    auto *Compare = Branch && Branch->isConditional()
+                        ? dyn_cast<ICmpInst>(Branch->getCondition())
+                        : nullptr;
+    if (!Compare)
+      return None;
+    bool TrueBackedge = Branch->getSuccessor(0) == L.getHeader();
+    bool FalseBackedge = Branch->getSuccessor(1) == L.getHeader();
+    if (TrueBackedge == FalseBackedge)
+      return None;
+    Value *LHS = Compare->getOperand(0);
+    Value *RHS = Compare->getOperand(1);
+    ICmpInst::Predicate Predicate = Compare->getPredicate();
+    if (!TrueBackedge)
+      Predicate = ICmpInst::getInversePredicate(Predicate);
+    bool LHSSuccessor = isMergedUnitSuccessor(LHS, IV, L);
+    bool RHSSuccessor = isMergedUnitSuccessor(RHS, IV, L);
+    if (!LHSSuccessor && RHSSuccessor) {
+      std::swap(LHS, RHS);
+      std::swap(LHSSuccessor, RHSSuccessor);
+      Predicate = ICmpInst::getSwappedPredicate(Predicate);
+    }
+    auto Bound = GetConstant(RHS);
+    if (!LHSSuccessor || RHSSuccessor || !Bound || *Bound <= 0 ||
+        (Predicate != ICmpInst::ICMP_ULT &&
+         Predicate != ICmpInst::ICMP_SLT))
+      return None;
+    return static_cast<uint64_t>(*Bound);
   }
   if (auto Bounds = L.getBounds(SE)) {
     Optional<int64_t> Step = GetConstant(Bounds->getStepValue());
@@ -515,6 +827,4210 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
   return Small ? Optional<uint64_t>(Small) : None;
 }
 
+// This stage widens ordinary scalar CFG, independently of the transitional
+// Tile publication/gather/atomic profiles below. All legality is checked before
+// mutation. It deliberately leaves the mandatory sentinel for target lowering.
+struct PredicatedRegion {
+  Loop *L = nullptr;
+  PHINode *Induction = nullptr;
+  unsigned Count = 0;        // Valid logical iterations.
+  unsigned CarrierCount = 0; // Physical SSA vector lanes.
+  SmallVector<BasicBlock *, 16> Order;
+  DenseMap<PHINode *, ViewDescriptor> Accumulators;
+  DenseMap<Value *, ViewDescriptor> Publications;
+  SmallPtrSet<CallInst *, 8> GuardedElementZeroViews;
+  SmallPtrSet<CallInst *, 4> ProvenDeadTraps;
+  SmallPtrSet<StoreInst *, 1> UnorderedScatters;
+  SmallPtrSet<Value *, 32> PositiveB32Values;
+};
+
+// IndVarSimplify may widen source B32 control/address expressions to i64.
+// Select a narrower physical representation only for complete def-use
+// components that remain in [0, INT32_MAX].  Scalar IR is left unchanged, so
+// every analysis below still describes the optimizer's original program.
+static void planPositiveB32Representation(Function &F, ScalarEvolution &SE,
+                                           DominatorTree &DT,
+                                           LazyValueInfo &LVI,
+                                           PredicatedRegion &Plan) {
+  Loop &L = *Plan.L;
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  auto RangeFits = [](const ConstantRange &Range) {
+    if (Range.isFullSet() || Range.isWrappedSet())
+      return false;
+    APInt Limit(Range.getBitWidth(), uint64_t(INT32_MAX));
+    return Range.getUnsignedMin().isNonNegative() &&
+           Range.getUnsignedMax().ule(Limit);
+  };
+  auto FitsEverywhere = [&](Value *V) {
+    if (!V->getType()->isIntegerTy(64))
+      return false;
+    if (auto *C = dyn_cast<ConstantInt>(V))
+      return C->getValue().ule(APInt(64, uint64_t(INT32_MAX)));
+    if (V == Plan.Induction)
+      return Plan.Count && Plan.Count - 1 <= uint64_t(INT32_MAX);
+    if (RangeFits(SE.getUnsignedRange(SE.getSCEV(V))))
+      return true;
+    bool SawUse = false;
+    for (User *U : V->users()) {
+      auto *Use = dyn_cast<Instruction>(U);
+      if (!Use || !L.contains(Use))
+        continue;
+      SawUse = true;
+      auto FitsAt = [&](Instruction *Context, ConstantRange LVIRange) {
+        ConstantRange Range = computeConstantRange(
+            V, /*ForSigned=*/false, /*UseInstrInfo=*/true, nullptr, Context,
+            &DT);
+        Range = Range.intersectWith(LVIRange);
+        KnownBits Known = computeKnownBits(V, DL, 0, nullptr, Context, &DT);
+        Range = Range.intersectWith(
+            ConstantRange::fromKnownBits(Known, /*IsSigned=*/false));
+        return RangeFits(Range);
+      };
+      if (auto *Phi = dyn_cast<PHINode>(Use)) {
+        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+          if (Phi->getIncomingValue(I) != V)
+            continue;
+          BasicBlock *From = Phi->getIncomingBlock(I);
+          if (!FitsAt(From->getTerminator(), LVI.getConstantRangeOnEdge(
+                                                   V, From, Phi->getParent(),
+                                                   Phi)))
+            return false;
+        }
+      } else if (!FitsAt(Use, LVI.getConstantRange(V, Use))) {
+        return false;
+      }
+    }
+    return SawUse;
+  };
+
+  SmallPtrSet<Value *, 32> Approved;
+  SmallPtrSet<Value *, 32> Rejected;
+  for (BasicBlock *BB : Plan.Order)
+    for (Instruction &RootI : *BB) {
+      SmallVector<Value *, 16> Roots;
+      // Address-only affine i64 expressions already have an exact lowering in
+      // the Tile legalizer.  Root components at comparisons and explicit
+      // truncation boundaries, then close over every consumer before approval.
+      if (auto *Cmp = dyn_cast<ICmpInst>(&RootI)) {
+        if (Cmp->getOperand(0)->getType()->isIntegerTy(64)) {
+          Roots.push_back(Cmp->getOperand(0));
+          Roots.push_back(Cmp->getOperand(1));
+        }
+      } else if (auto *Cast = dyn_cast<TruncInst>(&RootI)) {
+        if (Cast->getSrcTy()->isIntegerTy(64) &&
+            Cast->getDestTy()->getIntegerBitWidth() <= 32)
+          Roots.push_back(Cast->getOperand(0));
+      }
+      if (!Roots.empty()) {
+        SmallPtrSet<Value *, 32> Component;
+        SmallPtrSet<Value *, 16> Active;
+        std::function<bool(Value *)> Admit = [&](Value *V) {
+          if (Component.contains(V))
+            return true;
+          if (Rejected.contains(V) || !V->getType()->isIntegerTy(64) ||
+              !FitsEverywhere(V) || !Active.insert(V).second)
+            return false;
+          auto Finish = [&](bool OK) {
+            Active.erase(V);
+            if (OK)
+              Component.insert(V);
+            return OK;
+          };
+          if (isa<ConstantInt>(V) || V == Plan.Induction)
+            return Finish(true);
+          auto *I = dyn_cast<Instruction>(V);
+          if (!I || !L.contains(I)) {
+            if (I && !DT.dominates(I, L.getLoopPreheader()->getTerminator()))
+              return Finish(false);
+            return Finish(L.isLoopInvariant(V));
+          }
+          if (auto *Binary = dyn_cast<BinaryOperator>(I)) {
+            bool OpcodeOK = Binary->getOpcode() == Instruction::Add ||
+                            Binary->getOpcode() == Instruction::Sub ||
+                            Binary->getOpcode() == Instruction::Mul;
+            if (Binary->getOpcode() == Instruction::Shl) {
+              auto *Amount = dyn_cast<ConstantInt>(Binary->getOperand(1));
+              OpcodeOK = Amount && Amount->getValue().ult(32);
+            }
+            return Finish(OpcodeOK && Admit(Binary->getOperand(0)) &&
+                          Admit(Binary->getOperand(1)));
+          }
+          if (auto *Phi = dyn_cast<PHINode>(I)) {
+            if (Phi->getParent() == L.getHeader())
+              return Finish(false);
+            for (Value *Incoming : Phi->incoming_values())
+              if (!Admit(Incoming))
+                return Finish(false);
+            return Finish(true);
+          }
+          if (auto *Select = dyn_cast<SelectInst>(I))
+            return Finish(Admit(Select->getTrueValue()) &&
+                          Admit(Select->getFalseValue()));
+          if (auto *Cast = dyn_cast<CastInst>(I)) {
+            if (Cast->getOpcode() != Instruction::ZExt ||
+                Cast->getSrcTy()->getIntegerBitWidth() > 32)
+              return Finish(false);
+            return Finish(true);
+          }
+          return Finish(false);
+        };
+        bool OK = true;
+        for (Value *Root : Roots)
+          OK &= Admit(Root);
+        SmallPtrSet<Value *, 32> Verified;
+        while (OK) {
+          Value *V = nullptr;
+          for (Value *Candidate : Component)
+            if (!Verified.contains(Candidate)) {
+              V = Candidate;
+              break;
+            }
+          if (!V)
+            break;
+          Verified.insert(V);
+          if (isa<Constant>(V))
+            continue;
+          auto *Def = dyn_cast<Instruction>(V);
+          if (!Def || !L.contains(Def))
+            continue;
+          for (User *U : V->users()) {
+            auto *Use = dyn_cast<Instruction>(U);
+            if (!Use || !L.contains(Use)) {
+              OK = false;
+              break;
+            }
+            if (auto *Cmp = dyn_cast<ICmpInst>(Use)) {
+              Value *Other = Cmp->getOperand(0) == V ? Cmp->getOperand(1)
+                                                     : Cmp->getOperand(0);
+              OK = Other->getType()->isIntegerTy(64) && Admit(Other);
+            } else if (auto *GEP = dyn_cast<GetElementPtrInst>(Use)) {
+              OK = GEP->getNumIndices() == 1 && GEP->getOperand(1) == V;
+            } else if (auto *Cast = dyn_cast<TruncInst>(Use)) {
+              OK = Cast->getOperand(0) == V &&
+                   Cast->getDestTy()->getIntegerBitWidth() <= 32;
+            } else if (isa<BinaryOperator>(Use) || isa<PHINode>(Use) ||
+                       isa<SelectInst>(Use) || isa<ZExtInst>(Use)) {
+              OK = Use->getType()->isIntegerTy(64) && Admit(Use);
+            } else {
+              OK = false;
+            }
+            if (!OK)
+              break;
+          }
+        }
+        if (OK) {
+          Approved.insert(Component.begin(), Component.end());
+        } else {
+          for (Value *V : Component) {
+            auto *I = dyn_cast<Instruction>(V);
+            if (I && L.contains(I)) {
+              Approved.erase(V);
+              Rejected.insert(V);
+            }
+          }
+        }
+      }
+    }
+  Plan.PositiveB32Values.insert(Approved.begin(), Approved.end());
+}
+
+static bool isElementCarrier(Value *V) {
+  auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+  if (!Ty)
+    return false;
+  if (Ty->getNumElements() == 128 || Ty->getNumElements() == 2048)
+    return Ty->getElementType()->isIntegerTy(32);
+  if (Ty->getNumElements() == 512)
+    return Ty->getElementType()->isFloatTy() ||
+           Ty->getElementType()->isIntegerTy(32);
+  if (Ty->getNumElements() != 32 && Ty->getNumElements() != 64)
+    return false;
+  Type *Scalar = Ty->getElementType();
+  if (Scalar->isIntegerTy(64))
+    return Ty->getNumElements() == 32;
+  return Scalar->isIntegerTy(16) || Scalar->isIntegerTy(32) ||
+         Scalar->isHalfTy() || Scalar->isFloatTy();
+}
+
+static Value *stripCarrierLCSSA(Value *V) {
+  while (auto *Phi = dyn_cast<PHINode>(V)) {
+    if (!isElementCarrier(Phi) || Phi->getNumIncomingValues() != 1)
+      break;
+    V = Phi->getIncomingValue(0);
+  }
+  return V;
+}
+
+static bool isTileCarrierProducer(Value *V) {
+  auto *Call = dyn_cast<CallBase>(V);
+  if (!Call || !Call->isInlineAsm() || !isElementCarrier(V))
+    return false;
+  auto *Asm = cast<InlineAsm>(Call->getCalledOperand());
+  auto Constraints = Asm->ParseConstraints();
+  return !Constraints.empty() &&
+         Constraints.front().Type == InlineAsm::isOutput &&
+         !Constraints.front().isIndirect &&
+         llvm::any_of(Constraints.front().Codes,
+                      [](const std::string &Code) { return Code == "Tr"; });
+}
+
+static bool isTypedTileImport(Value *V, SmallPtrSetImpl<Value *> &Seen) {
+  V = stripCarrierLCSSA(V);
+  if (!Seen.insert(V).second)
+    return true;
+  if (auto View = getViewDescriptor(V)) {
+    if (View->ScalarizedLaneZero)
+      return false;
+    if (View->Marker->getMetadata(PredicatedOwnerMD))
+      return true; // Checked by the owning token's complete legalization plan.
+    return isTypedTileImport(View->Marker->getArgOperand(0), Seen);
+  }
+  if (auto *Arg = dyn_cast<Argument>(V))
+    if (Arg->getParent()->hasFnAttribute("linx-local-tile-abi") &&
+        Arg->getType()->isVectorTy())
+      return true;
+  if (auto *Call = dyn_cast<CallBase>(V))
+    if (Call->getCalledFunction() &&
+        Call->getCalledFunction()->hasFnAttribute("linx-local-tile-abi"))
+      return true;
+  if (isTileCarrierProducer(V) || isa<UndefValue>(V) || isa<PoisonValue>(V))
+    return true;
+  if (auto *Phi = dyn_cast<PHINode>(V)) {
+    if (!isElementCarrier(Phi))
+      return false;
+    return llvm::all_of(Phi->incoming_values(), [&](Value *Incoming) {
+      return isTypedTileImport(Incoming, Seen);
+    });
+  }
+  return false;
+}
+
+static bool isTypedTileImport(Value *V) {
+  SmallPtrSet<Value *, 16> Seen;
+  return isTypedTileImport(V, Seen);
+}
+
+// Infer a carrier's public descriptor over its SSA graph. Header seeds are
+// imports, not extra iterations; the backedge determines the publication type.
+static Optional<ViewDescriptor>
+carrierDescriptor(Value *V, Loop &L, SmallPtrSetImpl<Value *> &Seen) {
+  if (!Seen.insert(V).second)
+    return None;
+  if (auto Descriptor = getViewDescriptor(V))
+    return Descriptor;
+  SmallVector<Value *, 4> Sources;
+  if (auto *Phi = dyn_cast<PHINode>(V)) {
+    for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I)
+      if (L.contains(Phi->getIncomingBlock(I)) ||
+          getViewDescriptor(stripCarrierLCSSA(Phi->getIncomingValue(I))))
+        Sources.push_back(Phi->getIncomingValue(I));
+  } else if (auto *Insert = dyn_cast<InsertElementInst>(V)) {
+    Sources.push_back(Insert->getOperand(0));
+  } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+    Sources.push_back(Select->getTrueValue());
+    Sources.push_back(Select->getFalseValue());
+  }
+  Optional<ViewDescriptor> Result;
+  for (Value *Source : Sources) {
+    auto Candidate = carrierDescriptor(Source, L, Seen);
+    if (!Candidate)
+      continue;
+    if (Result && (Result->StorageID != Candidate->StorageID ||
+                   Result->Offset != Candidate->Offset ||
+                   Result->Profile.DataType != Candidate->Profile.DataType))
+      diagnose(*L.getHeader()->getParent(), dyn_cast<Instruction>(V),
+               "carrier PHI merges incompatible typed storage identities");
+    Result = Candidate;
+  }
+  return Result;
+}
+
+struct FloatComparisonMapping {
+  uint64_t Selector;
+  bool Invert;
+};
+
+// PTO's six native FP comparison modes use C-like unordered behavior: EQ is
+// ordered while NE is unordered.  LLVM may canonicalize ordered relational
+// branches to the inverse unordered predicate with reversed successors.  The
+// four relational complements remain exact when the native result is inverted;
+// ONE and UEQ do not have such a one-comparison representation.
+static Optional<FloatComparisonMapping>
+floatComparisonMapping(CmpInst::Predicate Pred) {
+  switch (Pred) {
+  case FCmpInst::FCMP_OEQ: return FloatComparisonMapping{0, false};
+  case FCmpInst::FCMP_UNE: return FloatComparisonMapping{1, false};
+  case FCmpInst::FCMP_OLT: return FloatComparisonMapping{2, false};
+  case FCmpInst::FCMP_OGT: return FloatComparisonMapping{3, false};
+  case FCmpInst::FCMP_OLE: return FloatComparisonMapping{4, false};
+  case FCmpInst::FCMP_OGE: return FloatComparisonMapping{5, false};
+  case FCmpInst::FCMP_ULT: return FloatComparisonMapping{5, true};
+  case FCmpInst::FCMP_UGT: return FloatComparisonMapping{4, true};
+  case FCmpInst::FCMP_ULE: return FloatComparisonMapping{3, true};
+  case FCmpInst::FCMP_UGE: return FloatComparisonMapping{2, true};
+  default: return None;
+  }
+}
+
+static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
+                            DominatorTree &DT, LazyValueInfo &LVI,
+                            AAResults &AA, PredicatedRegion &Plan) {
+  auto Fail = [&](const Instruction *I, const Twine &Why) {
+    return diagnose(F, I, Twine("predication: ") + Why);
+  };
+  if (F.hasFnAttribute(Attribute::StrictFP))
+    return Fail(L.getHeader()->getTerminator(),
+                "strictfp/fenv requires constrained floating-point lowering");
+  if (!L.isInnermost() || !L.getLoopPreheader() || !L.getLoopLatch() ||
+      !L.getExitBlock() || L.getExitingBlock() != L.getLoopLatch() ||
+      L.getExitBlock()->getSinglePredecessor() != L.getLoopLatch())
+    return Fail(L.getHeader()->getTerminator(),
+                "requires an innermost single-latch loop without early exits");
+  auto *Sentinel = findRegionSentinel(F, getElementRegionToken(L));
+  if (!Sentinel || !DT.dominates(Sentinel, L.getHeader()))
+    return Fail(L.getHeader()->getTerminator(),
+                "requires a dominating mandatory region sentinel");
+  Plan.L = &L;
+  Plan.Induction = findUnitInduction(L, SE);
+  Optional<uint64_t> TripCount =
+      Plan.Induction ? getProvenTripCount(L, Plan.Induction, SE) : None;
+  Plan.Count = 0;
+  if (TripCount && *TripCount <= std::numeric_limits<unsigned>::max())
+    Plan.Count = static_cast<unsigned>(*TripCount);
+  // This is an implementation bound for the initial explicit IR stage, not an
+  // ISA shape restriction. Never substitute the old fixed 32-element profile.
+  if (!Plan.Induction || !Plan.Count || Plan.Count > 4096)
+    return Fail(L.getHeader()->getTerminator(),
+                "requires a proven 1..4096 trip count and zero-based unit induction");
+  Plan.CarrierCount = Plan.Count;
+  Optional<ElementProfile> Norm;
+  for (BasicBlock *BB : L.blocks())
+    for (Instruction &I : *BB)
+      if (auto View = getViewDescriptor(&I))
+        if (View->Profile.Layout == 0) {
+          const auto &P = View->Profile;
+          if (P.Rows > UINT64_MAX / P.Cols ||
+              uint64_t(P.Rows) * P.Cols != Plan.Count ||
+              (Norm && (Norm->Count != P.Count || Norm->Rows != P.Rows ||
+                        Norm->Cols != P.Cols ||
+                        Norm->DataType != P.DataType)))
+            return Fail(&I, "NORM carrier requires its exact valid domain");
+          Norm = P;
+          Plan.CarrierCount = P.Count;
+        }
+  for (PHINode &Phi : L.getHeader()->phis()) {
+    if (&Phi == Plan.Induction)
+      continue;
+    if (!isElementCarrier(&Phi) ||
+        cast<FixedVectorType>(Phi.getType())->getNumElements() !=
+            Plan.CarrierCount) {
+      std::string Detail;
+      raw_string_ostream OS(Detail);
+      Phi.print(OS);
+      return Fail(&Phi, Twine("loop-carried recurrence is not supported: ") +
+                            OS.str());
+    }
+    Value *Final = Phi.getIncomingValueForBlock(L.getLoopLatch());
+    SmallPtrSet<Value *, 16> Seen;
+    auto Descriptor = carrierDescriptor(Final, L, Seen);
+    if (!Descriptor || Descriptor->ScalarizedLaneZero)
+      return Fail(&Phi,
+                  "carrier accumulator requires a typed final publication");
+    Plan.Accumulators[&Phi] = *Descriptor;
+    Plan.Publications.insert({Final, *Descriptor});
+  }
+
+  // Kahn order over one iteration, excluding only the proven latch backedge.
+  DenseMap<BasicBlock *, unsigned> Pending;
+  for (BasicBlock *BB : L.blocks()) {
+    if (!isa<BranchInst>(BB->getTerminator()))
+      return Fail(BB->getTerminator(), "unsupported control-flow terminator");
+    unsigned Count = 0;
+    for (BasicBlock *Pred : predecessors(BB))
+      if (L.contains(Pred) &&
+          !(Pred == L.getLoopLatch() && BB == L.getHeader()))
+        ++Count;
+    Pending[BB] = Count;
+  }
+  Plan.Order.push_back(L.getHeader());
+  for (unsigned I = 0; I < Plan.Order.size(); ++I) {
+    BasicBlock *BB = Plan.Order[I];
+    for (BasicBlock *Succ : successors(BB)) {
+      if (!L.contains(Succ) ||
+          (BB == L.getLoopLatch() && Succ == L.getHeader()))
+        continue;
+      if (--Pending[Succ] == 0)
+        Plan.Order.push_back(Succ);
+    }
+  }
+  if (Plan.Order.size() != L.getNumBlocks())
+    return Fail(L.getHeader()->getTerminator(),
+                "iteration CFG must be acyclic after removing its backedge");
+
+  auto IsCarrierOperand = [&](Value *V) {
+    if (getViewDescriptor(stripCarrierLCSSA(V)))
+      return true;
+    auto *I = dyn_cast<Instruction>(V);
+    return I && L.contains(I) && isElementCarrier(I) &&
+           (isa<InsertElementInst>(I) ||
+            (isa<PHINode>(I) && (I->getParent() != L.getHeader() ||
+                                 Plan.Accumulators.count(cast<PHINode>(I)))));
+  };
+  auto IndexIsCurrent = [&](Value *Index, const Instruction *Use) {
+    const SCEV *IndexSCEV = SE.getSCEV(Index);
+    const SCEV *IVSCEV = SE.getSCEV(Plan.Induction);
+    if (IndexSCEV->getType() != IVSCEV->getType()) {
+      // IndVarSimplify may widen the canonical IV for pointer indexing while
+      // Clang's logical vector index remains i32. Compare in the index type
+      // only when the complete proven domain fits, never by discarding bits
+      // of an arbitrary index expression.
+      unsigned Width = IndexSCEV->getType()->getIntegerBitWidth();
+      if (!isUIntN(Width, Plan.Count - 1))
+        return false;
+      IVSCEV = SE.getTruncateOrZeroExtend(IVSCEV, IndexSCEV->getType());
+    }
+    return IndexSCEV == IVSCEV ||
+           SE.isKnownPredicateAt(ICmpInst::ICMP_EQ, IndexSCEV, IVSCEV, Use);
+  };
+  auto CertifyElementZeroView = [&](const ViewDescriptor &Descriptor) {
+    if (!Descriptor.ScalarizedLaneZero)
+      return true;
+    for (User *U : Descriptor.Marker->users()) {
+      auto *Extract = dyn_cast<ExtractElementInst>(U);
+      auto *Index =
+          Extract ? dyn_cast<ConstantInt>(Extract->getIndexOperand()) : nullptr;
+      if (!Extract || !L.contains(Extract) || !Index || !Index->isZero() ||
+          !IndexIsCurrent(Index, Extract))
+        return false;
+    }
+    Plan.GuardedElementZeroViews.insert(Descriptor.Marker);
+    return true;
+  };
+  SmallPtrSet<const SCEV *, 16> ActiveSCEVBounds;
+  std::function<Optional<APInt>(const SCEV *)> SCEVUnsignedMax =
+      [&](const SCEV *S) -> Optional<APInt> {
+    if (!S->getType()->isIntegerTy() || !ActiveSCEVBounds.insert(S).second)
+      return None;
+    auto Finish = [&](Optional<APInt> Result) {
+      ActiveSCEVBounds.erase(S);
+      return Result;
+    };
+    unsigned Width = S->getType()->getIntegerBitWidth();
+    if (auto *C = dyn_cast<SCEVConstant>(S))
+      return Finish(C->getAPInt());
+    if (auto *Add = dyn_cast<SCEVAddExpr>(S)) {
+      APInt Result(Width, 0);
+      for (const SCEV *Operand : Add->operands()) {
+        auto Bound = SCEVUnsignedMax(Operand);
+        bool Overflow = false;
+        if (!Bound)
+          return Finish(None);
+        Result = Result.uadd_ov(*Bound, Overflow);
+        if (Overflow)
+          return Finish(None);
+      }
+      return Finish(Result);
+    }
+    if (auto *Mul = dyn_cast<SCEVMulExpr>(S)) {
+      APInt Result(Width, 1);
+      for (const SCEV *Operand : Mul->operands()) {
+        auto Bound = SCEVUnsignedMax(Operand);
+        bool Overflow = false;
+        if (!Bound)
+          return Finish(None);
+        Result = Result.umul_ov(*Bound, Overflow);
+        if (Overflow)
+          return Finish(None);
+      }
+      return Finish(Result);
+    }
+    if (auto *AddRec = dyn_cast<SCEVAddRecExpr>(S)) {
+      auto Start = SCEVUnsignedMax(AddRec->getStart());
+      auto Step = SCEVUnsignedMax(AddRec->getStepRecurrence(SE));
+      uint64_t Trip = SE.getSmallConstantTripCount(AddRec->getLoop());
+      if (!Trip)
+        Trip = SE.getSmallConstantMaxTripCount(AddRec->getLoop());
+      if (!Trip)
+        if (auto *Backedges = dyn_cast<SCEVConstant>(
+                SE.getBackedgeTakenCount(AddRec->getLoop())))
+          if (!Backedges->getAPInt().isAllOnes())
+            Trip = Backedges->getAPInt().getZExtValue() + 1;
+      if (!Start || !Step || !Trip ||
+          !SE.isKnownNonNegative(AddRec->getStepRecurrence(SE)))
+        return Finish(None);
+      if (!isUIntN(Width, Trip - 1))
+        return Finish(None);
+      bool Overflow = false;
+      APInt Last = Step->umul_ov(APInt(Width, Trip - 1), Overflow);
+      if (Overflow)
+        return Finish(None);
+      Last = Start->uadd_ov(Last, Overflow);
+      return Finish(Overflow ? None : Optional<APInt>(Last));
+    }
+    return Finish(None);
+  };
+  SmallPtrSet<Value *, 16> ActiveUnsignedBounds;
+  std::function<Optional<APInt>(Value *)> UnsignedMax =
+      [&](Value *V) -> Optional<APInt> {
+    if (!V->getType()->isIntegerTy() || !ActiveUnsignedBounds.insert(V).second)
+      return None;
+    auto Finish = [&](Optional<APInt> Result) {
+      ActiveUnsignedBounds.erase(V);
+      return Result;
+    };
+    unsigned Width = V->getType()->getIntegerBitWidth();
+    if (auto *C = dyn_cast<ConstantInt>(V))
+      return Finish(C->getValue());
+    if (auto Bound = SCEVUnsignedMax(SE.getSCEV(V)))
+      return Finish(Bound);
+    if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      bool Defined = isGuaranteedNotToBeUndefOrPoison(Freeze->getOperand(0),
+                                                      nullptr, Freeze, &DT);
+      if (Defined)
+        return Finish(UnsignedMax(Freeze->getOperand(0)));
+      return Finish(None);
+    }
+    if (auto *Phi = dyn_cast<PHINode>(V)) {
+      if (Phi->getNumIncomingValues() != 2)
+        return Finish(None);
+      ConstantInt *Start = nullptr;
+      BasicBlock *StartBlock = nullptr;
+      BinaryOperator *Next = nullptr;
+      BasicBlock *NextBlock = nullptr;
+      for (unsigned I = 0; I < 2; ++I) {
+        Value *Incoming = Phi->getIncomingValue(I);
+        BasicBlock *IncomingBlock = Phi->getIncomingBlock(I);
+        if (auto *C = dyn_cast<ConstantInt>(Incoming)) {
+          if (Start)
+            return Finish(None);
+          Start = C;
+          StartBlock = IncomingBlock;
+          continue;
+        }
+        auto *Add = dyn_cast<BinaryOperator>(Incoming);
+        if (!Add || Add->getOpcode() != Instruction::Add ||
+            !Add->hasNoUnsignedWrap() || Add->getParent() != IncomingBlock ||
+            Next)
+          return Finish(None);
+        ConstantInt *Step = nullptr;
+        if (Add->getOperand(0) == Phi)
+          Step = dyn_cast<ConstantInt>(Add->getOperand(1));
+        else if (Add->getOperand(1) == Phi)
+          Step = dyn_cast<ConstantInt>(Add->getOperand(0));
+        if (!Step || !Step->isOne())
+          return Finish(None);
+        Next = Add;
+        NextBlock = IncomingBlock;
+      }
+      if (Start && StartBlock && Next && NextBlock && StartBlock != NextBlock)
+        for (User *U : Next->users()) {
+          auto *Cmp = dyn_cast<ICmpInst>(U);
+          if (!Cmp || Cmp->getPredicate() != ICmpInst::ICMP_EQ)
+            continue;
+          ConstantInt *Limit = Cmp->getOperand(0) == Next
+                                   ? dyn_cast<ConstantInt>(Cmp->getOperand(1))
+                               : Cmp->getOperand(1) == Next
+                                   ? dyn_cast<ConstantInt>(Cmp->getOperand(0))
+                                   : nullptr;
+          auto *Branch = Cmp->hasOneUse()
+                             ? dyn_cast<BranchInst>(*Cmp->user_begin())
+                             : nullptr;
+          if (!Limit || !Branch || !Branch->isConditional() ||
+              Branch->getParent() != NextBlock ||
+              Branch->getCondition() != Cmp ||
+              Branch->getSuccessor(1) != Phi->getParent() ||
+              Branch->getSuccessor(0) == Phi->getParent() ||
+              Start->getValue().uge(Limit->getValue()) || Limit->isZero())
+            continue;
+          return Finish(Limit->getValue() - 1);
+        }
+      if (Start && Start->isZero() && Next) {
+        Loop *PhiLoop = nullptr;
+        for (Loop *Scope = &L; Scope; Scope = Scope->getParentLoop())
+          if (Scope->getHeader() == Phi->getParent()) {
+            PhiLoop = Scope;
+            break;
+          }
+        if (PhiLoop)
+          for (User *U : Phi->users()) {
+            auto *Cmp = dyn_cast<ICmpInst>(U);
+            if (!Cmp || Cmp->getPredicate() != ICmpInst::ICMP_EQ)
+              continue;
+            ConstantInt *Limit = Cmp->getOperand(0) == Phi
+                                     ? dyn_cast<ConstantInt>(Cmp->getOperand(1))
+                                 : Cmp->getOperand(1) == Phi
+                                     ? dyn_cast<ConstantInt>(Cmp->getOperand(0))
+                                     : nullptr;
+            auto *Branch = Cmp->hasOneUse()
+                               ? dyn_cast<BranchInst>(*Cmp->user_begin())
+                               : nullptr;
+            if (!Limit || !Branch || !Branch->isConditional() ||
+                Branch->getCondition() != Cmp ||
+                !PhiLoop->contains(Branch->getParent()) ||
+                !DT.dominates(Branch->getParent(), NextBlock))
+              continue;
+            auto ReachesIncrementBeforeHeader = [&](BasicBlock *Start) {
+              SmallVector<BasicBlock *, 8> Worklist{Start};
+              SmallPtrSet<BasicBlock *, 16> Seen;
+              while (!Worklist.empty()) {
+                BasicBlock *BB = Worklist.pop_back_val();
+                if (!Seen.insert(BB).second)
+                  continue;
+                if (BB == NextBlock)
+                  return true;
+                if (BB == PhiLoop->getHeader())
+                  continue;
+                append_range(Worklist, successors(BB));
+              }
+              return false;
+            };
+            bool TrueIncrements =
+                ReachesIncrementBeforeHeader(Branch->getSuccessor(0));
+            bool FalseIncrements =
+                ReachesIncrementBeforeHeader(Branch->getSuccessor(1));
+            if (!TrueIncrements && FalseIncrements)
+              return Finish(Limit->getValue());
+          }
+      }
+    }
+    if (auto *AddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(V))) {
+      auto *Start = dyn_cast<SCEVConstant>(AddRec->getStart());
+      auto *Step = dyn_cast<SCEVConstant>(AddRec->getStepRecurrence(SE));
+      uint64_t Trip = SE.getSmallConstantTripCount(AddRec->getLoop());
+      if (!Trip)
+        Trip = SE.getSmallConstantMaxTripCount(AddRec->getLoop());
+      if (!Trip)
+        if (auto *Backedges = dyn_cast<SCEVConstant>(
+                SE.getBackedgeTakenCount(AddRec->getLoop())))
+          if (!Backedges->getAPInt().isAllOnes())
+            Trip = Backedges->getAPInt().getZExtValue() + 1;
+      if (Start && Step && Trip && Step->getAPInt().isNonNegative()) {
+        if (!isUIntN(Width, Trip - 1))
+          return Finish(None);
+        bool Overflow = false;
+        APInt Last = Step->getAPInt().umul_ov(APInt(Width, Trip - 1), Overflow);
+        if (!Overflow) {
+          Last = Start->getAPInt().uadd_ov(Last, Overflow);
+          if (!Overflow)
+            return Finish(Last.zextOrTrunc(Width));
+        }
+      }
+    }
+    for (Loop *Scope = &L; Scope; Scope = Scope->getParentLoop()) {
+      PHINode *IV = findUnitInduction(*Scope, SE);
+      if (IV != V)
+        continue;
+      Optional<uint64_t> Trip = getProvenTripCount(*Scope, IV, SE);
+      if (Trip && *Trip)
+        return Finish(APInt(Width, *Trip - 1));
+    }
+    if (auto *Cast = dyn_cast<CastInst>(V)) {
+      auto Source = UnsignedMax(Cast->getOperand(0));
+      if (!Source)
+        return Finish(None);
+      if (Cast->getOpcode() == Instruction::ZExt)
+        return Finish(Source->zext(Width));
+      if (Cast->getOpcode() == Instruction::Trunc && Source->isIntN(Width))
+        return Finish(Source->trunc(Width));
+      return Finish(None);
+    }
+    auto *Binary = dyn_cast<BinaryOperator>(V);
+    if (!Binary)
+      return Finish(None);
+    auto Left = UnsignedMax(Binary->getOperand(0));
+    auto Right = UnsignedMax(Binary->getOperand(1));
+    if (!Left || !Right)
+      return Finish(None);
+    bool Overflow = false;
+    switch (Binary->getOpcode()) {
+    case Instruction::Add: {
+      APInt Sum = Left->uadd_ov(*Right, Overflow);
+      return Finish(Overflow ? None : Optional<APInt>(Sum));
+    }
+    case Instruction::Mul: {
+      APInt Product = Left->umul_ov(*Right, Overflow);
+      return Finish(Overflow ? None : Optional<APInt>(Product));
+    }
+    case Instruction::Shl: {
+      auto *Shift = dyn_cast<ConstantInt>(Binary->getOperand(1));
+      if (!Shift || Shift->getValue().uge(Width))
+        return Finish(None);
+      unsigned Amount = Shift->getZExtValue();
+      if (Left->getActiveBits() + Amount > Width)
+        return Finish(None);
+      return Finish(*Left << Amount);
+    }
+    case Instruction::And:
+    case Instruction::Or: {
+      auto MaxMaskedValue = [](const APInt &Max, const APInt &Mask) {
+        APInt Best = Max & Mask;
+        for (unsigned Bit = 0; Bit < Max.getBitWidth(); ++Bit) {
+          if (!Max[Bit])
+            continue;
+          APInt Lower = APInt::getLowBitsSet(Max.getBitWidth(), Bit);
+          APInt Higher = ~(Lower | APInt::getOneBitSet(Max.getBitWidth(), Bit));
+          APInt Candidate = (Max & Higher & Mask) | (Lower & Mask);
+          if (Candidate.ugt(Best))
+            Best = Candidate;
+        }
+        return Best;
+      };
+      if (Binary->getOpcode() == Instruction::And) {
+        if (auto *Mask = dyn_cast<ConstantInt>(Binary->getOperand(0)))
+          return Finish(MaxMaskedValue(*Right, Mask->getValue()));
+        if (auto *Mask = dyn_cast<ConstantInt>(Binary->getOperand(1)))
+          return Finish(MaxMaskedValue(*Left, Mask->getValue()));
+      }
+      auto RangeFor = [&](Value *Operand, const APInt &Max) {
+        if (auto *C = dyn_cast<ConstantInt>(Operand))
+          return ConstantRange(C->getValue());
+        return Max.isAllOnes() ? ConstantRange::getFull(Width)
+                               : ConstantRange(APInt(Width, 0), Max + 1);
+      };
+      ConstantRange L = RangeFor(Binary->getOperand(0), *Left);
+      ConstantRange R = RangeFor(Binary->getOperand(1), *Right);
+      // OR is not monotone in its unsigned operands: 1|2 exceeds 2|2.
+      // Bound the complete input ranges rather than OR-ing their maxima.
+      return Finish((Binary->getOpcode() == Instruction::And ? L.binaryAnd(R)
+                                                             : L.binaryOr(R))
+                        .getUnsignedMax());
+    }
+    default:
+      return Finish(None);
+    }
+  };
+  // Some public helpers express a bounded logical index through several
+  // correlated loop inductions and a dominating tail predicate.  Independent
+  // ranges lose that correlation.  For small constant domains, evaluate the
+  // integer SSA expression exactly over every induction tuple and retain only
+  // tuples admitted by evaluable dominating conditions.  Unknown conditions
+  // are deliberately ignored, which widens the checked set and cannot prove
+  // an unsafe predicate.
+  auto ProveFiniteIntegerPredicate =
+      [&](ICmpInst::Predicate Predicate, Value *LHS, Value *RHS,
+          Instruction *Context) {
+        struct RequiredCondition {
+          llvm::Value *Condition;
+          bool Result;
+        };
+        SmallVector<RequiredCondition, 8> Conditions;
+        DomTreeNode *Node = DT.getNode(Context->getParent());
+        for (Node = Node ? Node->getIDom() : nullptr; Node;
+             Node = Node->getIDom()) {
+          auto *BI = dyn_cast<BranchInst>(Node->getBlock()->getTerminator());
+          if (!BI || !BI->isConditional())
+            continue;
+          bool TrueDominates =
+              DT.dominates(BI->getSuccessor(0), Context->getParent());
+          bool FalseDominates =
+              DT.dominates(BI->getSuccessor(1), Context->getParent());
+          if (TrueDominates != FalseDominates)
+            Conditions.push_back({BI->getCondition(), TrueDominates});
+        }
+
+        SmallVector<const Loop *, 4> Domains;
+        struct FinitePhiDomain {
+          PHINode *Phi;
+          SmallVector<APInt, 4> Values;
+        };
+        SmallVector<FinitePhiDomain, 2> PhiDomains;
+        SmallPtrSet<const Loop *, 4> SeenLoops;
+        SmallPtrSet<PHINode *, 2> SeenPhis;
+        SmallPtrSet<Value *, 32> SeenValues;
+        auto DomainTripCount = [&](const Loop *Domain) -> Optional<uint64_t> {
+          uint64_t Trip = SE.getSmallConstantTripCount(Domain);
+          if (Trip)
+            return Trip;
+          auto *MutableDomain = const_cast<Loop *>(Domain);
+          PHINode *IV = findUnitInduction(*MutableDomain, SE);
+          return IV ? getProvenTripCount(*MutableDomain, IV, SE) : None;
+        };
+        std::function<void(Value *)> CollectLoops = [&](Value *V) {
+          if (!SeenValues.insert(V).second || isa<Constant>(V))
+            return;
+          if (auto *Phi = dyn_cast<PHINode>(V)) {
+            if (auto *AddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Phi))) {
+              const Loop *PhiLoop = AddRec->getLoop();
+              auto *Start = dyn_cast<SCEVConstant>(AddRec->getStart());
+              auto *Step =
+                  dyn_cast<SCEVConstant>(AddRec->getStepRecurrence(SE));
+              Optional<uint64_t> Trip = DomainTripCount(PhiLoop);
+              if (Start && Step && Trip && *Trip &&
+                  SeenLoops.insert(PhiLoop).second) {
+                Domains.push_back(PhiLoop);
+                return;
+              }
+              if (Start && Step)
+                if (auto Max = UnsignedMax(Phi))
+                  if (Max->ule(4095) && SeenPhis.insert(Phi).second) {
+                    FinitePhiDomain Domain{Phi, {}};
+                    uint64_t Maximum = Max->getZExtValue();
+                    for (uint64_t Value = 0; Value <= Maximum; ++Value)
+                      Domain.Values.emplace_back(
+                          Phi->getType()->getIntegerBitWidth(), Value);
+                    PhiDomains.push_back(std::move(Domain));
+                    return;
+                  }
+            }
+            Loop *PhiLoop = nullptr;
+            for (Loop *Scope = &L; Scope; Scope = Scope->getParentLoop())
+              if (Scope->getHeader() == Phi->getParent()) {
+                PhiLoop = Scope;
+                break;
+              }
+            bool HasZeroStart = false;
+            bool HasUnitNext = false;
+            BasicBlock *NextBlock = nullptr;
+            if (PhiLoop && Phi->getNumIncomingValues() == 2)
+              for (unsigned I = 0; I < 2; ++I) {
+                Value *Incoming = Phi->getIncomingValue(I);
+                BasicBlock *IncomingBlock = Phi->getIncomingBlock(I);
+                if (!PhiLoop->contains(IncomingBlock))
+                  HasZeroStart |= match(Incoming, m_Zero());
+                else
+                  if (match(Incoming,
+                            m_Add(m_Specific(Phi), m_One())) ||
+                      match(Incoming,
+                            m_Add(m_One(), m_Specific(Phi)))) {
+                    HasUnitNext = true;
+                    NextBlock = IncomingBlock;
+                  }
+              }
+            auto ReachesNext = [&](const APInt &PhiValue) {
+              SmallVector<BasicBlock *, 16> Worklist{PhiLoop->getHeader()};
+              SmallPtrSet<BasicBlock *, 32> Seen;
+              std::function<Optional<APInt>(Value *)> EvaluateConditionValue =
+                  [&](Value *V) -> Optional<APInt> {
+                if (auto *C = dyn_cast<ConstantInt>(V))
+                  return C->getValue();
+                if (V == Phi)
+                  return PhiValue;
+                auto *Cast = dyn_cast<CastInst>(V);
+                if (!Cast)
+                  return None;
+                auto Operand = EvaluateConditionValue(Cast->getOperand(0));
+                if (!Operand)
+                  return None;
+                unsigned Width = Cast->getDestTy()->getIntegerBitWidth();
+                switch (Cast->getOpcode()) {
+                case Instruction::Trunc: return Operand->trunc(Width);
+                case Instruction::ZExt: return Operand->zext(Width);
+                case Instruction::SExt: return Operand->sext(Width);
+                default: return None;
+                }
+              };
+              while (!Worklist.empty()) {
+                BasicBlock *BB = Worklist.pop_back_val();
+                if (!Seen.insert(BB).second || !PhiLoop->contains(BB))
+                  continue;
+                if (BB == NextBlock)
+                  return true;
+                auto *Branch = dyn_cast<BranchInst>(BB->getTerminator());
+                if (Branch && Branch->isConditional())
+                  if (auto *Cmp = dyn_cast<ICmpInst>(Branch->getCondition())) {
+                    auto Left = EvaluateConditionValue(Cmp->getOperand(0));
+                    auto Right = EvaluateConditionValue(Cmp->getOperand(1));
+                    if (Left && Right) {
+                      bool TakeTrue = ICmpInst::compare(
+                          *Left, *Right, Cmp->getPredicate());
+                      Worklist.push_back(Branch->getSuccessor(TakeTrue ? 0 : 1));
+                      continue;
+                    }
+                  }
+                append_range(Worklist, successors(BB));
+              }
+              return false;
+            };
+            if (HasZeroStart && HasUnitNext && NextBlock &&
+                SeenPhis.insert(Phi).second) {
+              FinitePhiDomain Domain{Phi, {}};
+              bool Closed = false;
+              for (uint64_t Value = 0; Value < 4096; ++Value) {
+                Domain.Values.emplace_back(
+                    Phi->getType()->getIntegerBitWidth(), Value);
+                if (!ReachesNext(Domain.Values.back())) {
+                  Closed = true;
+                  break;
+                }
+              }
+              if (Closed) {
+                PhiDomains.push_back(std::move(Domain));
+                return;
+              }
+              SeenPhis.erase(Phi);
+            }
+            if (auto Max = UnsignedMax(Phi))
+              if (Max->ule(4095) && SeenPhis.insert(Phi).second) {
+                FinitePhiDomain Domain{Phi, {}};
+                uint64_t Maximum = Max->getZExtValue();
+                for (uint64_t Value = 0; Value <= Maximum; ++Value)
+                  Domain.Values.emplace_back(
+                      Phi->getType()->getIntegerBitWidth(), Value);
+                PhiDomains.push_back(std::move(Domain));
+                return;
+              }
+            FinitePhiDomain Domain{Phi, {}};
+            for (Value *Incoming : Phi->incoming_values()) {
+              auto *C = dyn_cast<ConstantInt>(Incoming);
+              if (!C) {
+                Domain.Values.clear();
+                break;
+              }
+              if (!llvm::is_contained(Domain.Values, C->getValue()))
+                Domain.Values.push_back(C->getValue());
+            }
+            if (!Domain.Values.empty() && SeenPhis.insert(Phi).second) {
+              PhiDomains.push_back(std::move(Domain));
+              return;
+            }
+          }
+          if (auto *I = dyn_cast<Instruction>(V))
+            for (Value *Operand : I->operands())
+              CollectLoops(Operand);
+        };
+        CollectLoops(LHS);
+        CollectLoops(RHS);
+        for (const RequiredCondition &Condition : Conditions)
+          CollectLoops(Condition.Condition);
+
+        uint64_t Evaluations = 1;
+        for (const Loop *Domain : Domains) {
+          Optional<uint64_t> Trip = DomainTripCount(Domain);
+          if (!Trip || !*Trip || Evaluations > 65536 / *Trip)
+            return false;
+          Evaluations *= *Trip;
+        }
+        for (const FinitePhiDomain &Domain : PhiDomains) {
+          if (Evaluations > 65536 / Domain.Values.size())
+            return false;
+          Evaluations *= Domain.Values.size();
+        }
+        if (Domains.empty() && PhiDomains.empty())
+          return false;
+
+        DenseMap<const Loop *, uint64_t> Iterations;
+        DenseMap<const PHINode *, APInt> PhiValues;
+        std::function<bool(unsigned)> Check = [&](unsigned DomainIndex) {
+          if (DomainIndex < Domains.size()) {
+            const Loop *Domain = Domains[DomainIndex];
+            uint64_t Trip = *DomainTripCount(Domain);
+            for (uint64_t Iteration = 0; Iteration < Trip; ++Iteration) {
+              Iterations[Domain] = Iteration;
+              if (!Check(DomainIndex + 1))
+                return false;
+            }
+            Iterations.erase(Domain);
+            return true;
+          }
+          unsigned PhiIndex = DomainIndex - Domains.size();
+          if (PhiIndex < PhiDomains.size()) {
+            const FinitePhiDomain &Domain = PhiDomains[PhiIndex];
+            for (const APInt &Value : Domain.Values) {
+              PhiValues.insert({Domain.Phi, Value});
+              if (!Check(DomainIndex + 1))
+                return false;
+              PhiValues.erase(Domain.Phi);
+            }
+            return true;
+          }
+
+          // Under freeze, a concrete enumeration must also certify every
+          // induction seed. APInt arithmetic below already checks poison flags.
+          bool RequireDefined = false;
+          auto DefinedPhiSeed = [&](PHINode *Phi, const APInt &Current) {
+            if (llvm::all_of(Phi->incoming_values(),
+                             [](Value *V) { return isa<ConstantInt>(V); }))
+              return true;
+            if ((!Phi->getType()->isIntegerTy(32) &&
+                 !Phi->getType()->isIntegerTy(64)) ||
+                Phi->getNumIncomingValues() != 2 || Current.ugt(65535))
+              return false;
+            Loop *Scope = &L;
+            while (Scope && Scope->getHeader() != Phi->getParent())
+              Scope = Scope->getParentLoop();
+            if (!Scope || !Scope->getLoopPreheader() || !Scope->getLoopLatch())
+              return false;
+            Value *Initial =
+                Phi->getIncomingValueForBlock(Scope->getLoopPreheader());
+            auto *Zero = dyn_cast_or_null<ConstantInt>(Initial);
+            auto *Next = dyn_cast_or_null<BinaryOperator>(
+                Phi->getIncomingValueForBlock(Scope->getLoopLatch()));
+            if (!Zero || !Zero->isZero() || !Next ||
+                Next->getOpcode() != Instruction::Add ||
+                Next->getParent() != Scope->getLoopLatch())
+              return false;
+            auto *Step = Next->getOperand(0) == Phi
+                             ? dyn_cast<ConstantInt>(Next->getOperand(1))
+                         : Next->getOperand(1) == Phi
+                             ? dyn_cast<ConstantInt>(Next->getOperand(0))
+                             : nullptr;
+            if (!Step || !Step->isOne())
+              return false;
+            if (Current.isMaxValue())
+              return false;
+            if (Next->hasNoSignedWrap() && Current.isMaxSignedValue())
+              return false;
+            return true;
+          };
+          SmallPtrSet<Value *, 32> Active;
+          std::function<Optional<APInt>(Value *)> Evaluate =
+              [&](Value *V) -> Optional<APInt> {
+            if (!V->getType()->isIntegerTy() || !Active.insert(V).second)
+              return None;
+            auto Finish = [&](Optional<APInt> Result) {
+              Active.erase(V);
+              return Result;
+            };
+            if (auto *C = dyn_cast<ConstantInt>(V))
+              return Finish(C->getValue());
+            if (auto *Phi = dyn_cast<PHINode>(V)) {
+              auto FiniteValue = PhiValues.find(Phi);
+              if (FiniteValue != PhiValues.end())
+                return Finish(!RequireDefined ||
+                                      DefinedPhiSeed(Phi, FiniteValue->second)
+                                  ? Optional<APInt>(FiniteValue->second)
+                                  : None);
+              if (auto *AddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Phi))) {
+                auto Iteration = Iterations.find(AddRec->getLoop());
+                auto *Start = dyn_cast<SCEVConstant>(AddRec->getStart());
+                auto *Step =
+                    dyn_cast<SCEVConstant>(AddRec->getStepRecurrence(SE));
+                if (Iteration != Iterations.end() && Start && Step) {
+                  APInt Result = Step->getAPInt() * Iteration->second;
+                  Result += Start->getAPInt();
+                  return Finish(!RequireDefined || DefinedPhiSeed(Phi, Result)
+                                    ? Optional<APInt>(Result)
+                                    : None);
+                }
+              }
+              if (Phi->getNumIncomingValues() == 1)
+                return Finish(Evaluate(Phi->getIncomingValue(0)));
+              return Finish(None);
+            }
+            auto *I = dyn_cast<Instruction>(V);
+            if (!I)
+              return Finish(None);
+            if (auto *Cast = dyn_cast<CastInst>(I)) {
+              auto Operand = Evaluate(Cast->getOperand(0));
+              if (!Operand)
+                return Finish(None);
+              unsigned Width = Cast->getDestTy()->getIntegerBitWidth();
+              switch (Cast->getOpcode()) {
+              case Instruction::Trunc:
+                return Finish(Operand->trunc(Width));
+              case Instruction::ZExt:
+                return Finish(Operand->zext(Width));
+              case Instruction::SExt:
+                return Finish(Operand->sext(Width));
+              default:
+                return Finish(None);
+              }
+            }
+            if (auto *Cmp = dyn_cast<ICmpInst>(I)) {
+              auto Left = Evaluate(Cmp->getOperand(0));
+              auto Right = Evaluate(Cmp->getOperand(1));
+              if (!Left || !Right)
+                return Finish(None);
+              return Finish(APInt(1, ICmpInst::compare(
+                                         *Left, *Right, Cmp->getPredicate())));
+            }
+            if (auto *Select = dyn_cast<SelectInst>(I)) {
+              auto Condition = Evaluate(Select->getCondition());
+              if (!Condition)
+                return Finish(None);
+              return Finish(
+                  Evaluate(Select->getOperand(Condition->isZero() ? 2 : 1)));
+            }
+            if (auto *Freeze = dyn_cast<FreezeInst>(I)) {
+              // Unknown, undef, or poison-producing operand paths stay
+              // unknown. Only a defined concrete value passes through freeze.
+              bool Previous = RequireDefined;
+              RequireDefined = true;
+              auto Operand = Evaluate(Freeze->getOperand(0));
+              RequireDefined = Previous;
+              return Finish(Operand);
+            }
+            if (auto *Intrinsic = dyn_cast<IntrinsicInst>(I)) {
+              switch (Intrinsic->getIntrinsicID()) {
+              case Intrinsic::umin:
+              case Intrinsic::umax:
+              case Intrinsic::smin:
+              case Intrinsic::smax:
+                break;
+              default:
+                return Finish(None);
+              }
+              if (Intrinsic->arg_size() != 2)
+                return Finish(None);
+              auto Left = Evaluate(Intrinsic->getArgOperand(0));
+              auto Right = Evaluate(Intrinsic->getArgOperand(1));
+              if (!Left || !Right)
+                return Finish(None);
+              switch (Intrinsic->getIntrinsicID()) {
+              case Intrinsic::umin:
+                return Finish(Left->ult(*Right) ? *Left : *Right);
+              case Intrinsic::umax:
+                return Finish(Left->ugt(*Right) ? *Left : *Right);
+              case Intrinsic::smin:
+                return Finish(Left->slt(*Right) ? *Left : *Right);
+              case Intrinsic::smax:
+                return Finish(Left->sgt(*Right) ? *Left : *Right);
+              default:
+                return Finish(None);
+              }
+            }
+            auto *Binary = dyn_cast<BinaryOperator>(I);
+            if (!Binary)
+              return Finish(None);
+            auto Left = Evaluate(Binary->getOperand(0));
+            auto Right = Evaluate(Binary->getOperand(1));
+            if (!Left || !Right)
+              return Finish(None);
+            switch (Binary->getOpcode()) {
+            case Instruction::Add: {
+              bool Overflow = false;
+              APInt Result = Binary->hasNoUnsignedWrap()
+                                 ? Left->uadd_ov(*Right, Overflow)
+                                 : *Left + *Right;
+              if (!Overflow && Binary->hasNoSignedWrap())
+                Result = Left->sadd_ov(*Right, Overflow);
+              return Finish(Overflow ? None : Optional<APInt>(Result));
+            }
+            case Instruction::Sub: {
+              bool Overflow = false;
+              APInt Result = Binary->hasNoUnsignedWrap()
+                                 ? Left->usub_ov(*Right, Overflow)
+                                 : *Left - *Right;
+              if (!Overflow && Binary->hasNoSignedWrap())
+                Result = Left->ssub_ov(*Right, Overflow);
+              return Finish(Overflow ? None : Optional<APInt>(Result));
+            }
+            case Instruction::Mul: {
+              bool Overflow = false;
+              APInt Result = Binary->hasNoUnsignedWrap()
+                                 ? Left->umul_ov(*Right, Overflow)
+                                 : *Left * *Right;
+              if (!Overflow && Binary->hasNoSignedWrap())
+                Result = Left->smul_ov(*Right, Overflow);
+              return Finish(Overflow ? None : Optional<APInt>(Result));
+            }
+            case Instruction::UDiv:
+              if (Right->isZero() ||
+                  (Binary->isExact() && !Left->urem(*Right).isZero()))
+                return Finish(None);
+              return Finish(Left->udiv(*Right));
+            case Instruction::URem:
+              return Finish(Right->isZero() ? None
+                                            : Optional<APInt>(Left->urem(*Right)));
+            case Instruction::Shl: {
+              if (Right->uge(Left->getBitWidth()))
+                return Finish(None);
+              bool Overflow = false;
+              APInt Result = Binary->hasNoUnsignedWrap()
+                                 ? Left->ushl_ov(*Right, Overflow)
+                                 : Left->shl(Right->getZExtValue());
+              if (!Overflow && Binary->hasNoSignedWrap())
+                Result = Left->sshl_ov(*Right, Overflow);
+              return Finish(Overflow ? None : Optional<APInt>(Result));
+            }
+            case Instruction::LShr:
+              if (Binary->isExact())
+                return Finish(None);
+              return Finish(Right->uge(Left->getBitWidth())
+                                ? None
+                                : Optional<APInt>(Left->lshr(Right->getZExtValue())));
+            case Instruction::AShr:
+              if (Binary->isExact())
+                return Finish(None);
+              return Finish(Right->uge(Left->getBitWidth())
+                                ? None
+                                : Optional<APInt>(Left->ashr(Right->getZExtValue())));
+            case Instruction::And: return Finish(*Left & *Right);
+            case Instruction::Or: return Finish(*Left | *Right);
+            case Instruction::Xor: return Finish(*Left ^ *Right);
+            default: return Finish(None);
+            }
+          };
+
+          for (const RequiredCondition &Condition : Conditions)
+            if (auto Value = Evaluate(Condition.Condition))
+              if (Value->getBoolValue() != Condition.Result)
+                return true;
+          auto Left = Evaluate(LHS);
+          auto Right = Evaluate(RHS);
+          return Left && Right && ICmpInst::compare(*Left, *Right, Predicate);
+        };
+        return Check(0);
+      };
+  auto ProveTrapDead = [&](CallInst &Trap) {
+    if (!isIntrinsic(&Trap, Intrinsic::trap))
+      return false;
+    BasicBlock *TrapBlock = Trap.getParent();
+    BasicBlock *Pred = TrapBlock->getSinglePredecessor();
+    auto *Branch = Pred ? dyn_cast<BranchInst>(Pred->getTerminator()) : nullptr;
+    auto *Compare = Branch && Branch->isConditional()
+                        ? dyn_cast<ICmpInst>(Branch->getCondition())
+                        : nullptr;
+    if (!Compare)
+      return false;
+    int TrapEdge = Branch->getSuccessor(0) == TrapBlock   ? 0
+                   : Branch->getSuccessor(1) == TrapBlock ? 1
+                                                          : -1;
+    if (TrapEdge < 0)
+      return false;
+    ICmpInst::Predicate SafePredicate = TrapEdge == 0
+                                            ? Compare->getInversePredicate()
+                                            : Compare->getPredicate();
+    if (Optional<bool> Implied = isImpliedByDomCondition(
+            SafePredicate, Compare->getOperand(0), Compare->getOperand(1),
+            Branch, F.getParent()->getDataLayout()))
+      if (*Implied)
+        return true;
+    if (SE.isKnownPredicateAt(SafePredicate, SE.getSCEV(Compare->getOperand(0)),
+                              SE.getSCEV(Compare->getOperand(1)), Branch))
+      return true;
+    if (SafePredicate == ICmpInst::ICMP_ULT)
+      if (auto *Limit = dyn_cast<ConstantInt>(Compare->getOperand(1))) {
+        KnownBits Known = computeKnownBits(Compare->getOperand(0),
+                                           F.getParent()->getDataLayout(), 0,
+                                           nullptr, Branch, &DT);
+        ConstantRange Range =
+            SE.getUnsignedRange(SE.getSCEV(Compare->getOperand(0)));
+        Range = Range.intersectWith(
+            computeConstantRange(Compare->getOperand(0), /*ForSigned=*/false,
+                                 /*UseInstrInfo=*/true, nullptr, Branch, &DT));
+        Range = Range.intersectWith(
+            LVI.getConstantRange(Compare->getOperand(0), Branch));
+        Range = Range.intersectWith(
+            ConstantRange::fromKnownBits(Known, /*IsSigned=*/false));
+        if (Range.getUnsignedMax().ult(Limit->getValue()))
+          return true;
+        auto Max = UnsignedMax(Compare->getOperand(0));
+        if (Max && Max->ult(Limit->getValue()))
+          return true;
+      }
+    return ProveFiniteIntegerPredicate(SafePredicate, Compare->getOperand(0),
+                                       Compare->getOperand(1), Branch);
+  };
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  auto IsAggregateMemoryPointer = [&](Value *Pointer) {
+    Value *Current = Pointer;
+    Value *DynamicIndex = nullptr;
+    APInt DynamicScale(DL.getIndexSizeInBits(0), 0);
+    unsigned DynamicOccurrences = 0;
+    while (auto *GEP = dyn_cast<GetElementPtrInst>(Current)) {
+      unsigned BitWidth =
+          DL.getIndexSizeInBits(GEP->getPointerAddressSpace());
+      MapVector<Value *, APInt> Variables;
+      APInt ConstantOffset(BitWidth, 0);
+      if (!GEP->getSourceElementType()->isAggregateType() ||
+          !GEP->collectOffset(DL, BitWidth, Variables, ConstantOffset) ||
+          Variables.size() > 1)
+        return false;
+      for (Value *Index : GEP->indices())
+        if (!isa<Constant>(Index) && ++DynamicOccurrences > 1)
+          return false;
+      if (!Variables.empty()) {
+        if (DynamicIndex && DynamicIndex != Variables.front().first)
+          return false;
+        DynamicIndex = Variables.front().first;
+        DynamicScale = Variables.front().second;
+      }
+      Current = GEP->getPointerOperand();
+    }
+    return DynamicIndex && !DynamicScale.isZero() &&
+           Current->getType()->isPointerTy() &&
+           Current->getType()->getPointerAddressSpace() == 0 &&
+           L.isLoopInvariant(Current);
+  };
+  SmallVector<Instruction *, 8> Memory;
+  SmallPtrSet<Instruction *, 8> IndependentStreams;
+  for (BasicBlock *BB : Plan.Order) {
+    for (Instruction &I : *BB) {
+      if (I.isTerminator() || isa<DbgInfoIntrinsic>(I))
+        continue;
+      if (auto *Call = dyn_cast<CallInst>(&I))
+        if (ProveTrapDead(*Call)) {
+          Plan.ProvenDeadTraps.insert(Call);
+          continue;
+        }
+      bool Carrier = isElementCarrier(&I) &&
+                     cast<FixedVectorType>(I.getType())->getNumElements() ==
+                         Plan.CarrierCount;
+      if (!I.getType()->isVoidTy() && !I.getType()->isIntegerTy() &&
+          !I.getType()->isPointerTy() && !I.getType()->isFloatTy() &&
+          !I.getType()->isHalfTy() && !Carrier)
+        return Fail(&I, "requires scalar integer or pointer results, f32 or "
+                        "typed carrier results");
+      // An invariant typed import can be shared by later regions. Its carrier
+      // is a preheader SSA version, unlike an accumulator's iteration snapshot.
+      auto InvariantView = getViewDescriptor(&I);
+      if (InvariantView) {
+        auto Final =
+            Plan.Publications.find(InvariantView->Marker->getArgOperand(0));
+        if (Final != Plan.Publications.end()) {
+          const auto &Descriptor = Final->second;
+          if (!sameCarrierStorage(Descriptor, *InvariantView))
+            return Fail(&I,
+                        "final publication changes its typed storage identity");
+          Plan.Publications.insert({&I, *InvariantView});
+        }
+      }
+      bool ImmutableImport = false;
+      if (InvariantView && !InvariantView->ScalarizedLaneZero) {
+        Value *Source = InvariantView->Marker->getArgOperand(0);
+        auto *SourceI = dyn_cast<Instruction>(Source);
+        ImmutableImport =
+            SourceI && !L.contains(SourceI) &&
+            DT.dominates(SourceI, L.getLoopPreheader()->getTerminator()) &&
+            isTypedTileImport(Source);
+      }
+      for (User *U : I.users())
+        if (auto *UseI = dyn_cast<Instruction>(U))
+          if (!L.contains(UseI) && !Plan.Publications.count(&I)) {
+            if (!ImmutableImport)
+              return Fail(
+                  &I,
+                  "live-out must be the final typed accumulator publication");
+            Plan.Publications.insert({&I, *InvariantView});
+          }
+      if (auto Descriptor = getViewDescriptor(&I)) {
+        Value *Source = Descriptor->Marker->getArgOperand(0);
+        unsigned ValidCount = Descriptor->Profile.Count;
+        if (Descriptor->Profile.Layout == 0) {
+          if (Descriptor->Profile.Rows >
+              std::numeric_limits<unsigned>::max() /
+                  Descriptor->Profile.Cols)
+            return Fail(&I, "typed carrier valid domain overflows");
+          ValidCount =
+              Descriptor->Profile.Rows * Descriptor->Profile.Cols;
+        }
+        if (Plan.Count != ValidCount ||
+            Plan.CarrierCount != Descriptor->Profile.Count)
+          return Fail(&I, "typed carrier requires its exact valid domain");
+        if (!CertifyElementZeroView(*Descriptor))
+          return Fail(
+              &I,
+              "scalarized view requires a proven current-element-zero guard");
+        if (auto *Producer = dyn_cast<Instruction>(Source)) {
+          if (!L.contains(Producer) &&
+              (!DT.dominates(Producer, L.getLoopPreheader()->getTerminator()) ||
+               !isTypedTileImport(Source)))
+            return Fail(&I, "typed import requires a dominating Tile producer");
+        } else if (!isa<UndefValue>(Source) && !isa<PoisonValue>(Source)) {
+          return Fail(&I, "typed import requires an explicit Tile producer");
+        }
+        continue;
+      }
+      if (auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
+        if (!isElementCarrier(Extract->getVectorOperand()) ||
+            !IndexIsCurrent(Extract->getIndexOperand(), Extract) ||
+            !IsCarrierOperand(Extract->getVectorOperand()))
+          return Fail(
+              &I, "carrier extract requires a typed view and exact element IV");
+        if (auto Descriptor = getViewDescriptor(
+                stripCarrierLCSSA(Extract->getVectorOperand())))
+          if (!CertifyElementZeroView(*Descriptor))
+            return Fail(
+                &I,
+                "scalarized view requires a proven current-element-zero guard");
+        if (auto *Source = dyn_cast<Instruction>(Extract->getVectorOperand()))
+          if (!L.contains(Source) &&
+              (!DT.dominates(Source, L.getLoopPreheader()->getTerminator()) ||
+               !(Plan.GuardedElementZeroViews.contains(
+                     dyn_cast<CallInst>(Source))
+                     ? isTypedTileImport(
+                           cast<CallInst>(Source)->getArgOperand(0))
+                     : isTypedTileImport(Source))))
+            return Fail(&I, "typed import requires a dominating Tile producer");
+        continue;
+      }
+      if (auto *Insert = dyn_cast<InsertElementInst>(&I)) {
+        if (!Carrier || !IndexIsCurrent(Insert->getOperand(2), Insert) ||
+            !IsCarrierOperand(Insert->getOperand(0)))
+          return Fail(
+              &I, "carrier insert requires a typed view and exact element IV");
+        continue;
+      }
+      if (isa<PHINode>(I)) {
+        if (isa<FPMathOperator>(I) && I.getFastMathFlags().any())
+          return Fail(&I, "floating PHI requires no fast-math");
+        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy() &&
+            !I.getType()->isFloatTy() && !I.getType()->isHalfTy() && !Carrier)
+          return Fail(&I, "PHI requires a scalar or typed carrier");
+        continue;
+      }
+      if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
+        if (!Freeze->getType()->isIntegerTy(32) &&
+            !Freeze->getType()->isIntegerTy(64) &&
+            !Freeze->getType()->isFloatTy() && !Freeze->getType()->isHalfTy())
+          return Fail(&I, "freeze requires admitted scalar numeric data");
+        continue;
+      }
+      if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
+        if (Unary->getOpcode() != Instruction::FNeg ||
+            (!Unary->getType()->isFloatTy() && !Unary->getType()->isHalfTy()) ||
+            Unary->getFastMathFlags().any())
+          return Fail(&I, "floating unary requires f32 fneg without fast-math");
+        continue;
+      }
+      if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
+        if (Binary->getType()->isFloatTy() || Binary->getType()->isHalfTy()) {
+          if ((Binary->getOpcode() != Instruction::FAdd &&
+               Binary->getOpcode() != Instruction::FSub &&
+               Binary->getOpcode() != Instruction::FMul) ||
+              Binary->getFastMathFlags().any())
+            return Fail(&I, "floating arithmetic requires f32 add/sub/mul "
+                            "without fast-math");
+        } else if (!Binary->getType()->isIntegerTy() ||
+                   VPIntrinsic::getForOpcode(Binary->getOpcode()) ==
+                       Intrinsic::not_intrinsic) {
+          return Fail(&I, "integer opcode has no VP lowering");
+        }
+        continue;
+      }
+      if (auto *Compare = dyn_cast<FCmpInst>(&I)) {
+        if ((!Compare->getOperand(0)->getType()->isFloatTy() &&
+             !Compare->getOperand(0)->getType()->isHalfTy()) ||
+            Compare->getFastMathFlags().any())
+          return Fail(&I, "floating comparison requires f32 without fast-math");
+        if (!floatComparisonMapping(Compare->getPredicate()))
+          return Fail(&I, "floating comparison predicate has no exact native mapping");
+        continue;
+      }
+      if (isa<ICmpInst>(I) || isa<SelectInst>(I)) {
+        if (isa<SelectInst>(I) && isa<FPMathOperator>(I) &&
+            I.getFastMathFlags().any())
+          return Fail(&I, "floating select requires no fast-math");
+        if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy() &&
+            !I.getType()->isFloatTy() && !I.getType()->isHalfTy())
+          return Fail(&I, "comparison/select requires scalar operands");
+        continue;
+      }
+      if (auto *Intrinsic = dyn_cast<IntrinsicInst>(&I)) {
+        const Intrinsic::ID ID = Intrinsic->getIntrinsicID();
+        if ((ID == Intrinsic::fshl || ID == Intrinsic::fshr) &&
+            Intrinsic->getType()->isIntegerTy(32) &&
+            Intrinsic->getArgOperand(0)->getType()->isIntegerTy(32) &&
+            Intrinsic->getArgOperand(1)->getType()->isIntegerTy(32) &&
+            Intrinsic->getArgOperand(2)->getType()->isIntegerTy(32))
+          continue;
+      }
+      if (auto *Cast = dyn_cast<CastInst>(&I)) {
+        const bool Bits32 = Cast->getOpcode() == Instruction::BitCast &&
+                            ((Cast->getSrcTy()->isFloatTy() &&
+                              Cast->getDestTy()->isIntegerTy(32)) ||
+                             (Cast->getSrcTy()->isIntegerTy(32) &&
+                              Cast->getDestTy()->isFloatTy()));
+        auto *SourceVector = dyn_cast<FixedVectorType>(Cast->getSrcTy());
+        auto *DestVector = dyn_cast<FixedVectorType>(Cast->getDestTy());
+        const bool F32NormCarrierBits =
+            Cast->getOpcode() == Instruction::BitCast && Norm &&
+            Norm->DataType == 1 && SourceVector && DestVector &&
+            SourceVector->getNumElements() == Norm->Count &&
+            DestVector->getNumElements() == Norm->Count &&
+            ((SourceVector->getElementType()->isIntegerTy(32) &&
+              DestVector->getElementType()->isFloatTy()) ||
+             (SourceVector->getElementType()->isFloatTy() &&
+              DestVector->getElementType()->isIntegerTy(32)));
+        if (!Bits32 && !F32NormCarrierBits &&
+            (!Cast->getSrcTy()->isIntegerTy() ||
+             !Cast->getDestTy()->isIntegerTy()))
+          return Fail(&I, "only integer casts are supported in this IR stage");
+        continue;
+      }
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        unsigned BitWidth =
+            DL.getIndexSizeInBits(GEP->getPointerAddressSpace());
+        MapVector<Value *, APInt> Variables;
+        APInt ConstantOffset(BitWidth, 0);
+        const bool ScalarLeaf =
+            GEP->getNumIndices() == 1 &&
+            (GEP->getSourceElementType()->isIntegerTy() ||
+             GEP->getSourceElementType()->isFloatTy() ||
+             GEP->getSourceElementType()->isHalfTy());
+        const bool AggregatePath =
+            GEP->getSourceElementType()->isAggregateType() &&
+            GEP->collectOffset(DL, BitWidth, Variables, ConstantOffset) &&
+            Variables.size() <= 1 &&
+            llvm::count_if(GEP->indices(),
+                           [](Value *Index) { return !isa<Constant>(Index); }) <=
+                1;
+        if (!GEP->getPointerOperandType()->isPointerTy() ||
+            (!ScalarLeaf && !AggregatePath))
+          return Fail(&I,
+                      "requires a scalar leaf GEP or one dynamic aggregate "
+                      "index with constant field suffixes");
+        continue;
+      }
+      Value *Pointer = nullptr;
+      Type *AccessTy = nullptr;
+      if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        if (Load->isVolatile() || Load->isAtomic())
+          return Fail(&I, "volatile/atomic load needs effect legalization");
+        Pointer = Load->getPointerOperand();
+        AccessTy = Load->getType();
+      } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        if (Store->isVolatile() || Store->isAtomic())
+          return Fail(&I, "volatile/atomic store needs effect legalization");
+        Pointer = Store->getPointerOperand();
+        AccessTy = Store->getValueOperand()->getType();
+      } else if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
+        if (Atomic->getOperation() != AtomicRMWInst::Add ||
+            Atomic->getOrdering() != AtomicOrdering::Monotonic ||
+            Atomic->getSyncScopeID() != SyncScope::System ||
+            Atomic->isVolatile() || Atomic->getAlign() < Align(4))
+          return Fail(&I, "atomic profile requires aligned nonvolatile "
+                          "system-scope monotonic i32 add");
+        Pointer = Atomic->getPointerOperand();
+        AccessTy = Atomic->getType();
+      } else {
+        std::string Opcode = I.getOpcodeName();
+        if (auto *Call = dyn_cast<CallBase>(&I))
+          if (Function *Callee = Call->getCalledFunction())
+            Opcode += (Twine(" ") + Callee->getName()).str();
+        return Fail(&I, Twine("unsupported opcode or effect in generic IR "
+                              "stage: ") +
+                            Opcode);
+      }
+      const bool DenseU16Access =
+          AccessTy->isIntegerTy(16) && Plan.Count == 64;
+      const bool NativeI64Access =
+          AccessTy->isIntegerTy(64) && Plan.Count == 32;
+      if ((!DenseU16Access && !NativeI64Access &&
+           !AccessTy->isIntegerTy(32) && !AccessTy->isFloatTy() &&
+           !AccessTy->isHalfTy()) ||
+          (isa<AtomicRMWInst>(I) && !AccessTy->isIntegerTy(32)))
+        return Fail(&I,
+                    "memory profile requires scalar i64/U16/i32/f16/f32 "
+                    "accesses with i64 using logical32 and U16 using "
+                    "logical64");
+      // Reads may be indexed by arbitrary element values; overlapping atomic
+      // adds are intentional. Ordinary writes still need injective unit-stride
+      // streams. Mixed atomic/non-atomic objects are checked separately below.
+      if (!Pointer->getType()->isPointerTy() ||
+          Pointer->getType()->getPointerAddressSpace() != 0)
+        return Fail(&I, "memory profile requires the default address space");
+      auto *GEP = dyn_cast<GetElementPtrInst>(Pointer);
+      if (GEP && GEP->getSourceElementType()->isAggregateType() &&
+          !IsAggregateMemoryPointer(Pointer))
+        return Fail(GEP,
+                    "requires one dynamic aggregate index with constant "
+                    "field suffixes");
+      bool UniformBase = L.isLoopInvariant(Pointer) ||
+                         (GEP && GEP->getNumIndices() == 1 &&
+                          (GEP->getSourceElementType()->isIntegerTy(64) ||
+                           GEP->getSourceElementType()->isIntegerTy(16) ||
+                           GEP->getSourceElementType()->isIntegerTy(32) ||
+                           GEP->getSourceElementType()->isFloatTy() ||
+                           GEP->getSourceElementType()->isHalfTy()) &&
+                          L.isLoopInvariant(GEP->getPointerOperand())) ||
+                         IsAggregateMemoryPointer(Pointer);
+      if (!UniformBase)
+        return Fail(&I, "memory address requires one loop-invariant base");
+      const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Pointer));
+      const auto *Step = AR && AR->getLoop() == &L
+                             ? dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE))
+                             : nullptr;
+      bool IsIndependentStream =
+          Step && Step->getAPInt() == DL.getTypeStoreSize(AccessTy);
+      if (IsIndependentStream)
+        IndependentStreams.insert(&I);
+      if (auto *Store = dyn_cast<StoreInst>(&I))
+        if (!IsIndependentStream)
+          Plan.UnorderedScatters.insert(Store);
+      Memory.push_back(&I);
+    }
+  }
+  if (Plan.UnorderedScatters.size() > 1)
+    return Fail(*Plan.UnorderedScatters.begin(),
+                "unordered scatter requires one isolated output stream");
+  if (!Plan.UnorderedScatters.empty() && !hasUnorderedSourceContract(L))
+    return Fail(
+        *Plan.UnorderedScatters.begin(),
+        "unordered scatter requires the unordered/source loop contract");
+  for (unsigned I = 0; I < Memory.size(); ++I) {
+    for (unsigned J = I + 1; J < Memory.size(); ++J) {
+      if ((isa<LoadInst>(Memory[I]) && isa<LoadInst>(Memory[J])) ||
+          (isa<AtomicRMWInst>(Memory[I]) && isa<AtomicRMWInst>(Memory[J])))
+        continue;
+      MemoryLocation A = MemoryLocation::get(Memory[I]);
+      MemoryLocation B = MemoryLocation::get(Memory[J]);
+      // A scalar NoAlias answer for a[i] and a[i+1] is not a proof about
+      // different iterations. Ask about entire underlying objects instead.
+      MemoryLocation AObject(getUnderlyingObject(A.Ptr),
+                             LocationSize::beforeOrAfterPointer(), A.AATags);
+      MemoryLocation BObject(getUnderlyingObject(B.Ptr),
+                             LocationSize::beforeOrAfterPointer(), B.AATags);
+      bool HasAtomic =
+          isa<AtomicRMWInst>(Memory[I]) || isa<AtomicRMWInst>(Memory[J]);
+      if (AA.alias(AObject, BObject) != AliasResult::NoAlias &&
+          !(!HasAtomic && IndependentStreams.contains(Memory[I]) &&
+            IndependentStreams.contains(Memory[J]) && A.Size == B.Size &&
+            SE.getSCEV(const_cast<Value *>(A.Ptr)) ==
+                SE.getSCEV(const_cast<Value *>(B.Ptr))))
+        return Fail(Memory[J], "memory streams may overlap across elements");
+    }
+  }
+  planPositiveB32Representation(F, SE, DT, LVI, Plan);
+  return true;
+}
+
+static void emitPredication(Function &F, const PredicatedRegion &Plan,
+                            LoopInfo &LI, ScalarEvolution &SE,
+                            DominatorTree &DT) {
+  Loop &L = *Plan.L;
+  Instruction *OldLast = L.getLoopPreheader()->getTerminator()->getPrevNode();
+  MDNode *Token = getElementRegionToken(L);
+  for (CallInst *View : Plan.GuardedElementZeroViews)
+    View->setMetadata(ScalarizedLaneZeroMD, nullptr);
+  IRBuilder<> B(L.getLoopPreheader()->getTerminator());
+  auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.CarrierCount);
+  Value *False = Constant::getNullValue(MaskTy);
+  Value *True = Constant::getAllOnesValue(MaskTy);
+  Value *EVL = B.getInt32(Plan.Count);
+  DenseMap<Value *, Value *> Values;
+  DenseMap<Value *, Value *> PositiveB32Values;
+  SmallPtrSet<Instruction *, 8> ScalarNarrowImports;
+  SimplifyQuery SQ(F.getParent()->getDataLayout());
+  auto UnionMask = [&](Value *Left, Value *Right, const Twine &Name) {
+    if (Value *Simple = simplifyOrInst(Left, Right, SQ))
+      return Simple;
+    return B.CreateOr(Left, Right, Name);
+  };
+  auto Blend = [&](Value *Mask, Value *Yes, Value *No, const Twine &Name) {
+    if (Value *Simple = simplifySelectInst(Mask, Yes, No, SQ))
+      return Simple;
+    return B.CreateSelect(Mask, Yes, No, Name);
+  };
+  // Successor index is part of identity: a conditional can have two edges to
+  // the same destination, and neither edge may be silently dropped.
+  DenseMap<std::pair<BasicBlock *, unsigned>, Value *> Edges;
+  SmallVector<Constant *, 32> Indices;
+  Type *InductionTy = Plan.PositiveB32Values.contains(Plan.Induction)
+                          ? B.getInt32Ty()
+                          : Plan.Induction->getType();
+  for (unsigned I = 0; I < Plan.CarrierCount; ++I)
+    Indices.push_back(ConstantInt::get(InductionTy, I));
+  if (Plan.PositiveB32Values.contains(Plan.Induction))
+    PositiveB32Values[Plan.Induction] = ConstantVector::get(Indices);
+  else
+    Values[Plan.Induction] = ConstantVector::get(Indices);
+
+  // LLVM narrows scalar control arithmetic (for example IV % 5) to i8.
+  // Represent those bits in i32 Tiles, with explicit modulo normalization and
+  // sign extension; this is value legalization, independent of source syntax.
+  auto WideType = [&](Value *V) -> Type * {
+    Type *Ty = V->getType();
+    if (Ty->isVoidTy() || Ty->isVectorTy())
+      return Ty;
+    if (Plan.PositiveB32Values.contains(V) && Ty->isIntegerTy(64))
+      Ty = B.getInt32Ty();
+    if (Ty->isIntegerTy() && Ty->getIntegerBitWidth() > 1 &&
+        Ty->getIntegerBitWidth() < 32)
+      Ty = B.getInt32Ty();
+    return FixedVectorType::get(Ty, Plan.CarrierCount);
+  };
+  auto Widen = [&](Value *V) -> Value * {
+    auto It = Values.find(V);
+    if (It != Values.end())
+      return It->second;
+    assert((!isa<Instruction>(V) || !L.contains(cast<Instruction>(V))) &&
+           "preflight and topological order must cover every operand");
+    Value *Scalar = V;
+    if (V->getType()->isIntegerTy() && V->getType()->getIntegerBitWidth() > 1 &&
+        V->getType()->getIntegerBitWidth() < 32)
+      Scalar = B.CreateZExt(V, B.getInt32Ty(), "pto.narrow.uniform");
+    Value *Wide =
+        isElementCarrier(V)
+            ? V
+            : B.CreateVectorSplat(Plan.CarrierCount, Scalar, "pto.uniform");
+    if (isElementCarrier(V) && isa<PHINode>(V)) {
+      if (auto Descriptor = getViewDescriptor(stripCarrierLCSSA(V))) {
+        auto *Marker = Descriptor->Marker;
+        SmallVector<Value *, 9> Args(Marker->args());
+        Args[0] = V;
+        Wide = B.CreateCall(Marker->getCalledFunction(), Args,
+                            "pto.carrier.import");
+      }
+    }
+    Values[V] = Wide;
+    return Wide;
+  };
+  auto WidenPositiveB32 = [&](Value *V) -> Value * {
+    if (V->getType()->isIntegerTy() &&
+        V->getType()->getIntegerBitWidth() <= 32)
+      return Widen(V);
+    auto It = PositiveB32Values.find(V);
+    if (It != PositiveB32Values.end())
+      return It->second;
+    assert(Plan.PositiveB32Values.contains(V) &&
+           V->getType()->isIntegerTy(64) &&
+           "B32 representation requires a complete approved component");
+    auto *I = dyn_cast<Instruction>(V);
+    assert((!I || !L.contains(I)) &&
+           "topological order must materialize internal B32 values");
+    Value *Scalar = B.CreateTrunc(V, B.getInt32Ty(), "pto.b32.import");
+    if (auto *Import = dyn_cast<Instruction>(Scalar))
+      ScalarNarrowImports.insert(Import);
+    Value *Wide =
+        B.CreateVectorSplat(Plan.CarrierCount, Scalar, "pto.b32.uniform");
+    PositiveB32Values[V] = Wide;
+    return Wide;
+  };
+  for (const auto &Entry : Plan.Accumulators) {
+    PHINode *Phi = Entry.first;
+    auto *Marker = Entry.second.Marker;
+    SmallVector<Value *, 9> Args(Marker->args());
+    Args[0] = Phi->getIncomingValueForBlock(L.getLoopPreheader());
+    Values[Phi] =
+        B.CreateCall(Marker->getCalledFunction(), Args, "pto.carrier.seed");
+  }
+  auto EmitVP = [&](Intrinsic::ID ID, Type *Ty,
+                    ArrayRef<Value *> Args) -> CallInst * {
+    Function *Callee =
+        VPIntrinsic::getDeclarationForParams(F.getParent(), ID, Ty, Args);
+    return B.CreateCall(Callee, Args, Ty->isVoidTy() ? "" : "pto.vp");
+  };
+  auto Narrow = [&](Value *V, unsigned Width, Value *Mask) -> Value * {
+    Value *Bits =
+        ConstantVector::getSplat(ElementCount::getFixed(Plan.CarrierCount),
+                                 B.getInt32((uint64_t(1) << Width) - 1));
+    return EmitVP(Intrinsic::vp_and, V->getType(), {V, Bits, Mask, EVL});
+  };
+  auto SignExtendNarrow = [&](Value *V, unsigned Width,
+                              Value *Mask) -> Value * {
+    Value *Shift = ConstantVector::getSplat(
+        ElementCount::getFixed(Plan.CarrierCount), B.getInt32(32 - Width));
+    Value *Left =
+        EmitVP(Intrinsic::vp_shl, V->getType(), {V, Shift, Mask, EVL});
+    return EmitVP(Intrinsic::vp_ashr, V->getType(), {Left, Shift, Mask, EVL});
+  };
+  auto EdgeFrom = [&](BasicBlock *Pred, BasicBlock *Dest) -> Value * {
+    Value *Mask = False;
+    auto *Term = Pred->getTerminator();
+    for (unsigned J = 0; J < Term->getNumSuccessors(); ++J)
+      if (Term->getSuccessor(J) == Dest) {
+        Value *Edge = Edges.lookup({Pred, J});
+        assert(Edge && "all predecessor edges must already be built");
+        Mask = UnionMask(Mask, Edge, "pto.edge.union");
+      }
+    return Mask;
+  };
+
+  auto WidenAddress = [&](Value *Pointer) -> Value * {
+    Value *Wide = Widen(Pointer);
+    if (!L.isLoopInvariant(Pointer))
+      return Wide;
+    Value *Zero = Constant::getNullValue(
+        FixedVectorType::get(B.getInt32Ty(), Plan.CarrierCount));
+    return B.Insert(GetElementPtrInst::Create(B.getInt32Ty(), Wide, {Zero}),
+                    "pto.uniform.address");
+  };
+  for (BasicBlock *BB : Plan.Order) {
+    Value *Mask = BB == L.getHeader() ? True : False;
+    if (BB != L.getHeader())
+      for (BasicBlock *Pred : predecessors(BB))
+        Mask = UnionMask(Mask, EdgeFrom(Pred, BB), "pto.block.mask");
+    for (Instruction &I : *BB) {
+      if (&I == Plan.Induction ||
+          Plan.Accumulators.count(dyn_cast<PHINode>(&I)) || I.isTerminator() ||
+          isa<DbgInfoIntrinsic>(I) ||
+          Plan.ProvenDeadTraps.contains(dyn_cast<CallInst>(&I)))
+        continue;
+      B.SetCurrentDebugLocation(I.getDebugLoc());
+      Value *Result = nullptr;
+      Type *WideTy = isa<LoadInst>(I) && I.getType()->isIntegerTy(16)
+                         ? FixedVectorType::get(I.getType(), Plan.CarrierCount)
+                         : WideType(&I);
+      bool PositiveB32Result = Plan.PositiveB32Values.contains(&I);
+      if (auto Descriptor = getViewDescriptor(&I)) {
+        auto *Marker = Descriptor->Marker;
+        SmallVector<Value *, 9> Args(Marker->args());
+        Args[0] = Widen(Marker->getArgOperand(0));
+        Result =
+            B.CreateCall(Marker->getCalledFunction(), Args, "pto.carrier.view");
+      } else if (auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
+        Result = Widen(Extract->getVectorOperand());
+      } else if (auto *Insert = dyn_cast<InsertElementInst>(&I)) {
+        Result = Blend(Mask, Widen(Insert->getOperand(1)),
+                       Widen(Insert->getOperand(0)), "pto.carrier.update");
+      } else if (auto *Phi = dyn_cast<PHINode>(&I)) {
+        Result = PoisonValue::get(WideTy);
+        for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
+          Result = Blend(EdgeFrom(Phi->getIncomingBlock(J), BB),
+                         PositiveB32Result
+                             ? WidenPositiveB32(Phi->getIncomingValue(J))
+                             : Widen(Phi->getIncomingValue(J)),
+                         Result, "pto.phi");
+      } else if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
+        Result = B.CreateFreeze(Widen(Freeze->getOperand(0)), "pto.freeze");
+      } else if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
+        Result = EmitVP(Intrinsic::vp_fneg, WideTy,
+                        {Widen(Unary->getOperand(0)), Mask, EVL});
+      } else if (auto *Binary = dyn_cast<BinaryOperator>(&I)) {
+        Value *Left = PositiveB32Result
+                          ? WidenPositiveB32(Binary->getOperand(0))
+                          : Widen(Binary->getOperand(0));
+        Value *Right = PositiveB32Result
+                           ? WidenPositiveB32(Binary->getOperand(1))
+                           : Widen(Binary->getOperand(1));
+        unsigned Width = Binary->getType()->isIntegerTy()
+                             ? Binary->getType()->getIntegerBitWidth() : 32;
+        if (Width > 1 && Width < 32 &&
+            (Binary->getOpcode() == Instruction::SDiv ||
+             Binary->getOpcode() == Instruction::SRem ||
+             Binary->getOpcode() == Instruction::AShr)) {
+          Left = SignExtendNarrow(Left, Width, Mask);
+          if (Binary->getOpcode() != Instruction::AShr)
+            Right = SignExtendNarrow(Right, Width, Mask);
+        }
+        Result = EmitVP(VPIntrinsic::getForOpcode(Binary->getOpcode()), WideTy,
+                        {Left, Right, Mask, EVL});
+        if (Width > 1 && Width < 32)
+          Result = Narrow(Result, Width, Mask);
+      } else if (auto *Intrinsic = dyn_cast<IntrinsicInst>(&I)) {
+        const Intrinsic::ID ID = Intrinsic->getIntrinsicID();
+        assert((ID == Intrinsic::fshl || ID == Intrinsic::fshr) &&
+               "funnel-shift preflight");
+        Value *Left = Widen(Intrinsic->getArgOperand(0));
+        Value *Right = Widen(Intrinsic->getArgOperand(1));
+        Value *Shift = Widen(Intrinsic->getArgOperand(2));
+        Value *WidthMask = ConstantVector::getSplat(
+            ElementCount::getFixed(Plan.CarrierCount), B.getInt32(31));
+        Value *Zero = Constant::getNullValue(WideTy);
+        Value *Normalized = EmitVP(Intrinsic::vp_and, WideTy,
+                                   {Shift, WidthMask, Mask, EVL});
+        Value *Negative = EmitVP(Intrinsic::vp_sub, WideTy,
+                                 {Zero, Normalized, Mask, EVL});
+        Value *Inverse = EmitVP(Intrinsic::vp_and, WideTy,
+                                {Negative, WidthMask, Mask, EVL});
+        Value *LeftAmount = ID == Intrinsic::fshl ? Normalized : Inverse;
+        Value *RightAmount = ID == Intrinsic::fshl ? Inverse : Normalized;
+        Value *ShiftedLeft = EmitVP(Intrinsic::vp_shl, WideTy,
+                                    {Left, LeftAmount, Mask, EVL});
+        Value *ShiftedRight = EmitVP(Intrinsic::vp_lshr, WideTy,
+                                     {Right, RightAmount, Mask, EVL});
+        Value *Combined = EmitVP(Intrinsic::vp_or, WideTy,
+                                 {ShiftedLeft, ShiftedRight, Mask, EVL});
+        Value *ZeroShift = B.CreateICmpEQ(Normalized, Zero, "pto.funnel.zero");
+        Result = B.CreateSelect(ZeroShift,
+                                ID == Intrinsic::fshl ? Left : Right,
+                                Combined, "pto.funnel");
+      } else if (auto *Compare = dyn_cast<FCmpInst>(&I)) {
+        Value *Predicate = MetadataAsValue::get(
+            F.getContext(), MDString::get(F.getContext(),
+                FCmpInst::getPredicateName(Compare->getPredicate())));
+        Result = EmitVP(Intrinsic::vp_fcmp, WideTy,
+                        {Widen(Compare->getOperand(0)),
+                         Widen(Compare->getOperand(1)), Predicate, Mask, EVL});
+      } else if (auto *Compare = dyn_cast<ICmpInst>(&I)) {
+        bool PositiveB32Compare =
+            Compare->getOperand(0)->getType()->isIntegerTy(64) &&
+            Plan.PositiveB32Values.contains(Compare->getOperand(0)) &&
+            Plan.PositiveB32Values.contains(Compare->getOperand(1));
+        Value *Left = PositiveB32Compare
+                          ? WidenPositiveB32(Compare->getOperand(0))
+                          : Widen(Compare->getOperand(0));
+        Value *Right = PositiveB32Compare
+                           ? WidenPositiveB32(Compare->getOperand(1))
+                           : Widen(Compare->getOperand(1));
+        unsigned Width =
+            Compare->getOperand(0)->getType()->getScalarSizeInBits();
+        if (Width > 1 && Width < 32 && Compare->isSigned()) {
+          Left = SignExtendNarrow(Left, Width, Mask);
+          Right = SignExtendNarrow(Right, Width, Mask);
+        }
+        Result =
+            B.CreateICmp(Compare->getPredicate(), Left, Right, "pto.compare");
+      } else if (auto *Select = dyn_cast<SelectInst>(&I)) {
+        Result = B.CreateSelect(
+            Widen(Select->getCondition()),
+            PositiveB32Result
+                ? WidenPositiveB32(Select->getTrueValue())
+                : Widen(Select->getTrueValue()),
+            PositiveB32Result
+                ? WidenPositiveB32(Select->getFalseValue())
+                : Widen(Select->getFalseValue()),
+            "pto.select");
+      } else if (auto *Cast = dyn_cast<CastInst>(&I)) {
+        if (Cast->getOpcode() == Instruction::BitCast) {
+          Values[&I] =
+              B.CreateBitCast(Widen(Cast->getOperand(0)), WideTy, "pto.bits");
+          continue;
+        }
+        unsigned SourceWidth = Cast->getSrcTy()->getIntegerBitWidth();
+        unsigned DestWidth = Cast->getDestTy()->getIntegerBitWidth();
+        bool PositiveB32Cast =
+            PositiveB32Result ||
+            (Cast->getOperand(0)->getType()->isIntegerTy(64) &&
+             Plan.PositiveB32Values.contains(Cast->getOperand(0)) &&
+             DestWidth <= 32);
+        Value *Source = PositiveB32Cast
+                            ? WidenPositiveB32(Cast->getOperand(0))
+                            : Widen(Cast->getOperand(0));
+        if (SourceWidth > 1 && SourceWidth < 32 &&
+            Cast->getOpcode() == Instruction::SExt)
+          Source = SignExtendNarrow(Source, SourceWidth, Mask);
+        if (!PositiveB32Cast && Cast->getOpcode() == Instruction::Trunc &&
+            SourceWidth == 64 && DestWidth == 32) {
+          Result = EmitVP(Intrinsic::vp_trunc, WideTy,
+                          {Source, Mask, EVL});
+          Values[&I] = Result;
+          continue;
+        }
+        if (DestWidth > 1 && DestWidth < 32) {
+          if (Source->getType() != WideTy)
+            Source =
+                B.CreateCast(Cast->getOpcode(), Source, WideTy, "pto.cast");
+          Result = Narrow(Source, DestWidth, Mask);
+        } else {
+          Result =
+              Source->getType() == WideTy
+                  ? Source
+                  : B.CreateCast(Cast->getOpcode(), Source, WideTy, "pto.cast");
+        }
+      } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        SmallVector<Value *, 4> Indices;
+        for (Value *Index : GEP->indices()) {
+          if (isa<Constant>(Index)) {
+            Indices.push_back(Index);
+          } else if (Index->getType()->isIntegerTy(64) &&
+                     Plan.PositiveB32Values.contains(Index)) {
+            Value *Narrow = WidenPositiveB32(Index);
+            Indices.push_back(B.CreateZExt(
+                Narrow, FixedVectorType::get(B.getInt64Ty(), Plan.CarrierCount),
+                "pto.b32.gep"));
+          } else {
+            Indices.push_back(Widen(Index));
+          }
+        }
+        Result = B.CreateGEP(GEP->getSourceElementType(),
+                             Widen(GEP->getPointerOperand()), Indices,
+                             "pto.address");
+      } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        auto *Call =
+            EmitVP(Intrinsic::vp_gather, WideTy,
+                   {WidenAddress(Load->getPointerOperand()), Mask, EVL});
+        Call->addParamAttr(0, Attribute::getWithAlignment(F.getContext(),
+                                                        Load->getAlign()));
+        Result = Call;
+      } else if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
+        Value *Pointers = WidenAddress(Atomic->getPointerOperand());
+        Function *Callee = Intrinsic::getDeclaration(
+            F.getParent(), Intrinsic::linx_experimental_element_atomic_add,
+            {WideTy, Pointers->getType()});
+        auto *Call = B.CreateCall(
+            Callee, {Pointers, Widen(Atomic->getValOperand()), Mask, EVL},
+            "pto.atomic.old");
+        Call->addParamAttr(
+            0, Attribute::getWithAlignment(F.getContext(), Atomic->getAlign()));
+        Result = Call;
+      } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        Value *Data = Widen(Store->getValueOperand());
+        Value *Address = WidenAddress(Store->getPointerOperand());
+        CallInst *Call = nullptr;
+        if (Plan.UnorderedScatters.contains(Store)) {
+          Function *Callee = Intrinsic::getDeclaration(
+              F.getParent(), Intrinsic::linx_experimental_element_scatter,
+              {Data->getType(), Address->getType()});
+          Call = B.CreateCall(Callee,
+                              {Data, Address, Mask, EVL,
+                               MetadataAsValue::get(F.getContext(), Token)});
+          Call->setMetadata(
+              InterElementOrderMD,
+              MDNode::get(F.getContext(),
+                          MDString::get(F.getContext(), "unordered")));
+          Call->setMetadata(
+              IntraElementOrderMD,
+              MDNode::get(F.getContext(),
+                          MDString::get(F.getContext(), "source")));
+        } else {
+          Call = EmitVP(Intrinsic::vp_scatter, B.getVoidTy(),
+                        {Data, Address, Mask, EVL});
+        }
+        Call->addParamAttr(1, Attribute::getWithAlignment(F.getContext(),
+                                                        Store->getAlign()));
+      } else {
+        llvm_unreachable("preflight must reject unsupported instructions");
+      }
+      if (Result) {
+        if (PositiveB32Result)
+          PositiveB32Values[&I] = Result;
+        else
+          Values[&I] = Result;
+      }
+    }
+    if (BB == L.getLoopLatch())
+      continue;
+    auto *Branch = cast<BranchInst>(BB->getTerminator());
+    for (unsigned J = 0; J < Branch->getNumSuccessors(); ++J) {
+      Value *Edge = Mask;
+      if (Branch->isConditional()) {
+        Value *Condition = Widen(Branch->getCondition());
+        if (J)
+          Condition = B.CreateNot(Condition, "pto.edge.not");
+        // As in LoopVectorize::createEdgeMask, and(false, poison) is poison;
+        // select suppresses a condition that was never evaluated by this element.
+        Edge = Blend(Mask, Condition, False, "pto.edge.mask");
+      }
+      Edges[{BB, J}] = Edge;
+    }
+  }
+  for (const auto &Entry : Plan.Publications) {
+    Value *Publication = Entry.first;
+    Value *Result = Values.lookup(Publication);
+    assert(Result && "final publication must have a mapped carrier");
+    auto ResultDescriptor = getViewDescriptor(Result);
+    if (!ResultDescriptor ||
+        !sameCarrierStorage(*ResultDescriptor, Entry.second)) {
+      auto *Marker = Entry.second.Marker;
+      SmallVector<Value *, 9> Args(Marker->args());
+      Args[0] = Result;
+      Result =
+          B.CreateCall(Marker->getCalledFunction(), Args, "pto.carrier.final");
+    }
+    Publication->replaceUsesWithIf(Result, [&](Use &U) {
+      auto *User = dyn_cast<Instruction>(U.getUser());
+      return User && !L.contains(User);
+    });
+  }
+  // Effects now exist as ordered VP calls; typed live-outs have been rewritten.
+  // Keep the sentinel: this is generic IR, not yet legal PTO Machine IR.
+  // Ownership survives loop deletion and does not rely on instruction names,
+  // function order, or recognizing a particular source expression.
+  for (Instruction *I = OldLast ? OldLast->getNextNode()
+                                : &L.getLoopPreheader()->front();
+       I != L.getLoopPreheader()->getTerminator(); I = I->getNextNode())
+    if (!ScalarNarrowImports.contains(I))
+      I->setMetadata(PredicatedOwnerMD, Token);
+  findRegionSentinel(F, Token)->setMetadata(
+      PredicatedDomainMD,
+      MDNode::get(F.getContext(),
+                  ConstantAsMetadata::get(B.getInt32(Plan.CarrierCount))));
+  deleteDeadLoop(&L, &DT, &SE, &LI);
+}
+
+// Tile values cross the region boundary through whole-carrier register inputs.
+// Match operand constraints, including the outputs that precede input operands.
+static bool isWholeTileConsumer(const CallBase &Call, Value *Carrier) {
+  if (Call.getCalledFunction() &&
+      Call.getCalledFunction()->hasFnAttribute("linx-local-tile-abi"))
+    return isElementCarrier(Carrier);
+  if (!Call.isInlineAsm() || !isElementCarrier(Carrier))
+    return false;
+  auto *Asm = cast<InlineAsm>(Call.getCalledOperand());
+  unsigned Argument = 0;
+  bool Found = false;
+  for (const auto &Constraint : Asm->ParseConstraints()) {
+    if (Constraint.Type == InlineAsm::isOutput && Constraint.isIndirect) {
+      ++Argument;
+      continue;
+    }
+    if (Constraint.Type != InlineAsm::isInput)
+      continue;
+    if (Argument >= Call.arg_size())
+      return false;
+    if (Call.getArgOperand(Argument++) == Carrier) {
+      if (Constraint.isIndirect || Constraint.Codes.size() != 1 ||
+          Constraint.Codes.front() != "Tr")
+        return false;
+      Found = true;
+    }
+  }
+  return Found;
+}
+
+static bool isBitPreservingF32TileCast(const Instruction *I,
+                                       const Value *Source) {
+  auto *Cast = dyn_cast_or_null<BitCastInst>(I);
+  auto *SourceTy = dyn_cast<FixedVectorType>(Source->getType());
+  auto *DestTy = Cast ? dyn_cast<FixedVectorType>(Cast->getType()) : nullptr;
+  return Cast && Cast->getOperand(0) == Source && SourceTy && DestTy &&
+         SourceTy->getNumElements() == DestTy->getNumElements() &&
+         ((SourceTy->getElementType()->isFloatTy() &&
+           DestTy->getElementType()->isIntegerTy(32)) ||
+          (SourceTy->getElementType()->isIntegerTy(32) &&
+           DestTy->getElementType()->isFloatTy()));
+}
+
+static bool hasWholeCarrierConsumers(Value *V, SmallPtrSetImpl<Value *> &Seen) {
+  if (!Seen.insert(V).second)
+    return true;
+  for (User *U : V->users()) {
+    auto *I = dyn_cast<Instruction>(U);
+    if (!I)
+      return false;
+    if (I->getMetadata(PredicatedOwnerMD))
+      continue;
+    if (isa<ReturnInst>(I) &&
+        I->getFunction()->hasFnAttribute("linx-local-tile-abi"))
+      continue;
+    if (auto *Phi = dyn_cast<PHINode>(I)) {
+      if (isTypedTileImport(Phi) && hasWholeCarrierConsumers(Phi, Seen))
+        continue;
+    }
+    if (isBitPreservingF32TileCast(I, V) &&
+        hasWholeCarrierConsumers(I, Seen))
+      continue;
+    if (auto *Call = dyn_cast<CallBase>(I)) {
+      if (isWholeTileConsumer(*Call, V) ||
+          (getViewDescriptor(Call) && hasWholeCarrierConsumers(Call, Seen)))
+        continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+static void rewriteF32ViewConsumerBitcasts(Function &F) {
+  SmallVector<BitCastInst *, 4> Bridges;
+  for (Instruction &I : instructions(F)) {
+    auto *Cast = dyn_cast<BitCastInst>(&I);
+    if (!Cast || !isBitPreservingF32TileCast(Cast, Cast->getOperand(0)))
+      continue;
+    auto View = getViewDescriptor(stripCarrierLCSSA(Cast->getOperand(0)));
+    if (!View || View->Profile.DataType != 1 || View->Profile.Layout != 0)
+      continue;
+    bool ExactConsumers = !Cast->use_empty();
+    for (User *U : Cast->users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      ExactConsumers &= Call && isWholeTileConsumer(*Call, Cast);
+    }
+    if (ExactConsumers)
+      Bridges.push_back(Cast);
+  }
+
+  for (BitCastInst *Cast : Bridges) {
+    SmallVector<CallInst *, 2> Consumers;
+    for (User *U : Cast->users())
+      Consumers.push_back(cast<CallInst>(U));
+    for (CallInst *Call : Consumers) {
+      auto *OldAsm = cast<InlineAsm>(Call->getCalledOperand());
+      SmallVector<Type *, 8> Parameters;
+      for (unsigned I = 0; I != Call->arg_size(); ++I) {
+        if (Call->getArgOperand(I) == Cast)
+          Call->setArgOperand(I, Cast->getOperand(0));
+        Parameters.push_back(Call->getArgOperand(I)->getType());
+      }
+      auto *CallType = FunctionType::get(Call->getType(), Parameters, false);
+      InlineAsm *NewAsm = InlineAsm::get(
+          CallType, OldAsm->getAsmString(), OldAsm->getConstraintString(),
+          OldAsm->hasSideEffects(), OldAsm->isAlignStack(),
+          OldAsm->getDialect(), OldAsm->canThrow());
+      Call->mutateFunctionType(CallType);
+      Call->setCalledOperand(NewAsm);
+    }
+    Cast->eraseFromParent();
+  }
+}
+
+static bool rewriteF32ViewImportBitcasts(Function &F) {
+  SmallVector<std::tuple<CallInst *, BitCastInst *, CallInst *>, 4> Bridges;
+  for (Instruction &I : instructions(F)) {
+    auto View = getViewDescriptor(&I);
+    if (!View || View->Profile.DataType != 1 || View->Profile.Layout != 0)
+      continue;
+    auto *Cast = dyn_cast<BitCastInst>(View->Marker->getArgOperand(0));
+    auto *Producer =
+        Cast ? dyn_cast<CallInst>(Cast->getOperand(0)) : nullptr;
+    if (!Cast || !Producer || !Producer->isInlineAsm() ||
+        !isBitPreservingF32TileCast(Cast, Producer) ||
+        !isTypedTileImport(Producer) ||
+        !Producer->hasOneUse() || !Cast->hasOneUse())
+      continue;
+    Bridges.emplace_back(View->Marker, Cast, Producer);
+  }
+
+  for (const auto &Bridge : Bridges) {
+    CallInst *View = std::get<0>(Bridge);
+    BitCastInst *Cast = std::get<1>(Bridge);
+    CallInst *Producer = std::get<2>(Bridge);
+    auto *OldAsm = cast<InlineAsm>(Producer->getCalledOperand());
+    SmallVector<Value *, 8> Arguments(Producer->args());
+    SmallVector<Type *, 8> Parameters;
+    for (Value *Argument : Arguments)
+      Parameters.push_back(Argument->getType());
+    auto *CallType =
+        FunctionType::get(Cast->getType(), Parameters, false);
+    InlineAsm *NewAsm = InlineAsm::get(
+        CallType, OldAsm->getAsmString(), OldAsm->getConstraintString(),
+        OldAsm->hasSideEffects(), OldAsm->isAlignStack(),
+        OldAsm->getDialect(), OldAsm->canThrow());
+    SmallVector<OperandBundleDef, 1> Bundles;
+    Producer->getOperandBundlesAsDefs(Bundles);
+    CallInst *TypedProducer = CallInst::Create(
+        CallType, NewAsm, Arguments, Bundles, Producer->getName(), Producer);
+    TypedProducer->setCallingConv(Producer->getCallingConv());
+    TypedProducer->setTailCallKind(Producer->getTailCallKind());
+    TypedProducer->setAttributes(Producer->getAttributes());
+    TypedProducer->setDebugLoc(Producer->getDebugLoc());
+    TypedProducer->copyMetadata(*Producer);
+    View->setArgOperand(0, TypedProducer);
+    Cast->eraseFromParent();
+    Producer->eraseFromParent();
+  }
+  return !Bridges.empty();
+}
+
+// The first physical profile uses 32 M32 rows and one column. Logical mask SSA
+// remains independent of this choice: it is mapped to low 32 GPR bits here, not
+// in Clang or the CFG predicator. Each new Tile definition is fully initialized
+// using ZERO, so unselected VP poison never violates TSEL source preflight.
+class ElementTileLegalizer {
+  Function &F;
+  SmallVector<Instruction *, 64> Owned;
+  SmallPtrSet<Instruction *, 32> OwnedSet;
+  SmallPtrSet<Value *, 32> Validated;
+  SmallVector<CallInst *, 8> Publications;
+  SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
+  DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
+  unsigned DomainCount;
+  Optional<ElementProfile> NormProfile;
+  DenseMap<Value *, Value *> Data;
+  DenseMap<Value *, Value *> Masks;
+  DenseMap<std::pair<Value *, uint64_t>, Value *> ActiveMasks;
+  DenseMap<Value *, uint64_t> PhysicalTypes;
+  uint64_t NativeI64RegionType = 0;
+  uint64_t NativeI32RegionType = 0;
+  bool MixedNativeI64RegionTypes = false;
+  bool MixedNativeI32RegionTypes = false;
+  DenseMap<std::pair<Value *, uint64_t>, Value *> RetypedIndices;
+  DenseMap<std::pair<Value *, uint64_t>, DenseMap<unsigned, Value *>>
+      ByteOffsets;
+  DenseMap<std::pair<Value *, uint64_t>,
+           DenseMap<uint64_t, DenseMap<Value *, Value *>>>
+      AggregateByteOffsets;
+  IRBuilder<> B;
+
+  struct Address {
+    Value *Base;
+    Value *Offset;
+    uint64_t IndexType;
+  };
+  struct AggregateAddress {
+    Value *Base;
+    Value *Index;
+    uint64_t StrideBytes;
+    uint64_t FieldOffsetBytes;
+  };
+  DenseMap<Value *, Address> Addresses;
+
+  bool fail(Value *V, const Twine &Why) {
+    return diagnose(F, dyn_cast<Instruction>(V),
+                    Twine("Tile legalization: ") + Why);
+  }
+
+  Optional<AggregateAddress> aggregateAddress(Value *V) {
+    const DataLayout &DL = F.getParent()->getDataLayout();
+    const unsigned BitWidth = DL.getIndexSizeInBits(0);
+    APInt ConstantOffset(BitWidth, 0);
+    APInt DynamicScale(BitWidth, 0);
+    Value *DynamicIndex = nullptr;
+    Value *Current = V;
+    unsigned DynamicOccurrences = 0;
+    while (auto *GEP = dyn_cast<GetElementPtrInst>(Current)) {
+      if (GEP->getPointerAddressSpace() != 0 ||
+          !GEP->getSourceElementType()->isAggregateType())
+        return None;
+      MapVector<Value *, APInt> Variables;
+      APInt LocalOffset(BitWidth, 0);
+      if (!GEP->collectOffset(DL, BitWidth, Variables, LocalOffset) ||
+          Variables.size() > 1)
+        return None;
+      for (Value *Index : GEP->indices())
+        if (!isa<Constant>(Index) && ++DynamicOccurrences > 1)
+          return None;
+      ConstantOffset += LocalOffset;
+      if (!Variables.empty()) {
+        if (DynamicIndex && DynamicIndex != Variables.front().first)
+          return None;
+        DynamicIndex = Variables.front().first;
+        DynamicScale = Variables.front().second;
+      }
+      Current = GEP->getPointerOperand();
+    }
+    Value *Base = getSplatValue(Current);
+    if (!Base || !Base->getType()->isPointerTy() ||
+        Base->getType()->getPointerAddressSpace() != 0 || !DynamicIndex ||
+        !DynamicScale.isStrictlyPositive() || DynamicScale.getActiveBits() > 63 ||
+        ConstantOffset.isNegative() || ConstantOffset.getActiveBits() > 63)
+      return None;
+    return AggregateAddress{Base, DynamicIndex, DynamicScale.getZExtValue(),
+                            ConstantOffset.getZExtValue()};
+  }
+
+  static Optional<unsigned> binaryOpcode(Intrinsic::ID ID) {
+    switch (ID) {
+    case Intrinsic::vp_fadd: return Instruction::FAdd;
+    case Intrinsic::vp_fsub: return Instruction::FSub;
+    case Intrinsic::vp_fmul: return Instruction::FMul;
+    case Intrinsic::vp_add: return Instruction::Add;
+    case Intrinsic::vp_sub: return Instruction::Sub;
+    case Intrinsic::vp_mul: return Instruction::Mul;
+    case Intrinsic::vp_sdiv: return Instruction::SDiv;
+    case Intrinsic::vp_udiv: return Instruction::UDiv;
+    case Intrinsic::vp_srem: return Instruction::SRem;
+    case Intrinsic::vp_urem: return Instruction::URem;
+    case Intrinsic::vp_and: return Instruction::And;
+    case Intrinsic::vp_or: return Instruction::Or;
+    case Intrinsic::vp_xor: return Instruction::Xor;
+    case Intrinsic::vp_shl: return Instruction::Shl;
+    case Intrinsic::vp_lshr: return Instruction::LShr;
+    case Intrinsic::vp_ashr: return Instruction::AShr;
+    default: return None;
+    }
+  }
+
+  static bool hasFullyActiveMask(VPIntrinsic &VP) {
+    auto *Mask = dyn_cast<Constant>(VP.getMaskParam());
+    auto *MaskTy = dyn_cast<FixedVectorType>(VP.getMaskParam()->getType());
+    if (!Mask || !MaskTy)
+      return false;
+    for (unsigned I = 0; I < MaskTy->getNumElements(); ++I) {
+      auto *Active =
+          dyn_cast_or_null<ConstantInt>(Mask->getAggregateElement(I));
+      if (!Active || Active->isZero())
+        return false;
+    }
+    return true;
+  }
+
+  static bool maskedAffineUsesSuppressInactiveLanes(VPIntrinsic &VP) {
+    Value *Mask = VP.getMaskParam();
+    Value *EVL = VP.getVectorLengthParam();
+    bool HasMemoryUse = false;
+    for (User *U : VP.users()) {
+      if (auto *Consumer = dyn_cast<VPIntrinsic>(U)) {
+        if (Consumer->getMaskParam() != Mask ||
+            Consumer->getVectorLengthParam() != EVL)
+          return false;
+        HasMemoryUse = true;
+        continue;
+      }
+      auto *GEP = dyn_cast<GetElementPtrInst>(U);
+      if (!GEP || GEP->getNumIndices() != 1 || GEP->getOperand(1) != &VP)
+        return false;
+      for (User *AddressUser : GEP->users()) {
+        auto *Call = dyn_cast<CallInst>(AddressUser);
+        if (!Call)
+          return false;
+        if (isIntrinsic(Call,
+                        Intrinsic::linx_experimental_element_scatter)) {
+          if (Call->getArgOperand(1) != GEP ||
+              Call->getArgOperand(2) != Mask ||
+              Call->getArgOperand(3) != EVL)
+            return false;
+          HasMemoryUse = true;
+          continue;
+        }
+        auto *MemoryVP = dyn_cast<VPIntrinsic>(Call);
+        if (!MemoryVP || MemoryVP->getMaskParam() != Mask ||
+            MemoryVP->getVectorLengthParam() != EVL)
+          return false;
+        bool IsGather =
+            MemoryVP->getIntrinsicID() == Intrinsic::vp_gather &&
+            MemoryVP->getArgOperand(0) == GEP;
+        bool IsScatter =
+            MemoryVP->getIntrinsicID() == Intrinsic::vp_scatter &&
+            MemoryVP->getArgOperand(1) == GEP;
+        if (!IsGather && !IsScatter)
+          return false;
+        HasMemoryUse = true;
+      }
+    }
+    return HasMemoryUse;
+  }
+
+  static Constant *foldConstantVPBinary(VPIntrinsic &VP) {
+    Optional<unsigned> Opcode = binaryOpcode(VP.getIntrinsicID());
+    auto *LHS = dyn_cast<Constant>(VP.getArgOperand(0));
+    auto *RHS = dyn_cast<Constant>(VP.getArgOperand(1));
+    auto *EVL = dyn_cast<ConstantInt>(VP.getVectorLengthParam());
+    unsigned Count = cast<FixedVectorType>(VP.getType())->getNumElements();
+    if (!Opcode || !LHS || !RHS || !EVL || !EVL->equalsInt(Count))
+      return nullptr;
+    if (!hasFullyActiveMask(VP) &&
+        !maskedAffineUsesSuppressInactiveLanes(VP))
+      return nullptr;
+    return ConstantFoldBinaryInstruction(*Opcode, LHS, RHS);
+  }
+
+  static Constant *foldAffineI64VPBinary(VPIntrinsic &VP) {
+    return isVector(&VP, 64) ? foldConstantVPBinary(VP) : nullptr;
+  }
+
+  struct UniformI64Address {
+    Constant *LaneOffsets;
+    Value *ScalarOffset;
+    bool NegateScalar;
+  };
+
+  static Constant *foldI64Constant(Value *V) {
+    if (auto *C = dyn_cast<Constant>(V))
+      return C;
+    if (auto *Cast = dyn_cast<CastInst>(V))
+      if (auto *Operand = foldI64Constant(Cast->getOperand(0)))
+        return ConstantFoldCastInstruction(Cast->getOpcode(), Operand,
+                                           Cast->getType());
+    if (auto *VP = dyn_cast<VPIntrinsic>(V))
+      return foldConstantVPBinary(*VP);
+    return nullptr;
+  }
+
+  // Native Tile arithmetic has no general B64 add/sub profile.  Admit the
+  // common address-only form by keeping the uniform i64 term in the scalar GM
+  // base and narrowing only independently proven signed-B32 lane offsets.
+  static Optional<UniformI64Address>
+  decomposeUniformI64Address(VPIntrinsic &VP) {
+    if (!isVector(&VP, 64) || !hasFullyActiveMask(VP))
+      return None;
+    Optional<unsigned> Opcode = binaryOpcode(VP.getIntrinsicID());
+    if (!Opcode || (*Opcode != Instruction::Add &&
+                    *Opcode != Instruction::Sub))
+      return None;
+    auto *EVL = dyn_cast<ConstantInt>(VP.getVectorLengthParam());
+    unsigned Count = cast<FixedVectorType>(VP.getType())->getNumElements();
+    if (!EVL || !EVL->equalsInt(Count))
+      return None;
+
+    Constant *LHS = foldI64Constant(VP.getArgOperand(0));
+    Constant *RHS = foldI64Constant(VP.getArgOperand(1));
+    Value *LScalar = getSplatValue(VP.getArgOperand(0));
+    Value *RScalar = getSplatValue(VP.getArgOperand(1));
+    Constant *Offsets = nullptr;
+    Value *Scalar = nullptr;
+    bool NegateOffsets = false;
+    bool NegateScalar = false;
+    if (*Opcode == Instruction::Add) {
+      if (LHS && RScalar) {
+        Offsets = LHS;
+        Scalar = RScalar;
+      } else if (RHS && LScalar) {
+        Offsets = RHS;
+        Scalar = LScalar;
+      }
+    } else if (LHS && RScalar) {
+      Offsets = LHS;
+      Scalar = RScalar;
+      NegateScalar = true;
+    } else if (RHS && LScalar) {
+      Offsets = RHS;
+      Scalar = LScalar;
+      NegateOffsets = true;
+    }
+    if (!Offsets || !Scalar || !Scalar->getType()->isIntegerTy(64))
+      return None;
+
+    SmallVector<Constant *, 64> Narrow;
+    Narrow.reserve(Count);
+    Type *I32 = Type::getInt32Ty(VP.getContext());
+    for (unsigned I = 0; I < Count; ++I) {
+      auto *Element =
+          dyn_cast_or_null<ConstantInt>(Offsets->getAggregateElement(I));
+      if (!Element)
+        return None;
+      APInt Value = Element->getValue();
+      if (NegateOffsets)
+        Value = -Value;
+      if (!Value.isSignedIntN(32))
+        return None;
+      Narrow.push_back(ConstantInt::get(I32, Value.trunc(32)));
+    }
+    return UniformI64Address{ConstantVector::get(Narrow), Scalar,
+                             NegateScalar};
+  }
+
+  static bool hasOnlyAddressUses(VPIntrinsic &VP) {
+    if (VP.use_empty())
+      return false;
+    for (User *U : VP.users()) {
+      auto *GEP = dyn_cast<GetElementPtrInst>(U);
+      if (!GEP || GEP->getNumIndices() != 1 || GEP->getOperand(1) != &VP ||
+          !getSplatValue(GEP->getPointerOperand()))
+        return false;
+    }
+    return true;
+  }
+
+  static bool isVector(Value *V, unsigned Width) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && (Ty->getNumElements() == 32 || Ty->getNumElements() == 64) &&
+           Ty->getElementType()->isIntegerTy(Width);
+  }
+
+  static bool isI64LeafVector(Value *V) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && Ty->getNumElements() == 32 &&
+           Ty->getElementType()->isIntegerTy(64);
+  }
+
+  static bool isF32Vector(Value *V) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && (Ty->getNumElements() == 32 || Ty->getNumElements() == 64) &&
+           Ty->getElementType()->isFloatTy();
+  }
+
+  static bool isF16Vector(Value *V) {
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    return Ty && Ty->getNumElements() == 64 && Ty->getElementType()->isHalfTy();
+  }
+
+  static bool constantProgression(Constant *C, APInt &Initial, APInt &Step) {
+    unsigned Width = C->getType()->getScalarSizeInBits();
+    if (Width != 32 && Width != 64)
+      return false;
+    auto *First = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(0u));
+    auto *Second = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(1u));
+    if (!First || !Second)
+      return false;
+    Initial = First->getValue();
+    Step = Second->getValue() - Initial;
+    if (!Step.isSignedIntN(32))
+      return false;
+    unsigned Count = cast<FixedVectorType>(C->getType())->getNumElements();
+    for (unsigned I = 0; I < Count; ++I) {
+      auto *Element = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(I));
+      if (!Element || Element->getValue() != Initial + Step * I)
+        return false;
+    }
+    return true;
+  }
+
+  static bool constantLogical64Grid(Constant *C, APInt &Initial, APInt &RowStep,
+                                    APInt &ColStep) {
+    auto *Ty = dyn_cast<FixedVectorType>(C->getType());
+    if (!Ty || Ty->getNumElements() != 64 ||
+        !Ty->getElementType()->isIntegerTy(32))
+      return false;
+    auto Element = [&](unsigned Index) {
+      return dyn_cast_or_null<ConstantInt>(C->getAggregateElement(Index));
+    };
+    auto *E0 = Element(0), *E1 = Element(1), *E2 = Element(2);
+    if (!E0 || !E1 || !E2)
+      return false;
+    Initial = E0->getValue();
+    ColStep = E1->getValue() - Initial;
+    RowStep = E2->getValue() - Initial;
+    for (unsigned I = 0; I < 64; ++I) {
+      auto *E = Element(I);
+      APInt Expected = Initial + RowStep * (I / 2) + ColStep * (I % 2);
+      if (!E || E->getValue() != Expected)
+        return false;
+    }
+    return true;
+  }
+
+  bool validateImportTypes(Value *V, uint64_t DType,
+                           SmallPtrSetImpl<Value *> &Seen,
+                           bool PhiIncoming = false) {
+    if (!Seen.insert(V).second)
+      return true;
+    auto *VT = dyn_cast<FixedVectorType>(V->getType());
+    unsigned Count = VT ? VT->getNumElements() : 0;
+    uint64_t Bytes =
+        VT ? F.getParent()->getDataLayout().getTypeStoreSize(VT) : 0;
+    auto Profile =
+        Count == 64 ? elementProfile(DType, 64, 32, 2, Bytes, V->getContext())
+                    : elementProfile(DType, V->getContext());
+    if (!Profile || V->getType() != Profile->VectorTy)
+      return fail(V, "typed import does not match its declared scalar type");
+    if (auto View = getViewDescriptor(V)) {
+      if (PhiIncoming && View->Profile.DataType != DType)
+        return fail(V, "imported carrier PHI requires one consistent dtype");
+      if (OwnedSet.contains(View->Marker) ||
+          View->Marker->getMetadata(PredicatedOwnerMD))
+        return true;
+      return validateImportTypes(View->Marker->getArgOperand(0),
+                                 View->Profile.DataType, Seen, PhiIncoming);
+    }
+    if (auto *Phi = dyn_cast<PHINode>(V)) {
+      if (isa<FPMathOperator>(Phi) && Phi->getFastMathFlags().any())
+        return fail(Phi, "floating PHI requires no fast-math");
+      auto Inserted = ImportedPhiTypes.try_emplace(Phi, DType);
+      if (!Inserted.second && Inserted.first->second != DType)
+        return fail(Phi, "imported carrier PHI requires one consistent dtype");
+      for (Value *Incoming : Phi->incoming_values())
+        if (!validateImportTypes(Incoming, DType, Seen, true))
+          return false;
+    }
+    return true;
+  }
+
+  bool validateImport(Value *V, uint64_t DType) {
+    if (!isTypedTileImport(V))
+      return fail(V, "typed import requires an explicit Tile producer");
+    SmallPtrSet<Value *, 16> Seen;
+    return validateImportTypes(V, DType, Seen);
+  }
+
+  bool matchNormAffineAdd(Value *V, APInt &Initial, APInt &Step) {
+    Value *LHS = nullptr;
+    Value *RHS = nullptr;
+    if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      auto Op = binaryOpcode(VP->getIntrinsicID());
+      if (!Op || *Op != Instruction::Add)
+        return false;
+      LHS = VP->getArgOperand(0);
+      RHS = VP->getArgOperand(1);
+    } else if (auto *Add = dyn_cast<BinaryOperator>(V)) {
+      if (Add->getOpcode() != Instruction::Add)
+        return false;
+      LHS = Add->getOperand(0);
+      RHS = Add->getOperand(1);
+    } else {
+      return false;
+    }
+    auto Match = [&](Value *Sequence, Value *Offset) {
+      auto *C = dyn_cast<Constant>(Sequence);
+      auto *Scalar = dyn_cast_or_null<ConstantInt>(getSplatValue(Offset));
+      if (!C || !Scalar || !constantProgression(C, Initial, Step) ||
+          !Step.isOne())
+        return false;
+      Initial += Scalar->getValue().zextOrTrunc(Initial.getBitWidth());
+      return true;
+    };
+    return Match(LHS, RHS) || Match(RHS, LHS);
+  }
+
+  bool validateNorm(Value *V) {
+    if (!Validated.insert(V).second)
+      return true;
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    if (!Ty || Ty->getNumElements() != NormProfile->Count ||
+        (Ty->getElementType() != NormProfile->ScalarTy &&
+         !Ty->getElementType()->isIntegerTy(1)))
+      return fail(V,
+                  "NORM pure Tile expression type does not match its profile");
+    if (auto View = getViewDescriptor(V)) {
+      const auto &P = View->Profile;
+      if (P.Layout != 0 || P.DataType != NormProfile->DataType ||
+          P.Count != NormProfile->Count || P.Rows != NormProfile->Rows ||
+          P.Cols != NormProfile->Cols ||
+          View->ScalarizedLaneZero)
+        return fail(
+            V, "NORM region cannot mix layout, shape, or scalarized views");
+      Value *Source = View->Marker->getArgOperand(0);
+      auto *I = dyn_cast<Instruction>(Source);
+      if ((I && !OwnedSet.contains(I)) || isa<Argument>(Source))
+        return isTypedTileImport(Source) ||
+               fail(V, "NORM import requires an explicit Tile producer");
+      return validateNorm(Source);
+    }
+    if (Value *Scalar = getSplatValue(V)) {
+      auto *I = dyn_cast<Instruction>(Scalar);
+      return (!(Ty->getElementType()->isIntegerTy(1) &&
+                NormProfile->DataType == 1) ||
+              fail(V, "NORM FP32 does not admit a scalar predicate Tile")) &&
+             ((!I || !OwnedSet.contains(I)) ||
+              fail(V, "NORM uniform source must be outside the region"));
+    }
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V))
+      return true;
+    if (auto *I = dyn_cast<Instruction>(V))
+      if (!OwnedSet.contains(I))
+        return fail(V, "NORM vector producer lacks its typed view boundary");
+    if (auto *C = dyn_cast<Constant>(V)) {
+      APInt Initial, Step;
+      return (NormProfile->DataType == 25 &&
+              constantProgression(C, Initial, Step) &&
+              (Step.isZero() || Step.isOne() || Step.isAllOnes())) ||
+             fail(V, "NORM constant requires a scalar splat or U32 unit-step "
+                     "index");
+    }
+    if (auto *Freeze = dyn_cast<FreezeInst>(V))
+      return validateNorm(Freeze->getOperand(0));
+    if (auto *Cast = dyn_cast<BitCastInst>(V)) {
+      auto *SourceTy = dyn_cast<FixedVectorType>(Cast->getSrcTy());
+      if (NormProfile->DataType != 1 || !SourceTy ||
+          !SourceTy->getElementType()->isIntegerTy(32) ||
+          SourceTy->getNumElements() != NormProfile->Count ||
+          !Ty->getElementType()->isFloatTy())
+        return fail(V,
+                    "NORM carrier bitcast must preserve exact FP32 storage");
+      Value *Source = Cast->getOperand(0);
+      auto *SourceI = dyn_cast<Instruction>(Source);
+      return ((!SourceI || !OwnedSet.contains(SourceI)) &&
+              isTypedTileImport(Source)) ||
+             fail(V,
+                  "NORM carrier bitcast requires an external Tile producer");
+    }
+    if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      if (NormProfile->DataType != 25 || Cmp->isSigned() ||
+          !Cmp->getOperand(0)->getType()->getScalarType()->isIntegerTy(32))
+        return fail(V, "NORM comparisons require U32 numeric operands");
+      return validateNorm(Cmp->getOperand(0)) &&
+             validateNorm(Cmp->getOperand(1));
+    }
+    if (auto *Cmp = dyn_cast<FCmpInst>(V)) {
+      if (NormProfile->DataType != 1 ||
+          !floatComparisonMapping(Cmp->getPredicate()))
+        return fail(V, "NORM FP32 comparison predicate has no native mapping");
+      return validateNorm(Cmp->getOperand(0)) &&
+             validateNorm(Cmp->getOperand(1));
+    }
+    if (auto *Select = dyn_cast<SelectInst>(V))
+      return (Ty->getElementType() == NormProfile->ScalarTy ||
+              fail(V, "NORM predicate selection is not yet supported")) &&
+             validateNorm(Select->getCondition()) &&
+             validateNorm(Select->getTrueValue()) &&
+             validateNorm(Select->getFalseValue());
+    if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      auto *EVL = dyn_cast<ConstantInt>(VP->getVectorLengthParam());
+      if (!EVL || !EVL->equalsInt(NormProfile->Rows * NormProfile->Cols))
+        return fail(V, "NORM Tile operation requires its full valid domain");
+      if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
+        return (Cmp->getIntrinsicID() == Intrinsic::vp_fcmp &&
+                NormProfile->DataType == 1 &&
+                floatComparisonMapping(Cmp->getPredicate()) &&
+                (!floatComparisonMapping(Cmp->getPredicate())->Invert ||
+                 hasFullyActiveMask(*VP)) &&
+                validateNorm(Cmp->getArgOperand(0)) &&
+                validateNorm(Cmp->getArgOperand(1))) ||
+               fail(V, "NORM FP32 comparison has no exact native mapping");
+      auto Op = binaryOpcode(VP->getIntrinsicID());
+      APInt Initial, Step;
+      const bool U32AffineAdd = NormProfile->DataType == 25 &&
+                                matchNormAffineAdd(VP, Initial, Step);
+      const bool PredicateNot =
+          Ty->getElementType()->isIntegerTy(1) &&
+          VP->getIntrinsicID() == Intrinsic::vp_xor &&
+          match(VP->getArgOperand(1), m_AllOnes()) &&
+          hasFullyActiveMask(*VP);
+      if (PredicateNot &&
+          (NormProfile->DataType == 1 || NormProfile->DataType == 25))
+        return validateNorm(VP->getArgOperand(0));
+      if (!hasFullyActiveMask(*VP) && !U32AffineAdd)
+        return fail(V, "NORM Tile operation requires its full valid domain");
+      if (NormProfile->DataType == 1 && Op &&
+          (*Op == Instruction::FAdd || *Op == Instruction::FMul) &&
+          !VP->getFastMathFlags().any())
+        return validateNorm(VP->getArgOperand(0)) &&
+               validateNorm(VP->getArgOperand(1));
+      if (U32AffineAdd)
+        return validateNorm(VP->getArgOperand(0)) &&
+               validateNorm(VP->getArgOperand(1));
+      return fail(V, "NORM VP operation has no exact native mapping");
+    }
+    if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      if (Ty->getElementType()->isIntegerTy(1) &&
+          Binary->getOpcode() == Instruction::Xor &&
+          match(Binary->getOperand(1), m_AllOnes()) &&
+          (NormProfile->DataType == 1 || NormProfile->DataType == 25))
+        return validateNorm(Binary->getOperand(0));
+      if (NormProfile->DataType == 1 &&
+          (Binary->getOpcode() == Instruction::FAdd ||
+           Binary->getOpcode() == Instruction::FMul) &&
+          !Binary->getFastMathFlags().any())
+        return validateNorm(Binary->getOperand(0)) &&
+               validateNorm(Binary->getOperand(1));
+      APInt Initial, Step;
+      if (NormProfile->DataType == 25 &&
+          matchNormAffineAdd(Binary, Initial, Step))
+        return validateNorm(Binary->getOperand(0)) &&
+               validateNorm(Binary->getOperand(1));
+    }
+    if (auto *Cast = dyn_cast<ZExtInst>(V))
+      if (NormProfile->DataType == 25 &&
+          Cast->getSrcTy()->getScalarType()->isIntegerTy(1) &&
+          Cast->getDestTy()->getScalarType()->isIntegerTy(32))
+        return validateNorm(Cast->getOperand(0));
+    std::string Detail;
+    raw_string_ostream OS(Detail);
+    V->print(OS);
+    return fail(V, Twine("NORM pure Tile profile does not support: ") +
+                       OS.str());
+  }
+
+  Value *normSplat(Value *Scalar, uint64_t Step = 0) {
+    Scalar = B.CreateFreeze(Scalar);
+    if (NormProfile->DataType == 25)
+      Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
+    if (Step == 0)
+      return call(Intrinsic::linx_experimental_ew_texpands_row,
+                  {NormProfile->VectorTy, Scalar->getType()},
+                  {B.getInt64(NormProfile->Rows),
+                   B.getInt64(NormProfile->Cols),
+                   B.getInt64(NormProfile->DataType), B.getInt64(0), Scalar,
+                   B.getInt64(NormProfile->Count / NormProfile->Rows)},
+                  "pto.norm.splat");
+    assert(NormProfile->DataType == 25 &&
+           "only U32 NORM profiles admit index sequences");
+    assert((Step == 1 || Step == UINT32_MAX) && "NORM unit sequence preflight");
+    // RowMajor TCI takes direction (0 ascending, 1 descending), whereas
+    // CUBE TCI takes packed signed steps. It cannot generate a scalar splat.
+    return call(Intrinsic::linx_experimental_ew_tci_row,
+                {NormProfile->VectorTy},
+                {B.getInt64(NormProfile->Rows),
+                 B.getInt64(NormProfile->Cols),
+                 B.getInt64(NormProfile->DataType), B.getInt64(0), Scalar,
+                 B.getInt64(Step == 1 ? 0 : 1),
+                 B.getInt64(NormProfile->Count / NormProfile->Rows)},
+                "pto.norm.index");
+  }
+
+  Value *normCompare(Value *L, Value *R, unsigned Selector) {
+    // Predicate payload stays bit-packed. Its raw allocation also satisfies
+    // the U8 descriptor extent required by identity TMOV, so allocator copies
+    // remain legal (PTO 8f589b7 TileDescriptorConfigured).
+    auto *MaskTy = FixedVectorType::get(
+        B.getInt32Ty(), std::max(32u, NormProfile->Count / 4));
+    return call(Intrinsic::linx_experimental_ew_tcmp_row,
+                {MaskTy, L->getType(), R->getType()},
+                {B.getInt64(NormProfile->Rows),
+                 B.getInt64(NormProfile->Cols),
+                 B.getInt64(NormProfile->DataType), B.getInt64(0), L, R,
+                 B.getInt64(Selector),
+                 B.getInt64(NormProfile->Count / NormProfile->Rows)},
+                "pto.norm.predicate");
+  }
+
+  Value *normInvertPredicate(Value *Mask) {
+    Constant *Zero = Constant::getNullValue(NormProfile->ScalarTy);
+    Constant *One = NormProfile->ScalarTy->isFloatingPointTy()
+                        ? static_cast<Constant *>(
+                              ConstantFP::get(NormProfile->ScalarTy, 1.0))
+                        : static_cast<Constant *>(
+                              ConstantInt::get(NormProfile->ScalarTy, 1));
+    Value *ZeroTile = normSplat(Zero);
+    Value *OneTile = normSplat(One);
+    return normCompare(normSelect(Mask, ZeroTile, OneTile), ZeroTile, 1);
+  }
+
+  Value *normSelect(Value *Mask, Value *Yes, Value *No) {
+    return call(
+        Intrinsic::linx_experimental_ew_tsel_row,
+        {Yes->getType(), Mask->getType(), Yes->getType(), No->getType()},
+        {B.getInt64(NormProfile->Rows), B.getInt64(NormProfile->Cols),
+         B.getInt64(NormProfile->DataType), B.getInt64(0), Mask, Yes, No,
+         B.getInt64(NormProfile->Count / NormProfile->Rows)},
+        "pto.norm.select");
+  }
+
+  Value *normBinary(Value *L, Value *R, unsigned Selector) {
+    return call(Intrinsic::linx_experimental_ew_tbinary, {L->getType()},
+                {B.getInt64(NormProfile->Rows),
+                 B.getInt64(NormProfile->Cols),
+                 B.getInt64(NormProfile->DataType), B.getInt64(0),
+                 B.getInt64(Selector), L, R},
+                "pto.norm.binary");
+  }
+
+  Value *valueNorm(Value *V) {
+    if (Value *Existing = Data.lookup(V))
+      return Existing;
+    auto *Ty = cast<FixedVectorType>(V->getType());
+    Value *R = nullptr;
+    if (auto View = getViewDescriptor(V)) {
+      Value *Source = View->Marker->getArgOperand(0);
+      auto *I = dyn_cast<Instruction>(Source);
+      R = (I && !OwnedSet.contains(I)) || isa<Argument>(Source)
+              ? Source
+              : valueNorm(Source);
+    } else if (Value *Scalar = getSplatValue(V)) {
+      if (Ty->getElementType()->isIntegerTy(1))
+        R = normCompare(normSplat(Scalar),
+                        normSplat(Constant::getNullValue(
+                            NormProfile->ScalarTy)),
+                        1);
+      else
+        R = normSplat(Scalar);
+    } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+      R = normSplat(Constant::getNullValue(NormProfile->ScalarTy));
+      if (Ty->getElementType()->isIntegerTy(1))
+        R = normCompare(R, R, 1);
+    } else if (auto *C = dyn_cast<Constant>(V)) {
+      APInt Initial, Step;
+      bool Affine = constantProgression(C, Initial, Step);
+      assert(Affine && "NORM constant preflight");
+      R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
+    } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      R = valueNorm(Freeze->getOperand(0));
+    } else if (auto *Cast = dyn_cast<BitCastInst>(V)) {
+      R = B.CreateBitCast(Cast->getOperand(0), Ty, "pto.norm.bits");
+    } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      unsigned Selector;
+      switch (Cmp->getPredicate()) {
+      case ICmpInst::ICMP_EQ:
+        Selector = 0;
+        break;
+      case ICmpInst::ICMP_NE:
+        Selector = 1;
+        break;
+      case ICmpInst::ICMP_ULT:
+        Selector = 2;
+        break;
+      case ICmpInst::ICMP_UGT:
+        Selector = 3;
+        break;
+      case ICmpInst::ICMP_ULE:
+        Selector = 4;
+        break;
+      case ICmpInst::ICMP_UGE:
+        Selector = 5;
+        break;
+      default:
+        llvm_unreachable("NORM comparison preflight");
+      }
+      R = normCompare(valueNorm(Cmp->getOperand(0)),
+                      valueNorm(Cmp->getOperand(1)), Selector);
+    } else if (auto *Cmp = dyn_cast<FCmpInst>(V)) {
+      auto Mapping = *floatComparisonMapping(Cmp->getPredicate());
+      R = normCompare(valueNorm(Cmp->getOperand(0)),
+                      valueNorm(Cmp->getOperand(1)), Mapping.Selector);
+      if (Mapping.Invert)
+        R = normInvertPredicate(R);
+    } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+      R = normSelect(valueNorm(Select->getCondition()),
+                     valueNorm(Select->getTrueValue()),
+                     valueNorm(Select->getFalseValue()));
+    } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      APInt Initial, Step;
+      if (NormProfile->DataType == 25 &&
+          matchNormAffineAdd(VP, Initial, Step))
+        R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
+      else if (Ty->getElementType()->isIntegerTy(1) &&
+               VP->getIntrinsicID() == Intrinsic::vp_xor &&
+               match(VP->getArgOperand(1), m_AllOnes()))
+        R = normInvertPredicate(valueNorm(VP->getArgOperand(0)));
+      else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP)) {
+        auto Mapping = *floatComparisonMapping(Cmp->getPredicate());
+        R = normCompare(valueNorm(Cmp->getArgOperand(0)),
+                        valueNorm(Cmp->getArgOperand(1)), Mapping.Selector);
+        if (Mapping.Invert)
+          R = normInvertPredicate(R);
+      }
+      else {
+        unsigned Op = *binaryOpcode(VP->getIntrinsicID());
+        R = normBinary(valueNorm(VP->getArgOperand(0)),
+                       valueNorm(VP->getArgOperand(1)),
+                       Op == Instruction::FAdd ? 0 : 2);
+      }
+    } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      APInt Initial, Step;
+      if (Ty->getElementType()->isIntegerTy(1) &&
+          Binary->getOpcode() == Instruction::Xor &&
+          match(Binary->getOperand(1), m_AllOnes())) {
+        if (NormProfile->DataType == 25)
+          if (auto *Cmp = dyn_cast<ICmpInst>(Binary->getOperand(0))) {
+            unsigned Selector;
+            switch (Cmp->getInversePredicate()) {
+            case ICmpInst::ICMP_EQ: Selector = 0; break;
+            case ICmpInst::ICMP_NE: Selector = 1; break;
+            case ICmpInst::ICMP_ULT: Selector = 2; break;
+            case ICmpInst::ICMP_UGT: Selector = 3; break;
+            case ICmpInst::ICMP_ULE: Selector = 4; break;
+            case ICmpInst::ICMP_UGE: Selector = 5; break;
+            default: llvm_unreachable("NORM predicate inverse preflight");
+            }
+            R = normCompare(valueNorm(Cmp->getOperand(0)),
+                            valueNorm(Cmp->getOperand(1)), Selector);
+          }
+        if (!R)
+          R = normInvertPredicate(valueNorm(Binary->getOperand(0)));
+      } else if (NormProfile->DataType == 25 &&
+          matchNormAffineAdd(Binary, Initial, Step)) {
+        R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
+      } else if (NormProfile->DataType == 1) {
+        R = normBinary(valueNorm(Binary->getOperand(0)),
+                       valueNorm(Binary->getOperand(1)),
+                       Binary->getOpcode() == Instruction::FAdd ? 0 : 2);
+      } else {
+        llvm_unreachable("NORM pure Tile binary preflight");
+      }
+    } else if (auto *Cast = dyn_cast<ZExtInst>(V)) {
+      R = normSelect(valueNorm(Cast->getOperand(0)), normSplat(B.getInt32(1)),
+                     normSplat(B.getInt32(0)));
+    } else {
+      llvm_unreachable("NORM pure Tile preflight");
+    }
+    return Data[V] = R;
+  }
+
+  bool validate(Value *V) {
+    if (NormProfile)
+      return validateNorm(V);
+    if (!Validated.insert(V).second)
+      return true;
+    auto *Ty = dyn_cast<FixedVectorType>(V->getType());
+    if (!Ty || (Ty->getNumElements() != 32 && Ty->getNumElements() != 64))
+      return fail(V, "requires an admitted fixed-vector element profile");
+    if (auto Descriptor = getViewDescriptor(V)) {
+      if (Descriptor->ScalarizedLaneZero)
+        return fail(V, "typed import requires a full Tile carrier");
+      if (!OwnedSet.contains(Descriptor->Marker))
+        return validateImport(V, Descriptor->Profile.DataType);
+      Value *Source = Descriptor->Marker->getArgOperand(0);
+      if (auto *I = dyn_cast<Instruction>(Source))
+        if (!OwnedSet.contains(I))
+          return validateImport(Source, Descriptor->Profile.DataType);
+      return validate(Source);
+    }
+    if (auto *I = dyn_cast<Instruction>(V))
+      if (!OwnedSet.contains(I))
+        return fail(V, "vector producer is outside its token-owned region");
+
+    if (Value *Scalar = getSplatValue(V)) {
+      if (auto *I = dyn_cast<Instruction>(Scalar))
+        if (OwnedSet.contains(I))
+          return fail(V, "uniform source must be outside its predicated region");
+      Type *ST = Scalar->getType();
+      if (ST->isIntegerTy(1) || ST->isIntegerTy(32) || ST->isIntegerTy(64) ||
+          ST->isFloatTy() || ST->isHalfTy() ||
+          (ST->isPointerTy() && ST->getPointerAddressSpace() == 0))
+        return true;
+      return fail(V, "unsupported uniform element type");
+    }
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V))
+      return isVector(V, 1) || isVector(V, 32) || isVector(V, 64) ||
+             isF32Vector(V) || isF16Vector(V) ||
+             fail(V, "unsupported undefined element type");
+    if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      if (!isVector(Freeze, 32) && !isI64LeafVector(Freeze) &&
+          !isF32Vector(Freeze) && !isF16Vector(Freeze))
+        return fail(V, "freeze requires admitted Tile data");
+      return validate(Freeze->getOperand(0));
+    }
+    if (auto *C = dyn_cast<Constant>(V)) {
+      if (isVector(V, 1)) {
+        unsigned Count = cast<FixedVectorType>(V->getType())->getNumElements();
+        for (unsigned I = 0; I < Count; ++I)
+          if (!isa_and_nonnull<ConstantInt>(C->getAggregateElement(I)))
+            return fail(V, "mask constant contains an unsupported element");
+        return true;
+      }
+      APInt Initial, Step, RowStep, ColStep;
+      if (!constantProgression(C, Initial, Step) &&
+          !constantLogical64Grid(C, Initial, RowStep, ColStep))
+        return fail(V,
+                    "constant Tile requires a scalar splat or affine sequence");
+      return true;
+    }
+    if (auto *GEP = dyn_cast<GetElementPtrInst>(V)) {
+      if (auto Aggregate = aggregateAddress(GEP))
+        return validate(Aggregate->Index);
+      Value *Base = getSplatValue(GEP->getPointerOperand());
+      if (!Base || !Base->getType()->isPointerTy() ||
+          Base->getType()->getPointerAddressSpace() != 0 ||
+          GEP->getNumIndices() != 1 ||
+          (!GEP->getSourceElementType()->isIntegerTy(64) &&
+           !GEP->getSourceElementType()->isIntegerTy(32) &&
+           !GEP->getSourceElementType()->isIntegerTy(16) &&
+           !GEP->getSourceElementType()->isFloatTy() &&
+           !GEP->getSourceElementType()->isHalfTy()) ||
+          (!isVector(GEP->getOperand(1), 32) &&
+           !isVector(GEP->getOperand(1), 64)))
+        return fail(V, "address requires one uniform base and one scalar "
+                       "element index, or one dynamic aggregate index with "
+                       "constant field suffixes");
+      if (auto *I = dyn_cast<Instruction>(Base))
+        if (OwnedSet.contains(I))
+          return fail(V, "address base must be uniform outside its region");
+      return validate(GEP->getOperand(1));
+    }
+    if (auto *Select = dyn_cast<SelectInst>(V)) {
+      if (isa<FPMathOperator>(Select) && Select->getFastMathFlags().any())
+        return fail(V, "floating select requires no fast-math");
+      if ((!isVector(V, 1) && !isVector(V, 16) && !isVector(V, 32) &&
+           !isI64LeafVector(V) && !isF32Vector(V) && !isF16Vector(V)) ||
+          !isVector(Select->getCondition(), 1))
+        return fail(V, "select requires an i1 mask and admitted Tile values");
+      return validate(Select->getCondition()) &&
+             validate(Select->getTrueValue()) && validate(Select->getFalseValue());
+    }
+    if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      if (!isVector(Cmp->getOperand(0), 32) &&
+          !isI64LeafVector(Cmp->getOperand(0)) &&
+          !(isVector(Cmp->getOperand(0), 64) &&
+            (getSplatValue(Cmp->getOperand(0)) ||
+             getSplatValue(Cmp->getOperand(1)))))
+        return fail(V, "comparison requires i32 Tiles or logical32 i64 Tiles");
+      return validate(Cmp->getOperand(0)) && validate(Cmp->getOperand(1));
+    }
+    if (isa<FCmpInst>(V))
+      return fail(V, "floating comparison requires token-owned llvm.vp.fcmp");
+    if (auto *Cast = dyn_cast<CastInst>(V)) {
+      if (Cast->getOpcode() == Instruction::BitCast &&
+          ((isVector(V, 32) && isF32Vector(Cast->getOperand(0))) ||
+           (isF32Vector(V) && isVector(Cast->getOperand(0), 32))))
+        return validate(Cast->getOperand(0));
+      if ((Cast->getOpcode() != Instruction::ZExt &&
+           Cast->getOpcode() != Instruction::SExt) ||
+          !isVector(Cast->getOperand(0), 32) || !isVector(V, 64))
+        return fail(V, "only i32 to i64 index extension is supported");
+      return validate(Cast->getOperand(0));
+    }
+    if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      if (!isVector(V, 1) ||
+          (Binary->getOpcode() != Instruction::And &&
+           Binary->getOpcode() != Instruction::Or &&
+           Binary->getOpcode() != Instruction::Xor))
+        return fail(V, "non-VP data arithmetic is not supported");
+      return validate(Binary->getOperand(0)) && validate(Binary->getOperand(1));
+    }
+    if (auto *Atomic = dyn_cast<CallInst>(V))
+      if (isIntrinsic(Atomic, Intrinsic::linx_experimental_element_atomic_add))
+        return validateAtomic(*Atomic);
+    if (auto *VP = dyn_cast<VPIntrinsic>(V))
+      return validateVP(*VP);
+    return fail(V, "unsupported vector operation");
+  }
+
+  bool validateAtomic(CallInst &Atomic) {
+    auto *EVL = dyn_cast<ConstantInt>(Atomic.getArgOperand(3));
+    auto Alignment = Atomic.getParamAlign(0);
+    auto *ResultTy = dyn_cast<FixedVectorType>(Atomic.getType());
+    auto *ValueTy =
+        dyn_cast<FixedVectorType>(Atomic.getArgOperand(1)->getType());
+    auto *MaskTy =
+        dyn_cast<FixedVectorType>(Atomic.getArgOperand(2)->getType());
+    if (DomainCount != 32 || !ResultTy || ResultTy->getNumElements() != 32 ||
+        !ResultTy->getElementType()->isIntegerTy(32) || !ValueTy ||
+        ValueTy->getNumElements() != 32 ||
+        !ValueTy->getElementType()->isIntegerTy(32) || !MaskTy ||
+        MaskTy->getNumElements() != 32 ||
+        !MaskTy->getElementType()->isIntegerTy(1) || !EVL ||
+        !EVL->equalsInt(32) ||
+        !Alignment || *Alignment < Align(4) ||
+        !isa<GetElementPtrInst>(Atomic.getArgOperand(0)))
+      return fail(&Atomic, "atomic add requires an owning 32-element domain, "
+                           "v32i32 values, explicit GEP, aligned memory, "
+                           "v32i1 mask and EVL=32");
+    return validate(Atomic.getArgOperand(0)) &&
+           validate(Atomic.getArgOperand(1)) &&
+           validate(Atomic.getArgOperand(2));
+  }
+
+  bool validateUnorderedScatter(CallInst &Scatter) {
+    auto *EVL = dyn_cast<ConstantInt>(Scatter.getArgOperand(3));
+    auto Alignment = Scatter.getParamAlign(1);
+    auto *DataTy =
+        dyn_cast<FixedVectorType>(Scatter.getArgOperand(0)->getType());
+    auto *MaskTy =
+        dyn_cast<FixedVectorType>(Scatter.getArgOperand(2)->getType());
+    auto *TokenArg = dyn_cast<MetadataAsValue>(Scatter.getArgOperand(4));
+    auto *Token =
+        TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
+    unsigned Count = DataTy ? DataTy->getNumElements() : 0;
+    Type *ElementTy = DataTy ? DataTy->getElementType() : nullptr;
+    bool ValidData =
+        (Count == 32 &&
+         (ElementTy->isIntegerTy(32) || ElementTy->isFloatTy())) ||
+        (Count == 64 &&
+         (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy() ||
+          ElementTy->isIntegerTy(32)));
+    Align RequiredAlignment =
+        ElementTy && (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy())
+            ? Align(2)
+            : Align(4);
+    if (Count != DomainCount)
+      return fail(&Scatter,
+                  "unordered scatter width must match its owning element "
+                  "domain");
+    if (!ValidData || !MaskTy || MaskTy->getNumElements() != Count ||
+        !MaskTy->getElementType()->isIntegerTy(1) || !EVL ||
+        !EVL->equalsInt(Count) || !Alignment ||
+        *Alignment < RequiredAlignment ||
+        !isa<GetElementPtrInst>(Scatter.getArgOperand(1)) || !Token ||
+        Scatter.getMetadata(PredicatedOwnerMD) != Token ||
+        !hasExactStringMetadata(Scatter, InterElementOrderMD, "unordered") ||
+        !hasExactStringMetadata(Scatter, IntraElementOrderMD, "source"))
+      return fail(
+          &Scatter,
+          "unordered scatter requires an exact owned 32-lane i32/f32 or "
+          "64-lane i16/f16/i32 profile, explicit GEP, natural alignment, "
+          "matching i1 mask/EVL and source contract");
+    return validate(Scatter.getArgOperand(0)) &&
+           validate(Scatter.getArgOperand(1)) &&
+           validate(Scatter.getArgOperand(2));
+  }
+
+  bool hasExclusiveTypedTileUses(Value *Root) {
+    SmallPtrSet<Value *, 16> Seen;
+    bool Published = false;
+    std::function<bool(Value *)> Walk = [&](Value *V) {
+      if (!Seen.insert(V).second)
+        return true;
+      for (User *U : V->users()) {
+        auto *I = dyn_cast<Instruction>(U);
+        if (!I)
+          return false;
+        if (auto Descriptor = getViewDescriptor(I)) {
+          if (Descriptor->Marker->getArgOperand(0) != V ||
+              !Descriptor->Profile.VectorTy->getElementType()->isIntegerTy(64))
+            return false;
+          Published = true;
+          continue;
+        }
+        if (auto *Call = dyn_cast<CallBase>(I))
+          if (isWholeTileConsumer(*Call, V)) {
+            Published = true;
+            continue;
+          }
+        if (isa<PHINode>(I) || isa<SelectInst>(I) || isa<FreezeInst>(I) ||
+            isa<CastInst>(I)) {
+          if (!Walk(I))
+            return false;
+          continue;
+        }
+        if (auto *VP = dyn_cast<VPIntrinsic>(I)) {
+          if (!binaryOpcode(VP->getIntrinsicID()) &&
+              VP->getIntrinsicID() != Intrinsic::vp_trunc)
+            return false;
+          if (!Walk(VP))
+            return false;
+          continue;
+        }
+        return false;
+      }
+      return true;
+    };
+    return Walk(Root) && Published;
+  }
+
+  bool validateVP(VPIntrinsic &VP) {
+    auto *EVL = dyn_cast<ConstantInt>(VP.getVectorLengthParam());
+    auto *ResultTy = dyn_cast<FixedVectorType>(VP.getType());
+    unsigned Count = ResultTy
+                         ? ResultTy->getNumElements()
+                         : cast<FixedVectorType>(VP.getMaskParam()->getType())
+                               ->getNumElements();
+    if (Count != DomainCount)
+      return fail(&VP, "VP effect width must match its owning element domain");
+    const bool PartialCompare =
+        isa<VPCmpIntrinsic>(&VP) && EVL && !EVL->isZero() &&
+        EVL->getValue().ule(Count);
+    if (!EVL || (!EVL->equalsInt(Count) && !PartialCompare) ||
+        !isVector(VP.getMaskParam(), 1))
+      return fail(&VP, "requires a 32-bit mask and constant EVL=32");
+    if (!validate(VP.getMaskParam()))
+      return false;
+    if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(&VP)) {
+      if (Cmp->getIntrinsicID() != Intrinsic::vp_fcmp ||
+          (!isF32Vector(Cmp->getArgOperand(0)) &&
+           !isF16Vector(Cmp->getArgOperand(0))) ||
+          Cmp->getArgOperand(0)->getType() !=
+              Cmp->getArgOperand(1)->getType() ||
+          !floatComparisonMapping(Cmp->getPredicate()))
+        return fail(&VP, "floating comparison predicate/type has no exact native mapping");
+      // LLVM 15 vp.fcmp returns an i1 vector and is not an FPMathOperator.
+      // Scalar FCmp fast-math is rejected before conversion to this intrinsic.
+      return validate(Cmp->getArgOperand(0)) && validate(Cmp->getArgOperand(1));
+    }
+    if (VP.getIntrinsicID() == Intrinsic::vp_fneg) {
+      if ((!isF32Vector(&VP) && !isF16Vector(&VP)) ||
+          VP.getType() != VP.getArgOperand(0)->getType())
+        return fail(&VP, "floating unary requires f32 Tile data");
+      if (VP.getFastMathFlags().any())
+        return fail(&VP, "floating unary requires no fast-math");
+      return validate(VP.getArgOperand(0));
+    }
+    if (VP.getIntrinsicID() == Intrinsic::vp_trunc) {
+      if (!isVector(&VP, 32) || !isI64LeafVector(VP.getArgOperand(0)))
+        return fail(&VP,
+                    "native integer narrowing requires logical32 i64 to i32");
+      return validate(VP.getArgOperand(0));
+    }
+    if (auto Op = binaryOpcode(VP.getIntrinsicID())) {
+      bool MaskLogic = isVector(&VP, 1) &&
+                       (*Op == Instruction::And || *Op == Instruction::Or ||
+                        *Op == Instruction::Xor);
+      bool FloatOpcode = *Op == Instruction::FAdd || *Op == Instruction::FSub ||
+                         *Op == Instruction::FMul;
+      bool FloatArithmetic =
+          (isF32Vector(&VP) || isF16Vector(&VP)) && FloatOpcode;
+      if (FloatOpcode && !FloatArithmetic)
+        return fail(&VP, "floating arithmetic requires admitted Tile data");
+      if (FloatArithmetic && VP.getFastMathFlags().any())
+        return fail(&VP, "floating arithmetic requires no fast-math");
+      if (isVector(&VP, 64)) {
+        const bool NativeShift =
+            isI64LeafVector(&VP) &&
+            (*Op == Instruction::LShr || *Op == Instruction::AShr) &&
+            getSplatValue(VP.getArgOperand(1));
+        if (NativeShift)
+          return validate(VP.getArgOperand(0)) &&
+                 validate(VP.getArgOperand(1));
+        const bool NativeScale =
+            isI64LeafVector(&VP) && *Op == Instruction::Mul &&
+            (getSplatValue(VP.getArgOperand(0)) ||
+             getSplatValue(VP.getArgOperand(1)));
+        if (NativeScale)
+          return validate(VP.getArgOperand(0)) &&
+                 validate(VP.getArgOperand(1));
+        const bool NativePublishedArithmetic =
+            isI64LeafVector(&VP) && hasExclusiveTypedTileUses(&VP) &&
+            (*Op == Instruction::Add || *Op == Instruction::Sub ||
+             *Op == Instruction::Mul || *Op == Instruction::And ||
+             *Op == Instruction::Or || *Op == Instruction::Xor ||
+             *Op == Instruction::Shl || *Op == Instruction::LShr ||
+             *Op == Instruction::AShr);
+        if (NativePublishedArithmetic)
+          return validate(VP.getArgOperand(0)) &&
+                 validate(VP.getArgOperand(1));
+        Constant *Folded = foldAffineI64VPBinary(VP);
+        if (Folded)
+          return validate(Folded);
+        if (!decomposeUniformI64Address(VP) || !hasOnlyAddressUses(VP))
+          return fail(&VP, "i64 VP address arithmetic requires a constant "
+                           "affine result or a fully active, address-only "
+                           "uniform offset with signed-B32 lane offsets");
+        return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
+      }
+      if (!isVector(&VP, 32) && !MaskLogic && !FloatArithmetic)
+        return fail(&VP, "VP arithmetic requires admitted Tile data");
+      return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
+    }
+    if (VP.getIntrinsicID() == Intrinsic::vp_gather) {
+      if (!isVector(&VP, 16) && !isVector(&VP, 32) && !isF32Vector(&VP) &&
+          !isF16Vector(&VP) && !isI64LeafVector(&VP))
+        return fail(&VP, "VP gather requires admitted data");
+      if (!isa<GetElementPtrInst>(VP.getArgOperand(0)))
+        return fail(&VP, "VP memory requires an explicit element GEP");
+      return validate(VP.getArgOperand(0));
+    }
+    if (VP.getIntrinsicID() == Intrinsic::vp_scatter) {
+      if (!isVector(VP.getArgOperand(0), 16) &&
+          !isVector(VP.getArgOperand(0), 32) &&
+          !isI64LeafVector(VP.getArgOperand(0)) &&
+          !isF32Vector(VP.getArgOperand(0)) &&
+          !isF16Vector(VP.getArgOperand(0)))
+        return fail(&VP, "VP scatter requires admitted data");
+      if (!isa<GetElementPtrInst>(VP.getArgOperand(1)))
+        return fail(&VP, "VP memory requires an explicit element GEP");
+      return validate(VP.getArgOperand(0)) && validate(VP.getArgOperand(1));
+    }
+    return fail(&VP, "unsupported VP effect or opcode");
+  }
+
+  Value *call(Intrinsic::ID ID, ArrayRef<Type *> Types,
+              ArrayRef<Value *> Args, const Twine &Name = "pto.tile") {
+    Function *Callee = Intrinsic::getDeclaration(F.getParent(), ID, Types);
+    CallInst *Result = B.CreateCall(
+        Callee, Args, Callee->getReturnType()->isVoidTy() ? "" : Name);
+    if (Result->getType()->isVectorTy()) {
+      uint64_t Type = cast<ConstantInt>(Args[2])->getZExtValue();
+      if (ID == Intrinsic::linx_experimental_ew_tlea)
+        Type = (Type == 17 || Type == 16) ? 16 : 24;
+      PhysicalTypes[Result] = Type;
+    }
+    return Result;
+  }
+
+  Value *logical64Affine(const APInt &Initial, const APInt &RowStep,
+                         const APInt &ColStep, FixedVectorType *Ty,
+                         uint64_t PreferredType) {
+    assert(Ty->getNumElements() == 64 &&
+           (Ty->getScalarSizeInBits() == 32 ||
+            Ty->getScalarSizeInBits() == 64) &&
+           "logical64 affine synthesis requires v64i32 or v64i64");
+    const bool Wide = Ty->getScalarSizeInBits() == 64;
+    const uint64_t DType = Wide ? (PreferredType == 16 ? 16 : 24)
+                                : (PreferredType == 17 ? 17 : 25);
+    auto TCI = [&](uint64_t Base, uint64_t Step, const Twine &Name) {
+      return call(Intrinsic::linx_experimental_ew_tci, {Ty},
+                  {B.getInt64(32), B.getInt64(2), B.getInt64(DType),
+                   B.getInt64(29), B.getInt64(Base), B.getInt64(Step)},
+                  Name);
+    };
+    auto Binary = [&](unsigned Code, Value *L, Value *R, const Twine &Name) {
+      return call(Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Ty},
+                  {B.getInt64(32), B.getInt64(2), B.getInt64(DType),
+                   B.getInt64(29), B.getInt64(Code), L, R,
+                   B.getInt64(~uint64_t(0)), B.getInt64(0), B.getInt64(0),
+                   B.getInt64(1)},
+                  Name);
+    };
+    Value *R = TCI(0, uint64_t(1) << 32, "pto.logical64.row");
+    Value *C = TCI(0, 1, "pto.logical64.column");
+    Value *RowFactor =
+        TCI(RowStep.getZExtValue(), 0, "pto.logical64.row.factor");
+    Value *ColFactor =
+        TCI(ColStep.getZExtValue(), 0, "pto.logical64.column.factor");
+    Value *Rows = Binary(2, R, RowFactor, "pto.logical64.row.scaled");
+    Value *Cols = Binary(2, C, ColFactor, "pto.logical64.column.scaled");
+    Value *Offset = Binary(0, Rows, Cols, "pto.logical64.offset");
+    Value *Base = TCI(Initial.getZExtValue(), 0, "pto.logical64.base");
+    return Binary(0, Base, Offset, "pto.logical64.affine");
+  }
+
+  Value *splat(Value *Scalar, FixedVectorType *Ty, uint64_t Step = 0,
+               uint64_t PreferredType = 0) {
+    // A scalar used only under an inactive edge may itself be poison. Choosing
+    // a defined representative keeps subsequent physical mask/Tile algebra
+    // from reintroducing poison into lanes excluded by an LLVM select.
+    auto *ConstantScalar = dyn_cast<ConstantInt>(Scalar);
+    Scalar = B.CreateFreeze(Scalar, "pto.uniform.defined");
+    if (Ty->getElementType()->isFloatTy() || Ty->getElementType()->isHalfTy()) {
+      bool NativeProfile = Ty->getElementType()->isHalfTy()
+                               ? PreferredType == 0 || PreferredType == 4
+                               : PreferredType == 0 || PreferredType == 1;
+      assert(Step == 0 && NativeProfile &&
+             "floating splats require the native profile");
+      uint64_t DType = Ty->getElementType()->isHalfTy() ? 4 : 1;
+      return call(Intrinsic::linx_experimental_ew_texpands,
+                  {Ty, Scalar->getType()},
+                  {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+                   B.getInt64(DType), B.getInt64(29), Scalar});
+    }
+    Scalar = B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
+    const uint64_t DType = Ty->getScalarSizeInBits() == 32
+                               ? (PreferredType == 17 ? 17 : 25)
+                               : (PreferredType == 16 ? 16 : 24);
+    if (Ty->getNumElements() == 64 &&
+        (Ty->getScalarSizeInBits() == 32 ||
+         Ty->getScalarSizeInBits() == 64) &&
+        Step != 0) {
+      assert(ConstantScalar && "affine constant preflight requires a base");
+      unsigned Width = Ty->getScalarSizeInBits();
+      APInt Initial(Width, ConstantScalar->getZExtValue());
+      APInt LogicalStep(Width, Step >> 32);
+      return logical64Affine(Initial, LogicalStep * 2, LogicalStep, Ty,
+                             PreferredType);
+    }
+    if (Step != 0) {
+      assert(ConstantScalar &&
+             (Step & uint64_t(std::numeric_limits<uint32_t>::max())) == 0 &&
+             "affine constant requires a packed row step");
+      int64_t RowStep = int32_t(Step >> 32);
+      if (RowStep < -1 || RowStep > 1) {
+        auto TCI = [&](Value *Base, uint64_t PackedStep,
+                       const Twine &Name) {
+          return call(Intrinsic::linx_experimental_ew_tci, {Ty},
+                      {B.getInt64(32),
+                       B.getInt64(Ty->getNumElements() / 32),
+                       B.getInt64(DType), B.getInt64(29), Base,
+                       B.getInt64(PackedStep)},
+                      Name);
+        };
+        auto Binary = [&](unsigned Code, Value *L, Value *R,
+                          const Twine &Name) {
+          return call(
+              Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Ty},
+              {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+               B.getInt64(DType), B.getInt64(29), B.getInt64(Code), L, R,
+               B.getInt64(~uint64_t(0)), B.getInt64(0), B.getInt64(0),
+               B.getInt64(1)},
+              Name);
+        };
+        Value *Indices = TCI(B.getInt64(0), uint64_t(1) << 32,
+                             "pto.affine.unit.indices");
+        Value *Factor = TCI(B.getInt64(RowStep), 0, "pto.affine.factor");
+        Value *Scaled = Binary(2, Indices, Factor, "pto.affine.scaled");
+        Value *Base = TCI(Scalar, 0, "pto.affine.base");
+        return Binary(0, Base, Scaled, "pto.affine.value");
+      }
+    }
+    return call(Intrinsic::linx_experimental_ew_tci, {Ty},
+                {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+                 B.getInt64(DType), B.getInt64(29), Scalar, B.getInt64(Step)});
+  }
+
+  Value *mask(Value *V) {
+    auto It = Masks.find(V);
+    if (It != Masks.end())
+      return It->second;
+    Value *R = nullptr;
+    auto *MaskTy = cast<FixedVectorType>(V->getType());
+    unsigned Count = MaskTy->getNumElements();
+    uint64_t FullMask = Count == 64 ? ~uint64_t(0) : (uint64_t(1) << Count) - 1;
+    auto PhysicalBit = [&](unsigned Logical) {
+      return Count == 64 ? Logical / 2 + 32 * (Logical % 2) : Logical;
+    };
+    if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+      R = B.getInt64(0);
+    } else if (Value *Scalar = getSplatValue(V)) {
+      R = B.CreateSelect(B.CreateFreeze(Scalar), B.getInt64(FullMask),
+                         B.getInt64(0), "pto.mask.splat");
+    } else if (auto *C = dyn_cast<Constant>(V)) {
+      uint64_t Bits = 0;
+      for (unsigned I = 0; I < Count; ++I)
+        if (!cast<ConstantInt>(C->getAggregateElement(I))->isZero())
+          Bits |= uint64_t(1) << PhysicalBit(I);
+      R = B.getInt64(Bits);
+    } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+      Value *Condition = mask(Select->getCondition());
+      R = B.CreateOr(B.CreateAnd(Condition, mask(Select->getTrueValue())),
+                     B.CreateAnd(B.CreateXor(Condition, B.getInt64(FullMask)),
+                                 mask(Select->getFalseValue())),
+                     "pto.mask.select");
+    } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+      R = B.CreateBinOp(Binary->getOpcode(), mask(Binary->getOperand(0)),
+                        mask(Binary->getOperand(1)), "pto.mask.logic");
+    } else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(V)) {
+      Value *L = Cmp->getArgOperand(0), *RHS = Cmp->getArgOperand(1);
+      auto Pred = Cmp->getPredicate();
+      if (getSplatValue(L) && !getSplatValue(RHS)) {
+        std::swap(L, RHS);
+        Pred = FCmpInst::getSwappedPredicate(Pred);
+      }
+      auto Mapping = *floatComparisonMapping(Pred);
+      Value *Active = activeMask(*Cmp);
+      if (Value *Scalar = getSplatValue(RHS)) {
+        Scalar = B.CreateFreeze(Scalar);
+        Type *BitsTy =
+            Scalar->getType()->isHalfTy() ? B.getInt16Ty() : B.getInt32Ty();
+        Scalar = B.CreateZExt(B.CreateBitCast(Scalar, BitsTy), B.getInt64Ty(),
+                              "pto.float.raw");
+        uint64_t DType = BitsTy->isIntegerTy(16) ? 4 : 1;
+        R = call(
+            Intrinsic::linx_experimental_ew_tcmps_gpr_masked, {L->getType()},
+            {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
+             B.getInt64(29), value(L), Scalar,
+             B.getInt64(Mapping.Selector), Active},
+            "pto.mask.compare");
+      } else {
+        R = call(Intrinsic::linx_experimental_ew_tcmp_gpr_masked,
+                 {L->getType()},
+                 {B.getInt64(32), B.getInt64(Count / 32),
+                  B.getInt64(L->getType()->getScalarType()->isHalfTy() ? 4 : 1),
+                  B.getInt64(29), value(L), value(RHS),
+                  B.getInt64(Mapping.Selector), Active},
+                 "pto.mask.compare");
+      }
+      if (Mapping.Invert)
+        R = B.CreateXor(R, Active, "pto.mask.compare.inverse");
+    } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      R = B.CreateBinOp(static_cast<Instruction::BinaryOps>(
+                            *binaryOpcode(VP->getIntrinsicID())),
+                        mask(VP->getArgOperand(0)), mask(VP->getArgOperand(1)),
+                        "pto.mask.logic");
+      R = B.CreateAnd(R, activeMask(*VP));
+    } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+      Value *L = Cmp->getOperand(0), *RHS = Cmp->getOperand(1);
+      auto Pred = Cmp->getPredicate();
+      if (getSplatValue(L) && !getSplatValue(RHS)) {
+        std::swap(L, RHS);
+        Pred = ICmpInst::getSwappedPredicate(Pred);
+      }
+      unsigned Width = L->getType()->getScalarSizeInBits();
+      const bool SignedPredicate = ICmpInst::isSigned(Pred);
+      const bool SignNeutral =
+          Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_NE;
+      uint64_t DType = Width == 32
+                           ? (SignedPredicate ? 17 : 25)
+                           : (SignNeutral && NativeI64RegionType != 0
+                                  ? NativeI64RegionType
+                                  : (SignedPredicate ? 16 : 24));
+      uint64_t Selector = 0;
+      switch (Pred) {
+      case ICmpInst::ICMP_EQ: Selector = 0; break;
+      case ICmpInst::ICMP_NE: Selector = 1; break;
+      case ICmpInst::ICMP_SLT: case ICmpInst::ICMP_ULT: Selector = 2; break;
+      case ICmpInst::ICMP_SGT: case ICmpInst::ICMP_UGT: Selector = 3; break;
+      case ICmpInst::ICMP_SLE: case ICmpInst::ICMP_ULE: Selector = 4; break;
+      case ICmpInst::ICMP_SGE: case ICmpInst::ICMP_UGE: Selector = 5; break;
+      default: llvm_unreachable("integer comparison preflight");
+      }
+      if (Value *Scalar = getSplatValue(RHS)) {
+        Scalar = B.CreateFreeze(Scalar);
+        Scalar = ICmpInst::isSigned(Pred)
+                     ? B.CreateSExtOrTrunc(Scalar, B.getInt64Ty())
+                     : B.CreateZExtOrTrunc(Scalar, B.getInt64Ty());
+        R = call(Intrinsic::linx_experimental_ew_tcmps_gpr, {L->getType()},
+                 {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
+                  B.getInt64(29), value(L, DType), Scalar,
+                  B.getInt64(Selector)},
+                 "pto.mask.compare");
+      } else {
+        R = call(Intrinsic::linx_experimental_ew_tcmp_gpr, {L->getType()},
+                 {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
+                  B.getInt64(29), value(L, DType), value(RHS, DType),
+                  B.getInt64(Selector)},
+                 "pto.mask.compare");
+      }
+    } else {
+      llvm_unreachable("mask preflight");
+    }
+    R = B.CreateAnd(R, B.getInt64(FullMask), "pto.mask.profile");
+    return Masks[V] = R;
+  }
+
+  Value *activeMask(VPIntrinsic &VP) {
+    uint64_t N = cast<ConstantInt>(VP.getVectorLengthParam())->getZExtValue();
+    auto Key = std::make_pair(VP.getMaskParam(), N);
+    if (Value *Existing = ActiveMasks.lookup(Key))
+      return Existing;
+    unsigned Count =
+        cast<FixedVectorType>(VP.getMaskParam()->getType())->getNumElements();
+    uint64_t FullMask = 0;
+    for (unsigned Logical = 0; Logical < N; ++Logical) {
+      unsigned Physical = Count == 64
+                              ? Logical / 2 + 32 * (Logical % 2)
+                              : Logical;
+      FullMask |= uint64_t(1) << Physical;
+    }
+    return ActiveMasks[Key] =
+               B.CreateAnd(mask(VP.getMaskParam()), B.getInt64(FullMask));
+  }
+
+  Value *binary(unsigned Op, Value *L, Value *R, Value *Active,
+                uint64_t PreferredType = 0) {
+    unsigned Code = 0;
+    bool Wide = L->getType()->getScalarType()->isIntegerTy(64);
+    uint64_t DType = Wide ? 24 : 25;
+    switch (Op) {
+    case Instruction::FAdd:
+      DType = L->getType()->getScalarType()->isHalfTy() ? 4 : 1;
+      Code = 0;
+      break;
+    case Instruction::FSub:
+      DType = L->getType()->getScalarType()->isHalfTy() ? 4 : 1;
+      Code = 1;
+      break;
+    case Instruction::FMul:
+      DType = L->getType()->getScalarType()->isHalfTy() ? 4 : 1;
+      Code = 2;
+      break;
+    case Instruction::Add: Code = 0; break;
+    case Instruction::Sub: Code = 1; break;
+    case Instruction::Mul: Code = 2; break;
+    case Instruction::SDiv: DType = Wide ? 16 : 17; LLVM_FALLTHROUGH;
+    case Instruction::UDiv: Code = 3; break;
+    case Instruction::URem: Code = 4; break;
+    case Instruction::And: Code = 5; break;
+    case Instruction::Or: Code = 6; break;
+    case Instruction::Xor: Code = 7; break;
+    case Instruction::Shl: Code = 8; break;
+    case Instruction::AShr: DType = Wide ? 16 : 17; LLVM_FALLTHROUGH;
+    case Instruction::LShr: Code = 9; break;
+    case Instruction::SRem: {
+      Value *Q = binary(Instruction::SDiv, L, R, Active);
+      Value *Product = binary(Instruction::Mul, Q, R, Active);
+      return binary(Instruction::Sub, L, Product, Active, PreferredType);
+    }
+    default: llvm_unreachable("binary preflight");
+    }
+    // Sign-neutral integer producers can publish the address index's actual
+    // S32 descriptor directly. Division/remainder/right-shift signedness
+    // remains determined by the LLVM opcode, never by a downstream descriptor
+    // hint.
+    if (DType != 1 && DType != 4 &&
+        (PreferredType == 16 || PreferredType == 17) &&
+        (Code <= 2 || (Code >= 5 && Code <= 8)))
+      DType = Wide ? 16 : 17;
+    return call(
+        Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
+        {B.getInt64(32),
+         B.getInt64(cast<FixedVectorType>(L->getType())->getNumElements() / 32),
+         B.getInt64(DType), B.getInt64(29), B.getInt64(Code), L, R, Active,
+         B.getInt64(0), B.getInt64(0), B.getInt64(1)});
+  }
+
+  Address address(Value *V, Value *Active, unsigned AccessBits) {
+    auto *GEP = cast<GetElementPtrInst>(V);
+    auto Aggregate = aggregateAddress(GEP);
+    if (!Aggregate) {
+      auto It = Addresses.find(V);
+      if (It != Addresses.end())
+        return It->second;
+    }
+    Value *Index =
+        Aggregate ? Aggregate->Index : GEP->getOperand(1);
+    Value *Base = Aggregate ? Aggregate->Base
+                            : getSplatValue(GEP->getPointerOperand());
+    assert(Base && "address preflight requires a uniform pointer base");
+    if (auto *VP = dyn_cast<VPIntrinsic>(Index)) {
+      if (Constant *Folded = foldAffineI64VPBinary(*VP)) {
+        Index = Folded;
+      } else if (auto Decomposed = decomposeUniformI64Address(*VP)) {
+        Value *Scalar = B.CreateFreeze(Decomposed->ScalarOffset,
+                                       "pto.address.uniform.defined");
+        if (Decomposed->NegateScalar)
+          Scalar = B.CreateNeg(Scalar, "pto.address.uniform.negated");
+        Base = B.CreateGEP(GEP->getSourceElementType(), Base, Scalar,
+                           "pto.address.uniform.base");
+        Index = Decomposed->LaneOffsets;
+      }
+    }
+    // LLVM GEP sign-extends a narrow raw index to the pointer index width.
+    // Only an explicit zext establishes the alternative unsigned semantics.
+    uint64_t IndexType = isVector(Index, 32) ? 16 : 24;
+    uint64_t SourceType = isVector(Index, 32) ? 17 : 24;
+    if (auto *Cast = dyn_cast<CastInst>(Index)) {
+      SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
+      IndexType = SourceType == 17 ? 16 : 24;
+      Index = Cast->getOperand(0);
+    }
+    // LLVM pointer indices are often widened induction constants. Narrow only
+    // when every value is provably representable without changing GEP semantics.
+    if (isVector(Index, 64)) {
+      auto *IndexTy = cast<FixedVectorType>(Index->getType());
+      unsigned IndexCount = IndexTy->getNumElements();
+      if (IndexCount == 32 || IndexCount == 64) {
+        if (auto *C = dyn_cast<Constant>(Index)) {
+          SmallVector<Constant *, 64> Narrow;
+          for (unsigned I = 0; I < IndexCount; ++I) {
+            auto *Element =
+                dyn_cast_or_null<ConstantInt>(C->getAggregateElement(I));
+            if (!Element || !Element->getValue().isIntN(32)) {
+              Narrow.clear();
+              break;
+            }
+            Narrow.push_back(B.getInt32(Element->getZExtValue()));
+          }
+          if (Narrow.size() == IndexCount) {
+            Index = ConstantVector::get(Narrow);
+            SourceType = 25;
+            IndexType = 24;
+          }
+        }
+      }
+    }
+    unsigned Count = cast<FixedVectorType>(Index->getType())->getNumElements();
+    Type *OffsetTy = FixedVectorType::get(B.getInt64Ty(), Count);
+    Value *Source = indexSource(value(Index, SourceType), SourceType);
+    // Identity views and LLVM GEP extensions may refer to the same B32 Tile.
+    // Cache the normalized physical SSA source and element width, independent
+    // of the GM base. The same index Tile may address mixed-width objects; its
+    // 32-bit byte offsets cannot be reused for a later 16-bit access.
+    auto Key = std::make_pair(Source, SourceType);
+    unsigned ElementBits = Aggregate ? 8 :
+        GEP->getSourceElementType()->getScalarSizeInBits();
+    Value *Offset =
+        Aggregate
+            ? AggregateByteOffsets[Key][Aggregate->StrideBytes].lookup(Active)
+            : ByteOffsets[Key].lookup(ElementBits);
+    if (!Offset) {
+      Offset = ByteOffsets[Key].lookup(ElementBits);
+      if (!Offset) {
+        Offset = call(
+            Intrinsic::linx_experimental_ew_tlea, {OffsetTy, Index->getType()},
+            {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
+             B.getInt64(29), Source, B.getInt64(ElementBits)},
+            "pto.byte.offsets");
+        ByteOffsets[Key][ElementBits] = Offset;
+      }
+      if (Aggregate) {
+        assert(AccessBits != 0 && Aggregate->StrideBytes != 0 &&
+               "aggregate address requires an exact leaf width and stride");
+        if (Aggregate->StrideBytes != 1) {
+          auto *OffsetTy = cast<FixedVectorType>(Offset->getType());
+          Value *Scale = splat(B.getInt64(Aggregate->StrideBytes), OffsetTy, 0,
+                               IndexType);
+          Offset = binary(Instruction::Mul, Offset, Scale, Active, IndexType);
+        }
+        AggregateByteOffsets[Key][Aggregate->StrideBytes][Active] = Offset;
+      }
+    }
+    if (Aggregate) {
+      if (Aggregate->FieldOffsetBytes != 0)
+        Base = B.CreateGEP(B.getInt8Ty(), Base,
+                           B.getInt64(Aggregate->FieldOffsetBytes),
+                           "pto.aggregate.field.base");
+    }
+    Address A{B.CreateFreeze(Base), Offset, IndexType};
+    if (!Aggregate)
+      Addresses.insert({V, A});
+    return A;
+  }
+
+  Value *indexSource(Value *Tile, uint64_t RequiredType) {
+    if (PhysicalTypes.lookup(Tile) == RequiredType)
+      return Tile;
+    auto Key = std::make_pair(Tile, RequiredType);
+    if (Value *Existing = RetypedIndices.lookup(Key))
+      return Existing;
+    // TLEA requires source operation/backing type equality, unlike the
+    // width-compatible arithmetic inputs. A typed add of zero preserves bits
+    // and publishes the required S32/U32 descriptor before extending it.
+    assert((RequiredType == 16 || RequiredType == 17 || RequiredType == 24 ||
+            RequiredType == 25) &&
+           "only integer element retyping is admitted");
+    unsigned Count = cast<FixedVectorType>(Tile->getType())->getNumElements();
+    uint64_t FullMask = Count == 64 ? ~uint64_t(0) : uint64_t(0xffffffff);
+    Value *Zero = value(Constant::getNullValue(Tile->getType()));
+    Value *Result = call(
+        Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Tile->getType()},
+        {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(RequiredType),
+         B.getInt64(29), B.getInt64(0), Tile, Zero, B.getInt64(FullMask),
+         B.getInt64(0), B.getInt64(0), B.getInt64(1)},
+        "pto.index.typed");
+    RetypedIndices[Key] = Result;
+    return Result;
+  }
+
+  void materializeImportPhi(PHINode *Phi, uint64_t DType) {
+    if (!MaterializedImportPhis.insert(Phi).second)
+      return;
+    assert(isElementCarrier(Phi) &&
+           "import preflight requires a full admitted Tile carrier");
+    DenseMap<BasicBlock *, Value *> ZeroInputs;
+    for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+      Value *Incoming = Phi->getIncomingValue(I);
+      // Import preflight also admits identity views around a PHI or an
+      // undefined seed. Follow those views before final cleanup peels them;
+      // otherwise a native Tile PHI would again receive an unproduced input.
+      while (auto View = getViewDescriptor(Incoming))
+        Incoming = View->Marker->getArgOperand(0);
+      if (isa<UndefValue>(Incoming) || isa<PoisonValue>(Incoming)) {
+        BasicBlock *Predecessor = Phi->getIncomingBlock(I);
+        Value *&Zero = ZeroInputs[Predecessor];
+        if (!Zero) {
+          IRBuilderBase::InsertPointGuard Guard(B);
+          B.SetInsertPoint(Predecessor->getTerminator());
+          Zero = splat(Constant::getNullValue(
+                           cast<FixedVectorType>(Phi->getType())->getElementType()),
+                       cast<FixedVectorType>(Phi->getType()), 0, DType);
+        }
+        Phi->setIncomingValue(I, Zero);
+      } else if (auto *IncomingPhi = dyn_cast<PHINode>(Incoming)) {
+        materializeImportPhi(IncomingPhi, DType);
+      }
+    }
+  }
+
+  Value *value(Value *V, uint64_t PreferredType = 0) {
+    if (NormProfile)
+      return valueNorm(V);
+    auto It = Data.find(V);
+    if (It != Data.end())
+      return It->second;
+    auto *Ty = cast<FixedVectorType>(V->getType());
+    if (Ty->getElementType()->isIntegerTy(64) && PreferredType == 0 &&
+        NativeI64RegionType != 0)
+      PreferredType = NativeI64RegionType;
+    Value *R = nullptr;
+    if (auto Descriptor = getViewDescriptor(V)) {
+      Value *Source = Descriptor->Marker->getArgOperand(0);
+      if (auto *I = dyn_cast<Instruction>(Source)) {
+        if (!OwnedSet.contains(I) && !getViewDescriptor(Source)) {
+          if (auto *Phi = dyn_cast<PHINode>(Source))
+            materializeImportPhi(Phi, Descriptor->Profile.DataType);
+          PhysicalTypes[Source] = Descriptor->Profile.DataType;
+          return Data[V] = Source;
+        }
+      }
+      // FP publications preserve raw bits; add-zero is not an identity for
+      // signed zero or NaN payloads.
+      R = Descriptor->Profile.isFloat()
+              ? value(Source, Descriptor->Profile.DataType)
+          : Descriptor->Profile.DataType == 26
+              ? value(Source, 26)
+          : Descriptor->Profile.DataType == 17 ||
+                  Descriptor->Profile.DataType == 25
+              ? indexSource(value(Source, Descriptor->Profile.DataType),
+                            Descriptor->Profile.DataType)
+              : indexSource(value(Source), Descriptor->Profile.DataType);
+    } else if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+      R = splat(Constant::getNullValue(Ty->getElementType()), Ty, 0,
+                PreferredType);
+    } else if (Value *Scalar = getSplatValue(V)) {
+      R = splat(Scalar, Ty, 0, PreferredType);
+    } else if (auto *C = dyn_cast<Constant>(V)) {
+      APInt Initial, Step, RowStep, ColStep;
+      if (constantProgression(C, Initial, Step)) {
+        R = splat(ConstantInt::get(Ty->getElementType(), Initial), Ty,
+                  uint64_t(uint32_t(Step.getSExtValue())) << 32, PreferredType);
+      } else {
+        bool OK = constantLogical64Grid(C, Initial, RowStep, ColStep);
+        assert(OK && "logical64 affine-grid preflight");
+        (void)OK;
+        R = logical64Affine(Initial, RowStep, ColStep, Ty, PreferredType);
+      }
+    } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      // Every admitted numeric source has a concrete Tile producer before this
+      // point: native operations zero inactive lanes, splats freeze their scalar,
+      // and imported PHI undef/poison seeds are materialized as zero Tiles.
+      // The physical operand is therefore fully defined, so freeze is identity.
+      // Data caching preserves that one chosen value for all quotient/remainder
+      // users of the same widened freeze.
+      R = value(Freeze->getOperand(0), PreferredType);
+    } else if (auto *Cast = dyn_cast<CastInst>(V)) {
+      Value *Source = Cast->getOperand(0);
+      if (Cast->getOpcode() == Instruction::BitCast) {
+        Value *Bits = value(Source);
+        R = B.CreateBitCast(Bits, Ty, "pto.tile.bits");
+        PhysicalTypes[R] = PhysicalTypes.lookup(Bits);
+        return Data[V] = R;
+      }
+      uint64_t SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
+      unsigned Count = Ty->getNumElements();
+      R = call(Intrinsic::linx_experimental_ew_tlea, {Ty, Source->getType()},
+                 {B.getInt64(32), B.getInt64(Count / 32),
+                  B.getInt64(SourceType), B.getInt64(29),
+                  indexSource(value(Source), SourceType), B.getInt64(8)});
+    } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+      unsigned Count = Ty->getNumElements();
+      uint64_t SelectType = isF16Vector(V)    ? 4
+                            : isVector(V, 16) ? 26
+                            : isF32Vector(V)  ? 1
+                            : isI64LeafVector(V)
+                                ? (PreferredType == 16 ? 16 : 24)
+                                : (PreferredType == 17 ? 17 : 25);
+      R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
+               {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SelectType),
+                B.getInt64(29), mask(Select->getCondition()), B.getInt64(0),
+                value(Select->getTrueValue(), SelectType),
+                value(Select->getFalseValue(), SelectType)});
+    } else if (isIntrinsic(dyn_cast<CallInst>(V),
+                           Intrinsic::linx_experimental_element_atomic_add)) {
+      auto *Atomic = cast<CallInst>(V);
+      assert(isIntrinsic(Atomic,
+                         Intrinsic::linx_experimental_element_atomic_add) &&
+             "atomic effect preflight");
+      Address A = address(Atomic->getArgOperand(0),
+                          mask(Atomic->getArgOperand(2)), 32);
+      Value *Source = indexSource(value(Atomic->getArgOperand(1)), 25);
+      R = call(Intrinsic::linx_experimental_ew_mgather_add_masked,
+               {Ty, A.Offset->getType(), Source->getType()},
+               {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(0),
+                B.getInt64(29), A.Base, A.Offset, Source,
+                mask(Atomic->getArgOperand(2)), B.getInt64(0), B.getInt64(0),
+                B.getInt64(1)},
+               "pto.atomic.old.tile");
+    } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      if (Constant *Folded = foldAffineI64VPBinary(*VP)) {
+        R = value(Folded, PreferredType);
+      } else if (VP->getIntrinsicID() == Intrinsic::vp_fneg) {
+        // Native TNEG toggles the FP32 sign bit without numeric conversion,
+        // preserving zero, infinities, NaN class and payload. The VP mask
+        // suppresses inactive undefined reads even though TNEG raises no NV.
+        uint64_t DType = isF16Vector(VP) ? 4 : 1;
+        R = call(Intrinsic::linx_experimental_ew_tneg_gpr_masked, {Ty},
+                 {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+                  B.getInt64(DType), B.getInt64(29),
+                  value(VP->getArgOperand(0)), activeMask(*VP)});
+      } else if (VP->getIntrinsicID() == Intrinsic::vp_trunc) {
+        Value *Source = value(VP->getArgOperand(0));
+        uint64_t SourceType = PhysicalTypes.lookup(Source);
+        uint64_t DestinationType =
+            PreferredType == 17 ||
+                    (PreferredType == 0 && NativeI32RegionType == 17)
+                ? 17
+                : 25;
+        assert((SourceType == 16 || SourceType == 24) &&
+               "native narrowing source requires an S64/U64 descriptor");
+        R = call(Intrinsic::linx_experimental_ew_tcvt_gpr_masked,
+                 {Ty, Source->getType()},
+                 {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
+                  B.getInt64(DestinationType), B.getInt64(29), B.getInt64(0),
+                  B.getInt64(0), Source, activeMask(*VP), B.getInt64(0),
+                  B.getInt64(0), B.getInt64(1)});
+        PhysicalTypes[R] = DestinationType;
+      } else if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
+        Address A = address(VP->getArgOperand(0), activeMask(*VP),
+                            Ty->getScalarSizeInBits());
+        unsigned Count = Ty->getNumElements();
+        uint64_t ValueType = isF16Vector(VP)    ? 4
+                             : isVector(VP, 16) ? 26
+                             : isF32Vector(VP)  ? 1
+                             : isI64LeafVector(VP)
+                                 ? (PreferredType == 16 ? 16 : 24)
+                                 : 25;
+        R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
+                 {Ty, A.Offset->getType()},
+                 {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(ValueType),
+                  B.getInt64(0), B.getInt64(29), B.getInt64(A.IndexType),
+                  A.Base, A.Offset, activeMask(*VP), B.getInt64(0),
+                  B.getInt64(0), B.getInt64(1)});
+      } else {
+        R = binary(*binaryOpcode(VP->getIntrinsicID()),
+                   value(VP->getArgOperand(0)), value(VP->getArgOperand(1)),
+                   activeMask(*VP), PreferredType);
+      }
+    } else {
+      llvm_unreachable("value preflight");
+    }
+    return Data[V] = R;
+  }
+
+public:
+  ElementTileLegalizer(Function &F, ArrayRef<Instruction *> Instructions,
+                       DenseMap<PHINode *, uint64_t> &ImportedPhiTypes,
+                       unsigned DomainCount)
+      : F(F), Owned(Instructions.begin(), Instructions.end()),
+        ImportedPhiTypes(ImportedPhiTypes), DomainCount(DomainCount),
+        B(F.getContext()) {
+    for (Instruction *I : Owned) {
+      OwnedSet.insert(I);
+      if (auto View = getViewDescriptor(I))
+        if (View->Profile.Layout == 0)
+          NormProfile = View->Profile;
+    }
+  }
+
+  bool preflight() {
+    if (Owned.empty())
+      return fail(nullptr, "empty predicated region");
+    for (Instruction *I : Owned) {
+      if (isa<FPMathOperator>(I) && I->getFastMathFlags().any())
+        return fail(I, "floating instructions require no fast-math");
+      if (I->getParent() != Owned.front()->getParent())
+        return fail(I, "first physical profile requires one predicated IR block");
+      bool External = false;
+      SmallPtrSet<Value *, 16> Visited;
+      std::function<bool(Value *)> Consumers = [&](Value *V) {
+        if (!Visited.insert(V).second)
+          return true;
+        for (User *U : V->users()) {
+          auto *UserI = dyn_cast<Instruction>(U);
+          if (UserI && OwnedSet.contains(UserI))
+            continue;
+          External = true;
+          if (isa_and_nonnull<ReturnInst>(UserI) &&
+              F.hasFnAttribute("linx-local-tile-abi"))
+            continue;
+          if (auto *Phi = dyn_cast_or_null<PHINode>(UserI)) {
+            if (isTypedTileImport(Phi) && Consumers(Phi))
+              continue;
+          }
+          if (isBitPreservingF32TileCast(UserI, V) && Consumers(UserI))
+            continue;
+          if (auto *Call = dyn_cast_or_null<CallBase>(UserI)) {
+            auto View = getViewDescriptor(Call);
+            auto Publication = getViewDescriptor(I);
+            if (View && Publication && !Call->getMetadata(PredicatedOwnerMD) &&
+                !sameCarrierStorage(*View, *Publication))
+              return fail(
+                  Call, "final publication changes its typed storage identity");
+            if (isWholeTileConsumer(*Call, V) ||
+                (View && Call->getMetadata(PredicatedOwnerMD) &&
+                 !OwnedSet.contains(cast<Instruction>(Call))) ||
+                (View && Consumers(Call)))
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!Consumers(I) || (External && !getViewDescriptor(I)))
+        return fail(I, Twine("vector live-out escapes its typed publication "
+                             "boundary: ") +
+                           I->getName());
+      if (External) {
+        if (!validate(I))
+          return false;
+        Publications.push_back(cast<CallInst>(I));
+      }
+      if (I->mayHaveSideEffects() || I->mayReadOrWriteMemory()) {
+        if (getViewDescriptor(I))
+          continue;
+        if (isIntrinsic(dyn_cast<CallInst>(I),
+                        Intrinsic::linx_experimental_element_atomic_add)) {
+          if (!validateAtomic(*cast<CallInst>(I)))
+            return false;
+          continue;
+        }
+        if (isIntrinsic(dyn_cast<CallInst>(I),
+                        Intrinsic::linx_experimental_element_scatter)) {
+          if (!validateUnorderedScatter(*cast<CallInst>(I)))
+            return false;
+          continue;
+        }
+        if (NormProfile)
+          return fail(
+              I, "NORM element regions support pure Tile expressions only");
+        auto *VP = dyn_cast<VPIntrinsic>(I);
+        if (!VP || !validateVP(*VP))
+          return fail(I, "unsupported token-owned side effect");
+      }
+    }
+    return true;
+  }
+
+  void emit() {
+    NativeI64RegionType = 0;
+    NativeI32RegionType = 0;
+    MixedNativeI64RegionTypes = false;
+    MixedNativeI32RegionTypes = false;
+    for (CallInst *Publication : Publications)
+      if (auto Descriptor = getViewDescriptor(Publication)) {
+        uint64_t DType = Descriptor->Profile.DataType;
+        if (DType == 16 || DType == 24) {
+          if (NativeI64RegionType && NativeI64RegionType != DType) {
+            NativeI64RegionType = 0;
+            MixedNativeI64RegionTypes = true;
+          } else if (!MixedNativeI64RegionTypes) {
+            NativeI64RegionType = DType;
+          }
+        }
+        if (DType == 17 || DType == 25) {
+          if (NativeI32RegionType && NativeI32RegionType != DType) {
+            NativeI32RegionType = 0;
+            MixedNativeI32RegionTypes = true;
+          } else if (!MixedNativeI32RegionTypes) {
+            NativeI32RegionType = DType;
+          }
+        }
+      }
+    // Visit memory roots in their original order. Recursive pure operands are
+    // cached, so a gather is neither duplicated nor moved past a prior effect.
+    for (Instruction *I : Owned) {
+      if (isIntrinsic(dyn_cast<CallInst>(I),
+                      Intrinsic::linx_experimental_element_atomic_add)) {
+        B.SetInsertPoint(I);
+        B.SetCurrentDebugLocation(I->getDebugLoc());
+        value(
+            I); // The effect must execute even if its old-value result is dead.
+        continue;
+      }
+      if (isIntrinsic(dyn_cast<CallInst>(I),
+                      Intrinsic::linx_experimental_element_scatter)) {
+        auto *Scatter = cast<CallInst>(I);
+        B.SetInsertPoint(Scatter);
+        B.SetCurrentDebugLocation(Scatter->getDebugLoc());
+        Address A = address(
+            Scatter->getArgOperand(1), mask(Scatter->getArgOperand(2)),
+            Scatter->getArgOperand(0)->getType()->getScalarSizeInBits());
+        Value *Source = value(Scatter->getArgOperand(0));
+        uint64_t SourceType = PhysicalTypes.lookup(Source);
+        assert((SourceType == 16 || SourceType == 17 || SourceType == 24 ||
+                SourceType == 25 || SourceType == 26 || SourceType == 1 ||
+                SourceType == 4) &&
+               "scatter source descriptor must have an admitted type");
+        unsigned Count =
+            cast<FixedVectorType>(Source->getType())->getNumElements();
+        call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
+             {A.Offset->getType(), Source->getType()},
+             {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
+              B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset, Source,
+              mask(Scatter->getArgOperand(2)), B.getInt64(0), B.getInt64(0),
+              B.getInt64(0)});
+        continue;
+      }
+      auto *VP = dyn_cast<VPIntrinsic>(I);
+      if (!VP || !VP->mayReadOrWriteMemory())
+        continue;
+      B.SetInsertPoint(I);
+      B.SetCurrentDebugLocation(I->getDebugLoc());
+      if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
+        value(VP, NativeI64RegionType);
+      } else {
+        Address A = address(
+            VP->getArgOperand(1), activeMask(*VP),
+            VP->getArgOperand(0)->getType()->getScalarSizeInBits());
+        Value *Source = value(VP->getArgOperand(0));
+        uint64_t SourceType = PhysicalTypes.lookup(Source);
+        assert((SourceType == 16 || SourceType == 17 || SourceType == 24 ||
+                SourceType == 25 || SourceType == 26 || SourceType == 1 ||
+                SourceType == 4) &&
+               "scatter source descriptor must have an admitted type");
+        unsigned Count =
+            cast<FixedVectorType>(Source->getType())->getNumElements();
+        call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
+             {A.Offset->getType(), Source->getType()},
+             {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
+              B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset, Source,
+              activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(0)});
+      }
+    }
+    for (CallInst *Publication : Publications) {
+      B.SetInsertPoint(Publication);
+      B.SetCurrentDebugLocation(Publication->getDebugLoc());
+      Value *Result = value(Publication);
+      Publication->replaceUsesWithIf(Result, [&](Use &U) {
+        auto *I = dyn_cast<Instruction>(U.getUser());
+        return !I || !OwnedSet.contains(I);
+      });
+    }
+    for (Instruction *I : Owned)
+      I->dropAllReferences();
+    for (Instruction *I : Owned)
+      I->eraseFromParent();
+  }
+};
+
 struct RegionPlan {
   Loop *L = nullptr;
   CallInst *Sentinel = nullptr;
@@ -530,6 +5046,7 @@ struct RegionPlan {
   uint64_t OutputStorageID = 0;
   int64_t OutputOffset = 0;
   uint64_t OutputRange = 0;
+  ElementProfile Profile;
   bool IsZeroElseGather = false;
   CallInst *GatherIndexView = nullptr;
   Value *GatherBase = nullptr;
@@ -710,7 +5227,7 @@ static bool collectAtomicPredicate(Function &F, Value *Condition,
     }
     auto KeyView =
         Extract ? getViewDescriptor(Extract->getVectorOperand()) : None;
-    if (Extract && KeyView &&
+    if (Extract && KeyView && KeyView->Profile.DataType == 25 &&
         sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
         Selected->getType()->isIntegerTy(32) &&
         isInvariantAtPreheader(Selected, *Plan.L, DT)) {
@@ -951,6 +5468,8 @@ static bool validateTileExpression(Value *V, const RegionPlan &Plan,
   if (isa<CastInst>(V))
     return Fail();
   if (auto Descriptor = getViewDescriptor(V)) {
+    if (Descriptor->Profile.DataType != Plan.Profile.DataType)
+      return Fail();
     if (Descriptor->ScalarizedLaneZero &&
         (!Plan.IsRelaxedAtomicAdd ||
          Descriptor->Marker != Plan.AtomicIndexView))
@@ -997,20 +5516,27 @@ static bool validateTileExpression(Value *V, const RegionPlan &Plan,
     case Instruction::Add:
     case Instruction::Sub:
     case Instruction::Mul:
+      break;
     case Instruction::UDiv:
     case Instruction::URem:
+      break;
+    case Instruction::SDiv:
+    case Instruction::SRem:
+    case Instruction::AShr:
+      break;
     case Instruction::And:
     case Instruction::Or:
     case Instruction::Xor:
     case Instruction::Shl:
     case Instruction::LShr:
-      return validateTileExpression(Binary->getOperand(0), Plan, SE, DT,
-                                    Visited, Inputs, Rejected) &&
-             validateTileExpression(Binary->getOperand(1), Plan, SE, DT,
-                                    Visited, Inputs, Rejected);
+      break;
     default:
       return Fail();
     }
+    return validateTileExpression(Binary->getOperand(0), Plan, SE, DT,
+                                  Visited, Inputs, Rejected) &&
+           validateTileExpression(Binary->getOperand(1), Plan, SE, DT,
+                                  Visited, Inputs, Rejected);
   }
   if (auto *I = dyn_cast<Instruction>(V)) {
     if (!Plan.L->contains(I) && I->getType()->isIntegerTy(32) &&
@@ -1210,6 +5736,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
                     "publication lacks exact U32/M32 view metadata");
   Plan.Publication =
       dyn_cast<InsertElementInst>(Plan.OutputView->getArgOperand(0));
+  Plan.Profile = Descriptor->Profile;
+  if ((!AtomicAdds.empty() || !ScalarLoads.empty()) &&
+      Plan.Profile.DataType != 25)
+    return diagnose(F, Plan.OutputView,
+                    "gather and atomic regions currently require U32 output views");
   Plan.OutputStorageID = Descriptor->StorageID;
   Plan.OutputOffset = Descriptor->Offset;
   Plan.OutputRange = Descriptor->Range;
@@ -1322,6 +5853,7 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
           ClobberedInLoop = L.contains(Def->getBlock());
       }
       if (HasZero && Loaded && Extract && IndexView &&
+          IndexView->Profile.DataType == 25 &&
           sameElementIndex(Extract->getIndexOperand(), Plan.IV, SE) &&
           Valid && Valid->getType()->isIntegerTy(32) &&
           L.isLoopInvariant(Valid) && PredicateReady && LoadArm && MergeArm &&
@@ -1457,8 +5989,11 @@ static bool planRegion(Function &F, Loop &L, LoopInfo &LI, ScalarEvolution &SE,
   if (!ExpressionValid) {
     std::string Detail;
     raw_string_ostream OS(Detail);
-    if (Rejected)
+    if (Rejected) {
       Rejected->printAsOperand(OS, /*PrintType=*/true);
+      if (auto *RejectedI = dyn_cast<Instruction>(Rejected))
+        OS << " (" << RejectedI->getOpcodeName() << ")";
+    }
     return diagnose(F, Plan.Publication ? cast<Instruction>(Plan.Publication)
                                         : cast<Instruction>(Plan.OutputView),
                     Twine("unsupported scalar expression in P1a arithmetic region: ") +
@@ -1500,10 +6035,12 @@ class TileExpressionBuilder {
 
   Value *splat(Value *V) {
     if (!V->getType()->isIntegerTy(64))
-      V = Builder.CreateZExtOrTrunc(V, Builder.getInt64Ty());
+      V = Plan.Profile.isSigned()
+              ? Builder.CreateSExtOrTrunc(V, Builder.getInt64Ty())
+              : Builder.CreateZExtOrTrunc(V, Builder.getInt64Ty());
     return Builder.CreateCall(TCI,
                               {Builder.getInt64(32), Builder.getInt64(1),
-                               Builder.getInt64(25), Builder.getInt64(29), V,
+                               Builder.getInt64(Plan.Profile.DataType), Builder.getInt64(29), V,
                                Builder.getInt64(0)},
                               "pto.element.splat");
   }
@@ -1513,7 +6050,7 @@ public:
                         DominatorTree &DT)
       : Plan(Plan), SE(SE), DT(DT),
         Builder(Plan.L->getLoopPreheader()->getTerminator()) {
-    Type *VectorTy = FixedVectorType::get(Builder.getInt32Ty(), 32);
+    Type *VectorTy = Plan.Profile.VectorTy;
     TCI = Intrinsic::getDeclaration(
         F.getParent(), Intrinsic::linx_experimental_ew_tci, {VectorTy});
     TBinary = Intrinsic::getDeclaration(
@@ -1530,13 +6067,12 @@ public:
     if (V == Plan.IV) {
       Result = Builder.CreateCall(TCI,
                                   {Builder.getInt64(32), Builder.getInt64(1),
-                                   Builder.getInt64(25), Builder.getInt64(29),
+                                   Builder.getInt64(Plan.Profile.DataType), Builder.getInt64(29),
                                    Builder.getInt64(0),
                                    Builder.getInt64(1ULL << 32)},
                                   "pto.element.index");
     } else if (auto *C = dyn_cast<ConstantInt>(V)) {
-      Result = splat(ConstantInt::get(Builder.getInt64Ty(),
-                                      C->getValue().zextOrTrunc(64)));
+      Result = splat(C);
     } else if (auto Descriptor = getViewDescriptor(V)) {
       Value *Carrier = Descriptor->Marker->getArgOperand(0);
       if (auto *Load = dyn_cast<LoadInst>(Carrier)) {
@@ -1544,7 +6080,7 @@ public:
         Result = LoadBuilder.CreateCall(
             TLoad,
             {LoadBuilder.getInt64(1), LoadBuilder.getInt64(32),
-             LoadBuilder.getInt64(1), LoadBuilder.getInt64(25),
+             LoadBuilder.getInt64(1), LoadBuilder.getInt64(Plan.Profile.DataType),
              LoadBuilder.getInt64(0), LoadBuilder.getInt64(21),
              Load->getPointerOperand(), LoadBuilder.getInt64(4)},
             "pto.element.carrier");
@@ -1577,9 +6113,11 @@ public:
         Opcode = 2;
         break;
       case Instruction::UDiv:
+      case Instruction::SDiv:
         Opcode = 3;
         break;
       case Instruction::URem:
+      case Instruction::SRem:
         Opcode = 4;
         break;
       case Instruction::And:
@@ -1595,6 +6133,7 @@ public:
         Opcode = 8;
         break;
       case Instruction::LShr:
+      case Instruction::AShr:
         Opcode = 9;
         break;
       default:
@@ -1604,11 +6143,40 @@ public:
       Value *RHS = lower(Binary->getOperand(1));
       if (!LHS || !RHS)
         return nullptr;
-      Result = Builder.CreateCall(TBinary,
-                                  {Builder.getInt64(32), Builder.getInt64(1),
-                                   Builder.getInt64(25), Builder.getInt64(29),
-                                   Builder.getInt64(Opcode), LHS, RHS},
-                                  "pto.element.value");
+      uint64_t OperationDataType = Plan.Profile.DataType;
+      switch (Binary->getOpcode()) {
+      case Instruction::SDiv:
+      case Instruction::SRem:
+      case Instruction::AShr:
+        OperationDataType = 17;
+        break;
+      case Instruction::UDiv:
+      case Instruction::URem:
+      case Instruction::LShr:
+        OperationDataType = 25;
+        break;
+      default:
+        break;
+      }
+      // LLVM may legally change ashr to lshr when later uses discard sign
+      // bits. The IR opcode owns arithmetic signedness; the view owns storage.
+      auto EmitBinary = [&](unsigned Operation, Value *Left, Value *Right) {
+        return Builder.CreateCall(
+            TBinary,
+            {Builder.getInt64(32), Builder.getInt64(1),
+             Builder.getInt64(OperationDataType), Builder.getInt64(29),
+             Builder.getInt64(Operation), Left, Right},
+            "pto.element.value");
+      };
+      if (Binary->getOpcode() == Instruction::SRem) {
+        // C++/LLVM srem truncates toward zero; PTO TREM has divisor-sign
+        // floor modulo. Preserve source remainder through the truncating TDIV.
+        Value *Quotient = EmitBinary(3, LHS, RHS);
+        Value *Product = EmitBinary(2, Quotient, RHS);
+        Result = EmitBinary(1, LHS, Product);
+      } else {
+        Result = EmitBinary(Opcode, LHS, RHS);
+      }
     } else if (auto *I = dyn_cast<Instruction>(V)) {
       if (!Plan.L->contains(I) && DT.dominates(I, Builder.GetInsertBlock()) &&
           I->getType()->isIntegerTy(32))
@@ -1832,7 +6400,7 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
       StoreBuilder.CreateCall(
           TStore,
           {StoreBuilder.getInt64(1), StoreBuilder.getInt64(32),
-           StoreBuilder.getInt64(1), StoreBuilder.getInt64(25),
+           StoreBuilder.getInt64(1), StoreBuilder.getInt64(Plan.Profile.DataType),
            StoreBuilder.getInt64(24), Store->getPointerOperand(),
            StoreBuilder.getInt64(4), Result});
       Store->eraseFromParent();
@@ -1845,7 +6413,7 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
       Builder.CreateCall(
           TStore,
           {Builder.getInt64(1), Builder.getInt64(32), Builder.getInt64(1),
-           Builder.getInt64(25), Builder.getInt64(24),
+           Builder.getInt64(Plan.Profile.DataType), Builder.getInt64(24),
            Plan.OutputStore->getPointerOperand(), Builder.getInt64(4), Result});
     }
     Plan.Sentinel->eraseFromParent();
@@ -1862,13 +6430,93 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
   return true;
 }
 
+static void verifyLocalTileCallBoundaries(Function &F, DominatorTree &DT) {
+  SmallVector<CallInst *, 4> Calls;
+  for (Instruction &I : instructions(F))
+    if (auto *Call = dyn_cast<CallInst>(&I))
+      if (Call->getCalledFunction() &&
+          Call->getCalledFunction()->hasFnAttribute("linx-local-tile-abi")) {
+        if (!Call->getAttributes().hasRetAttr(Attribute::InReg))
+          diagnose(F, Call, "Local Tile ABI call result requires inreg");
+        Calls.push_back(Call);
+      }
+  if (Calls.empty())
+    return;
+  for (Instruction &I : instructions(F)) {
+    Type *MemoryType = nullptr;
+    if (auto *Load = dyn_cast<LoadInst>(&I))
+      MemoryType = Load->getType();
+    if (auto *Store = dyn_cast<StoreInst>(&I))
+      MemoryType = Store->getValueOperand()->getType();
+    if (MemoryType && MemoryType->isVectorTy())
+      diagnose(F, &I,
+               "Local Tile ABI left an unpromoted vector payload access");
+  }
+  SmallVector<Value *, 16> Carriers;
+  for (Argument &A : F.args())
+    if (A.getType()->isVectorTy())
+      Carriers.push_back(&A);
+  for (Instruction &I : instructions(F))
+    if (I.getType()->isVectorTy())
+      Carriers.push_back(&I);
+  for (CallInst *Call : Calls)
+    for (Value *Carrier : Carriers) {
+      auto *Definition = dyn_cast<Instruction>(Carrier);
+      if (Carrier == Call || (Definition && !DT.dominates(Definition, Call)))
+        continue;
+      SmallPtrSet<BasicBlock *, 1> Kills;
+      if (Definition)
+        Kills.insert(Definition->getParent());
+      for (User *U : Carrier->users()) {
+        auto *Use = dyn_cast<Instruction>(U);
+        if (!Use || Use == Call || isa<DbgInfoIntrinsic>(Use))
+          continue;
+        bool Live = false;
+        if (auto *Phi = dyn_cast<PHINode>(Use)) {
+          for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+            if (Phi->getIncomingValue(I) != Carrier)
+              continue;
+            BasicBlock *Edge = Phi->getIncomingBlock(I);
+            if (Edge == Call->getParent()) {
+              Live = true;
+              break;
+            }
+            SmallVector<BasicBlock *, 4> Starts(successors(Call->getParent()));
+            Live |= !Starts.empty() && isPotentiallyReachableFromMany(Starts, Edge, &Kills, &DT);
+          }
+        } else if (Use->getParent() == Call->getParent()) {
+          Live = Call->comesBefore(Use);
+          if (!Live && !Definition) {
+            SmallVector<BasicBlock *, 4> Starts(successors(Call->getParent()));
+            Live = !Starts.empty() && isPotentiallyReachableFromMany(Starts, Use->getParent(),
+                                                  nullptr, &DT);
+          }
+        } else {
+          // Re-executing the defining block creates the next dynamic value;
+          // paths through that block do not keep this generation live.
+          SmallVector<BasicBlock *, 4> Starts(successors(Call->getParent()));
+          Live = !Starts.empty() && isPotentiallyReachableFromMany(Starts, Use->getParent(),
+                                                &Kills, &DT);
+        }
+        if (Live)
+          diagnose(
+              F, Call,
+              "Local Tile ABI cannot preserve another live Tile across a call");
+      }
+    }
+}
+
 static bool verifyNoResidualElementContracts(Function &F) {
   for (Instruction &I : instructions(F)) {
     if (hasElementRegionLoopMetadata(I))
       return diagnose(F, &I, "marked scalar loop survived required lowering");
+    if (I.getMetadata(PredicatedOwnerMD))
+      return diagnose(F, &I, "token-owned VP region survived Tile legalization");
     auto *Call = dyn_cast<CallInst>(&I);
     if (isIntrinsic(Call, Intrinsic::linx_experimental_element_region) ||
-        isIntrinsic(Call, Intrinsic::linx_experimental_element_view))
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_view) ||
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_atomic_add) ||
+        isIntrinsic(Call, Intrinsic::linx_experimental_element_scatter))
       return diagnose(F, &I, "required region lowering did not complete");
     StringRef Text;
     if (Call && getAnnotationString(*Call, Text) && Text.startswith(ViewPrefix))
@@ -1966,6 +6614,943 @@ FunctionPass *llvm::createLinxV5ElementRegionVerifierPass() {
 }
 
 PreservedAnalyses
+LinxV5ElementCallContextPass::run(Module &M, ModuleAnalysisManager &AM) {
+  struct Candidate {
+    Function *F;
+    Argument *Closure;
+    Argument *Source;
+    LoadInst *DestinationBase;
+    int64_t FieldOffset;
+    SmallVector<CallInst *, 8> Calls;
+  };
+
+  auto &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  const DataLayout &DL = M.getDataLayout();
+  SmallVector<Candidate, 4> Candidates;
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.isVarArg() ||
+        (!F.hasLocalLinkage() && !F.hasLinkOnceODRLinkage()) ||
+        F.hasAddressTaken())
+      continue;
+
+    SmallPtrSet<BasicBlock *, 16> RegionBlocks;
+    for (Loop *L : FAM.getResult<LoopAnalysis>(F).getLoopsInPreorder())
+      if (getElementRegionToken(*L))
+        RegionBlocks.insert(L->block_begin(), L->block_end());
+    if (RegionBlocks.empty())
+      continue;
+
+    LoadInst *DestinationBase = nullptr;
+    Argument *Closure = nullptr;
+    int64_t FieldOffset = 0;
+    bool Valid = true;
+    for (BasicBlock *BB : RegionBlocks)
+      for (Instruction &I : *BB) {
+        auto *Store = dyn_cast<StoreInst>(&I);
+        if (!Store)
+          continue;
+        auto *Base = dyn_cast<LoadInst>(
+            getUnderlyingObject(Store->getPointerOperand()));
+        int64_t Offset = 0;
+        auto *Arg = Base ? dyn_cast<Argument>(
+                              GetPointerBaseWithConstantOffset(
+                                  Base->getPointerOperand(), Offset, DL))
+                         : nullptr;
+        if (!Base || Base->isVolatile() || Base->isAtomic() || !Arg ||
+            !Arg->getType()->isPointerTy() || Offset < 0 ||
+            (DestinationBase && DestinationBase != Base) ||
+            (Closure && Closure != Arg) ||
+            (DestinationBase && FieldOffset != Offset)) {
+          Valid = false;
+          break;
+        }
+        DestinationBase = Base;
+        Closure = Arg;
+        FieldOffset = Offset;
+      }
+    if (!Valid || !DestinationBase || !Closure)
+      continue;
+
+    Argument *Source = nullptr;
+    for (BasicBlock *BB : RegionBlocks) {
+      for (Instruction &I : *BB) {
+        auto *Load = dyn_cast<LoadInst>(&I);
+        if (!Load || Load == DestinationBase)
+          continue;
+        Value *Base = getUnderlyingObject(Load->getPointerOperand());
+        if (Base == DestinationBase)
+          continue;
+        auto *Arg = dyn_cast<Argument>(Base);
+        if (!Arg || !Arg->getType()->isPointerTy() || Arg == Closure ||
+            (Source && Source != Arg)) {
+          Valid = false;
+          break;
+        }
+        Source = Arg;
+      }
+      if (!Valid)
+        break;
+    }
+    if (!Valid || !Source)
+      continue;
+
+    SmallPtrSet<Value *, 8> SeenClosureUses;
+    std::function<bool(Value *)> HasExactClosureUses = [&](Value *P) {
+      if (!SeenClosureUses.insert(P).second)
+        return true;
+      for (User *U : P->users()) {
+        if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+          if (GEP->hasAllConstantIndices() && HasExactClosureUses(GEP))
+            continue;
+        }
+        if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+          if (HasExactClosureUses(Cast))
+            continue;
+        }
+        if (U == DestinationBase &&
+            DestinationBase->getPointerOperand() == P)
+          continue;
+        if (isa<DbgInfoIntrinsic>(U))
+          continue;
+        return false;
+      }
+      return true;
+    };
+    if (!HasExactClosureUses(Closure))
+      continue;
+
+    Candidate C{&F, Closure, Source, DestinationBase, FieldOffset, {}};
+    for (User *U : F.users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != &F ||
+          Call->getFunction() == &F || Call->isMustTailCall() ||
+          Call->hasOperandBundles()) {
+        Valid = false;
+        break;
+      }
+      C.Calls.push_back(Call);
+    }
+    if (Valid && !C.Calls.empty())
+      Candidates.push_back(std::move(C));
+  }
+
+  unsigned CloneID = 0;
+  bool Changed = false;
+  SmallPtrSet<Function *, 8> ContextCallers;
+  DenseMap<Function *, Function *> ContextOrigins;
+
+  // A reusable private capture may be passed through one outlined caller.
+  // Specialize that caller at its proved root call site; attaching facts to
+  // the original externally callable helper would otherwise be unsound.
+  auto SpecializeCapturedCaller = [&](Candidate &C, CallInst *Inner) {
+    Function *Middle = Inner->getFunction();
+    LLVM_DEBUG(dbgs() << "element capture context: " << C.F->getName()
+                      << " through " << Middle->getName() << '\n');
+    if ((!Middle->hasLocalLinkage() && !Middle->hasLinkOnceODRLinkage()) ||
+        Middle->hasAddressTaken() || Middle->isVarArg())
+      return false;
+    SmallVector<CallInst *, 4> OuterCalls;
+    for (User *U : Middle->users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != Middle ||
+          Call->getFunction() == Middle || Call->isMustTailCall() ||
+          Call->hasOperandBundles())
+        return false;
+      OuterCalls.push_back(Call);
+    }
+    bool Specialized = false;
+    for (CallInst *Outer : OuterCalls) {
+      Function &Root = *Outer->getFunction();
+      DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(Root);
+      auto FindFieldStore = [&](AllocaInst *Object, int64_t Offset,
+                                Instruction *Use) -> StoreInst * {
+        auto *Count = dyn_cast<ConstantInt>(Object->getArraySize());
+        TypeSize ObjectSize = DL.getTypeAllocSize(Object->getAllocatedType());
+        uint64_t PointerSize = DL.getPointerSize();
+        if (!Count || !Count->isOne() || ObjectSize.isScalable() || Offset < 0 ||
+            ObjectSize.getFixedValue() < PointerSize ||
+            uint64_t(Offset) > ObjectSize.getFixedValue() - PointerSize)
+          return nullptr;
+        StoreInst *Found = nullptr;
+        for (Instruction &I : instructions(Root)) {
+          auto *Store = dyn_cast<StoreInst>(&I);
+          if (!Store)
+            continue;
+          int64_t StoreOffset = 0;
+          if (GetPointerBaseWithConstantOffset(Store->getPointerOperand(),
+                                               StoreOffset, DL) != Object)
+            continue;
+          TypeSize StoreSize = DL.getTypeStoreSize(Store->getValueOperand()->getType());
+          if (StoreSize.isScalable() || StoreOffset < 0 ||
+              StoreSize.getFixedValue() > ObjectSize.getFixedValue() ||
+              uint64_t(StoreOffset) > ObjectSize.getFixedValue() -
+                                          StoreSize.getFixedValue())
+            return nullptr;
+          if (uint64_t(StoreOffset) + StoreSize.getFixedValue() <= uint64_t(Offset) ||
+              uint64_t(Offset) + PointerSize <= uint64_t(StoreOffset))
+            continue;
+          // Any overlapping write invalidates the pointer-field proof, even
+          // when its starting offset differs or it precedes initialization.
+          if (StoreOffset != Offset || StoreSize.getFixedValue() != PointerSize)
+            return nullptr;
+          if (Found || Store->isAtomic() || Store->isVolatile() ||
+              !Store->getValueOperand()->getType()->isPointerTy() ||
+              (Store != Use && !DT.dominates(Store, Use)))
+            return nullptr;
+          Found = Store;
+        }
+        return Found;
+      };
+
+      std::function<Value *(Value *)> Resolve = [&](Value *V) -> Value * {
+        int64_t Offset = 0;
+        Value *Base = GetPointerBaseWithConstantOffset(V, Offset, DL);
+        if (auto *Arg = dyn_cast<Argument>(Base)) {
+          if (Arg->getParent() != Middle || Offset != 0)
+            return nullptr;
+          return Outer->getArgOperand(Arg->getArgNo());
+        }
+        auto *Load = dyn_cast<LoadInst>(Base);
+        if (!Load || Offset != 0 || Load->isAtomic() || Load->isVolatile() ||
+            !Load->getType()->isPointerTy())
+          return nullptr;
+        int64_t FieldOffset = 0;
+        Value *AddressBase = GetPointerBaseWithConstantOffset(
+            Load->getPointerOperand(), FieldOffset, DL);
+        Value *ObjectPointer = Resolve(AddressBase);
+        int64_t ObjectOffset = 0;
+        auto *Object = ObjectPointer ? dyn_cast<AllocaInst>(
+            GetPointerBaseWithConstantOffset(ObjectPointer, ObjectOffset, DL))
+                                    : nullptr;
+        if (!Object || ObjectOffset != 0)
+          return nullptr;
+        StoreInst *Store = FindFieldStore(Object, FieldOffset, Outer);
+        return Store ? Store->getValueOperand() : nullptr;
+      };
+
+      Value *ClosurePointer = Resolve(
+          Inner->getArgOperand(C.Closure->getArgNo()));
+      int64_t ClosureOffset = 0;
+      auto *ClosureObject = ClosurePointer ? dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(ClosurePointer, ClosureOffset, DL))
+                                          : nullptr;
+      if (!ClosureObject || ClosureOffset != 0) {
+        LLVM_DEBUG(dbgs() << "element capture: unresolved inner record\n");
+        continue;
+      }
+      StoreInst *FieldStore = FindFieldStore(ClosureObject, C.FieldOffset, Outer);
+      int64_t DestinationOffset = 0;
+      auto *Destination = FieldStore ? dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(FieldStore->getValueOperand(),
+                                           DestinationOffset, DL)) : nullptr;
+      Value *Source = Resolve(Inner->getArgOperand(C.Source->getArgNo()));
+      if (!Destination || DestinationOffset != 0 || !Source) {
+        LLVM_DEBUG(dbgs() << "element capture: unresolved pointer field\n");
+        continue;
+      }
+      Source = getUnderlyingObject(Source);
+      if (Source == Destination || Source == ClosureObject ||
+          FAM.getResult<AAManager>(Root).alias(
+              MemoryLocation(Destination, LocationSize::beforeOrAfterPointer()),
+              MemoryLocation(Source, LocationSize::beforeOrAfterPointer())) !=
+              AliasResult::NoAlias) {
+        LLVM_DEBUG(dbgs() << "element capture: root streams may alias\n");
+        continue;
+      }
+
+      // The inner record's address may only be loaded or passed to the exact
+      // read-only closure parameter already checked during candidate discovery.
+      SmallPtrSet<Value *, 16> SeenInner;
+      std::function<bool(Value *)> ReadOnlyInner = [&](Value *P) {
+        if (!SeenInner.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && ReadOnlyInner(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (ReadOnlyInner(Cast))
+              continue;
+          }
+          if (auto *Load = dyn_cast<LoadInst>(U)) {
+            if (Load->getPointerOperand() == P && !Load->isAtomic() &&
+                !Load->isVolatile())
+              continue;
+          }
+          auto *Call = dyn_cast<CallInst>(U);
+          Function *Called = Call ? Call->getCalledFunction() : nullptr;
+          if (Call && (Called == C.F || ContextOrigins.lookup(Called) == C.F) &&
+              !Call->isMustTailCall() && !Call->hasOperandBundles() &&
+              Call->getArgOperand(C.Closure->getArgNo()) == P)
+            continue;
+          if (isa<DbgInfoIntrinsic>(U))
+            continue;
+          return false;
+        }
+        return true;
+      };
+
+      // A capturing record is immutable after its unique initialization. Its
+      // outlined users may read fields, but may not write, return, or expose
+      // the record's address. Check every use, including other call sites.
+      SmallPtrSet<Value *, 16> SeenCapture;
+      std::function<bool(Value *, int64_t)> ReadOnlyCapture =
+          [&](Value *P, int64_t Offset) {
+        if (!SeenCapture.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            int64_t Delta = 0;
+            if (GetPointerBaseWithConstantOffset(GEP, Delta, DL) ==
+                    getUnderlyingObject(P) &&
+                GEP->hasAllConstantIndices() &&
+                ReadOnlyCapture(GEP, Delta))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (ReadOnlyCapture(Cast, Offset))
+              continue;
+          }
+          if (auto *Load = dyn_cast<LoadInst>(U)) {
+            if (Load->getPointerOperand() != P || Load->isAtomic() ||
+                Load->isVolatile())
+              return false;
+            if (!Load->getType()->isPointerTy())
+              return false;
+            // The root field resolver below records the inner capture's
+            // actual field offset separately for each receiver.
+            continue;
+          }
+          if (isa<DbgInfoIntrinsic>(U))
+            continue;
+          return false;
+        }
+        return true;
+      };
+      SmallPtrSet<Value *, 16> SeenRecord;
+      std::function<bool(Value *)> PrivateRecord = [&](Value *P) {
+        if (!SeenRecord.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && PrivateRecord(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (PrivateRecord(Cast))
+              continue;
+          }
+          if (U == FieldStore && FieldStore->getPointerOperand() == P)
+            continue;
+          if (auto *Store = dyn_cast<StoreInst>(U)) {
+            if (Store->getValueOperand() != P || Store->isAtomic() ||
+                Store->isVolatile())
+              return false;
+            int64_t CaptureOffset = 0;
+            auto *Receiver = dyn_cast<AllocaInst>(
+                GetPointerBaseWithConstantOffset(Store->getPointerOperand(),
+                                                 CaptureOffset, DL));
+            if (!Receiver || FindFieldStore(Receiver, CaptureOffset, Store) != Store)
+              return false;
+            SmallPtrSet<Value *, 16> SeenReceiver;
+            std::function<bool(Value *)> PrivateReceiver = [&](Value *Address) {
+              if (!SeenReceiver.insert(Address).second)
+                return true;
+              for (User *ReceiverUse : Address->users()) {
+                if (auto *GEP = dyn_cast<GetElementPtrInst>(ReceiverUse)) {
+                  if (GEP->hasAllConstantIndices() && PrivateReceiver(GEP))
+                    continue;
+                }
+                if (auto *Cast = dyn_cast<BitCastInst>(ReceiverUse)) {
+                  if (PrivateReceiver(Cast))
+                    continue;
+                }
+                if (auto *Init = dyn_cast<StoreInst>(ReceiverUse)) {
+                  if (Init->getPointerOperand() != Address)
+                    return false;
+                  int64_t InitOffset = 0;
+                  if (GetPointerBaseWithConstantOffset(Address, InitOffset, DL) !=
+                          Receiver ||
+                      FindFieldStore(Receiver, InitOffset, Init) != Init)
+                    return false;
+                  continue;
+                }
+                auto *Use = dyn_cast<CallInst>(ReceiverUse);
+                if (!Use)
+                  return false;
+                if (isa<DbgInfoIntrinsic>(Use) ||
+                    isIntrinsic(Use, Intrinsic::lifetime_start) ||
+                    isIntrinsic(Use, Intrinsic::lifetime_end))
+                  continue;
+                Function *UserF = Use->getCalledFunction();
+                if (!UserF || UserF->isDeclaration() || UserF->isVarArg() ||
+                    UserF->hasAddressTaken() || Use->isMustTailCall() ||
+                    Use->hasOperandBundles() || !DT.dominates(Store, Use))
+                  return false;
+                bool FoundAddress = false;
+                for (unsigned ArgNo = 0; ArgNo < Use->arg_size(); ++ArgNo) {
+                  if (Use->getArgOperand(ArgNo) != Address)
+                    continue;
+                  // Passing a field interior as the record base changes the
+                  // schema; only the exact whole capture object is proved.
+                  int64_t AddressOffset = 0;
+                  if (GetPointerBaseWithConstantOffset(Address, AddressOffset,
+                                                       DL) != Receiver ||
+                      AddressOffset != 0)
+                    return false;
+                  SeenCapture.clear();
+                  if (!ReadOnlyCapture(UserF->getArg(ArgNo), 0))
+                    return false;
+                  FoundAddress = true;
+                }
+                if (!FoundAddress)
+                  return false;
+              }
+              return true;
+            };
+            if (!PrivateReceiver(Receiver))
+              return false;
+            for (Instruction &I : instructions(Root)) {
+              auto *Use = dyn_cast<CallInst>(&I);
+              if (!Use || isa<IntrinsicInst>(Use))
+                continue;
+              for (unsigned ArgNo = 0; ArgNo < Use->arg_size(); ++ArgNo) {
+                if (getUnderlyingObject(Use->getArgOperand(ArgNo)) != Receiver)
+                  continue;
+                Function *UserF = Use->getCalledFunction();
+                if (!UserF || UserF->isDeclaration() || UserF->isVarArg() ||
+                    UserF->hasAddressTaken() || Use->isMustTailCall() ||
+                    Use->hasOperandBundles() ||
+                    !DT.dominates(Store, Use))
+                  return false;
+                SeenCapture.clear();
+                if (!ReadOnlyCapture(UserF->getArg(ArgNo), 0))
+                  return false;
+                for (Instruction &BodyI : instructions(UserF)) {
+                  auto *Load = dyn_cast<LoadInst>(&BodyI);
+                  if (!Load)
+                    continue;
+                  int64_t LoadOffset = 0;
+                  if (GetPointerBaseWithConstantOffset(Load->getPointerOperand(),
+                                                       LoadOffset, DL) !=
+                          UserF->getArg(ArgNo) ||
+                      LoadOffset != CaptureOffset)
+                    continue;
+                  SeenInner.clear();
+                  if (!ReadOnlyInner(Load))
+                    return false;
+                }
+              }
+            }
+            continue;
+          }
+          if (auto *Call = dyn_cast<CallInst>(U)) {
+            if (isa<DbgInfoIntrinsic>(Call) ||
+                isIntrinsic(Call, Intrinsic::lifetime_start) ||
+                isIntrinsic(Call, Intrinsic::lifetime_end))
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!PrivateRecord(ClosureObject)) {
+        LLVM_DEBUG(dbgs() << "element capture: record is not immutable/private\n");
+        continue;
+      }
+
+      SmallVector<CallInst *, 4> InnerCalls;
+      bool AllCallsProved = true;
+      for (Instruction &I : instructions(Middle)) {
+        auto *Sibling = dyn_cast<CallInst>(&I);
+        if (!Sibling || Sibling->getCalledFunction() != C.F)
+          continue;
+        Value *SiblingClosure = Resolve(
+            Sibling->getArgOperand(C.Closure->getArgNo()));
+        Value *SiblingSource = Resolve(
+            Sibling->getArgOperand(C.Source->getArgNo()));
+        int64_t SiblingOffset = 0;
+        if (!SiblingClosure || !SiblingSource ||
+            GetPointerBaseWithConstantOffset(SiblingClosure, SiblingOffset, DL) !=
+                ClosureObject || SiblingOffset != 0 ||
+            FAM.getResult<AAManager>(Root).alias(
+                MemoryLocation(Destination, LocationSize::beforeOrAfterPointer()),
+                MemoryLocation(getUnderlyingObject(SiblingSource),
+                               LocationSize::beforeOrAfterPointer())) !=
+                AliasResult::NoAlias) {
+          AllCallsProved = false;
+          break;
+        }
+        InnerCalls.push_back(Sibling);
+      }
+      if (!AllCallsProved || InnerCalls.empty())
+        continue;
+
+      ValueToValueMapTy MiddleMap;
+      Function *MiddleClone = CloneFunction(Middle, MiddleMap);
+      MiddleClone->setName(Middle->getName() + ".pto.context.caller." +
+                           Twine(CloneID++));
+      MiddleClone->setLinkage(GlobalValue::InternalLinkage);
+      MiddleClone->setComdat(nullptr);
+      for (CallInst *Sibling : InnerCalls) {
+        ValueToValueMapTy InnerMap;
+        Function *InnerClone = CloneFunction(C.F, InnerMap);
+        InnerClone->setName(C.F->getName() + ".pto.context." + Twine(CloneID++));
+        InnerClone->setLinkage(GlobalValue::InternalLinkage);
+        InnerClone->setComdat(nullptr);
+        ContextOrigins[InnerClone] = C.F;
+        MDBuilder MDB(M.getContext());
+        MDNode *Domain = MDB.createAnonymousAliasScopeDomain(
+            "linx.pto.element.call.context");
+        MDNode *Scope = MDB.createAnonymousAliasScope(
+            Domain, "linx.pto.element.private.destination");
+        MDNode *ScopeList = MDNode::get(M.getContext(), {Scope});
+        for (Instruction &I : instructions(InnerClone)) {
+          Value *Pointer = isa<LoadInst>(I) ? cast<LoadInst>(I).getPointerOperand()
+                         : isa<StoreInst>(I) ? cast<StoreInst>(I).getPointerOperand()
+                                            : nullptr;
+          if (!Pointer)
+            continue;
+          Value *Base = getUnderlyingObject(Pointer);
+          unsigned Kind = Base == InnerMap.lookup(C.DestinationBase)
+                              ? LLVMContext::MD_alias_scope
+                          : Base == InnerMap.lookup(C.Source)
+                              ? LLVMContext::MD_noalias : 0;
+          if (Kind)
+            I.setMetadata(Kind, MDNode::concatenate(I.getMetadata(Kind), ScopeList));
+        }
+        cast<CallInst>(MiddleMap.lookup(Sibling))->setCalledFunction(InnerClone);
+      }
+      Outer->setCalledFunction(MiddleClone);
+      ContextCallers.insert(Middle);
+      Specialized = true;
+    }
+    return Specialized;
+  };
+  for (Candidate &C : Candidates) {
+    Function &F = *C.F;
+    for (CallInst *Call : C.Calls) {
+      if (Call->getCalledFunction() != &F)
+        continue;
+      Function &Caller = *Call->getFunction();
+      int64_t ClosureOffset = 0;
+      auto *ClosureObject = dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(
+              Call->getArgOperand(C.Closure->getArgNo()), ClosureOffset, DL));
+      if (!ClosureObject || ClosureOffset != 0) {
+        Changed |= SpecializeCapturedCaller(C, Call);
+        continue;
+      }
+
+      SmallVector<StoreInst *, 2> FieldStores;
+      for (Instruction &I : instructions(Caller)) {
+        auto *Store = dyn_cast<StoreInst>(&I);
+        if (!Store)
+          continue;
+        int64_t Offset = 0;
+        if (GetPointerBaseWithConstantOffset(Store->getPointerOperand(), Offset,
+                                             DL) == ClosureObject &&
+            Offset == C.FieldOffset)
+          FieldStores.push_back(Store);
+      }
+      if (FieldStores.size() != 1)
+        continue;
+      StoreInst *FieldStore = FieldStores.front();
+      int64_t DestinationOffset = 0;
+      auto *DestinationObject = dyn_cast<AllocaInst>(
+          GetPointerBaseWithConstantOffset(FieldStore->getValueOperand(),
+                                           DestinationOffset, DL));
+      if (!DestinationObject || DestinationOffset != 0 ||
+          !FAM.getResult<DominatorTreeAnalysis>(Caller).dominates(FieldStore,
+                                                                  Call))
+        continue;
+
+      SmallPtrSet<Value *, 16> SeenClosure;
+      std::function<bool(Value *)> ClosureStaysPrivate = [&](Value *P) {
+        if (!SeenClosure.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && ClosureStaysPrivate(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (ClosureStaysPrivate(Cast))
+              continue;
+          }
+          if (U == FieldStore && FieldStore->getPointerOperand() == P)
+            continue;
+          if (auto *UseCall = dyn_cast<CallInst>(U)) {
+            if (isa<DbgInfoIntrinsic>(UseCall) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_start) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_end))
+              continue;
+            if (UseCall == Call &&
+                UseCall->getArgOperand(C.Closure->getArgNo()) == P)
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!ClosureStaysPrivate(ClosureObject))
+        continue;
+
+      SmallPtrSet<Value *, 32> SeenDestination;
+      std::function<bool(Value *)> DestinationStaysPrivate = [&](Value *P) {
+        if (!SeenDestination.insert(P).second)
+          return true;
+        for (User *U : P->users()) {
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && DestinationStaysPrivate(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (DestinationStaysPrivate(Cast))
+              continue;
+          }
+          if (auto *Load = dyn_cast<LoadInst>(U))
+            if (Load->getPointerOperand() == P)
+              continue;
+          if (auto *Store = dyn_cast<StoreInst>(U)) {
+            if (Store->getPointerOperand() == P)
+              continue;
+            if (Store == FieldStore && Store->getValueOperand() == P)
+              continue;
+          }
+          if (auto *UseCall = dyn_cast<CallInst>(U)) {
+            if (isa<DbgInfoIntrinsic>(UseCall) || isa<MemIntrinsic>(UseCall) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_start) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_end))
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!DestinationStaysPrivate(DestinationObject))
+        continue;
+
+      Value *SourceObject =
+          getUnderlyingObject(Call->getArgOperand(C.Source->getArgNo()));
+      if (SourceObject == DestinationObject || SourceObject == ClosureObject)
+        continue;
+      MemoryLocation DestinationLocation(
+          DestinationObject, LocationSize::beforeOrAfterPointer());
+      MemoryLocation SourceLocation(SourceObject,
+                                    LocationSize::beforeOrAfterPointer());
+      if (FAM.getResult<AAManager>(Caller).alias(DestinationLocation,
+                                                SourceLocation) !=
+          AliasResult::NoAlias)
+        continue;
+
+      ValueToValueMapTy Map;
+      Function *Clone = CloneFunction(&F, Map);
+      Clone->setName(F.getName() + ".pto.context." + Twine(CloneID++));
+      Clone->setLinkage(GlobalValue::InternalLinkage);
+      Clone->setComdat(nullptr);
+      auto *CloneDestinationBase =
+          cast<LoadInst>(Map.lookup(C.DestinationBase));
+      auto *CloneSource = cast<Argument>(Map.lookup(C.Source));
+      MDBuilder MDB(M.getContext());
+      MDNode *Domain = MDB.createAnonymousAliasScopeDomain(
+          "linx.pto.element.call.context");
+      MDNode *Scope = MDB.createAnonymousAliasScope(
+          Domain, "linx.pto.element.private.destination");
+      MDNode *ScopeList = MDNode::get(M.getContext(), {Scope});
+      for (Instruction &I : instructions(Clone)) {
+        Value *Pointer = nullptr;
+        if (auto *Load = dyn_cast<LoadInst>(&I))
+          Pointer = Load->getPointerOperand();
+        else if (auto *Store = dyn_cast<StoreInst>(&I))
+          Pointer = Store->getPointerOperand();
+        if (!Pointer)
+          continue;
+        Value *Base = getUnderlyingObject(Pointer);
+        if (Base == CloneDestinationBase)
+          I.setMetadata(LLVMContext::MD_alias_scope,
+                        MDNode::concatenate(
+                            I.getMetadata(LLVMContext::MD_alias_scope),
+                            ScopeList));
+        else if (Base == CloneSource)
+          I.setMetadata(LLVMContext::MD_noalias,
+                        MDNode::concatenate(
+                            I.getMetadata(LLVMContext::MD_noalias), ScopeList));
+      }
+      Call->setCalledFunction(Clone);
+      Changed = true;
+    }
+  }
+  // Remove only discarded originals of the specialized chain. Leaving their
+  // unproved marked regions around would incorrectly fail later verification.
+  SmallPtrSet<Function *, 8> Originals(ContextCallers.begin(), ContextCallers.end());
+  for (Candidate &C : Candidates)
+    Originals.insert(C.F);
+  SmallVector<Function *, 8> Pending(Originals.begin(), Originals.end());
+  bool Removed;
+  do {
+    Removed = false;
+    for (unsigned Index = 0; Index < Pending.size();) {
+      Function *F = Pending[Index];
+      if (!F->use_empty() || !F->isDiscardableIfUnused()) {
+        ++Index;
+        continue;
+      }
+      Pending.erase(Pending.begin() + Index);
+      F->eraseFromParent();
+      Removed = true;
+    }
+  } while (Removed);
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
+
+PreservedAnalyses
+LinxV5LocalTileABIPromotionPass::run(Module &M, ModuleAnalysisManager &) {
+  struct Candidate {
+    Function *F;
+    unsigned Index;
+    uint64_t DataOffset;
+    ElementProfile Profile;
+    SmallVector<CallInst *, 8> Calls;
+  };
+  SmallVector<Candidate, 4> Candidates;
+  const DataLayout &DL = M.getDataLayout();
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.hasFnAttribute("linx-local-tile-abi"))
+      continue;
+    Optional<unsigned> Index;
+    Optional<ElementProfile> Profile;
+    Optional<uint64_t> DataOffset;
+    for (Instruction &I : instructions(F)) {
+      auto *A = dyn_cast<CallInst>(&I);
+      StringRef Text;
+      if (!A || !getAnnotationString(*A, Text) ||
+          !Text.startswith("pto.element.view:v2;"))
+        continue;
+      auto P = elementViewProfile(Text, F.getContext());
+      int64_t Offset = 0;
+      auto *Arg = dyn_cast<Argument>(
+          GetPointerBaseWithConstantOffset(A->getArgOperand(0), Offset, DL));
+      if (!P || P->Layout != 0 || !Arg)
+        continue;
+      if (Offset < 0 || (DataOffset && *DataOffset != uint64_t(Offset)) ||
+          (Index && *Index != Arg->getArgNo()) ||
+          (Profile && (Profile->Count != P->Count || Profile->Cols != P->Cols)))
+        diagnose(F, A,
+                 "Local Tile ABI requires one exact mutable row reference");
+      Index = Arg->getArgNo();
+      DataOffset = Offset;
+      Profile = *P;
+    }
+    if (!Index)
+      continue;
+    if ((!F.hasLocalLinkage() && !F.hasLinkOnceODRLinkage()) || F.isVarArg() ||
+        !F.getReturnType()->isVoidTy() || F.hasAddressTaken())
+      diagnose(F, nullptr,
+               "Local Tile ABI requires a direct internal void helper");
+    SmallPtrSet<Value *, 16> Seen;
+    std::function<bool(Value *)> ExactUses = [&](Value *P) {
+      if (!Seen.insert(P).second)
+        return true;
+      int64_t Offset = 0;
+      Value *Canonical = P;
+      while (auto *A = dyn_cast<CallInst>(Canonical)) {
+        StringRef Text;
+        if (!getAnnotationString(*A, Text))
+          break;
+        Canonical = A->getArgOperand(0);
+      }
+      bool IsData = GetPointerBaseWithConstantOffset(Canonical, Offset, DL) ==
+                        F.getArg(*Index) &&
+                    Offset >= 0 && uint64_t(Offset) == *DataOffset;
+      for (User *U : P->users()) {
+        if (auto *L = dyn_cast<LoadInst>(U))
+          if (IsData && L->getPointerOperand() == P && !L->isVolatile() &&
+              !L->isAtomic() && L->getType() == Profile->VectorTy)
+            continue;
+        if (auto *S = dyn_cast<StoreInst>(U))
+          if (IsData && S->getPointerOperand() == P && !S->isVolatile() &&
+              !S->isAtomic() &&
+              S->getValueOperand()->getType() == Profile->VectorTy)
+            continue;
+        if (auto *G = dyn_cast<GetElementPtrInst>(U))
+          if (G->hasAllConstantIndices() && ExactUses(G))
+            continue;
+        if (auto *C = dyn_cast<BitCastInst>(U))
+          if (ExactUses(C))
+            continue;
+        if (auto *A = dyn_cast<CallInst>(U)) {
+          StringRef Text;
+          if (getAnnotationString(*A, Text) && A->getArgOperand(0) == P &&
+              ExactUses(A))
+            continue;
+          if (isa<DbgInfoIntrinsic>(A))
+            continue;
+        }
+        return false;
+      }
+      return true;
+    };
+    if (!ExactUses(F.getArg(*Index)))
+      diagnose(F, nullptr,
+               "Local Tile reference escapes exact carrier accesses");
+    for (Instruction &I : instructions(F))
+      if (auto *Call = dyn_cast<CallBase>(&I))
+        if (!Call->isInlineAsm() && !isa<IntrinsicInst>(Call))
+          diagnose(F, &I, "Local Tile ABI rejects nested ordinary calls");
+    Candidate C{&F, *Index, *DataOffset, *Profile, {}};
+    for (User *U : F.users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != &F ||
+          Call->getFunction() == &F || Call->isMustTailCall() ||
+          Call->hasOperandBundles())
+        diagnose(F, nullptr,
+                 "Local Tile ABI rejects indirect or recursive calls");
+      int64_t Offset = 0;
+      auto *Object = dyn_cast<AllocaInst>(GetPointerBaseWithConstantOffset(
+          Call->getArgOperand(*Index), Offset, DL));
+      auto *Count =
+          Object ? dyn_cast<ConstantInt>(Object->getArraySize()) : nullptr;
+      if (!Object || !Count || Offset != 0 || !Count->isOne() ||
+          Object->getAlign() < Align(32) ||
+          DL.getTypeAllocSize(Object->getAllocatedType()) !=
+              *DataOffset + Profile->Bytes)
+        diagnose(*Call->getFunction(), Call,
+                 "Local Tile ABI requires one exact aligned local carrier");
+      for (unsigned I = 0; I < Call->arg_size(); ++I)
+        if (I != *Index && Call->getArgOperand(I)->getType()->isPointerTy() &&
+            getUnderlyingObject(Call->getArgOperand(I)) == Object)
+          diagnose(*Call->getFunction(), Call,
+                   "Local Tile reference aliases another call argument");
+
+      SmallPtrSet<Value *, 16> PrivatePointers;
+      std::function<bool(Value *)> StaysPrivate = [&](Value *Pointer) {
+        if (!PrivatePointers.insert(Pointer).second)
+          return true;
+        for (User *U : Pointer->users()) {
+          if (auto *Load = dyn_cast<LoadInst>(U)) {
+            if (Load->getPointerOperand() == Pointer)
+              continue;
+          }
+          if (auto *Store = dyn_cast<StoreInst>(U)) {
+            if (Store->getPointerOperand() == Pointer &&
+                Store->getValueOperand() != Pointer)
+              continue;
+          }
+          if (auto *GEP = dyn_cast<GetElementPtrInst>(U)) {
+            if (GEP->hasAllConstantIndices() && StaysPrivate(GEP))
+              continue;
+          }
+          if (auto *Cast = dyn_cast<BitCastInst>(U)) {
+            if (StaysPrivate(Cast))
+              continue;
+          }
+          if (auto *UseCall = dyn_cast<CallInst>(U)) {
+            StringRef Text;
+            if (getAnnotationString(*UseCall, Text) && StaysPrivate(UseCall))
+              continue;
+            if (isa<DbgInfoIntrinsic>(UseCall) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_start) ||
+                isIntrinsic(UseCall, Intrinsic::lifetime_end))
+              continue;
+            if (UseCall->getCalledFunction() == &F &&
+                UseCall->getArgOperand(*Index) == Pointer)
+              continue;
+          }
+          return false;
+        }
+        return true;
+      };
+      if (!StaysPrivate(Object))
+        diagnose(*Call->getFunction(), Call,
+                 "Local Tile ABI requires caller-private nonescaping storage");
+      C.Calls.push_back(Call);
+    }
+    if (C.Calls.empty())
+      diagnose(F, nullptr,
+               "Local Tile reference helper lacks direct local callers");
+    Candidates.push_back(std::move(C));
+  }
+  for (Candidate &C : Candidates) {
+    Function &F = *C.F;
+    SmallVector<Type *, 8> Parameters(F.getFunctionType()->param_begin(),
+                                      F.getFunctionType()->param_end());
+    Parameters[C.Index] = C.Profile.VectorTy;
+    Function *NF = Function::Create(
+        FunctionType::get(C.Profile.VectorTy, Parameters, false),
+        GlobalValue::InternalLinkage, F.getName() + ".pto.local", &M);
+    NF->setCallingConv(CallingConv::C);
+    BasicBlock *Entry =
+        BasicBlock::Create(M.getContext(), "tile.abi.entry", NF);
+    IRBuilder<> B(Entry);
+    auto *StorageType =
+        ArrayType::get(B.getInt8Ty(), C.DataOffset + C.Profile.Bytes);
+    AllocaInst *Storage = B.CreateAlloca(StorageType, nullptr, "tile.abi.ref");
+    Storage->setAlignment(Align(256));
+    ValueToValueMapTy Map;
+    for (Argument &A : F.args()) {
+      Argument *NewArg = NF->getArg(A.getArgNo());
+      NewArg->setName(A.getName());
+      Map[&A] = A.getArgNo() == C.Index ? static_cast<Value *>(Storage)
+                                        : static_cast<Value *>(NewArg);
+    }
+    Value *DataPointer =
+        B.CreateInBoundsGEP(B.getInt8Ty(), Storage, B.getInt64(C.DataOffset));
+    B.CreateStore(NF->getArg(C.Index), DataPointer)->setAlignment(Align(32));
+    SmallVector<ReturnInst *, 4> Returns;
+    CloneFunctionInto(NF, &F, Map, CloneFunctionChangeType::LocalChangesOnly,
+                      Returns);
+    NF->setLinkage(GlobalValue::InternalLinkage);
+    NF->setCallingConv(CallingConv::C);
+    NF->setComdat(nullptr);
+    NF->addRetAttr(Attribute::InReg);
+    NF->addFnAttr("linx-local-tile-abi",
+                  (Twine(C.Index) + ":" + Twine(C.Profile.Count) + ":" +
+                   Twine(C.Profile.Cols))
+                      .str());
+    B.CreateBr(cast<BasicBlock>(Map[&F.getEntryBlock()]));
+    for (ReturnInst *R : Returns) {
+      IRBuilder<> RB(R);
+      LoadInst *V =
+          RB.CreateLoad(C.Profile.VectorTy, DataPointer, "tile.abi.result");
+      V->setAlignment(Align(32));
+      RB.CreateRet(V);
+      R->eraseFromParent();
+    }
+    for (CallInst *Call : C.Calls) {
+      IRBuilder<> CB(Call);
+      SmallVector<Value *, 8> Args(Call->args());
+      Value *Pointer = CB.CreateInBoundsGEP(CB.getInt8Ty(), Args[C.Index],
+                                            CB.getInt64(C.DataOffset));
+      LoadInst *V =
+          CB.CreateLoad(C.Profile.VectorTy, Pointer, "tile.abi.input");
+      V->setAlignment(Align(32));
+      Args[C.Index] = V;
+      CallInst *Result = CB.CreateCall(NF, Args, "tile.abi.return");
+      Result->setCallingConv(NF->getCallingConv());
+      SmallVector<AttributeSet, 8> ArgumentAttributes;
+      for (unsigned I = 0; I < Call->arg_size(); ++I)
+        ArgumentAttributes.push_back(
+            I == C.Index ? AttributeSet()
+                         : Call->getAttributes().getParamAttrs(I));
+      Result->setAttributes(
+          AttributeList::get(M.getContext(), Call->getAttributes().getFnAttrs(),
+                             AttributeSet::get(M.getContext(),
+                                 {Attribute::get(M.getContext(), Attribute::InReg)}),
+                             ArgumentAttributes));
+      Result->setDebugLoc(Call->getDebugLoc());
+      CB.CreateStore(Result, Pointer)->setAlignment(Align(32));
+      Call->eraseFromParent();
+    }
+    F.eraseFromParent();
+  }
+  return Candidates.empty() ? PreservedAnalyses::all()
+                            : PreservedAnalyses::none();
+}
+
+PreservedAnalyses
 LinxV5ElementRegionPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
   (void)AM;
   return prepareViews(F) ? PreservedAnalyses::none()
@@ -2009,7 +7594,164 @@ PreservedAnalyses LinxV5ElementRegionPass::run(Function &F,
 }
 
 PreservedAnalyses
-LinxV5ElementRegionVerifierPass::run(Function &F, FunctionAnalysisManager &) {
+LinxV5ElementRegionVerifierPass::run(Function &F, FunctionAnalysisManager &AM) {
   verifyNoResidualElementContracts(F);
+  verifyLocalTileCallBoundaries(F, AM.getResult<DominatorTreeAnalysis>(F));
   return PreservedAnalyses::all();
+}
+
+PreservedAnalyses
+LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
+  bool Changed = rewriteF32ViewImportBitcasts(F);
+  if (Changed)
+    AM.invalidate(F, PreservedAnalyses::none());
+  for (;;) {
+    auto &LI = AM.getResult<LoopAnalysis>(F);
+    Loop *Selected = nullptr;
+    for (Loop *L : LI.getLoopsInPreorder())
+      if (getElementRegionToken(*L)) {
+        Selected = L;
+        break;
+      }
+    if (!Selected)
+      break;
+    auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+    auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+    auto &LVI = AM.getResult<LazyValueAnalysis>(F);
+    PredicatedRegion Plan;
+    if (!planPredication(F, *Selected, SE, DT, LVI, AM.getResult<AAManager>(F),
+                         Plan))
+      break;
+    emitPredication(F, Plan, LI, SE, DT);
+    // No analysis reference is reused after CFG deletion, including when there
+    // are several independent element regions in the same function.
+    AM.invalidate(F, PreservedAnalyses::none());
+    Changed = true;
+  }
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
+
+PreservedAnalyses
+LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
+  SmallVector<CallInst *, 4> Sentinels;
+  for (Instruction &I : instructions(F)) {
+    auto *Call = dyn_cast<CallInst>(&I);
+    if (isIntrinsic(Call, Intrinsic::linx_experimental_element_atomic_add) &&
+        !I.getMetadata(PredicatedOwnerMD))
+      diagnose(F, &I,
+               "Tile legalization: atomic effect lacks region ownership");
+    if (isIntrinsic(Call, Intrinsic::linx_experimental_element_scatter) &&
+        !I.getMetadata(PredicatedOwnerMD))
+      diagnose(F, &I,
+               "Tile legalization: scatter effect lacks region ownership");
+    if (isIntrinsic(Call, Intrinsic::linx_experimental_element_region))
+      Sentinels.push_back(cast<CallInst>(&I));
+  }
+  if (Sentinels.empty()) {
+    for (Instruction &I : instructions(F))
+      if (I.getMetadata(PredicatedOwnerMD))
+        diagnose(F, &I, "Tile legalization: orphan predicated region ownership");
+    return PreservedAnalyses::all();
+  }
+  if (F.hasFnAttribute(Attribute::StrictFP))
+    diagnose(F, Sentinels.front(),
+             "Tile legalization: strictfp/fenv requires constrained floating-point lowering");
+  if (F.hasFnAttribute(Attribute::OptimizeNone))
+    diagnose(F, Sentinels.front(),
+             "Tile legalization: typed Tile spill/reload is unsupported at -O0");
+
+  SmallPtrSet<MDNode *, 4> Tokens;
+  DenseMap<PHINode *, uint64_t> ImportedPhiTypes;
+  SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
+  for (CallInst *Sentinel : Sentinels) {
+    auto *Domain = Sentinel->getMetadata(PredicatedDomainMD);
+    auto *Count = Domain && Domain->getNumOperands() == 1
+                      ? mdconst::dyn_extract<ConstantInt>(Domain->getOperand(0))
+                      : nullptr;
+    auto *TokenArg = dyn_cast<MetadataAsValue>(Sentinel->getArgOperand(0));
+    auto *Token = TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
+    if (!Count ||
+        (Count->getZExtValue() != 32 && Count->getZExtValue() != 64 &&
+         Count->getZExtValue() != 128 && Count->getZExtValue() != 512 &&
+         Count->getZExtValue() != 2048) ||
+        !Token || !Tokens.insert(Token).second)
+      diagnose(F, Sentinel,
+               "Tile legalization: requires a unique admitted predicated domain");
+    SmallVector<Instruction *, 64> Owned;
+    for (Instruction &I : instructions(F))
+      if (I.getMetadata(PredicatedOwnerMD) == Token)
+        Owned.push_back(&I);
+    auto Plan = std::make_unique<ElementTileLegalizer>(
+        F, Owned, ImportedPhiTypes, Count->getZExtValue());
+    Plan->preflight();
+    Plans.push_back(std::move(Plan));
+  }
+  for (Instruction &I : instructions(F))
+    if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
+      if (!Tokens.contains(Owner))
+        diagnose(F, &I, "Tile legalization: unknown predicated region token");
+  for (Instruction &I : instructions(F)) {
+    auto View = getViewDescriptor(&I);
+    if (!View || I.getMetadata(PredicatedOwnerMD))
+      continue;
+    SmallPtrSet<Value *, 16> Seen;
+    if (!isTypedTileImport(&I) || !hasWholeCarrierConsumers(&I, Seen))
+      diagnose(F, &I,
+               "Tile legalization: invalid external typed carrier boundary");
+  }
+  // Preflight every region before publishing any target IR. Consumption of the
+  // sentinel is the last step, after all token-owned VP/vector-pointer IR is gone.
+  rewriteF32ViewConsumerBitcasts(F);
+  for (unsigned I = 0; I < Plans.size(); ++I) {
+    Plans[I]->emit();
+    Sentinels[I]->eraseFromParent();
+  }
+  SmallVector<CallInst *, 8> Views;
+  for (Instruction &I : instructions(F))
+    if (getViewDescriptor(&I))
+      Views.push_back(cast<CallInst>(&I));
+  for (CallInst *View : Views) {
+    View->replaceAllUsesWith(View->getArgOperand(0));
+    View->eraseFromParent();
+  }
+  return PreservedAnalyses::none();
+}
+
+PreservedAnalyses
+LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
+  bool HasRegion = false;
+  for (Instruction &I : instructions(F))
+    HasRegion |= isIntrinsic(dyn_cast<CallInst>(&I),
+                             Intrinsic::linx_experimental_element_region);
+  if (!HasRegion) {
+    bool ViewsChanged = prepareViews(F);
+    if (ViewsChanged)
+      AM.invalidate(F, PreservedAnalyses::none());
+    bool HasTileCall = false;
+    for (Instruction &I : instructions(F))
+      if (auto *Call = dyn_cast<CallBase>(&I))
+        HasTileCall |=
+            Call->getCalledFunction() &&
+            Call->getCalledFunction()->hasFnAttribute("linx-local-tile-abi");
+    if (HasTileCall) {
+      FunctionPassManager Promote;
+      Promote.addPass(SROAPass());
+      Promote.addPass(InstCombinePass());
+      Promote.run(F, AM);
+      return PreservedAnalyses::none();
+    }
+    return ViewsChanged ? PreservedAnalyses::none()
+                        : PreservedAnalyses::all();
+  }
+  bool ViewsChanged = prepareViews(F, /*RestoreFullCarrier=*/true);
+  if (ViewsChanged)
+    AM.invalidate(F, PreservedAnalyses::none());
+  FunctionPassManager Prepare;
+  Prepare.addPass(LinxV5ElementRegionPromotePass());
+  Prepare.addPass(LoopSimplifyPass());
+  Prepare.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
+  Prepare.addPass(InstCombinePass());
+  Prepare.addPass(LCSSAPass());
+  PreservedAnalyses PA = Prepare.run(F, AM);
+  return ViewsChanged ? PreservedAnalyses::none() : PA;
 }

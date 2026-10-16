@@ -408,6 +408,15 @@ def Tile_TR  : RegisterClass<"LinxV5", [vAny], 64, (add
   let Size = 64;
 }
 
+// Closed outlined-call ABI carrier. A concrete VT list is required here:
+// getMinimalPhysRegClassLLT cannot select the generic vAny class for a
+// CopyFromReg/CopyToReg on the canonical physical incoming hand.
+let isAllocatable = 0 in
+def Tile_LocalABI : RegisterClass<"LinxV5", [v128i32, v2048i32], 64,
+                                   (add Tile_T1)> {
+  let Size = 64;
+}
+
 def Tile_UR  : RegisterClass<"LinxV5", [vAny], 64, (add
   (sequence "Tile_U%u", 1, 16)
 )> {

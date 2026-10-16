@@ -1,0 +1,201 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/tstore.mir 2>&1 | FileCheck %s --check-prefix=TSTORE
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/tmov.mir 2>&1 | FileCheck %s --check-prefix=TMOV
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/hierarchy.mir 2>&1 | FileCheck %s --check-prefix=HIER
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/counter-overwrite.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=COUNTER
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/zero-trip.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ZERO-TRIP
+#
+# LAST on only one arm does not prove that an assembly generation is closed at
+# the join.  Reject every ordinary use: memory, COPY/TMOV, and use as the
+# writer source for another hierarchy level.
+#
+# TSTORE: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
+# TMOV: LLVM ERROR: OPEN B.ASSEMBLE parent hand contains another real tile definition after CFG copy insertion
+# HIER: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
+# COUNTER: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
+# ZERO-TRIP: LLVM ERROR: B.ASSEMBLE parent has conflicting relative distances at a CFG join
+
+#--- tstore.mir
+--- |
+  define void @maybe_open_tstore(i1 %cond) { ret void }
+...
+---
+name:            maybe_open_tstore
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $r2, $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $r2, $tile_t1, $tile_u1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $r2, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+    PseudoRET
+...
+
+#--- tmov.mir
+--- |
+  define void @maybe_open_tmov(i1 %cond) { ret void }
+...
+---
+name:            maybe_open_tmov
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1
+    dead $tile_t2 = PseudoTCOPY 5, $tile_t1
+    PseudoRET
+...
+
+#--- hierarchy.mir
+--- |
+  define void @maybe_open_hierarchy_writer(i1 %cond) { ret void }
+...
+---
+name:            maybe_open_hierarchy_writer
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u2, 720905 /* reguse:Tile_ABS */, $tile_t1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    PseudoRET
+...
+
+#--- counter-overwrite.mir
+--- |
+  define void @counter_overwrite_keeps_open_exit(i64 %unknown) { ret void }
+...
+---
+name:            counter_overwrite_keeps_open_exit
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2, $r3
+    $r4 = ORI $r0, 0
+    $r5 = ORI $r0, 1
+    $r6 = ORI $r0, 2
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $r3, $r4, $r5, $r6, $tile_t1, $tile_u1
+    BEQ $r4, $r5, %bb.3
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.4(0x40000000), %bb.1(0x40000000)
+    liveins: $r2, $r3, $r4, $r5, $r6, $tile_t1, $tile_u1
+    $r4 = ORI $r2, 0
+    $r4 = ADDI $r4, 1
+    BEQ $r4, $r6, %bb.4
+    PseudoBR %bb.1
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $r3, $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoBR %bb.4
+  bb.4:
+    liveins: $r3, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r3, 720905 /* reguse:Tile_ABS */, $tile_t1
+    PseudoRET
+...
+
+#--- zero-trip.mir
+--- |
+  define void @zero_trip_can_skip_init(i1 %skip) { ret void }
+...
+---
+name:            zero_trip_can_skip_init
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.2(0x40000000), %bb.1(0x40000000)
+    liveins: $r2, $r3
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x80000000)
+    liveins: $r3
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoBR %bb.2
+  bb.2:
+    liveins: $r3, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r3, 720905 /* reguse:Tile_ABS */, $tile_t1
+    PseudoRET
+...

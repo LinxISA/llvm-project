@@ -1,9 +1,9 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
-; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+; RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t | FileCheck %s
 
 ; CHECK-LABEL: <elementwise_tcmp>:
 ; CHECK: BSTART.TEPL TCMP, FP32
-; CHECK: B.DATR NORM.normal, FP32, Zero, LT
+; CHECK: B.DATR NORM.normal, Zero, LT
 ; CHECK: C.B.DIMI 8
 ; CHECK: C.B.DIMI 16
 ; CHECK-NOT: C.B.DIMI 0

@@ -1,0 +1,88 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -verify-machineinstrs \
+# RUN:   -run-pass=none -o /dev/null %s
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %s 2>&1 | FileCheck %s
+#
+# This is a post-RA conditional diamond derived from llc output.  The left arm
+# INITs and LAST-closes an S32 M32 parent in physical T1.  It reaches the join
+# at Local distance 1.  The right arm defines an ordinary S32 M32 value in T1
+# and then allocates T2, so its T1 reaches the join at distance 2.  The joined
+# TSTORE therefore cannot select one predecessor's distance by treating the
+# other predecessor as undefined.
+#
+# CHECK: LLVM ERROR: B.ASSEMBLE parent has conflicting relative distances at a CFG join
+--- |
+  define dso_local void @assemble_parent_distance_diamond(i1 %cond) {
+  entry:
+    br i1 %cond, label %parent-writer, label %ordinary-t1
+  parent-writer:
+    br label %parent-init
+  parent-init:
+    br label %parent-last
+  parent-last:
+    br label %join
+  ordinary-t1:
+    br label %ordinary-t2
+  ordinary-t2:
+    br label %join
+  join:
+    br label %return
+  return:
+    ret void
+  }
+...
+---
+name:            assemble_parent_distance_diamond
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body:             |
+  bb.0.entry:
+    successors: %bb.1(0x40000000), %bb.4(0x40000000)
+    liveins: $r2
+
+    BEQ $r2, $r0, %bb.4
+    PseudoBR %bb.1
+
+  bb.1.parent-writer:
+    successors: %bb.2(0x80000000)
+
+    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 13 /* imm */, 1
+
+  bb.2.parent-init:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_u1
+
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 1, 13 /* imm */, 1, 13 /* imm */, 0
+
+  bb.3.parent-last:
+    successors: %bb.6(0x80000000)
+    liveins: $tile_t1, $tile_u1
+
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoBR %bb.6
+
+  bb.4.ordinary-t1:
+    successors: %bb.5(0x80000000)
+
+    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 13 /* imm */, 5
+
+  bb.5.ordinary-t2:
+    successors: %bb.6(0x80000000)
+    liveins: $tile_t1
+
+    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOR zero, zero, zero, ->zero\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t2, 13 /* imm */, 5
+    PseudoBR %bb.6
+
+  bb.6.join:
+    successors: %bb.7(0x80000000)
+    liveins: $r2, $tile_t1
+
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+
+  bb.7.return:
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...

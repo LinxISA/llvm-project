@@ -1,0 +1,19 @@
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup -o /dev/null %s 2>&1 | FileCheck %s
+# Raw numeric spill descriptors cannot silently discard Predicate storage kind.
+# CHECK: packed Predicate Tile spilling has no storage-kind-preserving reload
+--- |
+  define void @predicate_spill() { ret void }
+...
+---
+name: predicate_spill
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    $tile_u2 = IMPLICIT_DEF
+    $tile_t1 = PseudoTCMP_Row_SizeI $r0, 1, $r0, 128, 25, 0, 1, $tile_u1, $tile_u2, 3, 128
+    PseudoTSpill killed $tile_t1, %stack.0 :: (store (s1024) into %stack.0, align 256)
+    PseudoRET
+...

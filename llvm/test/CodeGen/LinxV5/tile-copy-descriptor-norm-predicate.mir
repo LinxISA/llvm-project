@@ -1,0 +1,49 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos -o - %s | FileCheck %s
+# Packed predicate copies preserve U8 Predicate storage, never numeric U32
+# capacity. A second copy must retain the same identity.
+# CHECK-LABEL: name: predicate_copy
+# CHECK: $tile_t2 = PseudoPCOPYDesc 1, $tile_t1, 128, 1, 128, 27, 0
+# CHECK: $tile_t3 = PseudoPCOPYDesc 1, $tile_t2, 128, 1, 128, 27, 0
+# CHECK-LABEL: name: predicate_tail_copy
+# CHECK: $tile_t2 = PseudoPCOPYDesc 1, $tile_t1, 32, 1, 128, 27, 0
+# CHECK-LABEL: name: predicate2048_copy
+# CHECK: $tile_t2 = PseudoPCOPYDesc 5, $tile_t1, 2048, 1, 2048, 27, 0
+--- |
+  define void @predicate_copy() { ret void }
+  define void @predicate_tail_copy() { ret void }
+  define void @predicate2048_copy() { ret void }
+...
+---
+name: predicate_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    $tile_u2 = IMPLICIT_DEF
+    $tile_t1 = PseudoTCMP_Row_SizeI $r0, 1, $r0, 128, 25, 0, 1, $tile_u1, $tile_u2, 3, 128
+    $tile_t2 = COPY $tile_t1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: predicate_tail_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    $tile_u2 = IMPLICIT_DEF
+    $tile_t1 = PseudoTCMP_Row_SizeI $r0, 1, $r0, 32, 25, 0, 1, $tile_u1, $tile_u2, 3, 128
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: predicate2048_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    $tile_u2 = IMPLICIT_DEF
+    $tile_t1 = PseudoTCMP_Row_SizeI $r0, 1, $r0, 2048, 25, 0, 5, $tile_u1, $tile_u2, 3, 2048
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

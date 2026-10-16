@@ -9,6 +9,8 @@
 
 #include "LinxV5TileOpExpand.h"
 #include "LinxV5BaseInfo.h"
+#include "LinxV5CompressInst.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "LinxV5TileOpReader.h"
 #include "MCTargetDesc/LinxV5MCTargetDesc.h"
 #include "llvm/ADT/DenseSet.h"
@@ -20,6 +22,131 @@
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 
 namespace llvm {
+
+bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
+                            MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded) {
+  const bool Scalar = Inst.getOpcode() == LinxV5::PseudoTCMPS_GPR_Masked;
+  if (!Scalar && Inst.getOpcode() != LinxV5::PseudoTCMP_GPR_Masked)
+    return false;
+  // These are CodeGen-only bounded forms. Check the complete profile before
+  // appending native commands, including the selector lost by the old printer.
+  if (Inst.getNumOperands() != 11 || !Inst.getOperand(0).isReg() ||
+      !Inst.getOperand(7).isReg() || !Inst.getOperand(8).isReg() ||
+      !Inst.getOperand(10).isReg() || !Inst.getOperand(1).isReg() ||
+      Inst.getOperand(1).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 32 ||
+      !Inst.getOperand(3).isReg() ||
+      Inst.getOperand(3).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(4).isImm() ||
+      (Inst.getOperand(4).getImm() != 1 && Inst.getOperand(4).getImm() != 2) ||
+      !Inst.getOperand(5).isImm() ||
+      (Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP32 &&
+       Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP16) ||
+      ((Inst.getOperand(5).getImm() == LinxV5Op::DataType::FP32) !=
+       (Inst.getOperand(4).getImm() == 1)) ||
+      !Inst.getOperand(6).isImm() || Inst.getOperand(6).getImm() != 29 ||
+      !Inst.getOperand(9).isImm() || Inst.getOperand(9).getImm() < 0 ||
+      Inst.getOperand(9).getImm() > 5)
+    report_fatal_error(
+        "masked GPR compare expansion requires an exact admitted FP32/FP16 "
+        "CUBE_M32 profile and comparison 0..5");
+
+  Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                         .addOperand(Inst.getOperand(5))
+                         .addImm(Scalar ? 45 : 13)); // TCMPS / TCMP
+  // Compare field applicability requires NORM; the source Tile descriptor
+  // carries CUBE geometry. ZERO inactive results have no merge dependency.
+  Expanded.push_back(MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+                         .addImm(0).addImm(0).addImm(31)
+                         .addImm(LinxV5Op::PadValue::Zero)
+                         .addOperand(Inst.getOperand(9))
+                         .addImm(0).addImm(0).addImm(0).addImm(0).addImm(1));
+  // FP16 logical64 has two physical columns; FP32 keeps the omitted LB0=1.
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(0).addReg(LinxV5::R0).addImm(2));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_DIM)
+                         .addImm(1).addReg(LinxV5::R0).addImm(32));
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(2).addReg(LinxV5::R0).addImm(2));
+  if (Scalar)
+    Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                           .addImm(0b1111).addImm(1)
+                           .addOperand(Inst.getOperand(7)));
+  else
+    Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                           .addImm(0b1111).addImm(1)
+                           .addOperand(Inst.getOperand(7))
+                           .addOperand(Inst.getOperand(8)));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOR_EXEC_MASK_DST)
+                         .addOperand(Inst.getOperand(0))
+                         .addOperand(Inst.getOperand(Scalar ? 8 : 10))
+                         .addOperand(Scalar ? Inst.getOperand(10)
+                                            : MCOperand::createReg(LinxV5::R0))
+                         .addReg(LinxV5::R0));
+  // Share compression as well as expansion so -S roundtrips reproduce the
+  // exact native .text bytes emitted by the object path.
+  for (MCInst &Command : Expanded) {
+    MCInst Compressed;
+    if (LinxV5::tryCompressInst(Compressed, Command, STI, Ctx))
+      Command = Compressed;
+  }
+  return true;
+}
+
+bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
+                         MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded) {
+  if (Inst.getOpcode() != LinxV5::PseudoTNEG_GPR_Masked_SizeI)
+    return false;
+  if (Inst.getNumOperands() != 10 || !Inst.getOperand(0).isReg() ||
+      !Inst.getOperand(1).isReg() ||
+      Inst.getOperand(1).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(2).isImm() || Inst.getOperand(2).getImm() != 32 ||
+      !Inst.getOperand(3).isReg() ||
+      Inst.getOperand(3).getReg() != LinxV5::R0 ||
+      !Inst.getOperand(4).isImm() ||
+      (Inst.getOperand(4).getImm() != 1 && Inst.getOperand(4).getImm() != 2) ||
+      !Inst.getOperand(5).isImm() ||
+      (Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP32 &&
+       Inst.getOperand(5).getImm() != LinxV5Op::DataType::FP16) ||
+      ((Inst.getOperand(5).getImm() == LinxV5Op::DataType::FP32) !=
+       (Inst.getOperand(4).getImm() == 1)) ||
+      !Inst.getOperand(6).isImm() || Inst.getOperand(6).getImm() != 29 ||
+      !Inst.getOperand(7).isImm() || Inst.getOperand(7).getImm() != 1 ||
+      !Inst.getOperand(8).isReg() || !Inst.getOperand(9).isReg())
+    report_fatal_error("masked TNEG expansion requires exact FP32/FP16 "
+                       "CUBE_M32 and 128-byte destination");
+  Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                         .addOperand(Inst.getOperand(5))
+                         .addImm(17));
+  Expanded.push_back(MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+                         .addImm(29).addImm(0).addImm(31)
+                         .addImm(LinxV5Op::PadValue::Null)
+                         .addImm(0).addImm(0).addImm(0).addImm(0)
+                         .addImm(0).addImm(1)); // PredInv=0, ZERO inactive
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(0).addReg(LinxV5::R0).addImm(2));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_DIM)
+                         .addImm(1).addReg(LinxV5::R0).addImm(32));
+  if (Inst.getOperand(4).getImm() == 2)
+    Expanded.push_back(
+        MCInstBuilder(LinxV5::B_DIM).addImm(2).addReg(LinxV5::R0).addImm(2));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                         .addOperand(Inst.getOperand(0)).addImm(0b1111)
+                         .addOperand(Inst.getOperand(7)).addImm(1)
+                         .addOperand(Inst.getOperand(8)));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
+                         .addOperand(Inst.getOperand(9))
+                         .addReg(LinxV5::R0).addReg(LinxV5::R0));
+  for (MCInst &Command : Expanded) {
+    MCInst Compressed;
+    if (LinxV5::tryCompressInst(Compressed, Command, STI, Ctx))
+      Command = Compressed;
+  }
+  return true;
+}
 
 static cl::opt<bool> EnableDimOpt("linxv5-enable-dim-opt",
                                   cl::desc("B.DIM Coding Optimization"),
@@ -97,6 +224,7 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
             .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
     break;
   case LinxV5::PseudoTLOAD_noDsrc_noDdst:
+  case LinxV5::PseudoTLOADSpillDesc:
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
     MCVec.push_back(
         MCInstBuilder(LinxV5::BDATR)
@@ -565,6 +693,7 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(0)));          // SrcTile0
     break;
   case LinxV5::PseudoTLOAD_noDsrc_noDdst:
+  case LinxV5::PseudoTLOADSpillDesc:
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
   case LinxV5::PseudoTLOAD_Dsrc_noDdst:
   case LinxV5::PseudoTLOAD_Dsrc_Ddst:
@@ -717,6 +846,7 @@ llvm::SmallVector<MCInst> getBDIMFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(4)));
     break;
   case PseudoTLOAD_noDsrc_noDdst:
+  case PseudoTLOADSpillDesc:
   case PseudoTSTORE_noDsrc_noDdst:
   case PseudoTLOAD_noDsrc_Ddst:
   case PseudoTSTORE_noDsrc_Ddst:
@@ -784,6 +914,7 @@ llvm::SmallVector<MCInst> getBIORFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTLOAD_Dsrc_noDdst:
   case LinxV5::PseudoTLOAD_Dsrc_Ddst:
   case LinxV5::PseudoTLOAD_noDsrc_noDdst:
+  case LinxV5::PseudoTLOADSpillDesc:
   case LinxV5::PseudoTLOAD_noDsrc_Ddst:
   case LinxV5::PseudoTSTORE_Dsrc_noDdst:
   case LinxV5::PseudoTSTORE_Dsrc_Ddst:
@@ -897,6 +1028,7 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoMAMULBMXACC_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX_ACC},
       {LinxV5::PseudoMAMULBMXBACC_SizeI, LinxV5Op::TileOPCUBE::MAMULBMX_ACC},
       {LinxV5::PseudoTLOAD_noDsrc_noDdst, LinxV5Op::TileOPTMA::TLOAD},
+      {LinxV5::PseudoTLOADSpillDesc, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_noDsrc_noDdst, LinxV5Op::TileOPTMA::TSTORE},
       {LinxV5::PseudoTLOAD_noDsrc_Ddst, LinxV5Op::TileOPTMA::TLOAD},
       {LinxV5::PseudoTSTORE_noDsrc_Ddst, LinxV5Op::TileOPTMA::TSTORE},
@@ -908,6 +1040,8 @@ unsigned getPseudoTILEOpcode(unsigned Opcode) {
       {LinxV5::PseudoMGATHER_GPR_Masked_SizeI,
        LinxV5Op::TileOPTMA::MGATHER},
       {LinxV5::PseudoMSCATTER_MASK_SizeI, LinxV5Op::TileOPTMA::MSCATTER_MASK},
+      {LinxV5::PseudoMSCATTER_GPR_Masked_SizeI,
+       LinxV5Op::TileOPTMA::MSCATTER},
       {LinxV5::PseudoMGATHER_ADD_SizeI, LinxV5Op::TileOPTMA::MGATHER_ADD},
       {LinxV5::PseudoMGATHER_ADD_Masked_SizeI,
        LinxV5Op::TileOPTMA::MGATHER_ADD},
