@@ -11,7 +11,7 @@ from pathlib import Path
 
 EXPECTED_ARCHITECTURE = "0.58.7"
 EXPECTED_OPERATIONS = 118
-EXPECTED_FORMS = 145
+EXPECTED_FORMS = 147
 
 
 def cxx_string(value: str) -> str:
@@ -419,7 +419,147 @@ def enrich_tcvt_assemble_variants(catalog: dict) -> None:
                 },
             ]
             operation["forms"].append(split_form)
-        return
+    return
+
+
+def enrich_mx_emitted_order_variants(catalog: dict) -> None:
+    """Add exact forms for the post-0.58.7 MX emitter command streams.
+
+    The catalog's original MX forms describe the logical packed binder groups.
+    The current TileOP emitter emits each matrix/scale operand as its own
+    physical binder, and emits the destination/output binders separately.
+    Keep the original forms for the normative packed shapes and add exact
+    alternatives for the emitted streams; do not relax the generic matcher.
+    """
+    for operation in catalog["operations"]:
+        if operation["mnemonic"] == "TMATMUL_MX":
+            base = operation["forms"][2]
+            form = json.loads(json.dumps(base))
+            expansion = form["expansion"]
+            expansion["form_id"] = "pto0587-tmatmul-mx-emitted-shared"
+            expansion["macro_format"] = (
+                "TMATMUL_MX <M=1, N=1, K=1, AType, BType?, RMode?, Sat?, "
+                "PreMode=0, PostMode=0, PostScale=0, RowMax=0, GroupMax=0, "
+                "RowMaxInit=0, FlushToZero=0, TransposeA=0, TransposeB=0, "
+                "CScale=0, PEMask=AllPE>, SharedLeft0, ScaleA, SharedRight0, "
+                "ScaleB, ->DstTile<Size>, ->RowMaxOut<Size>{if RowMax}, "
+                "->GroupMaxOut<Size>{if GroupMax}"
+            )
+            form["macro_format"] = expansion["macro_format"]
+            bindings = [
+                ("SharedLeft0", "shared-tile-binding", "source", "Role0", 0),
+                ("ScaleA", "shared-tile-binding", "source", "Role0", 1),
+                ("SharedRight0", "shared-tile-binding", "source", "Role0", 2),
+                ("ScaleB", "shared-tile-binding", "source", "Role0", 3),
+                ("DstTile", "tile-destination-binding", "destination", "Role0", 4),
+                ("RowMaxOut", "tile-destination-binding", "destination", "Role0", 5),
+                ("GroupMaxOut", "tile-destination-binding", "destination", "Role0", 6),
+            ]
+            expansion["operand_bindings"] = []
+            for field, kind, role, slot, group in bindings:
+                condition = "RowMax" if field == "RowMaxOut" else (
+                    "GroupMax" if field == "GroupMaxOut" else None
+                )
+                expansion["operand_bindings"].append({
+                    "binding_kind": kind,
+                    "command": "B.IOS" if field in {"SharedLeft0", "ScaleA", "SharedRight0", "ScaleB"} else "B.IOT",
+                    "field": field,
+                    "members": [{
+                        "command_group": group,
+                        "condition": condition,
+                        "default": None,
+                        "eligible_modifiers": [],
+                        "optional": condition is not None,
+                        "physical_role": "destination" if role == "destination" else "source",
+                        "slot": slot,
+                        "syntax": field,
+                    }],
+                    "role_kind": role,
+                    "syntax": field,
+                })
+            expansion["operand_commands"] = [
+                {"command": "B.IOS", "group": group, "members": [{"field": field, "slot": "Role0", "condition": None, "default": None, "optional": False}]}
+                for field, _, _, _, group in bindings[:4]
+            ] + [
+                {"command": "B.IOT", "group": group, "members": [{"field": field, "slot": "Role0", "condition": ("RowMax" if field == "RowMaxOut" else "GroupMax" if field == "GroupMaxOut" else None), "default": None, "optional": field in {"RowMaxOut", "GroupMaxOut"}}]}
+                for field, _, _, _, group in bindings[4:]
+            ]
+            operation["forms"].append(form)
+        elif operation["mnemonic"] == "TMATMUL_MX_ACC":
+            base = operation["forms"][1]
+            form = json.loads(json.dumps(base))
+            expansion = form["expansion"]
+            expansion["form_id"] = "pto0587-tmatmul-mx-acc-emitted-local-shared"
+            expansion["macro_format"] = (
+                "TMATMUL_MX_ACC <M=1, N=1, K=1, AType, BType?, RMode?, Sat?, "
+                "PreMode=0, PostMode=0, PostScale=0, RowMax=0, GroupMax=0, "
+                "RowMaxInit=0, FlushToZero=0, TransposeA=0, TransposeB=0, "
+                "CScale=0, PEMask=AllPE, CCTRL=InternalAccHint>, AccTile, SharedB, ScaleB, LocalA, "
+                "ScaleA, CScaleTile{if CScale}, ->DstTile<Size>"
+            )
+            form["macro_format"] = expansion["macro_format"]
+            form["configuration"].append({
+                "binding_kind": "bundle-configuration",
+                "condition": None,
+                "configuration_kind": "attribute",
+                "constraint": "InternalAccHint",
+                "default": "InternalAccHint",
+                "field": "CCTRL",
+                "optional": False,
+                "ordinal": len(form["configuration"]),
+                "role": "bundle configuration field",
+                "size": None,
+                "syntax": "CCTRL=InternalAccHint",
+                "value_style": "bare-value",
+            })
+            expansion["configuration_bindings"].append({
+                "field": "CCTRL",
+                "syntax": "CCTRL=InternalAccHint",
+                "targets": [{
+                    "command": "B.DATR",
+                    "group": None,
+                    "slot": "PadValueOrByteId",
+                }],
+            })
+            specs = [
+                ("AccTile", "B.IOT", "LocalSource", "source", 0, "Role0", None),
+                ("SharedB", "B.IOS", "SharedSource", "source", 1, "Role0", None),
+                ("ScaleB", "B.IOS", "SharedSource", "source", 2, "Role0", None),
+                ("LocalA", "B.IOT", "LocalSource", "source", 3, "Role0", None),
+                ("ScaleA", "B.IOT", "LocalSource", "source", 4, "Role0", None),
+                ("CScaleTile", "B.IOT", "LocalSource", "source", 5, "Role0", "CScale"),
+                ("DstTile", "B.IOT", "LocalDestination", "destination", 6, "Role0", None),
+            ]
+            kind_to_binding = {
+                "LocalSource": "tile-source-binding",
+                "SharedSource": "shared-tile-binding",
+                "LocalDestination": "tile-destination-binding",
+            }
+            expansion["operand_bindings"] = []
+            for field, command, kind, role, group, slot, condition in specs:
+                expansion["operand_bindings"].append({
+                    "binding_kind": kind_to_binding[kind],
+                    "command": command,
+                    "field": field,
+                    "members": [{
+                        "command_group": group,
+                        "condition": condition,
+                        "default": None,
+                        "eligible_modifiers": [],
+                        "optional": condition is not None,
+                        "physical_role": "destination" if role == "destination" else "source",
+                        "slot": slot,
+                        "syntax": field,
+                    }],
+                    "role_kind": role,
+                    "syntax": field,
+                })
+            expansion["operand_commands"] = [
+                {"command": command, "group": group, "members": [{"field": field, "slot": slot, "condition": condition, "default": None, "optional": condition is not None}]}
+                for field, command, _, _, group, slot, condition in specs
+            ]
+            operation["forms"].append(form)
+    return
 
 
 def generate(catalog_path: Path) -> str:
@@ -431,6 +571,7 @@ def generate(catalog_path: Path) -> str:
         )
     enrich_elementwise_layout_configs(catalog)
     enrich_tcvt_assemble_variants(catalog)
+    enrich_mx_emitted_order_variants(catalog)
     operations = catalog["operations"]
     forms = [(operation, form) for operation in operations for form in operation["forms"]]
     if len(operations) != EXPECTED_OPERATIONS:

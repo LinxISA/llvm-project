@@ -666,8 +666,11 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           DATR->getOperand(2).getImm() != LinxV5Op::DataType::EMPTY_DataType;
       break;
     case TileMacroTargetSlot::PadValueOrByteId:
-      Print |= DATR->getOperand(3).getImm() != LinxV5Op::PadValue::Null ||
-               DATR->getOperand(7).getImm() != 0;
+      if (Field == "CCTRL")
+        Print = true;
+      else
+        Print |= DATR->getOperand(3).getImm() != LinxV5Op::PadValue::Null ||
+                 DATR->getOperand(7).getImm() != 0;
       break;
     case TileMacroTargetSlot::CMode:
       Print |= DATR->getOperand(4).getImm() != LinxV5Op::CmpMode::EQ;
@@ -695,7 +698,9 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       printBstartDataType(DATR, 2, STI, O);
       break;
     case TileMacroTargetSlot::PadValueOrByteId:
-      if (Field == "PadValueOrByteId" && DATR->getOperand(7).getImm() != 0)
+      if (Field == "CCTRL") {
+        O << "InternalAccHint";
+      } else if (Field == "PadValueOrByteId" && DATR->getOperand(7).getImm() != 0)
         printByteID(DATR, 7, STI, O);
       else
         printPadValue(DATR, 3, STI, O);

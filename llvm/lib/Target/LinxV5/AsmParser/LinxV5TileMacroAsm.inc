@@ -230,6 +230,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       Value.Imm = CmpMode::EQ;
     else if (Default == "Null")
       Value.Imm = PadValue::Null;
+    else if (Default == "InternalAccHint")
+      Value.Imm = 2;
     else if (Default == "DTYPE_NONE")
       Value.Imm = DataType::EMPTY_DataType;
     else
@@ -262,6 +264,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       ParsedValue = parsePadName(Name);
       if (ParsedValue == 32)
         ParsedValue = parseByteName(Name);
+    } else if (Field == "CCTRL") {
+      ParsedValue = Name.equals_insensitive("InternalAccHint") ? 2 : 32;
     } else if (Field == "CMode")
       ParsedValue = parseCmpName(Name);
     else if (Field == "RMode")
@@ -986,7 +990,9 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
           DstType = Value.Imm;
           break;
         case TileMacroTargetSlot::PadValueOrByteId:
-          if (StringRef(Desc.Field) == "PadValueOrByteId" &&
+          if (StringRef(Desc.Field) == "CCTRL")
+            Pad = Value.Imm;
+          else if (StringRef(Desc.Field) == "PadValueOrByteId" &&
               Value.Imm <= ByteID::BYTE3)
             Byte = Value.Imm;
           else

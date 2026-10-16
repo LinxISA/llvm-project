@@ -979,6 +979,9 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       const auto *PadConfig =
           targetConfig(Form, TileMacroTargetKind::DATR,
                        TileMacroTargetSlot::PadValueOrByteId);
+      if (PadConfig && StringRef(PadConfig->Field) == "CCTRL" &&
+          Pad != 2)
+        return false;
       if (!PadConfig) {
         unsigned DefaultPad = Operation->HeaderKind == TileMacroHeaderKind::CUBE
                                   ? 0
