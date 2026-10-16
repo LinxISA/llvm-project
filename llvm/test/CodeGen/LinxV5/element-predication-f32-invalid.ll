@@ -3,6 +3,8 @@
 ; FASTADD: floating arithmetic requires f32 add/sub/mul without fast-math
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/one.ll 2>&1 | FileCheck %s --check-prefix=ONE
 ; ONE: floating comparison predicate has no exact native mapping
+; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/ueq.ll 2>&1 | FileCheck %s --check-prefix=UEQ
+; UEQ: floating comparison predicate has no exact native mapping
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/fast-cmp.ll 2>&1 | FileCheck %s --check-prefix=FASTCMP
 ; FASTCMP: floating comparison requires f32 without fast-math
 ; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %t/fast-select.ll 2>&1 | FileCheck %s --check-prefix=FASTSELECT
@@ -100,6 +102,37 @@ loop:
   %value = extractelement <32 x float> %view, i32 %element
   %condition = fcmp nnan ogt float %value, 0.0
   %result = select i1 %condition, float %value, float -0.0
+  %insert = insertelement <32 x float> %carrier, float %result, i32 %element
+  %published = call <32 x float> @llvm.linx.experimental.element.view.v32f32(<32 x float> %insert, i64 2, i64 2, i64 0, i64 128, i64 1, i64 32, i64 1, i64 29)
+  %next = add nuw nsw i32 %element, 1
+  %more = icmp ult i32 %next, 32
+  br i1 %more, label %loop, label %exit, !llvm.loop !1
+exit:
+  %final = phi <32 x float> [ %published, %loop ]
+  call void asm sideeffect "opaque.tile.consumer $0", "@2Tr"(<32 x float> %final)
+  ret void
+}
+!0 = distinct !{}
+!1 = distinct !{!1, !2}
+!2 = !{!"llvm.loop.linx.pto.element.region", !0}
+
+;--- ueq.ll
+target triple = "linx64v5"
+declare void @llvm.linx.experimental.element.region(metadata)
+declare <32 x float> @llvm.linx.experimental.element.view.v32f32(<32 x float>, i64, i64, i64, i64, i64, i64, i64, i64)
+define void @bad() {
+entry:
+  %input = call <32 x float> asm sideeffect "", "=@2Tr"()
+  %initial = call <32 x float> asm sideeffect "", "=@2Tr"()
+  call void @llvm.linx.experimental.element.region(metadata !0)
+  br label %loop
+loop:
+  %element = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %carrier = phi <32 x float> [ %initial, %entry ], [ %published, %loop ]
+  %view = call <32 x float> @llvm.linx.experimental.element.view.v32f32(<32 x float> %input, i64 1, i64 1, i64 0, i64 128, i64 1, i64 32, i64 1, i64 29)
+  %value = extractelement <32 x float> %view, i32 %element
+  %condition = fcmp ueq float %value, 0.0
+  %result = select i1 %condition, float 11.0, float 22.0
   %insert = insertelement <32 x float> %carrier, float %result, i32 %element
   %published = call <32 x float> @llvm.linx.experimental.element.view.v32f32(<32 x float> %insert, i64 2, i64 2, i64 0, i64 128, i64 1, i64 32, i64 1, i64 29)
   %next = add nuw nsw i32 %element, 1

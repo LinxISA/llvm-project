@@ -1,17 +1,13 @@
-; RUN: not opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize' -disable-output %s 2>&1 | FileCheck %s
+; RUN: opt -mtriple=linx64v5 -passes='loop-simplify,lcssa,linx-v5-element-predication,linx-v5-element-tile-legalize,linx-v5-element-region-verify,verify' -verify-each -S %s | FileCheck %s
 ;
-; FP32 NORM predicate inversion is not a numeric multiply. Keep boolean NOT
-; fail-closed until an exact packed-predicate inversion lowering is defined.
-;
-; CHECK: PTO element region: Tile legalization: NORM VP operation has no exact native mapping
-
+; FP32 NORM predicate inversion is packed predicate algebra, not numeric FMUL.
 target triple = "linx64v5"
 
 declare void @llvm.linx.experimental.element.region(metadata)
 declare <512 x float> @llvm.linx.experimental.element.view.v512f32(
     <512 x float>, i64, i64, i64, i64, i64, i64, i64, i64)
 
-define void @reject_f32_norm_predicate_not() {
+define void @f32_norm_predicate_not() {
 entry:
   %input = call <512 x float> asm sideeffect "", "=@2Tr"()
   %initial = call <512 x float> asm sideeffect "", "=@2Tr"()
@@ -27,7 +23,7 @@ loop:
   %value = extractelement <512 x float> %input.view, i32 %element
   %positive = fcmp ogt float %value, 0.0
   %not = xor i1 %positive, true
-  %result = select i1 %not, float %value, float 0.0
+  %result = select i1 %not, float 11.0, float 22.0
   %inserted = insertelement <512 x float> %carrier, float %result, i32 %element
   %published = call <512 x float> @llvm.linx.experimental.element.view.v512f32(
       <512 x float> %inserted, i64 2, i64 2, i64 0, i64 2048, i64 1,
@@ -41,6 +37,14 @@ exit:
   call void asm sideeffect "opaque.tile.consumer $0", "@2Tr"(<512 x float> %final)
   ret void
 }
+
+; CHECK-LABEL: define void @f32_norm_predicate_not
+; CHECK: @llvm.linx.experimental.ew.tcmp.row
+; CHECK: @llvm.linx.experimental.ew.tsel.row
+; CHECK: @llvm.linx.experimental.ew.tcmp.row
+; CHECK-NOT: @llvm.linx.experimental.ew.tbinary
+; CHECK: @llvm.linx.experimental.ew.tsel.row
+; CHECK: call void asm sideeffect "opaque.tile.consumer $0"
 
 !0 = distinct !{}
 !1 = distinct !{!1, !2}

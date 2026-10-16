@@ -1145,14 +1145,29 @@ carrierDescriptor(Value *V, Loop &L, SmallPtrSetImpl<Value *> &Seen) {
   return Result;
 }
 
-static Optional<uint64_t> floatComparisonSelector(CmpInst::Predicate Pred) {
+struct FloatComparisonMapping {
+  uint64_t Selector;
+  bool Invert;
+};
+
+// PTO's six native FP comparison modes use C-like unordered behavior: EQ is
+// ordered while NE is unordered.  LLVM may canonicalize ordered relational
+// branches to the inverse unordered predicate with reversed successors.  The
+// four relational complements remain exact when the native result is inverted;
+// ONE and UEQ do not have such a one-comparison representation.
+static Optional<FloatComparisonMapping>
+floatComparisonMapping(CmpInst::Predicate Pred) {
   switch (Pred) {
-  case FCmpInst::FCMP_OEQ: return 0;
-  case FCmpInst::FCMP_UNE: return 1;
-  case FCmpInst::FCMP_OLT: return 2;
-  case FCmpInst::FCMP_OGT: return 3;
-  case FCmpInst::FCMP_OLE: return 4;
-  case FCmpInst::FCMP_OGE: return 5;
+  case FCmpInst::FCMP_OEQ: return FloatComparisonMapping{0, false};
+  case FCmpInst::FCMP_UNE: return FloatComparisonMapping{1, false};
+  case FCmpInst::FCMP_OLT: return FloatComparisonMapping{2, false};
+  case FCmpInst::FCMP_OGT: return FloatComparisonMapping{3, false};
+  case FCmpInst::FCMP_OLE: return FloatComparisonMapping{4, false};
+  case FCmpInst::FCMP_OGE: return FloatComparisonMapping{5, false};
+  case FCmpInst::FCMP_ULT: return FloatComparisonMapping{5, true};
+  case FCmpInst::FCMP_UGT: return FloatComparisonMapping{4, true};
+  case FCmpInst::FCMP_ULE: return FloatComparisonMapping{3, true};
+  case FCmpInst::FCMP_UGE: return FloatComparisonMapping{2, true};
   default: return None;
   }
 }
@@ -2279,7 +2294,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
              !Compare->getOperand(0)->getType()->isHalfTy()) ||
             Compare->getFastMathFlags().any())
           return Fail(&I, "floating comparison requires f32 without fast-math");
-        if (!floatComparisonSelector(Compare->getPredicate()))
+        if (!floatComparisonMapping(Compare->getPredicate()))
           return Fail(&I, "floating comparison predicate has no exact native mapping");
         continue;
       }
@@ -3074,7 +3089,7 @@ class ElementTileLegalizer {
   Optional<ElementProfile> NormProfile;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
-  DenseMap<Value *, Value *> ActiveMasks;
+  DenseMap<std::pair<Value *, uint64_t>, Value *> ActiveMasks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
   uint64_t NativeI64RegionType = 0;
   uint64_t NativeI32RegionType = 0;
@@ -3549,7 +3564,7 @@ class ElementTileLegalizer {
     }
     if (auto *Cmp = dyn_cast<FCmpInst>(V)) {
       if (NormProfile->DataType != 1 ||
-          !floatComparisonSelector(Cmp->getPredicate()))
+          !floatComparisonMapping(Cmp->getPredicate()))
         return fail(V, "NORM FP32 comparison predicate has no native mapping");
       return validateNorm(Cmp->getOperand(0)) &&
              validateNorm(Cmp->getOperand(1));
@@ -3567,7 +3582,9 @@ class ElementTileLegalizer {
       if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
         return (Cmp->getIntrinsicID() == Intrinsic::vp_fcmp &&
                 NormProfile->DataType == 1 &&
-                floatComparisonSelector(Cmp->getPredicate()) &&
+                floatComparisonMapping(Cmp->getPredicate()) &&
+                (!floatComparisonMapping(Cmp->getPredicate())->Invert ||
+                 hasFullyActiveMask(*VP)) &&
                 validateNorm(Cmp->getArgOperand(0)) &&
                 validateNorm(Cmp->getArgOperand(1))) ||
                fail(V, "NORM FP32 comparison has no exact native mapping");
@@ -3575,6 +3592,14 @@ class ElementTileLegalizer {
       APInt Initial, Step;
       const bool U32AffineAdd = NormProfile->DataType == 25 &&
                                 matchNormAffineAdd(VP, Initial, Step);
+      const bool PredicateNot =
+          Ty->getElementType()->isIntegerTy(1) &&
+          VP->getIntrinsicID() == Intrinsic::vp_xor &&
+          match(VP->getArgOperand(1), m_AllOnes()) &&
+          hasFullyActiveMask(*VP);
+      if (PredicateNot &&
+          (NormProfile->DataType == 1 || NormProfile->DataType == 25))
+        return validateNorm(VP->getArgOperand(0));
       if (!hasFullyActiveMask(*VP) && !U32AffineAdd)
         return fail(V, "NORM Tile operation requires its full valid domain");
       if (NormProfile->DataType == 1 && Op &&
@@ -3591,7 +3616,7 @@ class ElementTileLegalizer {
       if (Ty->getElementType()->isIntegerTy(1) &&
           Binary->getOpcode() == Instruction::Xor &&
           match(Binary->getOperand(1), m_AllOnes()) &&
-          NormProfile->DataType == 25)
+          (NormProfile->DataType == 1 || NormProfile->DataType == 25))
         return validateNorm(Binary->getOperand(0));
       if (NormProfile->DataType == 1 &&
           (Binary->getOpcode() == Instruction::FAdd ||
@@ -3658,6 +3683,18 @@ class ElementTileLegalizer {
                  B.getInt64(Selector),
                  B.getInt64(NormProfile->Count / NormProfile->Rows)},
                 "pto.norm.predicate");
+  }
+
+  Value *normInvertPredicate(Value *Mask) {
+    Constant *Zero = Constant::getNullValue(NormProfile->ScalarTy);
+    Constant *One = NormProfile->ScalarTy->isFloatingPointTy()
+                        ? static_cast<Constant *>(
+                              ConstantFP::get(NormProfile->ScalarTy, 1.0))
+                        : static_cast<Constant *>(
+                              ConstantInt::get(NormProfile->ScalarTy, 1));
+    Value *ZeroTile = normSplat(Zero);
+    Value *OneTile = normSplat(One);
+    return normCompare(normSelect(Mask, ZeroTile, OneTile), ZeroTile, 1);
   }
 
   Value *normSelect(Value *Mask, Value *Yes, Value *No) {
@@ -3738,9 +3775,11 @@ class ElementTileLegalizer {
       R = normCompare(valueNorm(Cmp->getOperand(0)),
                       valueNorm(Cmp->getOperand(1)), Selector);
     } else if (auto *Cmp = dyn_cast<FCmpInst>(V)) {
+      auto Mapping = *floatComparisonMapping(Cmp->getPredicate());
       R = normCompare(valueNorm(Cmp->getOperand(0)),
-                      valueNorm(Cmp->getOperand(1)),
-                      *floatComparisonSelector(Cmp->getPredicate()));
+                      valueNorm(Cmp->getOperand(1)), Mapping.Selector);
+      if (Mapping.Invert)
+        R = normInvertPredicate(R);
     } else if (auto *Select = dyn_cast<SelectInst>(V)) {
       R = normSelect(valueNorm(Select->getCondition()),
                      valueNorm(Select->getTrueValue()),
@@ -3750,10 +3789,17 @@ class ElementTileLegalizer {
       if (NormProfile->DataType == 25 &&
           matchNormAffineAdd(VP, Initial, Step))
         R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
-      else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
+      else if (Ty->getElementType()->isIntegerTy(1) &&
+               VP->getIntrinsicID() == Intrinsic::vp_xor &&
+               match(VP->getArgOperand(1), m_AllOnes()))
+        R = normInvertPredicate(valueNorm(VP->getArgOperand(0)));
+      else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP)) {
+        auto Mapping = *floatComparisonMapping(Cmp->getPredicate());
         R = normCompare(valueNorm(Cmp->getArgOperand(0)),
-                        valueNorm(Cmp->getArgOperand(1)),
-                        *floatComparisonSelector(Cmp->getPredicate()));
+                        valueNorm(Cmp->getArgOperand(1)), Mapping.Selector);
+        if (Mapping.Invert)
+          R = normInvertPredicate(R);
+      }
       else {
         unsigned Op = *binaryOpcode(VP->getIntrinsicID());
         R = normBinary(valueNorm(VP->getArgOperand(0)),
@@ -3762,44 +3808,35 @@ class ElementTileLegalizer {
       }
     } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
       APInt Initial, Step;
-      if (NormProfile->DataType == 25 &&
+      if (Ty->getElementType()->isIntegerTy(1) &&
+          Binary->getOpcode() == Instruction::Xor &&
+          match(Binary->getOperand(1), m_AllOnes())) {
+        if (NormProfile->DataType == 25)
+          if (auto *Cmp = dyn_cast<ICmpInst>(Binary->getOperand(0))) {
+            unsigned Selector;
+            switch (Cmp->getInversePredicate()) {
+            case ICmpInst::ICMP_EQ: Selector = 0; break;
+            case ICmpInst::ICMP_NE: Selector = 1; break;
+            case ICmpInst::ICMP_ULT: Selector = 2; break;
+            case ICmpInst::ICMP_UGT: Selector = 3; break;
+            case ICmpInst::ICMP_ULE: Selector = 4; break;
+            case ICmpInst::ICMP_UGE: Selector = 5; break;
+            default: llvm_unreachable("NORM predicate inverse preflight");
+            }
+            R = normCompare(valueNorm(Cmp->getOperand(0)),
+                            valueNorm(Cmp->getOperand(1)), Selector);
+          }
+        if (!R)
+          R = normInvertPredicate(valueNorm(Binary->getOperand(0)));
+      } else if (NormProfile->DataType == 25 &&
           matchNormAffineAdd(Binary, Initial, Step)) {
         R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
       } else if (NormProfile->DataType == 1) {
         R = normBinary(valueNorm(Binary->getOperand(0)),
                        valueNorm(Binary->getOperand(1)),
                        Binary->getOpcode() == Instruction::FAdd ? 0 : 2);
-      } else if (auto *Cmp = dyn_cast<ICmpInst>(Binary->getOperand(0))) {
-        unsigned Selector;
-        switch (Cmp->getInversePredicate()) {
-        case ICmpInst::ICMP_EQ:
-          Selector = 0;
-          break;
-        case ICmpInst::ICMP_NE:
-          Selector = 1;
-          break;
-        case ICmpInst::ICMP_ULT:
-          Selector = 2;
-          break;
-        case ICmpInst::ICMP_UGT:
-          Selector = 3;
-          break;
-        case ICmpInst::ICMP_ULE:
-          Selector = 4;
-          break;
-        case ICmpInst::ICMP_UGE:
-          Selector = 5;
-          break;
-        default:
-          llvm_unreachable("NORM predicate inverse preflight");
-        }
-        R = normCompare(valueNorm(Cmp->getOperand(0)),
-                        valueNorm(Cmp->getOperand(1)), Selector);
       } else {
-        Value *Zero = normSplat(B.getInt32(0));
-        Value *One = normSplat(B.getInt32(1));
-        R = normCompare(
-            normSelect(valueNorm(Binary->getOperand(0)), Zero, One), Zero, 1);
+        llvm_unreachable("NORM pure Tile binary preflight");
       }
     } else if (auto *Cast = dyn_cast<ZExtInst>(V)) {
       R = normSelect(valueNorm(Cast->getOperand(0)), normSplat(B.getInt32(1)),
@@ -4060,7 +4097,11 @@ class ElementTileLegalizer {
                                ->getNumElements();
     if (Count != DomainCount)
       return fail(&VP, "VP effect width must match its owning element domain");
-    if (!EVL || !EVL->equalsInt(Count) || !isVector(VP.getMaskParam(), 1))
+    const bool PartialCompare =
+        isa<VPCmpIntrinsic>(&VP) && EVL && !EVL->isZero() &&
+        EVL->getValue().ule(Count);
+    if (!EVL || (!EVL->equalsInt(Count) && !PartialCompare) ||
+        !isVector(VP.getMaskParam(), 1))
       return fail(&VP, "requires a 32-bit mask and constant EVL=32");
     if (!validate(VP.getMaskParam()))
       return false;
@@ -4070,7 +4111,7 @@ class ElementTileLegalizer {
            !isF16Vector(Cmp->getArgOperand(0))) ||
           Cmp->getArgOperand(0)->getType() !=
               Cmp->getArgOperand(1)->getType() ||
-          !floatComparisonSelector(Cmp->getPredicate()))
+          !floatComparisonMapping(Cmp->getPredicate()))
         return fail(&VP, "floating comparison predicate/type has no exact native mapping");
       // LLVM 15 vp.fcmp returns an i1 vector and is not an FPMathOperator.
       // Scalar FCmp fast-math is rejected before conversion to this intrinsic.
@@ -4323,7 +4364,7 @@ class ElementTileLegalizer {
         std::swap(L, RHS);
         Pred = FCmpInst::getSwappedPredicate(Pred);
       }
-      uint64_t Selector = *floatComparisonSelector(Pred);
+      auto Mapping = *floatComparisonMapping(Pred);
       Value *Active = activeMask(*Cmp);
       if (Value *Scalar = getSplatValue(RHS)) {
         Scalar = B.CreateFreeze(Scalar);
@@ -4335,17 +4376,20 @@ class ElementTileLegalizer {
         R = call(
             Intrinsic::linx_experimental_ew_tcmps_gpr_masked, {L->getType()},
             {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
-             B.getInt64(29), value(L), Scalar, B.getInt64(Selector), Active},
+             B.getInt64(29), value(L), Scalar,
+             B.getInt64(Mapping.Selector), Active},
             "pto.mask.compare");
       } else {
         R = call(Intrinsic::linx_experimental_ew_tcmp_gpr_masked,
                  {L->getType()},
                  {B.getInt64(32), B.getInt64(Count / 32),
                   B.getInt64(L->getType()->getScalarType()->isHalfTy() ? 4 : 1),
-                  B.getInt64(29), value(L), value(RHS), B.getInt64(Selector),
-                  Active},
+                  B.getInt64(29), value(L), value(RHS),
+                  B.getInt64(Mapping.Selector), Active},
                  "pto.mask.compare");
       }
+      if (Mapping.Invert)
+        R = B.CreateXor(R, Active, "pto.mask.compare.inverse");
     } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
       R = B.CreateBinOp(static_cast<Instruction::BinaryOps>(
                             *binaryOpcode(VP->getIntrinsicID())),
@@ -4403,11 +4447,20 @@ class ElementTileLegalizer {
   }
 
   Value *activeMask(VPIntrinsic &VP) {
-    if (Value *Existing = ActiveMasks.lookup(VP.getMaskParam()))
-      return Existing;
     uint64_t N = cast<ConstantInt>(VP.getVectorLengthParam())->getZExtValue();
-    uint64_t FullMask = N == 64 ? ~uint64_t(0) : (uint64_t(1) << N) - 1;
-    return ActiveMasks[VP.getMaskParam()] =
+    auto Key = std::make_pair(VP.getMaskParam(), N);
+    if (Value *Existing = ActiveMasks.lookup(Key))
+      return Existing;
+    unsigned Count =
+        cast<FixedVectorType>(VP.getMaskParam()->getType())->getNumElements();
+    uint64_t FullMask = 0;
+    for (unsigned Logical = 0; Logical < N; ++Logical) {
+      unsigned Physical = Count == 64
+                              ? Logical / 2 + 32 * (Logical % 2)
+                              : Logical;
+      FullMask |= uint64_t(1) << Physical;
+    }
+    return ActiveMasks[Key] =
                B.CreateAnd(mask(VP.getMaskParam()), B.getInt64(FullMask));
   }
 
