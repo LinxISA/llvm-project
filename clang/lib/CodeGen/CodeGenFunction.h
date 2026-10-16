@@ -262,6 +262,13 @@ public:
   CodeGenModule &CGM;  // Per-module state.
   const TargetInfo &Target;
 
+  // Issue #120: layout contracts for pto::Tile<..., CUBE, ...> carrier
+  // lvalue pointers, keyed by the pointer Value. Consumed by
+  // EmitLoadOfScalar/EmitStoreOfScalar when the access through that exact
+  // pointer is emitted; the "linx.tile.transport" metadata then drives the
+  // backend's boundary transport rewrite (LinxV5TileCarrierTransport).
+  llvm::DenseMap<llvm::Value *, std::string> LinxTileCarrierContracts;
+
   // For EH/SEH outlined funclets, this field points to parent's CGF
   CodeGenFunction *ParentCGF = nullptr;
 

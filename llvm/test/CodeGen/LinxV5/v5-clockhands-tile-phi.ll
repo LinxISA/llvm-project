@@ -2,6 +2,11 @@
 ; RUN:   -enable-all-vector-as-tilereg=true \
 ; RUN:   -linxv5-enable-clock-hand-opt=true \
 ; RUN:   -stop-after=linxv5-clockhands -o - | FileCheck %s
+; RUN: llc < %s -mtriple=linx64v5 -mcpu=janus \
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-clock-hand-opt=true \
+; RUN:   -linxv5-enable-window-aware-tile-coloring=true \
+; RUN:   -stop-after=linxv5-clockhands -o - | FileCheck %s
 
 target triple = "linx64v5"
 

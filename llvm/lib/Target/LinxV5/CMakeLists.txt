@@ -48,6 +48,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5AnnotateControlFlow.cpp
   LinxV5ElementwiseMask.cpp
   LinxV5ElementRegion.cpp
+  LinxV5TileCarrierTransport.cpp
   LinxV5TargetTransformInfo.cpp
   LinxV5BaseInfo.cpp
   LinxV5RebindGetTilePTR.cpp
