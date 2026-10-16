@@ -1,10 +1,15 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
 ; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+; RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t | FileCheck %s --check-prefix=RAW
 
 ; CHECK-LABEL: <elementwise_tsel>:
-; CHECK: BSTART.TEPL TCMP, FP32
+; CHECK: TCMP <Row=16, Col=8, FP32, LT, Zero>
 ; CHECK: TSEL <Row=
 ; CHECK-NOT: C.B.DIMI 0
+; RAW-LABEL: <elementwise_tsel>:
+; RAW: BSTART.TEPL TCMP, FP32
+; RAW: BSTART.TEPL TSEL, FP32
+; RAW-NOT: C.B.DIMI 0
 
 define void @elementwise_tsel(ptr %lhs_ptr, ptr %rhs_ptr) #0 {
 entry:

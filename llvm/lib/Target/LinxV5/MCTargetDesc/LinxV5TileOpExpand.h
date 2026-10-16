@@ -38,6 +38,16 @@ llvm::SmallVector<MCInst> getBIORFromInst(MCInst Inst, const MCInstrInfo &MII);
 
 llvm::SmallVector<MCInst> getBTEXTTFromInst(MCInst Inst, const MCInstrInfo &MII);
 
+// Expand bounded FP32 GPR-masked comparisons before either textual assembly or
+// object emission. Result and execution mask share one dense B.IOR record.
+bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
+                            MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded);
+
+// Native unary masked TNEG uses a Tile destination and one source-only
+// execution-mask B.IOR. Shared by textual and object emission.
+bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
+                         MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded);
+
 unsigned getPseudoTILEOpcode(unsigned Opcode);
 
 bool isActiveMatrixPseudo(unsigned Opcode);

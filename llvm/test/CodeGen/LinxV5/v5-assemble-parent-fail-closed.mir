@@ -1,0 +1,308 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/stale-implicit-def.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/unresolved-init.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CONTROL
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/unresolved-last.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CONTROL
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/one-arm-last-common-last.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CONTINUATION
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/already-closed-continuation.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CONTINUATION
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/overlapping-spill-write.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/unknown-spill-store.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/non-spill-stack-object.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OPEN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=linxv5-treg-to-offset \
+# RUN:   -o /dev/null %t/unsafe-parent-rotation.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ROTATION
+#
+# An unmodeled implicit register definition invalidates an earlier known
+# scalar value.  The conditional branch must explore both successors,
+# including the path that reaches the ordinary use while the parent is OPEN.
+#
+# OPEN: LLVM ERROR: cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source before LAST
+# CONTROL: LLVM ERROR: B.ASSEMBLE Init/Last controls must be immediate operands
+# CONTINUATION: LLVM ERROR: B.ASSEMBLE continuation requires one exact OPEN parent epoch at a uniform relative distance
+# ROTATION: LLVM ERROR: OPEN B.ASSEMBLE parent hand contains another real tile definition after CFG copy insertion
+
+#--- stale-implicit-def.mir
+--- |
+  define void @stale_implicit_def_must_not_prune_open_path(i64 %unknown) { ret void }
+...
+---
+name:            stale_implicit_def_must_not_prune_open_path
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $r3
+    $r4 = ORI $r0, 0
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    C_SETC_TGT $r2, implicit-def $r4, implicit-def $carg
+    BEQ $r4, $r0, %bb.1
+    PseudoBR %bb.2
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $r3, $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $r3, $tile_t1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $r3, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r3, 720905, $tile_t1
+    PseudoRET
+...
+
+#--- unresolved-init.mir
+--- |
+  define void @unresolved_assemble_init() { ret void }
+...
+---
+name:            unresolved_assemble_init
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${9:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    PseudoRET
+...
+
+#--- unresolved-last.mir
+--- |
+  define void @unresolved_assemble_last() { ret void }
+...
+---
+name:            unresolved_assemble_last
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${9:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    PseudoRET
+...
+
+#--- one-arm-last-common-last.mir
+--- |
+  define void @one_arm_last_common_last(i64 %unknown) { ret void }
+...
+---
+name:            one_arm_last_common_last
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+body:             |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1, $tile_u1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+...
+
+#--- already-closed-continuation.mir
+--- |
+  define void @already_closed_continuation() { ret void }
+...
+---
+name:            already_closed_continuation
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+...
+
+#--- overlapping-spill-write.mir
+--- |
+  define void @overlapping_spill_write_must_invalidate_counter() { ret void }
+...
+---
+name:            overlapping_spill_write_must_invalidate_counter
+alignment:       2
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    $r4 = ORI $r0, 0
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    INLINEASM &"", 17 :: (store (s32) into %stack.0, align 4)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
+    PseudoRET
+...
+
+#--- unknown-spill-store.mir
+--- |
+  define void @unknown_spill_store_must_invalidate_counter(i64 %unknown) { ret void }
+...
+---
+name:            unknown_spill_store_must_invalidate_counter
+alignment:       2
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2
+    $r4 = ORI $r0, 0
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    SDI $r2, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
+    PseudoRET
+...
+
+#--- non-spill-stack-object.mir
+--- |
+  define void @non_spill_stack_object_must_not_transport_counter() { ret void }
+...
+---
+name:            non_spill_stack_object_must_not_transport_counter
+alignment:       2
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: default, offset: 0, size: 8, alignment: 8 }
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    $r4 = ORI $r0, 0
+    SDI $r4, $r1, 0 :: (store (s64) into %stack.0, align 8)
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 5, 13, 1, 13, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2(0x40000000), %bb.3(0x40000000)
+    liveins: $tile_t1, $tile_u1
+    $r4 = LDI $r1, 0 :: (load (s64) from %stack.0, align 8)
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    liveins: $tile_t1, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_u1, 13, 0, 13, 1
+    PseudoRET
+  bb.3:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_t1
+    PseudoRET
+...
+
+#--- unsafe-parent-rotation.mir
+--- |
+  define void @unsafe_parent_rotation_must_fail_closed() { ret void }
+...
+---
+name:            unsafe_parent_rotation_must_fail_closed
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    $r4 = ORI $r0, 0
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 2, 4, 29, 1, $r0, $r0
+    $tile_u3 = IMPLICIT_DEF
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x40000000), %bb.2(0x40000000)
+    liveins: $r4, $tile_u1, $tile_u2, $tile_u3
+    $tile_u1 = PseudoTCOPYDesc 1, $tile_u1, 2, 32, 2, 4, 29
+    BEQ $r4, $r0, %bb.2
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.4(0x80000000)
+    liveins: $r4, $tile_u1
+    INLINEASM &"BSTART.TEPL 27, 4\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 2, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_u2, 720905, $tile_u1, 13, 1, 13, 1, 13, 0
+    $tile_u3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 2, 4, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+  bb.4:
+    successors: %bb.1(0x80000000)
+    liveins: $r4, $tile_u1, $tile_u2, $tile_u3
+    $r4 = ADDI $r4, 1
+    PseudoBR %bb.1
+  bb.3:
+    liveins: $tile_u1, $tile_u2, $tile_u3
+    INLINEASM &"BSTART.TEPL 27, 4\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 2, ->lb2\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_u2, 720905, $tile_u1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 4\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1, 2293769, $r0, 720905, $tile_u3
+    PseudoRET
+...

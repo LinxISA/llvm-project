@@ -1,0 +1,18 @@
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# The packed payload fits 256B, but the pinned U8 descriptor legality fence
+# requires 2KB for a 2048-column predicate used by identity TMOV.
+# CHECK: invalid packed NORM predicate COPY descriptor
+--- |
+  define void @predicate_copy_too_small() { ret void }
+...
+---
+name: predicate_copy_too_small
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    $tile_u2 = IMPLICIT_DEF
+    $tile_t1 = PseudoTCMP_Row_SizeI $r0, 1, $r0, 2048, 25, 0, 2, $tile_u1, $tile_u2, 3, 2048
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

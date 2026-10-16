@@ -66,6 +66,38 @@ struct LinxV5ElementRegionPass : PassInfoMixin<LinxV5ElementRegionPass> {
   static bool isRequired() { return true; }
 };
 
+// Explicit IR development stage. Target legalization must consume the retained
+// mandatory region sentinel before this output can enter instruction selection.
+struct LinxV5ElementPredicationPass
+    : PassInfoMixin<LinxV5ElementPredicationPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5ElementTileLegalizationPass
+    : PassInfoMixin<LinxV5ElementTileLegalizationPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5LocalTileABIPromotionPass
+    : PassInfoMixin<LinxV5LocalTileABIPromotionPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5ElementCallContextPass
+    : PassInfoMixin<LinxV5ElementCallContextPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5GenericElementPreparePass
+    : PassInfoMixin<LinxV5GenericElementPreparePass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
 struct LinxV5ElementRegionVerifierPass
     : PassInfoMixin<LinxV5ElementRegionVerifierPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

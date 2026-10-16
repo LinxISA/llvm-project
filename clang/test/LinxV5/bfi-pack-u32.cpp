@@ -16,4 +16,4 @@ extern "C" u64 topk_pair_constant() {
 }
 
 // CHECK-LABEL: topk_pair_constant:
-// CHECK: hl.bfi t#1, t#1, 32, 64, ->a0
+// CHECK: hl.bfi t#1, t#1, 32, 63, ->a0

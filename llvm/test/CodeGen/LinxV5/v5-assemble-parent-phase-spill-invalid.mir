@@ -1,0 +1,16 @@
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("\n    $r5 = LDI", "\n    SWI $r4, %%stack.0, 0 :: (store (s32) into %%stack.0)\n    $r5 = LDI", 1))' %S/v5-assemble-parent-phase-spill.mir %t-partial.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-clockhands -o /dev/null %t-partial.mir 2>&1 | FileCheck %s
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("  bb.1:\n    successors: %bb.2, %bb.3", "  bb.1:\n    successors: %bb.7").replace("\n    $r5 = LDI", "\n    PseudoCALLInd $r0, implicit-def $r10\n  bb.7:\n    successors: %bb.2, %bb.3\n    $r5 = LDI", 1))' %S/v5-assemble-parent-phase-spill.mir %t-call.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-clockhands -o /dev/null %t-call.mir 2>&1 | FileCheck %s
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("type: spill-slot", "type: default"))' %S/v5-assemble-parent-phase-spill.mir %t-addressable.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-clockhands -o /dev/null %t-addressable.mir 2>&1 | FileCheck %s
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("(load (s64)", "(volatile load (s64)"))' %S/v5-assemble-parent-phase-spill.mir %t-volatile.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-clockhands -o /dev/null %t-volatile.mir 2>&1 | FileCheck %s
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("%"+"stack.0)", "%"+"stack.0 + 8)"))' %S/v5-assemble-parent-phase-spill.mir %t-outside.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-clockhands -o /dev/null %t-outside.mir 2>&1 | FileCheck %s
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("%"+"stack.0)", "%"+"stack.0 - 8)"))' %S/v5-assemble-parent-phase-spill.mir %t-negative.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-clockhands -o /dev/null %t-negative.mir 2>&1 | FileCheck %s
+#
+# Partial writes, calls, ordinary addressable stack objects and volatile
+# reloads must never retain the private exact-spill counter proof.
+# CHECK: LLVM ERROR: B.ASSEMBLE continuation may execute without an OPEN parent

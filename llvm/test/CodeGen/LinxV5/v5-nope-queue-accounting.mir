@@ -1,0 +1,282 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/good.mir | FileCheck %s
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/closed-copy.mir \
+# RUN:   | FileCheck %s --check-prefix=CLOSED-COPY
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/init-source.mir \
+# RUN:   | FileCheck %s --check-prefix=INIT-SOURCE
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/open-nope-pressure.mir \
+# RUN:   | FileCheck %s --check-prefix=OPEN-NOPE \
+# RUN:   --implicit-check-not=PseudoTCOPY
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/ordinary-nope-pressure.mir \
+# RUN:   | FileCheck %s --check-prefix=ORDINARY-NOPE \
+# RUN:   --implicit-check-not=PseudoTCOPY
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/same-reg.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SAME-REG
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/real-copy.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=REAL-COPY
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null \
+# RUN:   %t/cross-hand-parent-copy.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CROSS-HAND-COPY
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null \
+# RUN:   %t/other-parent-last-spoof.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LAST-SPOOF
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/bound.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BOUND
+#
+# PseudoEmptyTile expands to a zero-mask NoPE and therefore does not allocate a
+# Local tile.  The following real use must still select the producer at t#1;
+# counting the marker as an allocation rewrites it to t#2.
+#--- good.mir
+--- |
+  define dso_local void @nope_does_not_advance_tile_queue() {
+    ret void
+  }
+...
+---
+name:            nope_does_not_advance_tile_queue
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 1, $r0, 1, 25, 29, 1, $r0, $r0
+    dead $tile_t8 = PseudoEmptyTile 1
+    INLINEASM &"BSTART.TLSU TSTORE, ${1:D}\0AB.IOT $0, mask=1111, last\0A", 1 /* sideeffect attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 13 /* imm */, 17
+    PseudoRET
+
+    ; CHECK: $tile_t = PseudoTCI_EW_SizeI
+    ; CHECK-NEXT: dead $tile_t8 = PseudoEmptyTile 1
+    ; CHECK-NEXT: INLINEASM {{.*}}$tile_tos1
+...
+#--- closed-copy.mir
+--- |
+  define dso_local void @closed_parent_allows_later_copy() {
+    ret void
+  }
+...
+---
+name:            closed_parent_allows_later_copy
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $0, mask=1111, last\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 15, 1\0A", 1 /* sideeffect attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    dead $tile_u2 = PseudoTCOPY 5, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, ${1:D}\0AB.IOT $0, mask=1111, last\0A", 1 /* sideeffect attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 13 /* imm */, 17
+    PseudoRET
+
+    ; CLOSED-COPY: B.ASSEMBLE
+    ; CLOSED-COPY: dead $tile_u = PseudoTCOPY 5, $tile_tos1
+    ; CLOSED-COPY: INLINEASM {{.*}}$tile_tos1
+...
+#--- init-source.mir
+--- |
+  define dso_local void @init_reads_old_physical_parent_number() {
+    ret void
+  }
+...
+---
+name:            init_reads_old_physical_parent_number
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    dead $tile_t2 = PseudoTCOPY 1, $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_t1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    PseudoRET
+
+    ; INIT-SOURCE: INLINEASM {{.*}}def $tile_t{{.*}}$tile_tos2
+...
+#--- same-reg.mir
+--- |
+  define dso_local void @same_parent_register_redefined() {
+    ret void
+  }
+...
+---
+name:            same_parent_register_redefined
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 1, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoRET
+...
+#--- real-copy.mir
+--- |
+  define dso_local void @real_copy_in_parent_hand() {
+    ret void
+  }
+...
+---
+name:            real_copy_in_parent_hand
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, killed $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    dead $tile_t2 = PseudoTCOPY 1, $tile_t1
+    PseudoRET
+...
+#--- cross-hand-parent-copy.mir
+--- |
+  define dso_local void @cross_hand_open_parent_copy() {
+    ret void
+  }
+...
+---
+name:            cross_hand_open_parent_copy
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, killed $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    dead $tile_u2 = PseudoTCOPY 5, $tile_t1
+    PseudoRET
+...
+#--- open-nope-pressure.mir
+--- |
+  define dso_local void @open_parent_ignores_nope_pressure() {
+    ret void
+  }
+...
+---
+name:            open_parent_ignores_nope_pressure
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    dead $tile_t2 = PseudoEmptyTile 1
+    dead $tile_t3 = PseudoEmptyTile 1
+    dead $tile_t4 = PseudoEmptyTile 1
+    dead $tile_t5 = PseudoEmptyTile 1
+    dead $tile_t6 = PseudoEmptyTile 1
+    dead $tile_t7 = PseudoEmptyTile 1
+    dead $tile_t8 = PseudoEmptyTile 1
+    dead $tile_t9 = PseudoEmptyTile 1
+    dead $tile_t10 = PseudoEmptyTile 1
+    dead $tile_t11 = PseudoEmptyTile 1
+    dead $tile_t12 = PseudoEmptyTile 1
+    dead $tile_t13 = PseudoEmptyTile 1
+    dead $tile_t14 = PseudoEmptyTile 1
+    dead $tile_t15 = PseudoEmptyTile 1
+    dead $tile_t16 = PseudoEmptyTile 1
+    dead $tile_t2 = PseudoEmptyTile 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 15, 1\0A", 1 /* sideeffect attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    PseudoRET
+
+    ; OPEN-NOPE: def $tile_t
+    ; OPEN-NOPE-COUNT-16: PseudoEmptyTile 1
+    ; OPEN-NOPE: B.ASSEMBLE {{.*}}$tile_tos1
+...
+#--- other-parent-last-spoof.mir
+--- |
+  define dso_local void @other_parent_last_does_not_close_writer() {
+    ret void
+  }
+...
+---
+name:            other_parent_last_does_not_close_writer
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_n1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 720905 /* reguse:Tile_ABS */, $tile_n1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $0, mask=1111, last\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 1 /* sideeffect attdialect */, 720905 /* reguse:Tile_ABS */, $tile_u1, 720905 /* reguse:Tile_ABS */, $tile_t1, 13 /* imm */, 0, 13 /* imm */, 1
+    dead $tile_u2 = PseudoTCOPY 5, $tile_t1
+    PseudoRET
+...
+#--- ordinary-nope-pressure.mir
+--- |
+  define dso_local void @ordinary_tile_ignores_nope_pressure() {
+    ret void
+  }
+...
+---
+name:            ordinary_tile_ignores_nope_pressure
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 1, $r0, 1, 25, 29, 1, $r0, $r0
+    dead $tile_t2 = PseudoEmptyTile 1
+    dead $tile_t3 = PseudoEmptyTile 1
+    dead $tile_t4 = PseudoEmptyTile 1
+    dead $tile_t5 = PseudoEmptyTile 1
+    dead $tile_t6 = PseudoEmptyTile 1
+    dead $tile_t7 = PseudoEmptyTile 1
+    dead $tile_t8 = PseudoEmptyTile 1
+    dead $tile_t9 = PseudoEmptyTile 1
+    dead $tile_t10 = PseudoEmptyTile 1
+    dead $tile_t11 = PseudoEmptyTile 1
+    dead $tile_t12 = PseudoEmptyTile 1
+    dead $tile_t13 = PseudoEmptyTile 1
+    dead $tile_t14 = PseudoEmptyTile 1
+    dead $tile_t15 = PseudoEmptyTile 1
+    dead $tile_t16 = PseudoEmptyTile 1
+    dead $tile_t2 = PseudoEmptyTile 1
+    INLINEASM &"BSTART.TLSU TSTORE, ${1:D}\0AB.IOT $0, mask=1111, last\0A", 1 /* sideeffect attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 13 /* imm */, 17
+    PseudoRET
+
+    ; ORDINARY-NOPE: $tile_t = PseudoTCI_EW_SizeI
+    ; ORDINARY-NOPE-COUNT-16: PseudoEmptyTile 1
+    ; ORDINARY-NOPE: INLINEASM {{.*}}$tile_tos1
+...
+#--- bound.mir
+--- |
+  define dso_local void @parent_distance_exceeds_window() {
+    ret void
+  }
+...
+---
+name:            parent_distance_exceeds_window
+alignment:       2
+tracksRegLiveness: true
+body:             |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR 25, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 5, 13 /* imm */, 1, 13 /* imm */, 0
+    dead $tile_t2 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t3 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t4 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t5 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t6 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t7 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t8 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t9 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t10 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t11 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t12 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t13 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t14 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t15 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t16 = PseudoTCOPY 1, $tile_u1
+    dead $tile_t2 = PseudoTCOPY 1, $tile_u1
+    PseudoRET
+...
+
+# SAME-REG: LLVM ERROR: OPEN B.ASSEMBLE parent register has a second real definition
+# REAL-COPY: LLVM ERROR: cannot copy an OPEN B.ASSEMBLE parent source before LAST
+# CROSS-HAND-COPY: LLVM ERROR: cannot copy an OPEN B.ASSEMBLE parent source before LAST
+# LAST-SPOOF: LLVM ERROR: cannot copy an OPEN B.ASSEMBLE parent source before LAST
+# BOUND: LLVM ERROR: B.ASSEMBLE parent relative distance exceeds the 16-entry Local tile window

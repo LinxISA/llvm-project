@@ -1,0 +1,37 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -verify-machineinstrs \
+# RUN:   -run-pass=postrapseudos -o - %s | FileCheck %s
+#
+# Indexed TLSU pseudos use LB0=columns, LB1=rows. Both logical32 and dense
+# logical64 result copies preserve payload dtype, layout and exact geometry.
+# TLEA copies describe B64 byte offsets, never the original B32 indices.
+# CHECK-LABEL: name: indexed_memory_copies
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 32, 1, 25, 29
+# CHECK: $tile_u2 = PseudoTCOPYDesc 1, $tile_u1, 2, 32, 2, 4, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 2, $tile_m1, 1, 32, 1, 24, 29
+# CHECK: $tile_n2 = PseudoTCOPYDesc 2, $tile_n1, 1, 32, 1, 16, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 2, $tile_m1, 1, 32, 1, 24, 29
+# CHECK: $tile_n2 = PseudoTCOPYDesc 2, $tile_n1, 1, 32, 1, 16, 29
+--- |
+  define void @indexed_memory_copies() { ret void }
+...
+---
+name: indexed_memory_copies
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r3, $r4, $tile_t3, $tile_u3
+    $tile_t1 = PseudoMGATHER_GPR_Masked_SizeI $r0, 1, $r0, 32, 25, 0, 29, 1, $tile_t3, $r2, $r0, $r3, 0, 1
+    $tile_t2 = COPY $tile_t1
+    $tile_u1 = PseudoMGATHER_GPR_Masked_SizeI $r0, 2, $r0, 32, 4, 0, 29, 1, $tile_u3, $r2, $r0, $r3, 0, 1
+    $tile_u2 = COPY $tile_u1
+    $tile_m1 = PseudoTLEA_SizeI $r0, 32, $r0, 1, 25, 29, 2, $tile_t2, $r4
+    $tile_m2 = COPY $tile_m1
+    $tile_n1 = PseudoTLEA_SizeI $r0, 32, $r0, 1, 17, 29, 2, $tile_t2, $r4
+    $tile_n2 = COPY $tile_n1
+    $tile_m1 = PseudoTLEA_SizeI $r0, 32, $r0, 1, 24, 29, 2, $tile_t2, $r4
+    $tile_m2 = COPY $tile_m1
+    $tile_n1 = PseudoTLEA_SizeI $r0, 32, $r0, 1, 16, 29, 2, $tile_t2, $r4
+    $tile_n2 = COPY $tile_n1
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...

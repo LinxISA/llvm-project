@@ -601,6 +601,14 @@ bool LinxV5FixSGPRCopies::runOnMachineFunction(MachineFunction &MF) {
 
 
 void LinxV5FixSGPRCopies::legalizeOperands(MachineInstr &MI) {
+    // Local Tile PHIs use the ordinary handle COPY/PHI-elimination path.
+    // Tile_ABS_CG bridge copies must not trigger SIMT scalar/vector retagging:
+    // their defining inline assembly has no register at operand zero, and its
+    // actual output already carries the required Tile register constraint.
+    const TargetRegisterClass *DstRC = getOpRegClass(MI, 0);
+    if (LinxV5::Tile_ABSRegClass.hasSubClassEq(DstRC) ||
+        LinxV5::Tile_ABS_CGRegClass.hasSubClassEq(DstRC))
+      return;
     const TargetRegisterClass *RC = nullptr, *SRC = nullptr, *VRC = nullptr;
     for (unsigned i = 1, e = MI.getNumOperands(); i != e; i += 2) {
       if (!MI.getOperand(i).isReg() || !MI.getOperand(i).getReg().isVirtual())

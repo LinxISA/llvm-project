@@ -31,6 +31,31 @@ def int_linx_experimental_element_view :
                llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_i64_ty],
               [IntrNoMem]>;
+
+// Required intermediate effect for a predicated monotonic i32 atomic add.
+// Active elements atomically add their value and return the observed old bits;
+// inactive elements do not access memory and return poison. EVL bounds the
+// logical mask. This is compiler IR, consumed before instruction selection,
+// not a public API, encoded instruction, or scalar atomic-helper call.
+def int_linx_experimental_element_atomic_add :
+    Intrinsic<[llvm_anyvector_ty],
+              [LLVMVectorOfAnyPointersToElt<0>, LLVMMatchType<0>,
+               LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty],
+              [IntrHasSideEffects, IntrNoDuplicate]>;
+
+// Required intermediate effect for an unordered predicated admitted Tile
+// scatter (32-lane i32/f32 or logical-64 i16/f16/i32)
+// whose inter-element ordering follows from the source element-region
+// contract, rather than from llvm.vp.scatter. Each active element performs one
+// aligned store in an unspecified order; inactive elements do not access
+// memory. The metadata operand is the source region identity token. This is
+// compiler IR and must be consumed before instruction selection.
+def int_linx_experimental_element_scatter :
+    Intrinsic<[],
+              [llvm_anyvector_ty, LLVMVectorOfAnyPointersToElt<0>,
+               LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>, llvm_i32_ty,
+               llvm_metadata_ty],
+              [IntrHasSideEffects, IntrNoDuplicate]>;
 def int_linx_hyper_region_start : Intrinsic<[], [llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_hyper_region_end : Intrinsic<[],[llvm_i64_ty], [IntrHasSideEffects]>;
@@ -226,6 +251,31 @@ def int_linx_experimental_ew_tbinary :
                llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>],
               [IntrHasSideEffects]>;
 
+def int_linx_experimental_ew_tbinary_gpr_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+// Bounded FP32 sign-bit negation. One low execution-mask word suppresses
+// inactive reads; PredInv=0 and ZERO inactive destination elements are fixed.
+def int_linx_experimental_ew_tneg_gpr_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               LLVMMatchType<0>, llvm_i64_ty], [IntrHasSideEffects]>;
+
+// Native integer narrowing through TCVT.  Source and destination vectors have
+// distinct element widths.  The backend admits only logical32 S64/U64 to
+// S32/U32 with one low execution-mask word; RMode/Sat remain explicit so all
+// unsupported conversion profiles fail before instruction selection.
+def int_linx_experimental_ew_tcvt_gpr_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 // Extend S32/U32/S64/U64 logical element indices to the corresponding
 // S64/U64 representation, then scale by element_bits/8 modulo 2^64. The
 // result is a byte-displacement Tile; result and source types are distinct.
@@ -240,10 +290,30 @@ def int_linx_experimental_ew_tci :
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
 
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_tci_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_tcmps_gpr :
     Intrinsic<[llvm_i64_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+// Native FP32 comparisons consume the execution mask before reading elements.
+// ZERO inactive lanes is fixed; the result and execution mask share one B.IOR.
+def int_linx_experimental_ew_tcmps_gpr_masked :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tcmp_gpr_masked :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, LLVMMatchType<0>, llvm_i64_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
 // TCMP returns a logical predicate vector. The LinxV5 backend materializes
@@ -254,16 +324,49 @@ def int_linx_experimental_ew_tcmp :
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_tcmp_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tcmp_gpr :
+    Intrinsic<[llvm_i64_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, LLVMMatchType<0>, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_tsel :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
 
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_tsel_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_tsel_gpr :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, LLVMMatchType<0>, LLVMMatchType<0>],
+              [IntrHasSideEffects]>;
+
 def int_linx_experimental_ew_texpands :
     Intrinsic<[llvm_anyvector_ty],
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
-               llvm_anyfloat_ty],
+               llvm_any_ty],
+              [IntrHasSideEffects]>;
+
+// Exact NORM row carrier geometry, including partial valid rows.
+def int_linx_experimental_ew_texpands_row :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_any_ty, llvm_i64_ty],
               [IntrHasSideEffects]>;
 
 def int_linx_blk_matmulmx_ac : Intrinsic<[llvm_anyvector_ty],
@@ -311,6 +414,13 @@ def int_linx_experimental_ew_mscatter_masked :
               [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty,
                llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_gpr_masked :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty], [IntrHasSideEffects]>;
 
 // Element-wise indexed atomic add. Indices are U64/S64 byte displacements;
 // the TLSU lowering performs no data-width scaling. MGATHER_ADD returns the

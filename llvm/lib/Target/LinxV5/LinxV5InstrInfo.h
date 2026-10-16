@@ -22,6 +22,7 @@
 
 namespace llvm {
 
+class Function;
 class LinxV5Subtarget;
 
 class LinxV5InstrInfo : public LinxV5GenInstrInfo {
@@ -128,6 +129,34 @@ struct SingleAsm {
   SmallVector<unsigned, 2> Sizes;
 };
 
+struct TileDescriptor {
+  unsigned DataType = 0;
+  unsigned Layout = 0;
+  unsigned ValidRow = 0;
+  unsigned ValidCol = 0;
+  unsigned PhysicalCol = 0;
+  unsigned SizeCode = 0;
+  // The initial packed predicate profile retains exactly one physical row.
+  bool PackedPredicate = false;
+
+  bool operator==(const TileDescriptor &Other) const {
+    return DataType == Other.DataType && Layout == Other.Layout &&
+           ValidRow == Other.ValidRow && ValidCol == Other.ValidCol &&
+           PhysicalCol == Other.PhysicalCol && SizeCode == Other.SizeCode &&
+           PackedPredicate == Other.PackedPredicate;
+  }
+};
+
+struct LocalTileABIInfo {
+  unsigned ArgumentIndex = 0;
+  TileDescriptor Descriptor;
+};
+
+/// Parse and validate the closed Local-Tile call-boundary contract carried by
+/// `linx-local-tile-abi`. Invalid or partial contracts fail closed; absence of
+/// the attribute returns None.
+Optional<LocalTileABIInfo> getLocalTileABIInfo(const Function &F);
+
 SingleAsm parseSingleAsm(MachineInstr *MI);
 
 int getPseudoMap(uint16_t Opcode);
@@ -135,6 +164,13 @@ int getPseudoMap(uint16_t Opcode);
 bool isRAInstrOfInlineASMBlock(MachineInstr &MI);
 
 bool isTileOp(const MachineInstr &MI);
+/// Return a destination-free B.ASSEMBLE continuation's Local ParentRef, or
+/// NoRegister when the inline-asm bundle has no such source-form binder.
+Register getAssembleParentRef(const MachineInstr &MI);
+/// Resolve the OperandIndex-th positional B.ASSEMBLE control operand.
+/// Named or otherwise non-constant operands return None so callers fail closed.
+Optional<bool> getAssembleControlBit(const MachineInstr &MI,
+                                     unsigned OperandIndex);
 unsigned getTileOpRegSize(MachineInstr &MI, Register Reg);
 bool isIsolateInstr(MachineInstr &MI);
 
@@ -144,6 +180,16 @@ bool isPhysScratchRegAvailable(MachineBasicBlock &MBB,
 unsigned getTileRegSize(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator MBBI, MCRegister Reg,
                         bool isSpill);
+
+/// Resolve the complete descriptor reaching Reg immediately before MBBI.
+/// Every predecessor must provide the same known descriptor. Unknown producer
+/// semantics and conflicting control-flow joins fail closed.
+TileDescriptor getTileRegDescriptor(MachineBasicBlock &MBB,
+                                    MachineBasicBlock::iterator MBBI,
+                                    MCRegister Reg);
+Optional<TileDescriptor>
+tryGetTileRegDescriptor(MachineBasicBlock &MBB,
+                        MachineBasicBlock::iterator MBBI, MCRegister Reg);
 
 bool enableBFIOpt();
 

@@ -1,5 +1,7 @@
-// RUN: %clang --target=linx64v5 -mlxbc -O0 -emit-llvm -S -o - %s | FileCheck %s
-// RUN: %clang++ -x c++ --target=linx64v5 -mlxbc -O0 -emit-llvm -S -o - %s | FileCheck %s
+// RUN: %clang --target=linx64v5 -mlxbc -O0 -Xclang -disable-llvm-passes \
+// RUN:   -emit-llvm -S -o - %s | FileCheck %s
+// RUN: %clang++ -x c++ --target=linx64v5 -mlxbc -O0 \
+// RUN:   -Xclang -disable-llvm-passes -emit-llvm -S -o - %s | FileCheck %s
 
 typedef unsigned int tile_size(32) tile32;
 
@@ -28,14 +30,8 @@ void legacy_histogram(tile32 *old_values, unsigned int *hist,
 }
 
 // CHECK-LABEL: define{{.*}} @{{.*}}pto_histogram
-// CHECK: call <32 x i32> @llvm.linx.experimental.ew.tci
-// CHECK: call i64 @llvm.linx.experimental.ew.tcmps.gpr
-// CHECK: call <32 x i64> @llvm.linx.experimental.ew.tlea
-// CHECK: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
-// CHECK-NOT: atomicrmw
+// CHECK: call void @llvm.linx.experimental.element.region(metadata
 // CHECK-LABEL: define{{.*}} @{{.*}}legacy_histogram
-// CHECK: call <32 x i32> @llvm.linx.experimental.ew.tci
-// CHECK: call i64 @llvm.linx.experimental.ew.tcmps.gpr
-// CHECK: call <32 x i64> @llvm.linx.experimental.ew.tlea
-// CHECK: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
-// CHECK-NOT: atomicrmw
+// CHECK: call void @llvm.linx.experimental.element.region(metadata
+// CHECK: !{!"llvm.loop.linx.pto.element.inter_element_order", !"unordered"}
+// CHECK: !{!"llvm.loop.linx.pto.element.intra_element_order", !"source"}

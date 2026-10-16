@@ -1,0 +1,19 @@
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+#
+# Row reduction shrinks columns, never valid rows. A 33-row U32 result cannot
+# fit the 128-byte allocation even though it has only one output column.
+# CHECK: LLVM ERROR: Local tile descriptor geometry does not fit its SizeCode
+--- |
+  define void @row_reduction_capacity() { ret void }
+...
+---
+name: row_reduction_capacity
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 64, U32\0AB.DATR NORM, Null\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 33, ->lb1\0AB.DIM zero, 128, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

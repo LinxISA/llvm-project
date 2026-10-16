@@ -15,10 +15,12 @@
 #include "LinxV5MachineFunctionInfo.h"
 #include "LinxV5Subtarget.h"
 #include "LinxV5TargetMachine.h"
+#include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
@@ -26,9 +28,12 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <queue>
 
@@ -50,6 +55,60 @@ static cl::opt<bool> EnableBFIOpt(
 
 STATISTIC(NumStoreReg, "Number of store regs to stack slots");
 STATISTIC(NumTileSpill, "Number of jcore-tile reg spills");
+
+Optional<LinxV5::LocalTileABIInfo>
+LinxV5::getLocalTileABIInfo(const Function &F) {
+  Attribute Attr = F.getFnAttribute("linx-local-tile-abi");
+  if (!Attr.isValid())
+    return None;
+
+  if (!F.getAttributes().hasRetAttr(Attribute::InReg))
+    report_fatal_error(
+        "linx-local-tile-abi requires an explicit inreg return marker");
+
+  SmallVector<StringRef, 3> Fields;
+  Attr.getValueAsString().split(Fields, ':');
+  if (Fields.size() != 3)
+    report_fatal_error("malformed linx-local-tile-abi attribute");
+
+  unsigned ArgumentIndex = 0;
+  unsigned PhysicalCols = 0;
+  unsigned ValidCols = 0;
+  if (Fields[0].getAsInteger(10, ArgumentIndex) ||
+      Fields[1].getAsInteger(10, PhysicalCols) ||
+      Fields[2].getAsInteger(10, ValidCols))
+    report_fatal_error("non-numeric linx-local-tile-abi attribute");
+
+  const bool SupportedProfile =
+      (PhysicalCols == 128 && (ValidCols == 128 || ValidCols == 32)) ||
+      (PhysicalCols == 2048 && ValidCols == 2048);
+  if (!SupportedProfile || ArgumentIndex >= F.arg_size())
+    report_fatal_error("unsupported linx-local-tile-abi profile");
+
+  auto *ArgumentTy = dyn_cast<FixedVectorType>(
+      F.getFunctionType()->getParamType(ArgumentIndex));
+  auto *ReturnTy = dyn_cast<FixedVectorType>(F.getReturnType());
+  auto IsExactType = [&](FixedVectorType *Ty) {
+    return Ty && Ty->getElementType()->isIntegerTy(32) &&
+           Ty->getNumElements() == PhysicalCols;
+  };
+  if (!IsExactType(ArgumentTy) || !IsExactType(ReturnTy))
+    report_fatal_error(
+        "linx-local-tile-abi type does not match its U32 NORM profile");
+
+  Optional<unsigned> SizeCode =
+      LinxV5SizeCode::sizeCodeForBytes(uint64_t{PhysicalCols} * 4);
+  if (!SizeCode)
+    report_fatal_error("linx-local-tile-abi capacity is not encodable");
+
+  LocalTileABIInfo Info;
+  Info.ArgumentIndex = ArgumentIndex;
+  Info.Descriptor = TileDescriptor{
+      LinxV5Op::DataType::U32, LinxV5Op::ArgFormat::NORM,
+      /*ValidRow=*/1, ValidCols, PhysicalCols, *SizeCode,
+      /*PackedPredicate=*/false};
+  return Info;
+}
 STATISTIC(NumTileReload, "Number of jcore-tile reg reloads");
 
 static inline MachineOperand *getAsmOperand(MachineInstr *MI, unsigned Val) {
@@ -200,10 +259,145 @@ bool LinxV5::isTileOp(const MachineInstr &MI) {
   return LinxV5II::isTileOp(TSFlags);
 }
 
+Optional<bool> LinxV5::getAssembleControlBit(const MachineInstr &MI,
+                                             unsigned OperandIndex) {
+  if (!MI.isInlineAsm())
+    return None;
+  StringRef Asm(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName());
+  size_t Pos = Asm.find("B.ASSEMBLE");
+  if (Pos == StringRef::npos)
+    return None;
+  Pos += strlen("B.ASSEMBLE");
+  unsigned ConstraintIdx = 0;
+  for (unsigned Seen = 0; Seen <= OperandIndex; ++Seen) {
+    size_t Dollar = Asm.find_first_of("$%", Pos);
+    if (Dollar == StringRef::npos)
+      return None;
+    Pos = Dollar;
+    StringRef Digits;
+    if (Asm[Pos] == '$') {
+      ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == '{') {
+        size_t Close = Asm.find('}', Pos);
+        if (Close == StringRef::npos)
+          return None;
+        StringRef Body = Asm.substr(Pos + 1, Close - Pos - 1);
+        size_t Colon = Body.find(':');
+        if (Colon != StringRef::npos)
+          Body = Body.substr(0, Colon);
+        Digits = Body;
+        Pos = Close + 1;
+      } else {
+        size_t End = Asm.find_first_not_of("0123456789", Pos);
+        Digits = Asm.slice(Pos, End == StringRef::npos ? Asm.size() : End);
+        Pos = End == StringRef::npos ? Asm.size() : End;
+      }
+    } else {
+      ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == 'c')
+        ++Pos;
+      if (Pos < Asm.size() && Asm[Pos] == '[')
+        return None;
+      size_t End = Asm.find_first_not_of("0123456789", Pos);
+      Digits = Asm.slice(Pos, End == StringRef::npos ? Asm.size() : End);
+      Pos = End == StringRef::npos ? Asm.size() : End;
+    }
+    if (Digits.empty() || Digits.getAsInteger(10, ConstraintIdx))
+      return None;
+  }
+  unsigned Group = 0;
+  for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+       I < E; ++Group) {
+    const MachineOperand &Flag = MI.getOperand(I);
+    if (!Flag.isImm())
+      return None;
+    unsigned N = InlineAsm::getNumOperandRegisters(Flag.getImm());
+    if (Group == ConstraintIdx) {
+      if (N != 1 || I + 1 >= E || !MI.getOperand(I + 1).isImm())
+        return None;
+      return MI.getOperand(I + 1).getImm() != 0;
+    }
+    I += 1 + N;
+  }
+  return None;
+}
+
 static bool isLocalTileReg(const MachineRegisterInfo &MRI, Register Reg) {
   if (Reg.isPhysical())
     return LinxV5::Tile_ABSRegClass.contains(Reg);
   return LinxV5::Tile_ABSRegClass.hasSubClassEq(MRI.getRegClass(Reg));
+}
+
+Register LinxV5::getAssembleParentRef(const MachineInstr &MI) {
+  if (!MI.isInlineAsm() ||
+      !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+           .contains("B.ASSEMBLE"))
+    return LinxV5::NoRegister;
+
+  // INIT publishes a destination.  Only a destination-free continuation has
+  // a ParentRef.  The modifier attaches to the immediately preceding B.IOT
+  // or B.IOS source-form binder, whose final Local tile operand is ParentRef;
+  // earlier operands in the same binder are numeric writer fragments.
+  if (llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
+        return MO.isReg() && MO.isDef() && !MO.isImplicit();
+      }))
+    return LinxV5::NoRegister;
+
+  StringRef Asm = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  size_t AssemblePos = Asm.find("B.ASSEMBLE");
+  StringRef BeforeAssemble = Asm.take_front(AssemblePos);
+  size_t IOTPos = BeforeAssemble.rfind("B.IOT");
+  size_t IOSPos = BeforeAssemble.rfind("B.IOS");
+  size_t BinderPos = IOTPos;
+  if (BinderPos == StringRef::npos ||
+      (IOSPos != StringRef::npos && IOSPos > BinderPos))
+    BinderPos = IOSPos;
+  if (BinderPos == StringRef::npos)
+    return LinxV5::NoRegister;
+
+  size_t BinderEnd = Asm.find('\n', BinderPos);
+  if (BinderEnd == StringRef::npos || BinderEnd > AssemblePos)
+    BinderEnd = AssemblePos;
+
+  const MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
+  Register ParentRef = LinxV5::NoRegister;
+  for (size_t Pos = Asm.find('$', BinderPos);
+       Pos != StringRef::npos && Pos < BinderEnd;
+       Pos = Asm.find('$', Pos + 1)) {
+    size_t DigitPos = Pos + 1;
+    if (DigitPos < BinderEnd && Asm[DigitPos] == '{')
+      ++DigitPos;
+    size_t DigitEnd = DigitPos;
+    while (DigitEnd < BinderEnd && isDigit(Asm[DigitEnd]))
+      ++DigitEnd;
+    if (DigitEnd == DigitPos)
+      continue;
+
+    unsigned ConstraintIdx = 0;
+    if (Asm.slice(DigitPos, DigitEnd).getAsInteger(10, ConstraintIdx))
+      continue;
+    unsigned Group = 0;
+    const MachineOperand *MO = nullptr;
+    for (unsigned I = InlineAsm::MIOp_FirstOperand, E = MI.getNumOperands();
+         I < E; ++Group) {
+      const MachineOperand &Flag = MI.getOperand(I);
+      if (!Flag.isImm())
+        break;
+      unsigned N = InlineAsm::getNumOperandRegisters(Flag.getImm());
+      if (Group == ConstraintIdx) {
+        if (N == 1 && I + 1 < E)
+          MO = &MI.getOperand(I + 1);
+        break;
+      }
+      I += 1 + N;
+    }
+    if (!MO || !MO->isReg() || !MO->isUse() || MO->isImplicit())
+      continue;
+    Register Reg = MO->getReg();
+    if (isLocalTileReg(MRI, Reg))
+      ParentRef = Reg;
+  }
+  return ParentRef;
 }
 
 static bool isSharedTileReg(const MachineRegisterInfo &MRI, Register Reg) {
@@ -213,7 +407,9 @@ static bool isSharedTileReg(const MachineRegisterInfo &MRI, Register Reg) {
 }
 
 unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
-  if (MI.getOpcode() == LinxV5::PseudoTCOPY) {
+  if (MI.getOpcode() == LinxV5::PseudoTCOPY ||
+      (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+       MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
     return MI.getOperand(1).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTADD_Masked_SizeI) {
     return MI.getOperand(7).getImm();
@@ -221,15 +417,27 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTBinary_SizeI) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTSEL_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoTNEG_GPR_Masked_SizeI) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI) {
+    return MI.getOperand(8).getImm();
+  } else if ((MI.getOpcode() == LinxV5::PseudoTCMP_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI)) {
+    return MI.getOperand(7).getImm();
+  } else if ((MI.getOpcode() == LinxV5::PseudoTSEL_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTSEL_Row_SizeI)) {
+    return MI.getOperand(7).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoTSEL_GPR_SizeI) {
+    return MI.getOperand(7).getImm();
+  } else if ((MI.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI)) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoTLEA_SizeI) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI) {
+  } else if ((MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
+              MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI)) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI) {
     return MI.getOperand(7).getImm();
@@ -237,6 +445,8 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
     return MI.getOperand(8).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI) {
     return MI.getOperand(6).getImm();
+  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_GPR_Masked_SizeI) {
+    return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI) {
     return MI.getOperand(7).getImm();
   } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI) {
@@ -507,6 +717,620 @@ unsigned LinxV5::getTileRegSize(MachineBasicBlock &MBB,
   return getTileRegSizeImpl(MBB, MBBI, Reg, isSpill) - 1;
 }
 
+static unsigned getTileDataTypeBits(unsigned DataType) {
+  using namespace LinxV5Op;
+  switch (DataType) {
+  case DataType::FP64:
+  case DataType::S64:
+  case DataType::U64:
+    return 64;
+  case DataType::FP32:
+  case DataType::TF32:
+  case DataType::HF32:
+  case DataType::S32:
+  case DataType::U32:
+    return 32;
+  case DataType::FP16:
+  case DataType::BF16:
+  case DataType::S16:
+  case DataType::U16:
+    return 16;
+  case DataType::HiF8:
+  case DataType::e4m3:
+  case DataType::e5m2:
+  case DataType::e3m2:
+  case DataType::e2m3:
+  case DataType::e8m0:
+  case DataType::e6m2:
+  case DataType::rcpe6m2:
+  case DataType::S8:
+  case DataType::U8:
+    return 8;
+  case DataType::e2m1x2:
+  case DataType::e1m2x2:
+  case DataType::HiF4x2:
+  case DataType::S4x2:
+  case DataType::U4x2:
+    return 4;
+  default:
+    return 0;
+  }
+}
+
+static Optional<unsigned> getInlineAsmOperandImmediate(MachineInstr &MI,
+                                                       StringRef Text,
+                                                       size_t Before) {
+  size_t Start = Text.take_front(std::min(Before + 1, Text.size())).rfind("${");
+  if (Start == StringRef::npos)
+    return None;
+  size_t Digit = Start + 2;
+  size_t End = Digit;
+  while (End < Text.size() && isDigit(Text[End]))
+    ++End;
+  unsigned Index = 0;
+  if (End == Digit || Text.slice(Digit, End).getAsInteger(10, Index))
+    return None;
+  MachineOperand *MO = getAsmOperand(&MI, Index);
+  if (!MO || !MO->isImm())
+    return None;
+  return static_cast<unsigned>(MO->getImm());
+}
+
+static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
+                                                StringRef Text,
+                                                unsigned Dimension) {
+  std::string Suffix = (Twine("->lb") + Twine(Dimension)).str();
+  size_t End = Text.find(Suffix);
+  if (End == StringRef::npos)
+    return 1u; // Omitted dimensions have architectural value one.
+  size_t Start = Text.take_front(std::min(End + 1, Text.size())).rfind("B.DIM");
+  if (Start == StringRef::npos)
+    return None;
+  StringRef Line = Text.slice(Start, End);
+  size_t Zero = Line.find("zero,");
+  if (Zero == StringRef::npos)
+    return None; // A runtime GPR dimension has no static descriptor value.
+  StringRef Value = Line.drop_front(Zero + strlen("zero,")).trim();
+  if (Value.startswith("${"))
+    return getInlineAsmOperandImmediate(MI, Text, Start + Zero +
+                                                      strlen("zero,") +
+                                                      Value.find(':'));
+  size_t Digits = 0;
+  while (Digits < Value.size() && isDigit(Value[Digits]))
+    ++Digits;
+  unsigned Result = 0;
+  if (!Digits || Value.take_front(Digits).getAsInteger(10, Result))
+    return None;
+  return Result;
+}
+
+static bool hasInlineAsmDimension(StringRef Text, unsigned Dimension) {
+  return Text.contains((Twine("->lb") + Twine(Dimension)).str());
+}
+
+static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
+                                               StringRef Text);
+
+static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
+                                             StringRef Text) {
+  struct ConditionalLayout {
+    const char *Needle;
+    unsigned Result;
+  } Cases[] = {{"== 29", LinxV5Op::ArgFormat::CUBE_M32},
+               {"== 31", LinxV5Op::ArgFormat::CUBE_M16},
+               {"== 21", LinxV5Op::ArgFormat::CUBE_M32},
+               {"== 22", LinxV5Op::ArgFormat::CUBE_M16}};
+  bool HasConditionalLayout = false;
+  Optional<unsigned> ConditionalActual;
+  for (const ConditionalLayout &Case : Cases) {
+    size_t Pos = Text.find(Case.Needle);
+    if (Pos == StringRef::npos)
+      continue;
+    HasConditionalLayout = true;
+    Optional<unsigned> Actual = getInlineAsmOperandImmediate(MI, Text, Pos);
+    if (!Actual)
+      return None;
+    if (ConditionalActual && *ConditionalActual != *Actual)
+      return None;
+    ConditionalActual = *Actual;
+    unsigned Expected = 0;
+    StringRef(Case.Needle).drop_front(3).getAsInteger(10, Expected);
+    if (Actual && *Actual == Expected)
+      return Case.Result;
+  }
+  if (HasConditionalLayout && ConditionalActual &&
+      *ConditionalActual == LinxV5Op::ArgFormat::ND2N8 &&
+      Text.contains("B.DATR ND2N8"))
+    return LinxV5Op::ArgFormat::ND2N8;
+  // Do not select text from an inactive conditional branch.  The complete
+  // layout must be statically resolved before a typed COPY can be emitted.
+  if (HasConditionalLayout)
+    return LinxV5Op::ArgFormat::NORM;
+  if (Text.contains("B.DATR CUBE_M32") || Text.contains("B.DATR ND2M32"))
+    return LinxV5Op::ArgFormat::CUBE_M32;
+  if (Text.contains("B.DATR CUBE_M16") || Text.contains("B.DATR ND2M16"))
+    return LinxV5Op::ArgFormat::CUBE_M16;
+  if (Text.contains("B.DATR NORM"))
+    return LinxV5Op::ArgFormat::NORM;
+  if (!Text.contains("B.DATR"))
+    return LinxV5Op::ArgFormat::NORM;
+
+  // Identity conversions may spell only dtype and rounding in B.DATR.
+  // Every possible attribute line then has the architectural default NORM
+  // layout. Require exact two-field spellings and the same resolved dtype as
+  // the header; non-identity conversion result typing needs separate proof.
+  size_t BStart = Text.find("BSTART.");
+  if (BStart == StringRef::npos)
+    return None;
+  StringRef Header = Text.drop_front(BStart).split('\n').first;
+  Optional<unsigned> HeaderType = getInlineAsmDataType(MI, Header);
+  if (!HeaderType || *HeaderType == LinxV5Op::DataType::EMPTY_DataType)
+    return None;
+  SmallVector<StringRef, 8> Lines;
+  Text.split(Lines, '\n');
+  bool SawAttribute = false;
+  for (StringRef Line : Lines) {
+    Line = Line.trim();
+    if (!Line.consume_front("B.DATR"))
+      continue;
+    Line = Line.trim();
+    auto Fields = Line.split(',');
+    StringRef Type = Fields.first.trim();
+    StringRef Rounding = Fields.second.trim();
+    if (!Type.startswith("${") || !Type.endswith(":D}") ||
+        (Rounding != "RNONE" && Rounding != "RNE" && Rounding != "RTZ" &&
+         Rounding != "RTM" && Rounding != "RTP" && Rounding != "RNA" &&
+         Rounding != "RTO" && Rounding != "RHB"))
+      return None;
+    size_t Marker = Type.data() - Text.data() + Type.find(":D}");
+    Optional<unsigned> ResultType =
+        getInlineAsmOperandImmediate(MI, Text, Marker);
+    if (!ResultType || *ResultType != *HeaderType)
+      return None;
+    SawAttribute = true;
+  }
+  return SawAttribute ? Optional<unsigned>(LinxV5Op::ArgFormat::NORM) : None;
+}
+
+static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
+                                               StringRef Text) {
+  size_t Marker = Text.find(":D}");
+  if (Marker != StringRef::npos)
+    return getInlineAsmOperandImmediate(MI, Text, Marker);
+
+  size_t BStart = Text.find("BSTART.");
+  if (BStart == StringRef::npos)
+    return None;
+  size_t Comma = Text.find(',', BStart);
+  if (Comma == StringRef::npos)
+    return None;
+  StringRef Token = Text.drop_front(Comma + 1).ltrim();
+  Token = Token.take_while(
+      [](char C) { return isAlnum(C) || C == '_'; });
+  if (Token.empty())
+    return None;
+
+  unsigned Numeric = 0;
+  if (!Token.getAsInteger(10, Numeric))
+    return Numeric <= LinxV5Op::DataType::EMPTY_DataType
+               ? Optional<unsigned>(Numeric)
+               : None;
+
+  return StringSwitch<Optional<unsigned>>(Token.upper())
+      .Case("FP64", LinxV5Op::DataType::FP64)
+      .Case("FP32", LinxV5Op::DataType::FP32)
+      .Case("TF32", LinxV5Op::DataType::TF32)
+      .Case("HF32", LinxV5Op::DataType::HF32)
+      .Case("FP16", LinxV5Op::DataType::FP16)
+      .Case("BF16", LinxV5Op::DataType::BF16)
+      .Case("HIF8", LinxV5Op::DataType::HiF8)
+      .Case("E4M3", LinxV5Op::DataType::e4m3)
+      .Case("E5M2", LinxV5Op::DataType::e5m2)
+      .Case("E3M2", LinxV5Op::DataType::e3m2)
+      .Case("E2M3", LinxV5Op::DataType::e2m3)
+      .Case("E2M1X2", LinxV5Op::DataType::e2m1x2)
+      .Case("E1M2X2", LinxV5Op::DataType::e1m2x2)
+      .Case("E8M0", LinxV5Op::DataType::e8m0)
+      .Case("HIF4X2", LinxV5Op::DataType::HiF4x2)
+      .Case("E6M2", LinxV5Op::DataType::e6m2)
+      .Case("RCPE6M2", LinxV5Op::DataType::rcpe6m2)
+      .Case("S64", LinxV5Op::DataType::S64)
+      .Case("S32", LinxV5Op::DataType::S32)
+      .Case("S16", LinxV5Op::DataType::S16)
+      .Case("S8", LinxV5Op::DataType::S8)
+      .Case("S4X2", LinxV5Op::DataType::S4x2)
+      .Case("U64", LinxV5Op::DataType::U64)
+      .Case("U32", LinxV5Op::DataType::U32)
+      .Case("U16", LinxV5Op::DataType::U16)
+      .Case("U8", LinxV5Op::DataType::U8)
+      .Case("U4X2", LinxV5Op::DataType::U4x2)
+      .Case("DTYPE_NONE", LinxV5Op::DataType::EMPTY_DataType)
+      .Default(None);
+}
+
+static LinxV5::TileDescriptor
+checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
+  unsigned TypeBits = getTileDataTypeBits(Descriptor.DataType);
+  if (!TypeBits || !Descriptor.ValidRow || !Descriptor.ValidCol ||
+      !Descriptor.PhysicalCol ||
+      Descriptor.PhysicalCol < Descriptor.ValidCol ||
+      Descriptor.SizeCode == 0 || Descriptor.SizeCode > 12)
+    report_fatal_error("invalid Local tile descriptor for typed COPY");
+
+  uint64_t CapacityBits =
+      (uint64_t{1} << (Descriptor.SizeCode + 6)) * 8;
+  if (Descriptor.PackedPredicate) {
+    bool SupportedShape =
+        (Descriptor.ValidRow == 1 &&
+         (Descriptor.PhysicalCol == 128 ||
+          Descriptor.PhysicalCol == 2048)) ||
+        ((Descriptor.ValidRow == 1 || Descriptor.ValidRow == 16) &&
+         Descriptor.PhysicalCol == 32);
+    if (Descriptor.DataType != LinxV5Op::DataType::U8 ||
+        Descriptor.Layout != LinxV5Op::ArgFormat::NORM ||
+        !SupportedShape ||
+        CapacityBits / 8 <
+            uint64_t{Descriptor.ValidRow} * Descriptor.PhysicalCol)
+      report_fatal_error("invalid packed NORM predicate COPY descriptor");
+    return Descriptor;
+  }
+  uint64_t RowBits = uint64_t{Descriptor.PhysicalCol} * TypeBits;
+  if (!RowBits || CapacityBits % RowBits ||
+      CapacityBits / RowBits < Descriptor.ValidRow)
+    report_fatal_error(
+        "Local tile descriptor geometry does not fit its SizeCode");
+  return Descriptor;
+}
+
+// These reductions encode source geometry in B.DIM but publish a different
+// result rectangle (PTO spec 8f589b7, row/column reduction contracts).
+static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
+                                                        StringRef Text) {
+  size_t Start = Text.find("BSTART.");
+  if (Start == StringRef::npos)
+    return None;
+  StringRef Header = Text.drop_front(Start).split('\n').first;
+  if (!Header.consume_front("BSTART.TEPL") &&
+      !Header.consume_front("BSTART.SFU"))
+    return None;
+  StringRef Operation = Header.split(',').first.trim();
+  Optional<unsigned> Selector;
+  if (Operation.startswith("${") && Operation.endswith(":c}")) {
+    Selector = getInlineAsmOperandImmediate(
+        MI, Text, Operation.data() - Text.data() + Operation.find(':'));
+  } else {
+    unsigned Value;
+    if (!Operation.getAsInteger(0, Value))
+      Selector = Value;
+    else
+      Selector = StringSwitch<Optional<unsigned>>(Operation)
+                     .Case("TROWSUM", 64)
+                     .Case("TROWMAX", 65)
+                     .Case("TROWARGMAX", 76)
+                     .Case("TCOLSUM", 80)
+                     .Default(None);
+  }
+  if (Selector && (*Selector == 64 || *Selector == 65 || *Selector == 76 ||
+                   *Selector == 80))
+    return Selector;
+  return None;
+}
+
+static Optional<LinxV5::TileDescriptor>
+getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
+  LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
+  Optional<unsigned> SizeCode;
+  for (unsigned I = 0; I < SA.Defs.size(); ++I)
+    if (SA.Defs[I]->getReg() == Reg) {
+      SizeCode = SA.Sizes[I];
+      break;
+    }
+  if (!SizeCode || *SizeCode == 0)
+    return None;
+
+  StringRef Text =
+      MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
+  Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
+  Optional<unsigned> ValidCol = getInlineAsmDimension(MI, Text, 0);
+  Optional<unsigned> ValidRow = getInlineAsmDimension(MI, Text, 1);
+  Optional<unsigned> PhysicalCol = getInlineAsmDimension(MI, Text, 2);
+  bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
+  if (!DataType || *DataType == LinxV5Op::DataType::EMPTY_DataType ||
+      !Layout || !ValidCol || !ValidRow || !PhysicalCol || !*ValidCol ||
+      !*ValidRow)
+    return None;
+
+  // PTO destination-shape defaults resolve an omitted LB2 to ValidCol.  Tile
+  // capacity determines the remaining physical rows; it must never invent
+  // additional columns.  Public CUBE TCI forms carry LB2 explicitly.
+  if (!HasPhysicalCol)
+    *PhysicalCol = *ValidCol;
+  if (Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text)) {
+    const bool Cube = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+                      *Layout == LinxV5Op::ArgFormat::CUBE_M32;
+    if (!Cube && *Layout != LinxV5Op::ArgFormat::NORM)
+      return None;
+    if (*Reduction == 76)
+      *DataType = LinxV5Op::DataType::U32;
+    if (*Reduction == 80) {
+      *ValidRow = 1;
+      if (Cube) {
+        unsigned Bits = getTileDataTypeBits(*DataType);
+        if (!Bits)
+          return None;
+        unsigned CellBits = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 64 : 32;
+        unsigned CellCols = std::max(1u, CellBits / Bits);
+        *PhysicalCol = alignTo(*ValidCol, CellCols);
+      }
+    } else {
+      *ValidCol = 1;
+      if (!Cube)
+        *PhysicalCol = 1;
+    }
+  }
+  return checkedTileDescriptor(LinxV5::TileDescriptor{
+      *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
+}
+
+static Optional<LinxV5::TileDescriptor>
+getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
+  if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed)
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(3).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(1).getImm()), false});
+
+  if ((MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+       MI.getOpcode() == LinxV5::PseudoPCOPYDesc))
+    return checkedTileDescriptor(
+        LinxV5::TileDescriptor{static_cast<unsigned>(MI.getOperand(6).getImm()),
+                               static_cast<unsigned>(MI.getOperand(7).getImm()),
+                               static_cast<unsigned>(MI.getOperand(4).getImm()),
+                               static_cast<unsigned>(MI.getOperand(3).getImm()),
+                               static_cast<unsigned>(MI.getOperand(5).getImm()),
+                               static_cast<unsigned>(MI.getOperand(1).getImm()),
+                               MI.getOpcode() == LinxV5::PseudoPCOPYDesc});
+
+  if (MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI ||
+      MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+    if (MI.getOperand(1).getReg() != LinxV5::R0 ||
+        MI.getOperand(3).getReg() != LinxV5::R0 ||
+        MI.getOperand(6).getImm() != 0)
+      return None;
+    unsigned Rows = MI.getOperand(2).getImm();
+    unsigned Cols = MI.getOperand(4).getImm();
+    unsigned DType = MI.getOperand(5).getImm();
+    unsigned PhysicalCols = MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI
+                                ? MI.getOperand(11).getImm()
+                                : Cols;
+    bool U32Row =
+        Rows == 1 && DType == LinxV5Op::DataType::U32 &&
+        ((PhysicalCols == 128 && (Cols == 32 || Cols == 128)) ||
+         (PhysicalCols == 2048 && Cols == 2048));
+    bool F32Tile = DType == LinxV5Op::DataType::FP32 &&
+                   PhysicalCols == 32 && Cols == 32 &&
+                   (Rows == 1 || Rows == 16);
+    if (!U32Row && !F32Tile)
+      return None;
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        LinxV5Op::DataType::U8, LinxV5Op::ArgFormat::NORM, Rows, Cols,
+        PhysicalCols, static_cast<unsigned>(MI.getOperand(7).getImm()), true});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoTCVT_GPR_Masked_SizeI) {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0)
+      return None;
+    // TCVT publishes the destination dtype and persistent Tile layout. The
+    // instruction's B.DATR layout is encoded separately by the MC emitter.
+    unsigned ValidCol = MI.getOperand(4).getImm();
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(7).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()), ValidCol, ValidCol,
+        static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoTMOV_SizeI) {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0 ||
+        !MI.getOperand(5).isReg() || MI.getOperand(5).getReg() != LinxV5::R0)
+      return None;
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(7).getImm()),
+        static_cast<unsigned>(MI.getOperand(10).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0)
+      return None;
+    // TLSU operands carry LB0 (columns) before LB1 (rows), unlike the
+    // elementwise arithmetic pseudos below. Omitted LB2 defaults to LB0.
+    unsigned ValidCol = MI.getOperand(2).getImm();
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(7).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()), ValidCol, ValidCol,
+        static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoTLOAD_noDsrc_noDdst ||
+      MI.getOpcode() == LinxV5::PseudoTLOAD_noDsrc_Ddst ||
+      MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_noDdst ||
+      MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_Ddst) {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0 ||
+        !MI.getOperand(5).isReg() || MI.getOperand(5).getReg() != LinxV5::R0)
+      return None;
+    unsigned LayoutOperand =
+        (MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_noDdst ||
+         MI.getOpcode() == LinxV5::PseudoTLOAD_Dsrc_Ddst)
+            ? 10
+            : 9;
+    unsigned Layout = MI.getOperand(LayoutOperand).getImm();
+    if (Layout == LinxV5Op::ArgFormat::ND2M32)
+      Layout = LinxV5Op::ArgFormat::CUBE_M32;
+    else if (Layout == LinxV5Op::ArgFormat::ND2M16)
+      Layout = LinxV5Op::ArgFormat::CUBE_M16;
+    else if (Layout != LinxV5Op::ArgFormat::NORM &&
+             Layout != LinxV5Op::ArgFormat::CUBE_M32 &&
+             Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
+             Layout != LinxV5Op::ArgFormat::ND2N8)
+      return None;
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(7).getImm()), Layout,
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoTLOADSpillDesc)
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(14).getImm()),
+        static_cast<unsigned>(MI.getOperand(15).getImm()),
+        static_cast<unsigned>(MI.getOperand(12).getImm()),
+        static_cast<unsigned>(MI.getOperand(11).getImm()),
+        static_cast<unsigned>(MI.getOperand(13).getImm()),
+        static_cast<unsigned>(MI.getOperand(16).getImm())});
+
+  if (MI.getOpcode() == LinxV5::PseudoTReloadDesc)
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(6).getImm()),
+        static_cast<unsigned>(MI.getOperand(3).getImm()),
+        static_cast<unsigned>(MI.getOperand(2).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()),
+        static_cast<unsigned>(MI.getOperand(7).getImm())});
+
+  switch (MI.getOpcode()) {
+  case LinxV5::PseudoTADD_Masked_SizeI:
+  case LinxV5::PseudoTSUB_Masked_SizeI:
+  case LinxV5::PseudoTBinary_SizeI:
+  case LinxV5::PseudoTBinary_GPR_Masked_SizeI:
+  case LinxV5::PseudoTNEG_GPR_Masked_SizeI:
+  case LinxV5::PseudoTSEL_Row_SizeI:
+  case LinxV5::PseudoTSEL_SizeI:
+  case LinxV5::PseudoTSEL_GPR_SizeI:
+  case LinxV5::PseudoTEXPANDS_Row_SizeI:
+  case LinxV5::PseudoTEXPANDS_SizeI:
+  case LinxV5::PseudoTLEA_SizeI:
+  case LinxV5::PseudoTCI_EW_Row_SizeI:
+  case LinxV5::PseudoTCI_EW_SizeI: {
+    if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
+        !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0)
+      return None;
+    unsigned ValidRow = MI.getOperand(2).getImm();
+    unsigned ValidCol = MI.getOperand(4).getImm();
+    unsigned DataType = MI.getOperand(5).getImm();
+    if (MI.getOpcode() == LinxV5::PseudoTLEA_SizeI) {
+      // TLEA names the index dtype but publishes signed/unsigned B64 byte
+      // displacements. A copy must preserve the result descriptor.
+      if (DataType == LinxV5Op::DataType::S32 ||
+          DataType == LinxV5Op::DataType::S64)
+        DataType = LinxV5Op::DataType::S64;
+      else if (DataType == LinxV5Op::DataType::U32 ||
+               DataType == LinxV5Op::DataType::U64)
+        DataType = LinxV5Op::DataType::U64;
+      else
+        return None;
+    }
+    unsigned Layout = MI.getOperand(6).getImm();
+    unsigned SizeCode = MI.getOperand(7).getImm();
+    // These pseudos omit LB2 under the common destination-shape contract.
+    // Capacity supplies additional physical rows, never extra columns.
+    unsigned PhysicalCol = ValidCol;
+    switch (MI.getOpcode()) {
+    case LinxV5::PseudoTCI_EW_Row_SizeI:
+      PhysicalCol = MI.getOperand(10).getImm();
+      break;
+    case LinxV5::PseudoTSEL_Row_SizeI:
+      PhysicalCol = MI.getOperand(11).getImm();
+      break;
+    case LinxV5::PseudoTEXPANDS_Row_SizeI:
+      PhysicalCol = MI.getOperand(9).getImm();
+      break;
+    default:
+      break;
+    }
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        DataType, Layout, ValidRow, ValidCol, PhysicalCol, SizeCode});
+  }
+  default:
+    break;
+  }
+  if (MI.isInlineAsm())
+    return getInlineAsmTileDescriptor(MI, Reg);
+  return None;
+}
+
+static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
+    SmallVectorImpl<std::pair<MachineBasicBlock *, Register>> &Active) {
+  std::pair<MachineBasicBlock *, Register> Key{&MBB, Reg};
+  if (is_contained(Active, Key))
+    return None;
+  Active.push_back(Key);
+
+  for (MachineInstr &MI : reverse(make_range(MBB.begin(), Before))) {
+    if (!MI.definesRegister(Reg))
+      continue;
+    Optional<LinxV5::TileDescriptor> Result;
+    if (MI.getOpcode() == TargetOpcode::COPY)
+      Result = resolveTileDescriptor(MBB, MI.getIterator(),
+                                     MI.getOperand(1).getReg(), Active);
+    else
+      Result = getDefinedTileDescriptor(MI, Reg);
+    Active.pop_back();
+    return Result;
+  }
+
+  Optional<LinxV5::TileDescriptor> Joined;
+  for (MachineBasicBlock *Pred : MBB.predecessors()) {
+    Optional<LinxV5::TileDescriptor> Incoming =
+        resolveTileDescriptor(*Pred, Pred->end(), Reg, Active);
+    if (!Incoming) {
+      Active.pop_back();
+      return None;
+    }
+    if (Joined && !(*Joined == *Incoming))
+      report_fatal_error(
+          "conflicting Local tile descriptors at COPY/PHI control-flow join");
+    Joined = *Incoming;
+  }
+  Active.pop_back();
+  return Joined;
+}
+
+LinxV5::TileDescriptor
+LinxV5::getTileRegDescriptor(MachineBasicBlock &MBB,
+                             MachineBasicBlock::iterator MBBI,
+                             MCRegister Reg) {
+  Optional<TileDescriptor> Descriptor =
+      tryGetTileRegDescriptor(MBB, MBBI, Reg);
+  if (!Descriptor)
+    report_fatal_error(
+        "cannot prove a complete Local tile descriptor for COPY/PHI");
+  return *Descriptor;
+}
+
+Optional<LinxV5::TileDescriptor>
+LinxV5::tryGetTileRegDescriptor(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI,
+                                MCRegister Reg) {
+  SmallVector<std::pair<MachineBasicBlock *, Register>, 8> Active;
+  return resolveTileDescriptor(MBB, MBBI, Reg, Active);
+}
+
 bool LinxV5::enableBFIOpt() { return EnableBFIOpt; }
 
 LinxV5InstrInfo::LinxV5InstrInfo(LinxV5Subtarget &STI)
@@ -658,10 +1482,19 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       }
     }
   } else if (LinxV5::Tile_ABS_CGRegClass.contains(DstReg)) {
-    unsigned RegSizeCode = LinxV5::getTileRegSize(MBB, MBBI, SrcReg, false);
-    BuildMI(MBB, MBBI, DL, get(LinxV5::PseudoTCOPY), DstReg)
-        .addImm(RegSizeCode)
-        .addReg(SrcReg, getKillRegState(KillSrc));
+    LinxV5::TileDescriptor Descriptor =
+        LinxV5::getTileRegDescriptor(MBB, MBBI, SrcReg);
+    BuildMI(MBB, MBBI, DL,
+            get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                           : LinxV5::PseudoTCOPYDesc),
+            DstReg)
+        .addImm(Descriptor.SizeCode)
+        .addReg(SrcReg, getKillRegState(KillSrc))
+        .addImm(Descriptor.ValidCol)
+        .addImm(Descriptor.ValidRow)
+        .addImm(Descriptor.PhysicalCol)
+        .addImm(Descriptor.DataType)
+        .addImm(Descriptor.Layout);
   } else {
     BuildMI(MBB, MBBI, DL, get(LinxV5::ORI), DstReg)
         .addReg(SrcReg, getKillRegState(KillSrc))
@@ -681,6 +1514,12 @@ void LinxV5InstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     DL = I->getDebugLoc();
 
   MachineFunction *MF = MBB.getParent();
+  if ((MF->getInfo<LinxV5MachineFunctionInfo>()->hasLocalTileABICall() ||
+       LinxV5::getLocalTileABIInfo(MF->getFunction())) &&
+      LinxV5::Tile_ABSRegClass.hasSubClassEq(RC))
+    report_fatal_error(
+        "linx-local-tile-abi cannot spill a Local Tile payload in an ABI "
+        "callee or across its call boundary");
   if (LinxV5::Shared_ABSRegClass.hasSubClassEq(RC))
     report_fatal_error(
         "Shared register spill is required, but Shared spill is not "
@@ -844,16 +1683,12 @@ void LinxV5::generateMatIntSeq(int64_t Val, LinxV5MatInt::InstSeq &Res,
       } else {
         generateInt32InstSeq(NewVal, Res);
       }
-      // HL.BFI uses raw immr/imms semantics.  To insert SymmWidth bits at
-      // offset SymmWidth, encode immr=SymmWidth and
-      // imms=2*SymmWidth-1.  The uimm6_plus1 TableGen operand takes imms+1,
-      // so the second assembly operand is 2*SymmWidth (16/32/64), not the
-      // field width itself.  Using SymmWidth for both operands gives the
-      // wrapping encoding and materializes the wrong constant in consumers
-      // that implement the canonical immr/imms contract.
-      unsigned M = static_cast<unsigned>(SymmWidth);
-      unsigned N = 2u * static_cast<unsigned>(SymmWidth);
-      Res.push_back(LinxV5MatInt::Inst(LinxV5::HL_BFI, (N << 6) | M));
+      // HL.BFI directly encodes the inclusive immr/imms endpoints. Copy the
+      // low SymmWidth bits into [2*SymmWidth-1:SymmWidth].
+      unsigned First = static_cast<unsigned>(SymmWidth);
+      unsigned Last = 2u * static_cast<unsigned>(SymmWidth) - 1u;
+      Res.push_back(
+          LinxV5MatInt::Inst(LinxV5::HL_BFI, (Last << 6) | First));
       return;
     }
   }
@@ -1079,6 +1914,12 @@ bool LinxV5InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
   // Handle a single conditional branch.
   if (NumTerminators == 1 && I->getDesc().isConditionalBranch()) {
+    // PseudoBRCondCARG carries only its target and an implicit CARG use,
+    // unlike the three-operand compare-and-branch instructions modeled by
+    // parseCondBranch().  Leave it intact for its dedicated lowering rather
+    // than reading nonexistent comparison operands.
+    if (I->getOpcode() == LinxV5::PseudoBRCondCARG)
+      return true;
     parseCondBranch(*I, TBB, Cond);
     return false;
   }
@@ -1086,6 +1927,8 @@ bool LinxV5InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   // Handle a conditional branch followed by an unconditional branch.
   if (NumTerminators == 2 && std::prev(I)->getDesc().isConditionalBranch() &&
       I->getDesc().isUnconditionalBranch()) {
+    if (std::prev(I)->getOpcode() == LinxV5::PseudoBRCondCARG)
+      return true;
     parseCondBranch(*std::prev(I), TBB, Cond);
     FBB = getBranchDestBlock(*I);
     return false;
@@ -1266,7 +2109,9 @@ bool LinxV5InstrInfo::verifyInstruction(const MachineInstr &MI,
     ErrInfo = "copy between LinxV5 Local tile and Shared tile handle";
     return false;
   }
-  if (MI.getOpcode() == LinxV5::PseudoTCOPY &&
+  if ((MI.getOpcode() == LinxV5::PseudoTCOPY ||
+       (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+        MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) &&
       MI.getOperand(0).isReg() && MI.getOperand(2).isReg()) {
     Register Dst = MI.getOperand(0).getReg();
     Register Src = MI.getOperand(2).getReg();

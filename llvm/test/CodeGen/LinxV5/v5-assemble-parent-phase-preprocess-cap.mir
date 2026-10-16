@@ -1,0 +1,16 @@
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("    $r5 = ADDI", "    $r6 = ORI $r0, 0\n" * 16384 + "    $r5 = ADDI", 1))' %S/v5-assemble-parent-phase-offset-cycle.mir %t.mir
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-clockhands -o /dev/null %t.mir 2>&1 \
+# RUN:   | FileCheck %s
+# RUN: %python -c 'import pathlib,sys; s=pathlib.Path(sys.argv[1]).read_text(); pathlib.Path(sys.argv[2]).write_text(s.replace("    %1:tile_abs", "    $r4 = ORI $r0, 0\n" * 16384 + "    %1:tile_abs", 1))' %S/v5-assemble-parent-phase-offset-cycle.mir %t-irrelevant.mir
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-clockhands -o - %t-irrelevant.mir \
+# RUN:   | FileCheck %s --check-prefix=IRRELEVANT
+#
+# Even a finite dependency graph in the event-carrying loop must respect the
+# unchanged 65536-work budget. The generated loop-local scalar transfers
+# exhaust preprocessing before path proof. A larger acyclic scalar prefix that
+# reuses the event loop's physical counter remains irrelevant and must compile.
+# CHECK: LLVM ERROR: unable to prove bounded B.ASSEMBLE parent phase behavior
+# IRRELEVANT-LABEL: name: assemble_parent_phase_offset_cycle
+# IRRELEVANT: class: tile_tr

@@ -1,0 +1,95 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -linxv5-enable-tile-clock-hand=false \
+# RUN:   -run-pass=linxv5-clockhands -o - %t/two-parent.mir \
+# RUN:   | FileCheck %s --check-prefix=TWO
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -linxv5-enable-tile-clock-hand=false \
+# RUN:   -run-pass=linxv5-clockhands -o /dev/null %t/three-parent.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=THREE
+#
+# A loop-invariant CUBE_N8 value exclusively reserves the N hand. Two
+# simultaneously OPEN B.ASSEMBLE parents may reserve T/M while U remains a
+# writer hand. Three simultaneous parents consume every remaining hand and
+# must fail closed instead of assigning an ordinary writer to a parent hand.
+#
+# TWO-LABEL: name: two_parents_with_loop_invariant_n8
+# TWO-COUNT-1: class: tile_nr
+# TWO-COUNT-1: class: tile_tr
+# TWO-COUNT-1: class: tile_mr
+# TWO: def %{{[0-9]+}},
+# TWO: %{{[0-9]+}}:tile_ur = PseudoTCI_EW_SizeI
+# TWO: def %{{[0-9]+}},{{.*}}%{{[0-9]+}}, 13{{.*}}, 2, 13{{.*}}, 1, 13{{.*}}, 0
+# TWO: def %{{[0-9]+}},{{.*}}%{{[0-9]+}}, 13{{.*}}, 2, 13{{.*}}, 1, 13{{.*}}, 0
+# THREE: LLVM ERROR: Local tile hand reservations leave no writer hand
+#--- two-parent.mir
+--- |
+  define void @two_parents_with_loop_invariant_n8() { ret void }
+...
+---
+name: two_parents_with_loop_invariant_n8
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs }
+  - { id: 1, class: tile_abs }
+  - { id: 2, class: tile_abs }
+  - { id: 3, class: tile_abs }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2, $r3
+    INLINEASM &"BSTART.TLSU TLOAD, ${3:D}\0A.if ${8:c} == 21\0AB.DATR ND2M32.normal, Zero\0A.elseif ${8:c} == 22\0AB.DATR ND2M16.normal, Zero\0A.else\0AB.DATR ND2N8.normal, Zero\0A.endif\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$1,$2], []\0A", 25, 720906, def %0, 2293769, $r2, 2293769, $r3, 13, 7, 13, 6, 13, 32, 13, 128, 13, 0, 13, 23
+    %1:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %2, 720905, %1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %3, 720905, %1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %2, 720905, %1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %3, 720905, %1, 13, 0, 13, 1
+    $r4 = ORI $r0, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r4
+    INLINEASM &"opaque.tile.consumer $0", 1, 720905, %0
+    $r4 = ADDI $r4, 1
+    SETC_LTI_BR $r4, 4, %bb.1
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...
+#--- three-parent.mir
+--- |
+  define void @three_parents_with_loop_invariant_n8() { ret void }
+...
+---
+name: three_parents_with_loop_invariant_n8
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs }
+  - { id: 1, class: tile_abs }
+  - { id: 2, class: tile_abs }
+  - { id: 3, class: tile_abs }
+  - { id: 4, class: tile_abs }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2, $r3
+    INLINEASM &"BSTART.TLSU TLOAD, ${3:D}\0A.if ${8:c} == 21\0AB.DATR ND2M32.normal, Zero\0A.elseif ${8:c} == 22\0AB.DATR ND2M16.normal, Zero\0A.else\0AB.DATR ND2N8.normal, Zero\0A.endif\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$1,$2], []\0A", 25, 720906, def %0, 2293769, $r2, 2293769, $r3, 13, 7, 13, 6, 13, 32, 13, 128, 13, 0, 13, 23
+    %1:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %2, 720905, %1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %3, 720905, %1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %4, 720905, %1, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %2, 720905, %1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %3, 720905, %1, 13, 0, 13, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %4, 720905, %1, 13, 0, 13, 1
+    $r4 = ORI $r0, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r4
+    INLINEASM &"opaque.tile.consumer $0", 1, 720905, %0
+    $r4 = ADDI $r4, 1
+    SETC_LTI_BR $r4, 4, %bb.1
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...

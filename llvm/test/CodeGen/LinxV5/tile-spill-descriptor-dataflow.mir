@@ -1,0 +1,216 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup -o - %s | FileCheck %s
+# CHECK: PseudoTSpillDesc killed $tile_u1, %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK: PseudoTReloadDesc %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK: PseudoTSpillDesc killed $tile_m1, %stack.0, 4, 32, 4, 17, 29, 3
+# CHECK: PseudoTReloadDesc %stack.0, 4, 32, 4, 17, 29, 3
+# CHECK-LABEL: name: equal_spill_diamond
+# CHECK-COUNT-2: PseudoTSpillDesc killed $tile_u1, %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK: PseudoTReloadDesc %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK-LABEL: name: loop_backedge_preserves_spill
+# CHECK: PseudoTSpillDesc killed $tile_u1, %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK: PseudoTReloadDesc %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK-LABEL: name: reload_respill_epochs
+# CHECK-COUNT-2: PseudoTSpillDesc {{.*}}, 4, 32, 4, 25, 29, 3
+# CHECK-COUNT-2: PseudoTSpillDesc {{.*}}, 4, 32, 4, 17, 29, 3
+# CHECK-LABEL: name: loop_invariant_reload_respill
+# CHECK: PseudoTReloadDesc %stack.0, 4, 32, 4, 25, 29, 3
+# CHECK: PseudoTSpillDesc killed $tile_n1, %stack.1, 4, 32, 4, 25, 29, 3
+# CHECK-LABEL: name: loop_invariant_copy_spill
+# CHECK: PseudoTSpillDesc killed $tile_t1, %stack.0, 4, 32, 4, 25, 29, 3
+--- |
+  define void @spill_reload() { ret void }
+  define void @cross_block_spill_reload() { ret void }
+  define void @sequential_spill_epochs() { ret void }
+  define void @equal_spill_diamond() { ret void }
+  define void @loop_backedge_preserves_spill() { ret void }
+  define void @reload_respill_epochs() { ret void }
+  define void @loop_invariant_reload_respill() { ret void }
+  define void @loop_invariant_copy_spill() { ret void }
+...
+---
+name: spill_reload
+tracksRegLiveness: true
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: 0, size: 512, alignment: 256,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r2
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
+---
+name: cross_block_spill_reload
+tracksRegLiveness: true
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: 0, size: 512, alignment: 256,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r2
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoBR %bb.1
+  bb.1:
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
+---
+name: sequential_spill_epochs
+tracksRegLiveness: true
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: 0, size: 512, alignment: 256,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r2
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    $tile_m1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 17, 3, 21, 0, $r2
+    PseudoTSpill killed $tile_m1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    $tile_t1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
+---
+name: equal_spill_diamond
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: 0, size: 512, alignment: 256,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body: |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $r3
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $r3
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r3
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $r3
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r3
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoBR %bb.3
+  bb.3:
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    C_SETC_TGT $r10, implicit-def $carg
+    PseudoRETCARG implicit $carg
+...
+---
+name: loop_backedge_preserves_spill
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+stack:
+  - { id: 0, name: '', type: spill-slot, offset: 0, size: 512, alignment: 256,
+      stack-id: default, callee-saved-register: '', callee-saved-restored: true,
+      debug-info-variable: '', debug-info-expression: '', debug-info-location: '' }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2, $r3
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r3
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    BEQ $r2, $r0, %bb.1
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...
+---
+name: reload_respill_epochs
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+  - { id: 1, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r2
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    PseudoTSpill killed $tile_n1, %stack.1 :: (store (s4096) into %stack.1, align 256)
+    $tile_t1 = PseudoTReload %stack.1 :: (load (s4096) from %stack.1, align 256)
+    $tile_m1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 17, 3, 21, 0, $r2
+    PseudoTSpill killed $tile_m1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    $tile_n2 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    PseudoTSpill killed $tile_n2, %stack.1 :: (store (s4096) into %stack.1, align 256)
+    $tile_t2 = PseudoTReload %stack.1 :: (load (s4096) from %stack.1, align 256)
+    PseudoRET
+...
+---
+name: loop_invariant_reload_respill
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+  - { id: 1, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2, $r3
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r3
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s4096) from %stack.0, align 256)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $tile_n1
+    PseudoTSpill killed $tile_n1, %stack.1 :: (store (s4096) into %stack.1, align 256)
+    $tile_t1 = PseudoTReload %stack.1 :: (load (s4096) from %stack.1, align 256)
+    BEQ $r2, $r0, %bb.1
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...
+---
+name: loop_invariant_copy_spill
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    liveins: $r2, $r3
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 21, 0, $r3
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $tile_u1
+    $tile_t1 = COPY $tile_u1
+    PseudoTSpill killed $tile_t1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    BEQ $r2, $r0, %bb.1
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...

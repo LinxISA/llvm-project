@@ -2941,6 +2941,12 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
 
   TileOP = StringSwitch<unsigned>(Identifier)
                .Case("tmov", TileOPTMA::TMOV)
+               // Public API movement spellings are assembler convenience aliases.
+               // The operand bundle selects the canonical Function 2 TMOV schema.
+               .Case("tmov.l2s.insert", TileOPTMA::TMOV)
+               .Case("tmov.l2s.publish", TileOPTMA::TMOV)
+               .Case("tmov.s2l.broadcast", TileOPTMA::TMOV)
+               .Case("tmov.s2l.extract", TileOPTMA::TMOV)
                .Case("tload", TileOPTMA::TLOAD)
                .Case("tstore", TileOPTMA::TSTORE)
                .Case("tprefetch", TileOPTMA::TPREFETCH)
@@ -2959,7 +2965,15 @@ OperandMatchResultTy LinxV5AsmParser::parseTileOPTMA(OperandVector &Operands) {
                .Case("mgather.and", TileOPTMA::MGATHER_AND)
                .Case("mgather.or", TileOPTMA::MGATHER_OR)
                .Case("mgather.xor", TileOPTMA::MGATHER_XOR)
+               .Case("mscatter.max", TileOPTMA::MSCATTER_MAX)
+               .Case("mscatter.min", TileOPTMA::MSCATTER_MIN)
                .Case("mscatter.add", TileOPTMA::MSCATTER_ADD)
+               .Case("mscatter.inc", TileOPTMA::MSCATTER_INC)
+               .Case("mscatter.dec", TileOPTMA::MSCATTER_DEC)
+               .Case("mscatter.and", TileOPTMA::MSCATTER_AND)
+               .Case("mscatter.or", TileOPTMA::MSCATTER_OR)
+               .Case("mscatter.xor", TileOPTMA::MSCATTER_XOR)
+               .Case("mscatter.popc", TileOPTMA::MSCATTER_POPC)
                // PTO 0.58.6 TLSU Function 28: standalone IMG2COL carrier.
                .Case("timg2col", TileOPTMA::TIMG2COL)
                .Default(TileOPTMA::EMPTY_TileOPTMA);

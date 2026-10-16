@@ -1,0 +1,106 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup -o - %t/closed.mir | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup -o /dev/null %t/open-join.mir 2>&1 | FileCheck %s --check-prefix=OPEN
+
+# CHECK-LABEL: name: single_instruction_closed
+# CHECK: PseudoTSpillDesc killed $tile_u1, %stack.0, 4, 32, 4, 25, 0, 3
+# CHECK-LABEL: name: multi_phase_closed
+# CHECK: PseudoTSpillDesc killed $tile_t1, %stack.0, 4, 32, 4, 25, 0, 3
+# CHECK-LABEL: name: closed_or_ordinary_join
+# CHECK: PseudoTSpillDesc killed $tile_t1, %stack.0, 4, 32, 4, 25, 0, 3
+# OPEN: LLVM ERROR: raw Tile spill source is OPEN, alias-bearing, or unresolved
+
+#--- closed.mir
+--- |
+  define void @single_instruction_closed() { ret void }
+  define void @multi_phase_closed() { ret void }
+  define void @closed_or_ordinary_join() { ret void }
+...
+---
+name: single_instruction_closed
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    INLINEASM &"BSTART.TEPL 102, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 4, ->lb2\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720906, def $tile_u1, 13, 3, 13, 1, 13, 1
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoRET
+...
+---
+name: multi_phase_closed
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    successors: %bb.1(0x80000000)
+    INLINEASM &"BSTART.TEPL 102, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 4, ->lb2\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 13, 3, 13, 1, 13, 0
+    PseudoBR %bb.1
+  bb.1:
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 4, ->lb2\0AB.IOT $0, mask=1111, last\0AB.ASSEMBLE ${1:c}, ${2:c}, zero, 1, 1\0A", 1, 720905, $tile_t1, 13, 0, 13, 1
+    PseudoTSpill killed $tile_t1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoRET
+...
+---
+name: closed_or_ordinary_join
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+  - { reg: '$r3', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2, $r3
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    INLINEASM &"BSTART.TEPL 102, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 4, ->lb2\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 13, 3, 13, 1, 13, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $r3
+    $tile_t1 = PseudoTLOAD_noDsrc_noDdst $r0, 4, $r0, 32, $r0, 4, 25, 3, 0, 0, $r3
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1
+    PseudoTSpill killed $tile_t1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoRET
+...
+
+#--- open-join.mir
+--- |
+  define void @open_join() { ret void }
+...
+---
+name: open_join
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r2', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    successors: %bb.1(0x40000000), %bb.2(0x40000000)
+    liveins: $r2
+    INLINEASM &"BSTART.TEPL 102, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 4, ->lb2\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 13, 3, 13, 1, 13, 0
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 25\0AB.DATR NORM, RNONE\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 4, ->lb2\0AB.IOT $0, mask=1111, last\0AB.ASSEMBLE ${1:c}, ${2:c}, zero, 1, 1\0A", 1, 720905, $tile_t1, 13, 0, 13, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3(0x80000000)
+    liveins: $tile_t1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1
+    PseudoTSpill killed $tile_t1, %stack.0 :: (store (s4096) into %stack.0, align 256)
+    PseudoRET
+...

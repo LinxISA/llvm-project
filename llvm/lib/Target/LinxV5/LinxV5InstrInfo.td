@@ -37,6 +37,7 @@ def linxv5_blk_matmul   : SDNode<"LinxV5ISD::BLK_MATMUL", SDT_LinxV5Call, [SDNPH
 def linxv5_blk_matmul_masked : SDNode<"LinxV5ISD::BLK_MATMUL_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tadd_masked : SDNode<"LinxV5ISD::EW_TADD_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tsub_masked : SDNode<"LinxV5ISD::EW_TSUB_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def linxv5_ew_tbinary_gpr_masked : SDNode<"LinxV5ISD::EW_TBINARY_GPR_MASKED", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tcmp : SDNode<"LinxV5ISD::EW_TCMP", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_tsel : SDNode<"LinxV5ISD::EW_TSEL", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def linxv5_ew_texpands : SDNode<"LinxV5ISD::EW_TEXPANDS", SDT_LinxV5Call, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
@@ -1879,6 +1880,33 @@ def B_IOR_EXEC_MASK : BlockModifierBase {
   let AsmString = "B.IOR [$RegSrc0,$RegSrc1,$RegSrc2], ExecMaskPresent";
 }
 
+// Compare result and dense scalar/mask sources occupy ONE execution record.
+// The source-only form above remains the more specific zero-destination decode.
+def B_IOR_EXEC_MASK_DST : BlockModifierBase {
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+  let isDisassembleOnly = 0;
+  let OutOperandList = (outs GPRDstWithOptionalArrow:$RegDst);
+  let InOperandList = (ins GPRSrc:$RegSrc0, GPRSrc:$RegSrc1, GPRSrc:$RegSrc2);
+
+  bits<5> RegSrc0;
+  bits<5> RegSrc1;
+  bits<5> RegSrc2;
+  bits<5> RegDst;
+  let Inst{31-27} = RegSrc2;
+  let Inst{26} = 0b1;
+  let Inst{25} = 0b0;
+  let Inst{24-20} = RegSrc1;
+  let Inst{19-15} = RegSrc0;
+  let Inst{14-12} = 0b000;
+  let Inst{11-7} = RegDst;
+  let Inst{6-4} = 0b001;
+  let Inst{3-1} = 0b001;
+  let Inst{0} = 0b1;
+  let AsmString = "B.IOR [$RegSrc0,$RegSrc1,$RegSrc2],[$RegDst], ExecMaskPresent";
+}
+
 def B_IOD_Dst : LinxV5InstBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;
@@ -3481,6 +3509,32 @@ def PseudoTCOPY : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
   let AsmString = "TCOPY\t$SrcTile, $DstTile$TileSize";
 }
 
+// CodeGen-only Local-tile copy with the complete logical/physical descriptor.
+// Generic register copies and PHI elimination must not lose the descriptor
+// carried by their producer: an untyped TCOPY defaults every omitted field and
+// is not an identity operation for typed CUBE tiles.
+let isCodeGenOnly = 1 in
+def PseudoTCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout)>;
+
+// Identity TMOV preserving a one-row packed Predicate storage descriptor.
+let isCodeGenOnly = 1 in
+def PseudoPCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout)>;
+
+// Post-RA metadata only: seed one closed Local-Tile value imported across an
+// outlined C call boundary. TRegToOffset consumes this pseudo while resetting
+// its queue model; no ISA allocation or instruction is emitted for the seed.
+let isCodeGenOnly = 1, hasSideEffects = 1 in
+def PseudoLocalTileABISeed : Pseudo<(outs TILE_DstWithArrow:$DstTile),
+    (ins TileSizeWithBracket:$TileSize,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout), []>;
+
 let isCodeGenOnly = 1, hasSideEffects = 1 in {
 def PseudoV5GMOV : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins BstartDataType:$DataType, PE_MASK_Op:$PE_MASK,
@@ -3516,10 +3570,29 @@ def PseudoERCOV : PseudoTEPLImpl<(outs ),
 
 def PseudoTSpill : PseudoMCalllImpl<(outs), (ins TILE_Src_Reg:$SrcTile, GPRSrc:$SrcR)> {
   let isCodeGenOnly = 1;
+  let mayStore = 1;
 }
 
 def PseudoTReload : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile), (ins GPRSrc:$SrcR)> {
   let isCodeGenOnly = 1;
+  let mayLoad = 1;
+}
+
+def PseudoTSpillDesc : PseudoMCalllImpl<(outs),
+    (ins TILE_Src_Reg:$SrcTile, GPRSrc:$SrcR,
+         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         BstartDataType:$DataType, BArgFormat:$Layout,
+         TileSizeWithBracket:$TileSize)> {
+  let isCodeGenOnly = 1;
+  let mayStore = 1;
+}
+
+def PseudoTReloadDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
+    (ins GPRSrc:$SrcR, uimm17:$ValidCol, uimm17:$ValidRow,
+         uimm17:$PhysicalCol, BstartDataType:$DataType, BArgFormat:$Layout,
+         TileSizeWithBracket:$TileSize)> {
+  let isCodeGenOnly = 1;
+  let mayLoad = 1;
 }
 
 class PseudoMTClImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
@@ -3531,6 +3604,20 @@ def PseudoTLOAD_noDsrc_noDdst : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile)
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataType,
   TileSizeWithBracket:$TileSize, BArgFormat:$Layout, PadValue:$PadValue, GPRList:$List)> {
     let AsmString = "TLOAD.$Layout\t<LB0: $RegM$immM, LB1: $RegN$immN, LB2: $RegK$immK, ${DataType}, ${PadValue}>" #"\t[$List], $DstTile$TileSize";
+}
+
+let isCodeGenOnly = 1 in
+def PseudoTLOADSpillDesc : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       GPRPlusImm:$RegK, PlusImm17:$immK,
+       BstartDataType:$DataType, TileSizeWithBracket:$TileSize,
+       BArgFormat:$Layout, PadValue:$PadValue,
+       uimm17:$OriginalValidCol, uimm17:$OriginalValidRow,
+       uimm17:$OriginalPhysicalCol, BstartDataType:$OriginalDataType,
+       BArgFormat:$OriginalLayout, TileSizeWithBracket:$OriginalTileSize,
+       GPRList:$List)> {
+  let mayLoad = 1;
 }
 
 def PseudoTSTORE_noDsrc_noDdst : PseudoMTClImpl<(outs),
@@ -3604,6 +3691,15 @@ def PseudoMSCATTER_MASK_SizeI : PseudoMTClImpl<(outs),
        PRED_TILE_Src_Reg:$MaskTile,
        GPRList:$List)> {
   let AsmString = "MSCATTER.MASK\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, $MaskTile, [$List]";
+}
+
+def PseudoMSCATTER_GPR_Masked_SizeI : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       BArgFormat:$Layout, TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$OffsetTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       GPRSrc:$Base, uimm1:$PredInv, uimm1:$Zero)> {
+  let AsmString = "MSCATTER.GPR.MASKED\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, [$Base]";
 }
 
 def PseudoMGATHER_ADD_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
@@ -3692,6 +3788,20 @@ class PseudoTEPL_TBinary_Base :
 
 def PseudoTBinary_SizeI : PseudoTEPL_TBinary_Base;
 
+class PseudoTEPL_TBinary_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       TileOPTEPL:$Selector, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       uimm1:$PredInv, uimm1:$Zero)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "EW.TBINARY.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $Selector, $DstTile$TileSize";
+}
+def PseudoTBinary_GPR_Masked_SizeI : PseudoTEPL_TBinary_GPR_Masked_Base;
+
 class PseudoTEPL_TLEA_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3703,6 +3813,41 @@ class PseudoTEPL_TLEA_Base :
 }
 
 def PseudoTLEA_SizeI : PseudoTEPL_TLEA_Base;
+
+class PseudoTEPL_TNEG_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
+       GPRSrc:$ExecMask)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TNEG.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}, $Layout>, $SrcTile, $ExecMask, $DstTile$TileSize";
+}
+def PseudoTNEG_GPR_Masked_SizeI : PseudoTEPL_TNEG_GPR_Masked_Base;
+
+class PseudoTEPL_TCVT_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$SrcDataType, BstartDataType:$DstDataType,
+       BArgFormat:$Layout, TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile, RMode:$RMode, Sat:$Sat,
+       GPRSrc:$MaskLow, GPRSrc:$MaskHigh, uimm1:$PredInv, uimm1:$Zero)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TCVT.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${SrcDataType}, ${DstDataType}, $Layout>, $SrcTile, $MaskLow, $MaskHigh, $DstTile$TileSize";
+}
+def PseudoTCVT_GPR_Masked_SizeI : PseudoTEPL_TCVT_GPR_Masked_Base;
+
+class PseudoTEPL_TCI_Row_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, GPRSrc:$Start, GPRSrc:$Step2D, uimm16:$PhysicalCols)> {
+  let AsmString = "TCI.EW\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Start, $Step2D, $DstTile$TileSize";
+}
+def PseudoTCI_EW_Row_SizeI : PseudoTEPL_TCI_Row_Base;
 
 class PseudoTEPL_TCI_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
@@ -3724,6 +3869,53 @@ class PseudoTEPL_TCMPS_GPR_Base :
 }
 def PseudoTCMPS_GPR : PseudoTEPL_TCMPS_GPR_Base;
 
+class PseudoTEPL_TCMP_GPR_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$Mask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, CmpMode:$CmpMode)> {
+  let AsmString = "TCMP.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $Mask";
+}
+def PseudoTCMP_GPR : PseudoTEPL_TCMP_GPR_Base;
+
+class PseudoTEPL_TCMPS_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$ResultMask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile, GPRSrc:$Scalar, CmpMode:$CmpMode,
+       GPRSrc:$ExecMask)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TCMPS.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}, $Layout, $CmpMode>, $SrcTile, $Scalar, $ExecMask, $ResultMask";
+}
+def PseudoTCMPS_GPR_Masked : PseudoTEPL_TCMPS_GPR_Masked_Base;
+
+class PseudoTEPL_TCMP_GPR_Masked_Base :
+  PseudoTEPLImpl<(outs GPRDstWithOptionalArrow:$ResultMask),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1, CmpMode:$CmpMode,
+       GPRSrc:$ExecMask)> {
+  let isCodeGenOnly = 1;
+  let AsmString = "TCMP.GPR.MASKED\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}, $Layout, $CmpMode>, $SrcTile0, $SrcTile1, $ExecMask, $ResultMask";
+}
+def PseudoTCMP_GPR_Masked : PseudoTEPL_TCMP_GPR_Masked_Base;
+
+class PseudoTEPL_TCMP_Row_Base :
+  PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1,
+       CmpMode:$CmpMode, uimm16:$PhysicalCols)> {
+  let AsmString = "TCMP\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $SrcTile0, $SrcTile1, $DstTile$TileSize";
+}
+
+def PseudoTCMP_Row_SizeI : PseudoTEPL_TCMP_Row_Base;
+
 class PseudoTEPL_TCMP_Base :
   PseudoTEPLImpl<(outs PRED_TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3737,6 +3929,19 @@ class PseudoTEPL_TCMP_Base :
 
 def PseudoTCMP_SizeI : PseudoTEPL_TCMP_Base;
 
+class PseudoTEPL_TSEL_Row_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize,
+       PRED_TILE_Src_Reg:$MaskTile, TILE_Src_Reg:$TrueTile,
+       TILE_Src_Reg:$FalseTile, uimm16:$PhysicalCols)> {
+  let AsmString = "TSEL\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $MaskTile, $TrueTile, $FalseTile, $DstTile$TileSize";
+}
+
+def PseudoTSEL_Row_SizeI : PseudoTEPL_TSEL_Row_Base;
+
 class PseudoTEPL_TSEL_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
@@ -3749,6 +3954,28 @@ class PseudoTEPL_TSEL_Base :
 }
 
 def PseudoTSEL_SizeI : PseudoTEPL_TSEL_Base;
+
+class PseudoTEPL_TSEL_GPR_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$TrueTile,
+       TILE_Src_Reg:$FalseTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh)> {
+  let AsmString = "TSEL.GPR\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $MaskLow, $MaskHigh, $TrueTile, $FalseTile, $DstTile$TileSize";
+}
+def PseudoTSEL_GPR_SizeI : PseudoTEPL_TSEL_GPR_Base;
+
+class PseudoTEPL_TEXPANDS_Row_Base :
+  PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, GRNoR0:$Scalar, uimm16:$PhysicalCols)> {
+  let AsmString = "TEXPANDS\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Scalar, $DstTile$TileSize";
+}
+
+def PseudoTEXPANDS_Row_SizeI : PseudoTEPL_TEXPANDS_Row_Base;
 
 class PseudoTEPL_TEXPANDS_Base :
   PseudoTEPLImpl<(outs TILE_DstWithArrow:$DstTile),
@@ -4370,14 +4597,14 @@ def HL_MISUB : V5Inst_48_Mul_Arith<0b001, "hl.misub">;
 }
 
 let PE = PET_STD in {
-def HL_BFI :  V5Inst_48_M_A<0b010, (outs DstRWithArrow:$Dst), (ins GPRSrc:$SrcL, GPRSrc:$SrcR, uimm6:$ImmM, uimm6_plus1:$ImmN), "hl.bfi"> {
-  bits<6> ImmM;
-  bits<6> ImmN;
+def HL_BFI :  V5Inst_48_M_A<0b010, (outs DstRWithArrow:$Dst), (ins GPRSrc:$SrcL, GPRSrc:$SrcR, uimm6:$ImmR, uimm6:$ImmS), "hl.bfi"> {
+  bits<6> ImmR;
+  bits<6> ImmS;
 
   let Inst{47-41} = 0b0000000;
-  let Inst{15-10} = ImmM;
-  let Inst{9-4} = ImmN;
-  let AsmString = "hl.bfi" # "\t$SrcL, $SrcR, $ImmM, $ImmN, $Dst";
+  let Inst{15-10} = ImmS;
+  let Inst{9-4} = ImmR;
+  let AsmString = "hl.bfi" # "\t$SrcL, $SrcR, $ImmR, $ImmS, $Dst";
 }
 }
 

@@ -1,0 +1,36 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
+#
+# Two persistent CUBE_N8 values occupy consecutive generations in the same
+# hand. An already matching loop backedge must keep their relative ages without
+# attempting a direct-Local copy, which has no legal CUBE_N8 TMOV selector.
+# CHECK-LABEL: name: two_n8_liveouts
+# CHECK-COUNT-2: BSTART.TLSU TLOAD
+# CHECK-NOT: PseudoTCOPY
+# CHECK: INLINEASM &"opaque.tile.consumer $0, $1"{{.*}}$tile_nos2{{.*}}$tile_nos1
+# CHECK-NOT: PseudoTCOPY
+# CHECK: PseudoRET
+--- |
+  define void @two_n8_liveouts() { ret void }
+...
+---
+name: two_n8_liveouts
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2, $r3, $r6, $r7
+    INLINEASM &"BSTART.TLSU TLOAD, ${3:D}\0A.if ${8:c} == 21\0AB.DATR ND2M32.normal, Zero\0A.elseif ${8:c} == 22\0AB.DATR ND2M16.normal, Zero\0A.else\0AB.DATR ND2N8.normal, Zero\0A.endif\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$1,$2], []\0A", 25, 720906, def $tile_n1, 2293769, $r2, 2293769, $r3, 13, 7, 13, 6, 13, 32, 13, 128, 13, 0, 13, 23
+    INLINEASM &"BSTART.TLSU TLOAD, ${3:D}\0A.if ${8:c} == 21\0AB.DATR ND2M32.normal, Zero\0A.elseif ${8:c} == 22\0AB.DATR ND2M16.normal, Zero\0A.else\0AB.DATR ND2N8.normal, Zero\0A.endif\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$1,$2], []\0A", 25, 720906, def $tile_n2, 2293769, $r6, 2293769, $r7, 13, 7, 13, 6, 13, 32, 13, 128, 13, 0, 13, 23
+    $r4 = ORI $r0, 0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r4, $tile_n1, $tile_n2
+    INLINEASM &"opaque.tile.consumer $0, $1", 1, 720905, $tile_n1, 720905, $tile_n2
+    $r4 = ADDI $r4, 1
+    SETC_LTI_BR $r4, 4, %bb.1
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...
