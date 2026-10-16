@@ -1610,8 +1610,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       [&](ICmpInst::Predicate Predicate, Value *LHS, Value *RHS,
           Instruction *Context) {
         struct RequiredCondition {
-          Value *Condition;
-          bool Value;
+          llvm::Value *Condition;
+          bool Result;
         };
         SmallVector<RequiredCondition, 8> Conditions;
         DomTreeNode *Node = DT.getNode(Context->getParent());
@@ -2054,7 +2054,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
 
           for (const RequiredCondition &Condition : Conditions)
             if (auto Value = Evaluate(Condition.Condition))
-              if (Value->getBoolValue() != Condition.Value)
+              if (Value->getBoolValue() != Condition.Result)
                 return true;
           auto Left = Evaluate(LHS);
           auto Right = Evaluate(RHS);
