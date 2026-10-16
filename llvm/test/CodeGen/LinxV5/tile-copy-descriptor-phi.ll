@@ -1,19 +1,25 @@
 ; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
 ; RUN:   -enable-all-vector-as-tilereg=true %s -o - | FileCheck %s
 
-; A Local-tile PHI copy must preserve the complete typed CUBE descriptor.  A
-; SizeCode-only TCOPY would default to DTYPE_NONE/NORM/1x1 and is not an
-; identity operation for either predecessor.
-;
+; Equal descriptor predecessors share a canonical queue contract, so PHI
+; coalescing need not republish the Tile. Check the typed producers/consumer;
+; forced physical COPY preservation is covered in tile-copy-descriptor-forced.mir.
 ; CHECK-LABEL: copy_phi:
 ; CHECK: BSTART.TLSU TLOAD, FP16
-; CHECK: BSTART.TLSU TLOAD, FP16
-; CHECK: BSTART.TLSU TMOV, FP16
-; CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
+; CHECK-NEXT: B.DATR ND2M32.normal, Zero
 ; CHECK-NEXT: C.B.DIMI 4, ->lb0
 ; CHECK-NEXT: C.B.DIMI 32, ->lb1
-; CHECK-NEXT: C.B.DIMI 4, ->lb2
 ; CHECK-NEXT: B.IOT {{.*}}<256B>
+; CHECK: BSTART.TLSU TLOAD, FP16
+; CHECK-NEXT: B.DATR ND2M32.normal, Zero
+; CHECK-NEXT: C.B.DIMI 4, ->lb0
+; CHECK-NEXT: C.B.DIMI 32, ->lb1
+; CHECK-NEXT: B.IOT {{.*}}<256B>
+; CHECK: BSTART.TLSU TSTORE, FP16
+; CHECK-NEXT: B.DATR M322ND.normal, Null
+; CHECK-NEXT: C.B.DIMI 4, ->lb0
+; CHECK-NEXT: C.B.DIMI 32, ->lb1
+; CHECK-NEXT: B.IOT t#1, mask=1111, last
 
 target triple = "linx64v5-unknown-linux-musl"
 

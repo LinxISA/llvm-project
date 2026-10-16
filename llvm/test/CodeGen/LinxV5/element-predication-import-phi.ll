@@ -79,10 +79,16 @@ exit:
 ; IR: ret void
 ; OBJ-LABEL: <undef_poison_import>:
 ; OBJ: BSTART.TLSU TLOAD, U32
+; OBJ: BSTART.TEPL TADDS, U32
+; OBJ: B.SUBVIEW 0, zero, 0, 1
 ; OBJ: BSTART.TEPL TCI, U32
-; OBJ: BSTART.TLSU TMOV, U32
+; OBJ-NEXT: {{.*}}B.DATR CUBE_M32.normal, Zero
+; OBJ-NEXT: {{.*}}C.B.DIMI 1, ->lb0
+; OBJ-NEXT: {{.*}}C.B.DIMI 32, ->lb1
 ; OBJ: BSTART.TEPL TCI, U32
-; OBJ: BSTART.TLSU TMOV, U32
+; OBJ-NEXT: {{.*}}B.DATR CUBE_M32.normal, Zero
+; OBJ-NEXT: {{.*}}C.B.DIMI 1, ->lb0
+; OBJ-NEXT: {{.*}}C.B.DIMI 32, ->lb1
 ; OBJ: BSTART.TEPL TCI, U32
 ; OBJ: BSTART.TLSU MSCATTER, U32
 

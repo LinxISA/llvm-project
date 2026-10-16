@@ -3,12 +3,19 @@
 ;
 ; The dtype-only B.DATR spelling has default NORM layout in every rounding
 ; branch. Its identity-conversion result agrees with the explicit NORM input
-; at the join. Preserve the complete descriptor in any inserted PHI copy.
+; at the join. Forced-copy descriptor preservation is covered by the MIR test.
 ; CHECK-LABEL: identity_rounding_phi:
 ; CHECK: BSTART.TEPL TCVT, U32
-; CHECK: BSTART.TLSU TMOV, U32
+; CHECK-NEXT: B.DATR U32, byte0, Null, RNONE, nosat
+; CHECK-NEXT: C.B.DIMI 128, ->lb0
+; CHECK-NEXT: C.B.DIMI 128, ->lb2
+; CHECK-NEXT: B.IOT {{.*}}<512B>
+; CHECK: BSTART.TLSU TLOAD, U32
+; CHECK-NEXT: B.DATR NORM.normal, Zero
+; CHECK: BSTART.TLSU TSTORE, U32
+; CHECK-NEXT: B.DATR NORM.normal, Null
 ; CHECK: C.B.DIMI 128, ->lb0
-; CHECK: <512B>
+; CHECK-NEXT: B.IOT t#1, mask=1111, last
 target triple = "linx64v5-unknown-linux-musl"
 
 define void @identity_rounding_phi(i1 %condition, ptr %base) {
@@ -29,7 +36,14 @@ join:
 
 ; CHECK-LABEL: identity_literal_rounding_phi:
 ; CHECK: BSTART.TEPL TCVT, U32
-; CHECK: BSTART.TLSU TMOV, U32
+; CHECK-NEXT: B.DATR U32, byte0, Null, RNONE, nosat
+; CHECK-NEXT: C.B.DIMI 128, ->lb0
+; CHECK-NEXT: C.B.DIMI 128, ->lb2
+; CHECK-NEXT: B.IOT {{.*}}<512B>
+; CHECK: BSTART.TLSU TLOAD, U32
+; CHECK-NEXT: B.DATR NORM.normal, Zero
+; CHECK: BSTART.TLSU TSTORE, U32
+; CHECK-NEXT: B.DATR NORM.normal, Null
 define void @identity_literal_rounding_phi(i1 %condition, ptr %base) {
 entry:
   %source = call <128 x i32> asm sideeffect "BSTART.TLSU TLOAD, ${2:D}\0AB.DATR NORM, Zero\0AB.DIM zero, 128, ->lb0\0AB.IOT mask=1111, last, ->$0<${3:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i,i,~{memory}"(ptr %base, i32 25, i32 3)
