@@ -633,6 +633,47 @@ static CallInst *findRegionSentinel(Function &F, MDNode *Token) {
   return nullptr;
 }
 
+static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L,
+                                  SmallPtrSetImpl<Value *> &Active) {
+  if (!Active.insert(V).second)
+    return false;
+  auto Finish = [&](bool Result) {
+    Active.erase(V);
+    return Result;
+  };
+  if (auto *Add = dyn_cast<BinaryOperator>(V)) {
+    if (Add->getOpcode() != Instruction::Add || !L.contains(Add))
+      return Finish(false);
+    Value *Other = nullptr;
+    if (Add->getOperand(0) == IV)
+      Other = Add->getOperand(1);
+    else if (Add->getOperand(1) == IV)
+      Other = Add->getOperand(0);
+    auto *Step = dyn_cast_or_null<ConstantInt>(Other);
+    return Finish(Step && Step->isOne());
+  }
+  if (auto *Phi = dyn_cast<PHINode>(V)) {
+    if (Phi == IV || !L.contains(Phi) || Phi->getNumIncomingValues() == 0)
+      return Finish(false);
+    for (Value *Incoming : Phi->incoming_values())
+      if (!isMergedUnitSuccessor(Incoming, IV, L, Active))
+        return Finish(false);
+    return Finish(true);
+  }
+  if (auto *Select = dyn_cast<SelectInst>(V))
+    return Finish(L.contains(Select) &&
+                  isMergedUnitSuccessor(Select->getTrueValue(), IV, L,
+                                        Active) &&
+                  isMergedUnitSuccessor(Select->getFalseValue(), IV, L,
+                                        Active));
+  return Finish(false);
+}
+
+static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L) {
+  SmallPtrSet<Value *, 8> Active;
+  return isMergedUnitSuccessor(V, IV, L, Active);
+}
+
 static PHINode *findUnitInduction(Loop &L, ScalarEvolution &SE) {
   for (PHINode &Phi : L.getHeader()->phis()) {
     if (!Phi.getType()->isIntegerTy())
@@ -643,6 +684,24 @@ static PHINode *findUnitInduction(Loop &L, ScalarEvolution &SE) {
     const auto *Start = dyn_cast<SCEVConstant>(AR->getStart());
     const auto *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
     if (Start && Step && Start->getAPInt().isZero() && Step->getAPInt().isOne())
+      return &Phi;
+  }
+  BasicBlock *Preheader = L.getLoopPreheader();
+  BasicBlock *Latch = L.getLoopLatch();
+  if (!Preheader || !Latch)
+    return nullptr;
+  for (PHINode &Phi : L.getHeader()->phis()) {
+    if (!Phi.getType()->isIntegerTy() || Phi.getNumIncomingValues() != 2)
+      continue;
+    int PreheaderIndex = Phi.getBasicBlockIndex(Preheader);
+    int LatchIndex = Phi.getBasicBlockIndex(Latch);
+    auto *Start = PreheaderIndex >= 0
+                      ? dyn_cast<ConstantInt>(
+                            Phi.getIncomingValue(PreheaderIndex))
+                      : nullptr;
+    Value *Next = LatchIndex >= 0 ? Phi.getIncomingValue(LatchIndex) : nullptr;
+    if (Start && Start->isZero() && Next &&
+        isMergedUnitSuccessor(Next, &Phi, L))
       return &Phi;
   }
   return nullptr;
@@ -707,6 +766,39 @@ static Optional<uint64_t> getProvenTripCount(Loop &L, PHINode *IV,
         }
       }
     }
+  }
+  const auto *IVAddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(IV));
+  const bool StructuralIV =
+      !IVAddRec || IVAddRec->getLoop() != &L || !IVAddRec->isAffine();
+  if (StructuralIV) {
+    auto *Branch = dyn_cast<BranchInst>(L.getLoopLatch()->getTerminator());
+    auto *Compare = Branch && Branch->isConditional()
+                        ? dyn_cast<ICmpInst>(Branch->getCondition())
+                        : nullptr;
+    if (!Compare)
+      return None;
+    bool TrueBackedge = Branch->getSuccessor(0) == L.getHeader();
+    bool FalseBackedge = Branch->getSuccessor(1) == L.getHeader();
+    if (TrueBackedge == FalseBackedge)
+      return None;
+    Value *LHS = Compare->getOperand(0);
+    Value *RHS = Compare->getOperand(1);
+    ICmpInst::Predicate Predicate = Compare->getPredicate();
+    if (!TrueBackedge)
+      Predicate = ICmpInst::getInversePredicate(Predicate);
+    bool LHSSuccessor = isMergedUnitSuccessor(LHS, IV, L);
+    bool RHSSuccessor = isMergedUnitSuccessor(RHS, IV, L);
+    if (!LHSSuccessor && RHSSuccessor) {
+      std::swap(LHS, RHS);
+      std::swap(LHSSuccessor, RHSSuccessor);
+      Predicate = ICmpInst::getSwappedPredicate(Predicate);
+    }
+    auto Bound = GetConstant(RHS);
+    if (!LHSSuccessor || RHSSuccessor || !Bound || *Bound <= 0 ||
+        (Predicate != ICmpInst::ICMP_ULT &&
+         Predicate != ICmpInst::ICMP_SLT))
+      return None;
+    return static_cast<uint64_t>(*Bound);
   }
   if (auto Bounds = L.getBounds(SE)) {
     Optional<int64_t> Step = GetConstant(Bounds->getStepValue());
@@ -1085,7 +1177,11 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                 "requires a dominating mandatory region sentinel");
   Plan.L = &L;
   Plan.Induction = findUnitInduction(L, SE);
-  Plan.Count = SE.getSmallConstantTripCount(&L);
+  Optional<uint64_t> TripCount =
+      Plan.Induction ? getProvenTripCount(L, Plan.Induction, SE) : None;
+  Plan.Count = 0;
+  if (TripCount && *TripCount <= std::numeric_limits<unsigned>::max())
+    Plan.Count = static_cast<unsigned>(*TripCount);
   // This is an implementation bound for the initial explicit IR stage, not an
   // ISA shape restriction. Never substitute the old fixed 32-element profile.
   if (!Plan.Induction || !Plan.Count || Plan.Count > 4096)
@@ -3353,6 +3449,35 @@ class ElementTileLegalizer {
     return validateImportTypes(V, DType, Seen);
   }
 
+  bool matchNormAffineAdd(Value *V, APInt &Initial, APInt &Step) {
+    Value *LHS = nullptr;
+    Value *RHS = nullptr;
+    if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+      auto Op = binaryOpcode(VP->getIntrinsicID());
+      if (!Op || *Op != Instruction::Add)
+        return false;
+      LHS = VP->getArgOperand(0);
+      RHS = VP->getArgOperand(1);
+    } else if (auto *Add = dyn_cast<BinaryOperator>(V)) {
+      if (Add->getOpcode() != Instruction::Add)
+        return false;
+      LHS = Add->getOperand(0);
+      RHS = Add->getOperand(1);
+    } else {
+      return false;
+    }
+    auto Match = [&](Value *Sequence, Value *Offset) {
+      auto *C = dyn_cast<Constant>(Sequence);
+      auto *Scalar = dyn_cast_or_null<ConstantInt>(getSplatValue(Offset));
+      if (!C || !Scalar || !constantProgression(C, Initial, Step) ||
+          !Step.isOne())
+        return false;
+      Initial += Scalar->getValue().zextOrTrunc(Initial.getBitWidth());
+      return true;
+    };
+    return Match(LHS, RHS) || Match(RHS, LHS);
+  }
+
   bool validateNorm(Value *V) {
     if (!Validated.insert(V).second)
       return true;
@@ -3437,8 +3562,7 @@ class ElementTileLegalizer {
              validateNorm(Select->getFalseValue());
     if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
       auto *EVL = dyn_cast<ConstantInt>(VP->getVectorLengthParam());
-      if (!EVL || !EVL->equalsInt(NormProfile->Rows * NormProfile->Cols) ||
-          !hasFullyActiveMask(*VP))
+      if (!EVL || !EVL->equalsInt(NormProfile->Rows * NormProfile->Cols))
         return fail(V, "NORM Tile operation requires its full valid domain");
       if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
         return (Cmp->getIntrinsicID() == Intrinsic::vp_fcmp &&
@@ -3448,9 +3572,17 @@ class ElementTileLegalizer {
                 validateNorm(Cmp->getArgOperand(1))) ||
                fail(V, "NORM FP32 comparison has no exact native mapping");
       auto Op = binaryOpcode(VP->getIntrinsicID());
+      APInt Initial, Step;
+      const bool U32AffineAdd = NormProfile->DataType == 25 &&
+                                matchNormAffineAdd(VP, Initial, Step);
+      if (!hasFullyActiveMask(*VP) && !U32AffineAdd)
+        return fail(V, "NORM Tile operation requires its full valid domain");
       if (NormProfile->DataType == 1 && Op &&
           (*Op == Instruction::FAdd || *Op == Instruction::FMul) &&
           !VP->getFastMathFlags().any())
+        return validateNorm(VP->getArgOperand(0)) &&
+               validateNorm(VP->getArgOperand(1));
+      if (U32AffineAdd)
         return validateNorm(VP->getArgOperand(0)) &&
                validateNorm(VP->getArgOperand(1));
       return fail(V, "NORM VP operation has no exact native mapping");
@@ -3465,6 +3597,11 @@ class ElementTileLegalizer {
           (Binary->getOpcode() == Instruction::FAdd ||
            Binary->getOpcode() == Instruction::FMul) &&
           !Binary->getFastMathFlags().any())
+        return validateNorm(Binary->getOperand(0)) &&
+               validateNorm(Binary->getOperand(1));
+      APInt Initial, Step;
+      if (NormProfile->DataType == 25 &&
+          matchNormAffineAdd(Binary, Initial, Step))
         return validateNorm(Binary->getOperand(0)) &&
                validateNorm(Binary->getOperand(1));
     }
@@ -3609,7 +3746,11 @@ class ElementTileLegalizer {
                      valueNorm(Select->getTrueValue()),
                      valueNorm(Select->getFalseValue()));
     } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
-      if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
+      APInt Initial, Step;
+      if (NormProfile->DataType == 25 &&
+          matchNormAffineAdd(VP, Initial, Step))
+        R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
+      else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(VP))
         R = normCompare(valueNorm(Cmp->getArgOperand(0)),
                         valueNorm(Cmp->getArgOperand(1)),
                         *floatComparisonSelector(Cmp->getPredicate()));
@@ -3620,7 +3761,11 @@ class ElementTileLegalizer {
                        Op == Instruction::FAdd ? 0 : 2);
       }
     } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
-      if (NormProfile->DataType == 1) {
+      APInt Initial, Step;
+      if (NormProfile->DataType == 25 &&
+          matchNormAffineAdd(Binary, Initial, Step)) {
+        R = normSplat(B.getInt32(Initial.getZExtValue()), Step.getZExtValue());
+      } else if (NormProfile->DataType == 1) {
         R = normBinary(valueNorm(Binary->getOperand(0)),
                        valueNorm(Binary->getOperand(1)),
                        Binary->getOpcode() == Instruction::FAdd ? 0 : 2);
