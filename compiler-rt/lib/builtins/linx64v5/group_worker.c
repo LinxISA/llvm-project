@@ -1,28 +1,24 @@
-// Minimal secondary-PE entry carrier for launchers that provide a worker PC.
-// This file intentionally has no libc dependency and never enters musl CRT.
+// Secondary-PE entry carrier for the hosted group ABI.  This file intentionally
+// has no libc dependency and never enters musl CRT.  gfrun supplies the PC,
+// stack and PE id; the carrier calls main and parks when it returns.  The
+// image's main owns any shared-memory completion protocol.
 
 #if !defined(__linx)
 #error "the Linx group worker runtime is target-only"
 #endif
 
-extern int __linx_group_worker_main(unsigned pe_id) __attribute__((weak));
-extern void __linx_group_worker_complete(int status)
-    __attribute__((weak, noreturn));
+// The hosted image's ordinary main is the worker body as well.  It must not
+// use process-global libc/TLS facilities when entered on PE1..PE3.
+extern int main();
+
+static __attribute__((noreturn)) void worker_park(void) {
+  for (;;) {
+    __asm__ volatile("" ::: "memory");
+  }
+}
 
 __attribute__((noreturn, used, visibility("default"))) void
 __linx_group_worker_start(void) {
-  const unsigned pe_id = __builtin_linx_get_thread_idx();
-  int status = -1;
-
-  if (__linx_group_worker_main)
-    status = __linx_group_worker_main(pe_id);
-
-  // The platform owns guest-result -> host End mapping.  Until that ABI is
-  // standardised, require an explicit hook and fail closed if it is absent.
-  if (__linx_group_worker_complete)
-    __linx_group_worker_complete(status);
-
-  __builtin_trap();
-  for (;;)
-    ;
+  (void)main();
+  worker_park();
 }
