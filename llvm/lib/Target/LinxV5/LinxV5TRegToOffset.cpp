@@ -822,6 +822,13 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
 
   if (TR == LinxV5::NoRegister) {
     if (IsTileRC) {
+      if (!EnableGenericElement) {
+        BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoEmptyTile))
+            .addReg(ReserveReg, RegState::Define | RegState::Dead)
+            .addImm(1);
+        LLVM_DEBUG(dbgs() << "build legacy empty tile " << *std::prev(Before));
+        return true;
+      }
       // A queue-alignment hole must consume a real architectural Tile entry.
       // PseudoEmptyTile is a zero-mask NoPE and cannot serve this purpose.
       // Duplicate any closed live value into the reserved dead register; the
@@ -895,6 +902,14 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
     if (!IsScalarRC) {
       if (LinxV5::Tile_ABS_CGRegClass.contains(RegOp.Reg)) {
         unsigned RegSizeCode = RegOp.Size;
+        if (!EnableGenericElement) {
+          BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoTCOPY))
+              .addReg(TR, RegState::Define)
+              .addImm(RegSizeCode)
+              .addReg(TR, RegState::Kill);
+          LLVM_DEBUG(dbgs() << "build legacy copy " << *std::prev(Before));
+          return true;
+        }
         // This pass creates PseudoTCOPYDesc directly, bypassing
         // LinxV5InstrInfo::copyPhysReg().  PseudoTCOPYDesc is a Local-tile
         // operation; Shared tile handles must only be moved by the explicit
@@ -1788,7 +1803,7 @@ SlotStatus *LinxV5TRegToOffsetOpt::getInitStatus(
   // CUBE geometry.  Require every completed predecessor that carries the
   // live-in to agree on the complete descriptor before selecting a queue
   // state to inherit.
-  if (isTileReg(RC) && DoneMBBsSlotStatus.size() > 1) {
+  if (EnableGenericElement && isTileReg(RC) && DoneMBBsSlotStatus.size() > 1) {
     for (const TRCopyRange &Reference :
          DoneMBBsSlotStatus.front()->TRCopyRanges) {
       if (!Reference.IsLiveout ||
@@ -2112,17 +2127,22 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
               Succ, RC, GlobalSlotsInfo[Pred][RC].LiveOuts));
         if (Contracts.empty() || Contracts.front().empty())
           continue;
+        if (!EnableGenericElement)
+          continue;
+        bool HasCompleteDescriptors = llvm::all_of(
+            Contracts, [](ArrayRef<QueueContractEntry> Contract) {
+              return llvm::all_of(Contract, [](const QueueContractEntry &Entry) {
+                return Entry.Value.Descriptor.hasValue();
+              });
+            });
+        if (!HasCompleteDescriptors)
+          continue;
         SmallVector<unsigned, 8> TargetAges(Contracts.front().size(), 0);
         for (const auto &Contract : Contracts) {
           if (Contract.size() != Contracts.front().size())
             report_fatal_error(
                 "Local tile CFG predecessors expose different live values");
           for (unsigned I = 0; I < Contract.size(); ++I) {
-            if (!Contract[I].Value.Descriptor ||
-                !Contracts.front()[I].Value.Descriptor)
-              report_fatal_error(
-                  "multi-predecessor Local tile contract lacks a complete "
-                  "descriptor");
             if (!(Contract[I].Value == Contracts.front()[I].Value))
               report_fatal_error(
                   "Local tile CFG predecessors expose conflicting values or "
@@ -3997,9 +4017,8 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
           });
       if (!EveryPredecessorDefines)
         continue;
-      Optional<LinxV5::TileDescriptor> Descriptor =
-          LinxV5::tryGetTileRegDescriptor(MBB, MBB.begin(), Reg);
-      if (!Descriptor)
+      if (EnableGenericElement &&
+          !LinxV5::tryGetTileRegDescriptor(MBB, MBB.begin(), Reg))
         report_fatal_error(
             "unknown Local tile descriptor at COPY/PHI control-flow join");
     }
@@ -4017,18 +4036,21 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     DoneMBBs.push_back(MBB);
   }
 
-  normalizeEntryContracts(MF);
+  if (EnableGenericElement)
+    normalizeEntryContracts(MF);
 
   // Clockhands reserves an OPEN parent's hand before register allocation.
   // Validate the final Phase-1 machine function, including every inserted
   // copy, before relying on that isolation in the relative-window rewrite.
-  solveAssembleParentDataflow(MF);
+  if (EnableGenericElement)
+    solveAssembleParentDataflow(MF);
 
   LLVM_DEBUG(dbgs() << "copys " << NumCopy - OldNumCopy << " total "
                     << MF.getInstructionCount() << "\n");
   LLVM_DEBUG(dbgs() << "after insert copy:\n"; MF.dump());
 
-  legalityCheck(MF);
+  if (EnableGenericElement)
+    legalityCheck(MF);
 
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
   if (!EnableReg2Offset) {
@@ -4043,6 +4065,19 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   // names.  The immutable snapshot also lets two descriptor-distinct values
   // allocated to one physical hand remain separately addressable.
   RewriteTRIdentities.clear();
+  if (!EnableGenericElement) {
+    DoneMBBs.clear();
+    for (MachineBasicBlock &MBB : MF)
+      TBDoneMBBs.push_back(&MBB);
+    while (!TBDoneMBBs.empty()) {
+      MachineBasicBlock *MBB = getNextBlock();
+      rewriteMBB(*MBB);
+      llvm::erase_value(TBDoneMBBs, MBB);
+      DoneMBBs.push_back(MBB);
+    }
+    eraseLocalTileABISeeds(MF);
+    return true;
+  }
   for (MachineBasicBlock &MBB : MF) {
     for (MachineInstr &MI : MBB) {
       if (canSkipMI(MI) || MI.isKill() || MI.isImplicitDef() ||
@@ -4304,7 +4339,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
     }
     LLVM_DEBUG(dbgs() << "rewrite " << TRI->getRegClassName(RC) << " in "
                       << printMBBReference(MBB) << "\n");
-    if (isTileReg(RC)) {
+    if (EnableGenericElement && isTileReg(RC)) {
       if (!MBB.pred_empty()) {
         auto MBBState = CanonicalRewriteEntryStates.find(&MBB);
         if (MBBState != CanonicalRewriteEntryStates.end() &&
@@ -4467,7 +4502,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             continue;
           }
           TRegIndexState::iterator Reaching = TRegIdx.end();
-          if (isTileReg(RC)) {
+          if (EnableGenericElement && isTileReg(RC)) {
             auto Identity = RewriteTRIdentities.find(&MO);
             if (Identity == RewriteTRIdentities.end())
               report_fatal_error(
@@ -4481,7 +4516,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             Reaching = findLatestRegister(TRegIdx, MO.getReg());
           }
           if (Reaching == TRegIdx.end()) {
-            if (isTileReg(RC))
+            if (EnableGenericElement && isTileReg(RC))
               report_fatal_error(
                   "Local tile use lacks one certified canonical source");
             // After coalescer, some tile vregs may be used without a prior
@@ -4521,7 +4556,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
         continue;
       }
       LinxRegOp Identity(Def->getReg(), LinxV5::SIMT_REG_SIZE_D);
-      if (isTileReg(RC)) {
+      if (EnableGenericElement && isTileReg(RC)) {
         auto TileIdentity = RewriteTRIdentities.find(Def);
         if (TileIdentity == RewriteTRIdentities.end())
           report_fatal_error(

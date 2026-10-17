@@ -36,9 +36,11 @@ using namespace llvm;
 
 cl::opt<bool> EnableClockHandSched("linxv5-enable-clock-hand-sched",
                                    cl::init(false));
-static cl::opt<bool> EnableGenericElement(
+namespace llvm {
+cl::opt<bool> EnableGenericElement(
     "linxv5-enable-generic-element", cl::init(false),
     cl::desc("Use generic CFG/VP predication and explicit PTO Tile legalization"));
+} // namespace llvm
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   RegisterTargetMachine<LinxV5TargetMachine> V4(getTheLinx64V5Target());

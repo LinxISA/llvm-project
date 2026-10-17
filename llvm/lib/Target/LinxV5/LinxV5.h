@@ -15,10 +15,12 @@
 #define LLVM_LIB_TARGET_LINXV4_LINXV5_H
 
 #include "MCTargetDesc/LinxV5BaseInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
+extern cl::opt<bool> EnableGenericElement;
 class LinxV5TargetMachine;
 class AsmPrinter;
 class FunctionPass;

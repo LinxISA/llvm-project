@@ -1,5 +1,8 @@
+; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
+; RUN:   -enable-all-vector-as-tilereg=true %s -o /dev/null
 ; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
-; RUN:   -enable-all-vector-as-tilereg=true %s -o /dev/null 2>&1 | FileCheck %s
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-generic-element=true %s -o /dev/null 2>&1 | FileCheck %s
 ; CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join
 
 target triple = "linx64v5-unknown-linux-musl"
@@ -21,4 +24,3 @@ join:
   call void asm sideeffect "BSTART.TLSU TSTORE, ${1:D}\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $0, mask=1111, last\0AB.IOR [$2,$3], []\0A", "@2Tr,i,r,r,~{memory}"(<128 x half> %tile, i32 4, ptr %base, i64 %stride)
   ret void
 }
-

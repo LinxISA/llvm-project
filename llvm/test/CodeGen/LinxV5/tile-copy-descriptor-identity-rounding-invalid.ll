@@ -1,7 +1,7 @@
 ; RUN: split-file %s %t
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 -enable-all-vector-as-tilereg=true %t/different-dtype.ll -o /dev/null 2>&1 | FileCheck %s
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 -enable-all-vector-as-tilereg=true %t/unknown-field.ll -o /dev/null 2>&1 | FileCheck %s
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 -enable-all-vector-as-tilereg=true %t/literal-header.ll -o /dev/null 2>&1 | FileCheck %s
+; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 -enable-all-vector-as-tilereg=true -linxv5-enable-generic-element=true %t/different-dtype.ll -o /dev/null 2>&1 | FileCheck %s
+; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 -enable-all-vector-as-tilereg=true -linxv5-enable-generic-element=true %t/unknown-field.ll -o /dev/null 2>&1 | FileCheck %s
+; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 -enable-all-vector-as-tilereg=true -linxv5-enable-generic-element=true %t/literal-header.ll -o /dev/null 2>&1 | FileCheck %s
 ; CHECK: unknown Local tile descriptor at COPY/PHI control-flow join
 
 ;--- different-dtype.ll

@@ -1482,6 +1482,13 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       }
     }
   } else if (LinxV5::Tile_ABS_CGRegClass.contains(DstReg)) {
+    if (!EnableGenericElement) {
+      unsigned RegSizeCode = LinxV5::getTileRegSize(MBB, MBBI, SrcReg, false);
+      BuildMI(MBB, MBBI, DL, get(LinxV5::PseudoTCOPY), DstReg)
+          .addImm(RegSizeCode)
+          .addReg(SrcReg, getKillRegState(KillSrc));
+      return;
+    }
     LinxV5::TileDescriptor Descriptor =
         LinxV5::getTileRegDescriptor(MBB, MBBI, SrcReg);
     BuildMI(MBB, MBBI, DL,
