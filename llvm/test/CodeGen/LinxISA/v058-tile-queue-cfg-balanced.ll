@@ -25,7 +25,7 @@ join:
 ; CHECK-LABEL: equal_state_diamond:
 ; CHECK: BSTART.TLOAD
 ; CHECK: BSTART.TSTORE
-; CHECK: B.IOT{{[[:space:]]+}}t#1, mask=1111, last
+; CHECK: B.IOT{{[[:space:]]+}}t#1.reuse, mask=1111, last
 
 define void @net_zero_tile_loop(ptr %src, ptr %dst, i32 %count) {
 entry:
@@ -53,6 +53,6 @@ exit:
 ; CHECK-LABEL: net_zero_tile_loop:
 ; CHECK: BSTART.TLOAD
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TMUL,
-; CHECK: B.IOT{{[[:space:]]+}}t#1, mask=1111, last, ->t<4KB>
+; CHECK: B.IOT{{[[:space:]]+}}t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
-; CHECK: B.IOT{{[[:space:]]+}}t#1, mask=1111, last
+; CHECK: B.IOT{{[[:space:]]+}}t#1.reuse, mask=1111, last

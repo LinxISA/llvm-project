@@ -517,7 +517,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::B_DATR: {
     OutMI.setOpcode(
         getSpecOpcodeByAsmFmt("B.DATR {layout, datatype, padvalue_or_byteid, "
-                              "cmode, rmode, sat, canonicalize}",
+                              "cmode, rmode, sat, canonicalize, predinv, zero}",
                               /*LengthBits=*/32));
     // Machine operand order: CMode, Layout, DataType, PadValueOrByteId,
     // RMode, Sat, Canonicalize. Catalog field order differs.
@@ -526,8 +526,10 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(I(2))); // DataType
     OutMI.addOperand(MCOperand::createImm(I(1))); // Layout
     OutMI.addOperand(MCOperand::createImm(I(3))); // PadValueOrByteId
+    OutMI.addOperand(MCOperand::createImm(0));    // PredInv
     OutMI.addOperand(MCOperand::createImm(I(4))); // RMode
     OutMI.addOperand(MCOperand::createImm(I(5))); // Sat
+    OutMI.addOperand(MCOperand::createImm(0));    // Zero
     return;
   }
 
@@ -564,8 +566,11 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::B_IOR: {
     OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("B.IOR [<gpr>[, <gpr>[, <gpr>]]][, -><gpr>]",
+        getSpecOpcodeByAsmFmt(
+            "B.IOR [<gpr>[, <gpr>[, <gpr>]]][, -><gpr>]"
+            "[, ExecMaskPresent]",
                               /*LengthBits=*/32));
+    OutMI.addOperand(MCOperand::createImm(0));    // ExecMaskPresent
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // RegSrc0
     OutMI.addOperand(MCOperand::createImm(R(2))); // RegSrc1
@@ -581,16 +586,32 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     const bool HasSrc0 = Src0Valid || Src1Valid;
     const bool HasSrc1 = Src0Valid && Src1Valid;
     const bool HasDestination = static_cast<unsigned>(I(0)) <= 3u;
+
+    // PTO-SPEC models source lifetime independently from the descriptor L bit.
+    // The target currently has no capability feature that promises runtime
+    // support for implicit source reclamation. Emit `.reuse` for every present
+    // source, including killed machine uses, preserving the pre-amendment words
+    // and live payload. Last-use remains available to explicit MC assembly and
+    // can be enabled in CodeGen only with a runtime capability contract.
+    const bool ReuseSrc0 = HasSrc0;
+    const bool ReuseSrc1 = HasSrc1;
+    const StringRef Src0Token = ReuseSrc0 ? "SrcTile0.reuse" : "SrcTile0";
+    const StringRef Src1Token = ReuseSrc1 ? "SrcTile1.reuse" : "SrcTile1";
+    SmallString<128> AsmFmtStorage;
+    raw_svector_ostream AsmFmtOS(AsmFmtStorage);
     StringRef AsmFmt;
+    if (HasSrc0) {
+      AsmFmtOS << "B.IOT " << Src0Token;
+      if (HasSrc1)
+        AsmFmtOS << ", " << Src1Token;
+      AsmFmtOS << ", ";
+    } else {
+      AsmFmtOS << "B.IOT ";
+    }
+    AsmFmtOS << "mask=PE_MASK, <last>";
     if (HasDestination)
-      AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>, "
-                         "->DstTile<SizeCode>"
-               : HasSrc0
-                   ? "B.IOT SrcTile0, mask=PE_MASK, <last>, ->DstTile<SizeCode>"
-                   : "B.IOT mask=PE_MASK, <last>, ->DstTile<SizeCode>";
-    else
-      AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>"
-                       : "B.IOT SrcTile0, mask=PE_MASK, <last>";
+      AsmFmtOS << ", ->DstTile<SizeCode>";
+    AsmFmt = AsmFmtStorage;
     const int64_t PEMask = I(1);
     const int64_t PEMode = PEMask == 0x0   ? 0
                            : PEMask == 0x8 ? 1

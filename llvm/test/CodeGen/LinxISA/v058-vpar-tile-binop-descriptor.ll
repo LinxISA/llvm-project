@@ -24,7 +24,7 @@ entry:
 ; TLOAD A followed by TLOAD B makes B the newest T#1 and A the preceding T#2
 ; (docs/zh/isa/register/common/tilereg.md). Keep the source order explicit so
 ; non-commutative TSUB cannot pass through a commutative TADD false green.
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2.reuse, t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK-NEXT: C.B.DIMI
 ; CHECK:      .__linx_vtile_add_body.{{[0-9]+}}:
 ; CHECK:      v.add{{[[:space:]]+}}vt#1, vu#1.sw,{{[[:space:]]+}}->vt#2
@@ -32,7 +32,7 @@ entry:
 ; OBJ-LABEL:  <vpar_tadd>:
 ; OBJ:        BSTART.VPAR{{[[:space:]]+}}VS8
 ; OBJ-NEXT:   B.TEXT
-; OBJ-NEXT:   B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; OBJ-NEXT:   B.IOT{{[[:space:]]+}}t#2.reuse, t#1.reuse, mask=1111, last, ->t<4KB>
 ; OBJ-NEXT:   C.B.DIMI
 
 define void @vpar_tsub(ptr %a, ptr %b, ptr %dst) {
@@ -47,7 +47,7 @@ entry:
 ; CHECK-LABEL: vpar_tsub:
 ; CHECK:      BSTART.VPAR{{[[:space:]]+}}VS8
 ; CHECK-NEXT: B.TEXT{{[[:space:]]+}}.__linx_vtile_sub_body.
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2.reuse, t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK-NEXT: C.B.DIMI
 
 ; The generated bodies retain queue-head destinations and consume VT#1 at
@@ -58,5 +58,5 @@ entry:
 ; OBJ-LABEL:  <vpar_tsub>:
 ; OBJ:        BSTART.VPAR{{[[:space:]]+}}VS8
 ; OBJ-NEXT:   B.TEXT
-; OBJ-NEXT:   B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; OBJ-NEXT:   B.IOT{{[[:space:]]+}}t#2.reuse, t#1.reuse, mask=1111, last, ->t<4KB>
 ; OBJ-NEXT:   C.B.DIMI

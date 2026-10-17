@@ -1984,13 +1984,10 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
       if (IsTileIODesc) {
         bool Reuse = false;
         if (auto Tile = parseTileRef(getTok().getString(), Reuse)) {
-          if (Reuse)
-            return Error(getTok().getLoc(),
-                         "B.IOT reuse suffix is not part of PTO ISA 0.58");
           SMLoc L = getTok().getLoc();
           SMLoc E = getTok().getEndLoc();
           Lex();
-          const unsigned Enc = *Tile & 0x3fu;
+          const unsigned Enc = (*Tile & 0x3fu) | (Reuse ? 0x40u : 0u);
           Operands.push_back(LinxOperand::createImm(
               MCConstantExpr::create(Enc, getContext()), L, E));
           continue;
@@ -2002,7 +1999,11 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
         if (SharedName.size() >= 2u &&
             (SharedName[0] == 's' || SharedName[0] == 'S') &&
             std::isdigit(static_cast<unsigned char>(SharedName[1]))) {
-          auto SharedTID = parseSharedTileId(SharedName);
+          const bool Reuse = SharedName.ends_with_insensitive(".reuse");
+          const StringRef SharedBase =
+              Reuse ? SharedName.drop_back(StringRef(".reuse").size())
+                    : SharedName;
+          auto SharedTID = parseSharedTileId(SharedBase);
           if (!SharedTID)
             return Error(getTok().getLoc(),
                          "B.IOS Shared register must be S0..S63");
@@ -2010,7 +2011,9 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
           SMLoc E = getTok().getEndLoc();
           Lex();
           Operands.push_back(LinxOperand::createImm(
-              MCConstantExpr::create(*SharedTID, getContext()), L, E));
+              MCConstantExpr::create(*SharedTID | (Reuse ? 0x40u : 0u),
+                                     getContext()),
+              L, E));
           continue;
         }
       }
@@ -2023,6 +2026,8 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
             Text.equals_insensitive("TRAP") || Text.equals_insensitive("DR") ||
             Text.equals_insensitive("FAR") || Text.equals_insensitive("SAT") ||
             Text.equals_insensitive("CANONICALIZE") ||
+            Text.equals_insensitive("PREDINV") ||
+            Text.equals_insensitive("ZERO") ||
             Text.starts_with_insensitive("CMODE") ||
             Text.starts_with_insensitive("RMODE") ||
             Text.equals_insensitive("NORMAL") ||
@@ -2198,6 +2203,27 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
 
   if (PI.LocalBit != 0 && !hasField(Form, "L")) {
     Err = "mnemonic suffix '.local' is not supported for this instruction";
+    return false;
+  }
+
+  // Atomic ordering/scope qualifiers are part of each form's architectural
+  // spelling.  Do not silently accept a qualifier that the selected form
+  // cannot encode (for example, `.aq` on a store-only operation whose only
+  // legal qualifier is `.rl`).
+  if (PI.AtomicAq != 0 && !hasField(Form, "aq")) {
+    Err = "mnemonic suffix '.aq' is not supported for this instruction";
+    return false;
+  }
+  if (PI.AtomicRl != 0 && !hasField(Form, "rl")) {
+    Err = "mnemonic suffix '.rl' is not supported for this instruction";
+    return false;
+  }
+  if (PI.AtomicFar != 0 && !hasField(Form, "far")) {
+    Err = "mnemonic suffix '.f' is not supported for this instruction";
+    return false;
+  }
+  if (PI.AtomicRd != 0 && !hasField(Form, "rd")) {
+    Err = "mnemonic suffix '.rd' is not supported for this instruction";
     return false;
   }
 
@@ -2932,10 +2958,21 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
   if (AsmFmt.starts_with("B.IOR")) {
     if (!require(!PI.Mem && !PI.SetRetTarget, "unexpected operands for B.IOR"))
       return false;
-    if (!require(PI.Imms.empty(), "unexpected immediate operands for B.IOR"))
-      return false;
     if (!require(PI.Keywords.empty(), "unexpected keyword operands for B.IOR"))
       return false;
+
+    unsigned ExecMaskPresent = 0;
+    if (!PI.Imms.empty()) {
+      if (!require(PI.Imms.size() == 1,
+                   "B.IOR accepts ExecMaskPresent at most once"))
+        return false;
+      const auto *Sym = dyn_cast<MCSymbolRefExpr>(PI.Imms[0].Expr);
+      if (!require(Sym && Sym->getSymbol().getName().equals_insensitive(
+                              "ExecMaskPresent"),
+                   "expected ExecMaskPresent"))
+        return false;
+      ExecMaskPresent = 1;
+    }
 
     if (!require(PI.Regs.size() <= 3 && PI.ArrowDests.size() <= 1,
                  "B.IOR expects up to 3 sources and 1 destination"))
@@ -2965,10 +3002,22 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (!PI.ArrowDests.empty())
       RegDst = PI.ArrowDests[0].Code;
 
-    emitFieldImm(RegDst & 0x1fu);  // RegDst
-    emitFieldImm(RegSrc0 & 0x1fu); // RegSrc0 (stride)
-    emitFieldImm(RegSrc1 & 0x1fu); // RegSrc1 (base)
-    emitFieldImm(RegSrc2 & 0x1fu); // RegSrc2
+    for (unsigned I = 0; I < Form.field_count; ++I) {
+      StringRef FieldName(linxisa_fields[Form.field_start + I].name);
+      if (FieldName == "ExecMaskPresent")
+        emitFieldImm(ExecMaskPresent);
+      else if (FieldName == "RegDst")
+        emitFieldImm(RegDst & 0x1fu);
+      else if (FieldName == "RegSrc0")
+        emitFieldImm(RegSrc0 & 0x1fu);
+      else if (FieldName == "RegSrc1")
+        emitFieldImm(RegSrc1 & 0x1fu);
+      else if (FieldName == "RegSrc2")
+        emitFieldImm(RegSrc2 & 0x1fu);
+      else
+        return require(false,
+                       ("unsupported B.IOR field: " + FieldName).str());
+    }
     return true;
   }
 
@@ -2998,14 +3047,23 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
 
     unsigned SharedTID = 0;
     unsigned SizeCode = 0;
+    const bool FormHasSizeCode = hasField(Form, "SizeCode");
     if (IsSource) {
       int64_t Value = 0;
       if (!require(isConstExpr(PI.Imms[0].Expr, Value) && Value >= 0 &&
-                       Value <= 63,
+                       Value <= 127,
                    "B.IOS Shared register must be S0..S63"))
         return false;
-      SharedTID = static_cast<unsigned>(Value);
+      const bool RequestedReuse =
+          (static_cast<unsigned>(Value) & 0x40u) != 0u;
+      if (!require(RequestedReuse == FormHasSizeCode,
+                   "B.IOS source reuse does not match encoding form"))
+        return false;
+      SharedTID = static_cast<unsigned>(Value) & 0x3fu;
     } else {
+      if (!require(FormHasSizeCode,
+                   "B.IOS destination requires a SizeCode encoding form"))
+        return false;
       SharedTID = PI.ArrowDests[0].Code;
       SizeCode = PI.ArrowDests[0].AngleSize;
       if (!require(PI.ArrowDests[0].HasAngleSize &&
@@ -3082,10 +3140,18 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         return true;
       }
       if (!IsBCATR && (Text.equals_insensitive("SAT") ||
-                       Text.equals_insensitive("CANONICALIZE"))) {
+                       Text.equals_insensitive("CANONICALIZE") ||
+                       Text.equals_insensitive("PREDINV"))) {
         if (!claim(Text.upper()))
           return false;
         Attrs[Text] = "ON";
+        return true;
+      }
+      if (!IsBCATR && Text.equals_insensitive("ZERO") &&
+          Attrs.contains("PAD")) {
+        if (!claim("ZERO"))
+          return false;
+        Attrs["ZERO"] = "ON";
         return true;
       }
       if (!IsBCATR && Text.starts_with_insensitive("CMODE")) {
@@ -3208,6 +3274,10 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         emitFieldImm(onBit("SAT"));
       else if (FN == "Canonicalize")
         emitFieldImm(onBit("CANONICALIZE"));
+      else if (FN == "PredInv")
+        emitFieldImm(onBit("PREDINV"));
+      else if (FN == "Zero")
+        emitFieldImm(onBit("ZERO"));
       else if (FN == "aq")
         emitFieldImm(Aq);
       else if (FN == "atom" || FN == "atomic")
@@ -3303,8 +3373,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
   }
 
   // Special-case: canonical PTO 0.58 B.IOT descriptors.  Every form carries
-  // an explicit four-PE participation mask.  Reuse bits do not exist, and the
-  // source-only forms keep their two architecturally unused low bits at zero.
+  // an explicit four-PE participation mask.  Source reuse is represented by
+  // distinct fixed encodings, selected from the source spelling here.
   if (AsmFmt.starts_with("B.IOT")) {
     if (!require(!PI.Mem && !PI.SetRetTarget, "unexpected operands for B.IOT"))
       return false;
@@ -3375,9 +3445,14 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     unsigned Src0 = 0, Src1 = 0;
     auto takeTileImm = [&](unsigned i, unsigned &Tile) -> bool {
       int64_t V = 0;
-      if (!isConstExpr(PI.Imms[i].Expr, V) || V < 0 || V > 63)
+      if (!isConstExpr(PI.Imms[i].Expr, V) || V < 0 || V > 127)
         return false;
-      Tile = static_cast<unsigned>(V);
+      const bool RequestedReuse = (static_cast<unsigned>(V) & 0x40u) != 0u;
+      const bool FormReuse =
+          AsmFmt.contains(i == 0 ? "SrcTile0.reuse" : "SrcTile1.reuse");
+      if (RequestedReuse != FormReuse)
+        return false;
+      Tile = static_cast<unsigned>(V) & 0x3fu;
       return true;
     };
 
@@ -3436,7 +3511,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
             .Case("INIT", 0u)
             .Case("LAST", 1u)
             .Case("uimm11", 2u)
-            .Case("ParentSizeCode", 3u)
+            .Case("WriterSizeCode", 3u)
             .Default(std::nullopt);
       return StringSwitch<std::optional<unsigned>>(FieldName)
           .Case("SrcSelect", 0u)

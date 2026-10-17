@@ -24,4 +24,4 @@ entry:
 ; CHECK: BSTART.VEC TADD, U32
 ; CHECK: B.IOT t#{{[1-8]}}, t#{{[1-8]}}, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
-; CHECK: B.IOT t#{{[1-8]}}, mask=1111, last
+; CHECK: B.IOT t#{{[1-8]}}.reuse, mask=1111, last

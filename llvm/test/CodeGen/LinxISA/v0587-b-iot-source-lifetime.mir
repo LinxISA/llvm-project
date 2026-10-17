@@ -1,0 +1,38 @@
+# RUN: llc -mtriple=linx64 -start-after=linx-blockify -filetype=asm -o - %s | FileCheck %s
+
+# B.IOT's L bit terminates a binding sequence. Source lifetime is independent.
+# Until the runtime advertises implicit-reclamation support, CodeGen preserves
+# every source with `.reuse`, including killed uses and missing liveness data.
+# CHECK-LABEL: b_iot_source_lifetime:
+# CHECK: B.IOT t#1.reuse, mask=1111
+# CHECK-NEXT: B.IOT t#1.reuse, u#1.reuse, mask=1111
+# CHECK-NEXT: B.IOT t#1.reuse, u#2.reuse, mask=1111, last
+# CHECK-NEXT: B.IOT u#3.reuse, mask=1111, last
+# CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last
+
+--- |
+  define void @b_iot_source_lifetime() {
+  entry:
+    ret void
+  }
+...
+---
+name:            b_iot_source_lifetime
+alignment:       2
+tracksRegLiveness: true
+noPhis:          true
+isSSA:           false
+noVRegs:         true
+body:             |
+  bb.0.entry:
+    B_IOT_G0 0, 15, 1, 1, 0, 0, 1, implicit-def $tile0
+    B_IOT_G0 1, 15, 1, 1, 0, 0, 1, implicit-def $tile16
+    B_IOT_G0 1, 15, 1, 1, 0, 0, 1, implicit-def $tile17
+    B_IOT_G1 1, 15, 1, 1, 0, 0, 1, implicit-def $tile18
+    B_IOT_G0 7, 15, 0, 1, 0, 0, 0, implicit $tile0
+    B_IOT_G0 7, 15, 0, 0, 0, 16, 0, implicit $tile0, implicit killed $tile16
+    B_IOT_G1 7, 15, 0, 0, 0, 17, 0, implicit killed $tile0, implicit $tile17
+    B_IOT_G1 7, 15, 0, 1, 18, 0, 0, implicit killed $tile18
+    B_IOT_G1 7, 15, 0, 1, 0, 0, 0
+    BSTOP
+...

@@ -15,4 +15,4 @@ entry:
 
 ; CHECK-LABEL: tile_exactly_64k:
 ; CHECK: B.IOT{{.*}}->t<64KB>
-; CHECK: B.IOT{{[[:space:]]+}}t#{{[0-9]+}}, mask=1111, last
+; CHECK: B.IOT{{[[:space:]]+}}t#{{[0-9]+}}.reuse, mask=1111, last

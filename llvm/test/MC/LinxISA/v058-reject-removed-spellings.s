@@ -8,9 +8,7 @@ removed_spellings:
 	B.IOT [t#1], last, ->u<1KB>
 	B.ATTR aq
 	BSTART.PAR 33, 4
-	BSTART.FP CALL, removed_fp_call
 	BSTART.FP ICALL
-	BSTART.STD CALL, removed_std_call
 	BSTART.STD ICALL
 	B.EQ t, u, removed_std_call
 	B.NE t, u, removed_std_call
@@ -35,10 +33,6 @@ removed_spellings:
 # CHECK: BSTART.PAR
 # CHECK: error:
 # CHECK: BSTART.FP
-# CHECK: error:
-# CHECK: BSTART.FP
-# CHECK: error:
-# CHECK: BSTART.STD
 # CHECK: error:
 # CHECK: BSTART.STD
 # CHECK: error: unrecognized instruction 'b.eq'

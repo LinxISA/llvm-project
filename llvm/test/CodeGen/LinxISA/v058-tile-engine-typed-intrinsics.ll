@@ -22,11 +22,11 @@ entry:
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TADD,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2.reuse, t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TSUB,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, t#2, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1.reuse, t#2.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
 
 define void @typed_sfu_rowmax(ptr %a, ptr %dst) {
@@ -41,6 +41,6 @@ entry:
 ; CHECK: BSTART.SFU{{[[:space:]]+}}TROWMAX,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
 ; CHECK-NOT: B.ARG
