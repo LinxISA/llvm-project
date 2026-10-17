@@ -22,7 +22,7 @@ entry:
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TADD,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TSUB,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1

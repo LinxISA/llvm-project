@@ -586,16 +586,43 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     const bool HasSrc0 = Src0Valid || Src1Valid;
     const bool HasSrc1 = Src0Valid && Src1Valid;
     const bool HasDestination = static_cast<unsigned>(I(0)) <= 3u;
+
+    // PTO-SPEC models source lifetime independently from the descriptor L bit.
+    // Blockify records tile liveness on the implicit source operands, in source
+    // order.  Preserve a source unless its use is explicitly marked killed. If
+    // an older producer omitted the implicit liveness operand, conservatively
+    // retain the source rather than reclaiming a live tile early.
+    auto sourceReuse = [&](unsigned SourceOrdinal) {
+      unsigned SeenUses = 0;
+      for (unsigned Op = MI->getNumExplicitOperands();
+           Op < MI->getNumOperands(); ++Op) {
+        const MachineOperand &MO = MI->getOperand(Op);
+        if (!MO.isReg() || !MO.isImplicit() || !MO.isUse() || !MO.getReg())
+          continue;
+        if (SeenUses++ == SourceOrdinal)
+          return !MO.isKill();
+      }
+      return true;
+    };
+    const bool ReuseSrc0 = HasSrc0 && sourceReuse(0);
+    const bool ReuseSrc1 = HasSrc1 && sourceReuse(1);
+    const StringRef Src0Token = ReuseSrc0 ? "SrcTile0.reuse" : "SrcTile0";
+    const StringRef Src1Token = ReuseSrc1 ? "SrcTile1.reuse" : "SrcTile1";
+    SmallString<128> AsmFmtStorage;
+    raw_svector_ostream AsmFmtOS(AsmFmtStorage);
     StringRef AsmFmt;
+    if (HasSrc0) {
+      AsmFmtOS << "B.IOT " << Src0Token;
+      if (HasSrc1)
+        AsmFmtOS << ", " << Src1Token;
+      AsmFmtOS << ", ";
+    } else {
+      AsmFmtOS << "B.IOT ";
+    }
+    AsmFmtOS << "mask=PE_MASK, <last>";
     if (HasDestination)
-      AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>, "
-                         "->DstTile<SizeCode>"
-               : HasSrc0
-                   ? "B.IOT SrcTile0, mask=PE_MASK, <last>, ->DstTile<SizeCode>"
-                   : "B.IOT mask=PE_MASK, <last>, ->DstTile<SizeCode>";
-    else
-      AsmFmt = HasSrc1 ? "B.IOT SrcTile0, SrcTile1, mask=PE_MASK, <last>"
-                       : "B.IOT SrcTile0, mask=PE_MASK, <last>";
+      AsmFmtOS << ", ->DstTile<SizeCode>";
+    AsmFmt = AsmFmtStorage;
     const int64_t PEMask = I(1);
     const int64_t PEMode = PEMask == 0x0   ? 0
                            : PEMask == 0x8 ? 1
