@@ -19,7 +19,6 @@ B.IOT t#4, n#5, mask=1111
 BSTART.TEPL 0, 1, FP16
 BSTART.TEPL 3, 21, FP32
 BSTART.SFU TPERMUTE, FP16
-BSTART.SFU TSORT, FP16
 L.BSTOP
 
 # ENC: B.CATR trap, atomic, aqrl, far, dr{{.*}}encoding: [0x23,0x80,0x0f,0x04]
@@ -33,14 +32,12 @@ L.BSTOP
 # ENC: BSTART.VEC TSUB, FP16{{.*}}encoding:
 # ENC: BSTART.SFU TPERMUTE, FP32{{.*}}encoding:
 # ENC: BSTART.SFU TPERMUTE, FP16{{.*}}encoding:
-# ENC: BSTART.SFU TSORT, FP16{{.*}}encoding:
 # ENC: L.BSTOP{{.*}}encoding: [0x0f,0x00,0x00,0x00,0x01,0x00,0x00,0x00]
 
 # DIS: B.DATR{{[[:space:]]+}}ND2NZ, FP16, Max, cmode5, rmode6, sat, canonicalize
 # DIS: B.FPATR{{[[:space:]]+}}1, 2, 3, 1, 0, 1, 1, 1, 1, 1
 # DIS: B.IOT{{[[:space:]]+}}t#1, u#2, mask=1100, last,{{[[:space:]]+}}->m<8KB>
 # DIS: BSTART.SFU{{[[:space:]]+}}TPERMUTE, FP16
-# DIS: BSTART.SFU{{[[:space:]]+}}TSORT, FP16
 # DIS: L.BSTOP
 
 # NOTE: .note.pto.isa     NOTE

@@ -46,6 +46,7 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TSEL, 0x01au, VEC)                                                         \
   X(TCVT, 0x01bu, VEC)                                                         \
   X(TFMA, 0x01cu, VEC)                                                         \
+  X(TEXPDIF, 0x01du, SFU)                                                      \
   X(TADDS, 0x020u, VEC)                                                        \
   X(TSUBS, 0x021u, VEC)                                                        \
   X(TMULS, 0x022u, VEC)                                                        \
@@ -59,6 +60,7 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TMAXS, 0x02bu, VEC)                                                        \
   X(TMINS, 0x02cu, VEC)                                                        \
   X(TCMPS, 0x02du, VEC)                                                        \
+  X(TLEA, 0x02eu, VEC)                                                         \
   X(TSELS, 0x03au, VEC)                                                        \
   X(TEXPANDS, 0x03bu, VEC)                                                     \
   X(TROWSUM, 0x040u, SFU)                                                      \
@@ -89,17 +91,8 @@ enum class TileEngineV058 { VEC, SFU, TLSU, CUBE };
   X(TCOLEXPANDEXPDIF, 0x05bu, SFU)                                             \
   X(TCOLARGMAX, 0x05cu, SFU)                                                   \
   X(TCOLARGMIN, 0x05du, SFU)                                                   \
-  X(TCONCAT, 0x060u, SFU)                                                      \
-  X(TEXTRACT, 0x062u, SFU)                                                     \
-  X(TINSERT, 0x063u, SFU)                                                      \
-  X(TIMG2COL, 0x064u, SFU)                                                     \
   X(TCI, 0x066u, SFU)                                                          \
   X(TTRI, 0x067u, SFU)                                                         \
-  X(THISTOGRAM, 0x068u, SFU)                                                   \
-  X(TQUANT, 0x06au, SFU)                                                       \
-  X(TDEQUANT, 0x06bu, SFU)                                                     \
-  X(TSORT, 0x06cu, SFU)                                                        \
-  X(TMRGSORT, 0x06du, SFU)                                                     \
   X(TGATHER, 0x06fu, SFU)                                                      \
   X(TSCATTER, 0x070u, SFU)                                                     \
   X(TPERMUTE, 0x075u, SFU)                                                     \
