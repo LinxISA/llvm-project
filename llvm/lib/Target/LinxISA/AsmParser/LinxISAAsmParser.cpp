@@ -579,15 +579,38 @@ static bool isConstExpr(const MCExpr *E, int64_t &Out) {
   return false;
 }
 
-static std::optional<unsigned> parseSrcRTypeSuffix(StringRef Suffix) {
+enum class ParsedSrcRModifier {
+  SignedWord,
+  UnsignedWord,
+  Negate,
+  BitwiseNot,
+};
+
+static std::optional<ParsedSrcRModifier>
+parseSrcRTypeSuffix(StringRef Suffix) {
   std::string Up = toUpperStr(Suffix);
   if (Up == "SW")
-    return 0u;
+    return ParsedSrcRModifier::SignedWord;
   if (Up == "UW")
-    return 1u;
-  if (Up == "NEG" || Up == "NOT")
-    return 2u;
+    return ParsedSrcRModifier::UnsignedWord;
+  if (Up == "NEG")
+    return ParsedSrcRModifier::Negate;
+  if (Up == "NOT")
+    return ParsedSrcRModifier::BitwiseNot;
   return std::nullopt;
+}
+
+static unsigned binarySrcRTypeEncoding(ParsedSrcRModifier Modifier) {
+  switch (Modifier) {
+  case ParsedSrcRModifier::SignedWord:
+    return 0u;
+  case ParsedSrcRModifier::UnsignedWord:
+    return 1u;
+  case ParsedSrcRModifier::Negate:
+  case ParsedSrcRModifier::BitwiseNot:
+    return 2u;
+  }
+  llvm_unreachable("unknown SrcR modifier");
 }
 
 static std::optional<unsigned> parseBrType(StringRef Tok) {
@@ -936,6 +959,7 @@ static bool decodeAtomicMnemonicSuffix(StringRef Suffix, unsigned &Aq,
 struct ParsedReg {
   unsigned Code = 0;
   unsigned SrcRType = 3; // default: no modifier
+  std::optional<ParsedSrcRModifier> SrcRModifier;
   unsigned Shamt = 0;
   bool HasExplicitType = false;
   bool HasExplicitShift = false;
@@ -1315,8 +1339,9 @@ bool LinxISAAsmParser::parseRegOperand(ParsedReg &Out) {
   Out.Loc = getTok().getLoc();
 
   if (!Suffix.empty()) {
-    if (auto T = parseSrcRTypeSuffix(Suffix)) {
-      Out.SrcRType = *T;
+    if (auto Modifier = parseSrcRTypeSuffix(Suffix)) {
+      Out.SrcRModifier = *Modifier;
+      Out.SrcRType = binarySrcRTypeEncoding(*Modifier);
       Out.HasExplicitType = true;
     }
   }
@@ -2807,17 +2832,22 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       if (FN == "SrcRType") {
         if (!require(M.HasIndex, "expected register offset for SrcRType"))
           return false;
+        const bool IsScalarAddress =
+            !Form.mnemonic ||
+            !StringRef(Form.mnemonic).starts_with_insensitive("V.");
         const bool IsHLPrefetch =
             Form.mnemonic &&
             (StringRef(Form.mnemonic).equals_insensitive("HL.PRF") ||
              StringRef(Form.mnemonic).equals_insensitive("HL.PRF.A"));
-        if (IsHLPrefetch) {
+        if (IsScalarAddress) {
           if (!require(!M.Index.HasExplicitType || M.Index.SrcRType <= 1,
-                       "HL.PRF register offset does not allow .neg or .not"))
+                       IsHLPrefetch
+                           ? "HL.PRF register offset does not allow .neg or .not"
+                           : "address register offset does not allow .neg or .not"))
             return false;
-          const unsigned HLSrcRType =
+          const unsigned AddressSrcRType =
               M.Index.HasExplicitType ? M.Index.SrcRType + 1 : 0;
-          emitFieldImm(static_cast<int64_t>(HLSrcRType));
+          emitFieldImm(static_cast<int64_t>(AddressSrcRType));
         } else {
           emitFieldImm(static_cast<int64_t>(M.Index.SrcRType));
         }
@@ -3876,6 +3906,43 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
     if (FN == "SrcRType") {
       if (!require(SrcROp.has_value(), "missing SrcR for SrcRType"))
         return false;
+      const StringRef FormMnemonic(Form.mnemonic ? Form.mnemonic : "");
+      if (FormMnemonic.equals_insensitive("CSEL")) {
+        if (!require(!SrcROp->HasExplicitType ||
+                         SrcROp->SrcRModifier == ParsedSrcRModifier::Negate,
+                     "CSEL SrcR allows only the .neg modifier"))
+          return false;
+        emitFieldImm(SrcROp->HasExplicitType ? 3 : 0);
+        continue;
+      }
+
+      const bool IsComparison =
+          FormMnemonic.starts_with_insensitive("CMP.") ||
+          FormMnemonic.starts_with_insensitive("SETC.");
+      if (IsComparison) {
+        const bool IsLogicalComparison =
+            FormMnemonic.ends_with_insensitive(".AND") ||
+            FormMnemonic.ends_with_insensitive(".OR");
+        if (SrcROp->HasExplicitType) {
+          if (SrcROp->SrcRModifier == ParsedSrcRModifier::Negate ||
+              SrcROp->SrcRModifier == ParsedSrcRModifier::BitwiseNot) {
+            if (!require(IsLogicalComparison &&
+                             SrcROp->SrcRModifier ==
+                                 ParsedSrcRModifier::BitwiseNot,
+                         IsLogicalComparison
+                             ? "logical comparison SrcR uses .not, not .neg"
+                             : "comparison SrcR does not allow .neg or .not"))
+              return false;
+            emitFieldImm(3);
+          } else {
+            emitFieldImm(SrcROp->SrcRType + 1);
+          }
+        } else {
+          emitFieldImm(0);
+        }
+        continue;
+      }
+
       emitFieldImm(static_cast<int64_t>(SrcROp->SrcRType));
       continue;
     }

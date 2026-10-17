@@ -1341,14 +1341,29 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     emitReg("SrcR");
     if (auto V = findFieldImm("SrcRType")) {
       const StringRef FormMnemonic(Form.mnemonic ? Form.mnemonic : "");
-      const bool IsHLPrefetch =
-          FormMnemonic == "HL.PRF" || FormMnemonic == "HL.PRF.A";
       const unsigned Type = static_cast<unsigned>(*V) & 0x3u;
-      const StringRef S = IsHLPrefetch
-                              ? (Type == 1u ? StringRef(".sw")
-                                            : Type == 2u ? StringRef(".uw")
-                                                         : StringRef())
-                              : srcRTypeSuffix(Type);
+      StringRef S;
+      const bool IsScalarAddress =
+          AsmFmt.contains('[') &&
+          !FormMnemonic.starts_with_insensitive("V.");
+      if (IsScalarAddress) {
+        S = Type == 1u ? StringRef(".sw")
+                       : Type == 2u ? StringRef(".uw") : StringRef();
+      } else if (FormMnemonic.equals_insensitive("CSEL")) {
+        S = Type == 3u ? StringRef(".neg") : StringRef();
+      } else if (FormMnemonic.starts_with_insensitive("CMP.") ||
+                 FormMnemonic.starts_with_insensitive("SETC.")) {
+        if (Type == 1u)
+          S = ".sw";
+        else if (Type == 2u)
+          S = ".uw";
+        else if (Type == 3u &&
+                 (FormMnemonic.ends_with_insensitive(".AND") ||
+                  FormMnemonic.ends_with_insensitive(".OR")))
+          S = ".not";
+      } else {
+        S = srcRTypeSuffix(Type);
+      }
       if (!S.empty())
         OS << S;
     }
