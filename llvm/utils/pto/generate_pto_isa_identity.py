@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -40,6 +41,13 @@ def identity_from_manifest(path: Path) -> tuple[dict[str, str], str]:
     ):
         raise ValueError("PTO release manifest has an invalid encoding projection digest")
     manifest_schema = value.get("schema")
+    if manifest_schema == "pto.development-manifest.v1":
+        if value.get("status") != "development-not-published":
+            raise ValueError(
+                "PTO development manifest status must be development-not-published"
+            )
+        if value.get("publication") is not None:
+            raise ValueError("PTO development manifest publication must be null")
     provenance = (
         "PTO-SPEC spec/development-manifest.json"
         if manifest_schema == "pto.development-manifest.v1"
@@ -94,19 +102,68 @@ inline constexpr StringLiteral Identity =
 '''
 
 
+def constraints_from_lock(path: Path) -> tuple[str, str, str, dict[str, str]]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("schema") != "llvm.pto-isa-identity-lock.v1":
+        raise ValueError("invalid PTO ISA identity lock schema")
+    manifest_path = value.get("manifest_path")
+    manifest_sha256 = value.get("manifest_sha256")
+    source_revision = value.get("source_revision")
+    identity = value.get("identity")
+    if not isinstance(manifest_path, str) or manifest_path != "spec/development-manifest.json":
+        raise ValueError("PTO ISA identity lock has an invalid manifest path")
+    if not isinstance(manifest_sha256, str) or SHA256.fullmatch(manifest_sha256) is None:
+        raise ValueError("PTO ISA identity lock has an invalid manifest SHA-256")
+    if not isinstance(source_revision, str) or GIT_REVISION.fullmatch(source_revision) is None:
+        raise ValueError("PTO ISA identity lock has an invalid source revision")
+    if not isinstance(identity, dict):
+        raise ValueError("PTO ISA identity lock identity must be an object")
+    return manifest_path, manifest_sha256, source_revision, identity  # type: ignore[return-value]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--lock", type=Path)
+    parser.add_argument("--manifest-sha256")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--source-revision")
     parser.add_argument("--check", action="store_true")
     arguments = parser.parse_args()
     try:
+        expected_manifest_sha256 = arguments.manifest_sha256
+        expected_source_revision = arguments.source_revision
+        locked_identity = None
+        if arguments.lock is not None:
+            _, lock_sha256, lock_revision, locked_identity = constraints_from_lock(
+                arguments.lock
+            )
+            if expected_manifest_sha256 is not None and expected_manifest_sha256 != lock_sha256:
+                raise ValueError("PTO manifest SHA-256 conflicts with identity lock")
+            if expected_source_revision is not None and expected_source_revision != lock_revision:
+                raise ValueError("PTO source revision conflicts with identity lock")
+            expected_manifest_sha256 = lock_sha256
+            expected_source_revision = lock_revision
+        if expected_manifest_sha256 is not None:
+            if SHA256.fullmatch(expected_manifest_sha256) is None:
+                raise ValueError("PTO manifest SHA-256 must be 64 lowercase hex digits")
+            manifest_digest = hashlib.sha256(arguments.manifest.read_bytes()).hexdigest()
+            if manifest_digest != expected_manifest_sha256:
+                raise ValueError(
+                    "PTO manifest SHA-256 mismatch "
+                    f"(expected {expected_manifest_sha256}, got {manifest_digest})"
+                )
         identity, provenance = identity_from_manifest(arguments.manifest)
-        if arguments.source_revision is not None:
-            if GIT_REVISION.fullmatch(arguments.source_revision) is None:
+        if locked_identity is not None and identity != locked_identity:
+            raise ValueError("PTO manifest identity does not match identity lock")
+        if expected_manifest_sha256 is not None:
+            provenance = (
+                f"{provenance} (sha256 {expected_manifest_sha256})"
+            )
+        if expected_source_revision is not None:
+            if GIT_REVISION.fullmatch(expected_source_revision) is None:
                 raise ValueError("PTO source revision must be a 40-character lowercase Git SHA")
-            provenance = f"{provenance} @ {arguments.source_revision}"
+            provenance = f"{provenance} @ {expected_source_revision}"
         expected = render(identity, provenance)
         if arguments.check:
             actual = arguments.output.read_text(encoding="utf-8")

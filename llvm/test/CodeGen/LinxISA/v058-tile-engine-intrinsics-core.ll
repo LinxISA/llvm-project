@@ -20,7 +20,7 @@ entry:
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TADD,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2, t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#2.reuse, t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
 
 define void @sfu_unary_rowmax(ptr %a, ptr %dst) {
@@ -35,7 +35,7 @@ entry:
 ; CHECK: BSTART.SFU{{[[:space:]]+}}TROWMAX,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE
 
 define void @vec_unary_int8_shape(ptr %a, ptr %dst) {
@@ -50,5 +50,5 @@ entry:
 ; CHECK: BSTART.VEC{{[[:space:]]+}}TABS,
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}32,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}128,{{[[:space:]]+}}->lb1
-; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1, mask=1111, last, ->t<4KB>
+; CHECK-NEXT: B.IOT{{[[:space:]]+}}t#1.reuse, mask=1111, last, ->t<4KB>
 ; CHECK: BSTART.TSTORE

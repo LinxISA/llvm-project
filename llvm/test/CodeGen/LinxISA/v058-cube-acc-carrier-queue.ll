@@ -40,9 +40,9 @@ entry:
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}4,{{[[:space:]]+}}->lb0
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}4,{{[[:space:]]+}}->lb1
 ; CHECK-NEXT: C.B.DIMI{{[[:space:]]+}}4,{{[[:space:]]+}}->lb2
-; CHECK-NEXT: B.IOT{{[[:space:]]+[mn]#[1-8], t#[1-2], mask=1111}}
-; CHECK-NEXT: B.IOT{{[[:space:]]+t#[1-2], mask=1111, last, ->[mn]<512B>}}
+; CHECK-NEXT: B.IOT{{[[:space:]]+[mn]#[1-8]\.reuse, t#[1-2]\.reuse, mask=1111}}
+; CHECK-NEXT: B.IOT{{[[:space:]]+t#[1-2]\.reuse, mask=1111, last, ->[mn]<512B>}}
 ; CHECK-NOT:  BSTART.ACCCVT
 ; CHECK:      BSTART.TSTORE
-; CHECK:      B.IOT{{[[:space:]]+[mn]#[1-8], mask=1111, last}}
+; CHECK:      B.IOT{{[[:space:]]+[mn]#[1-8]\.reuse, mask=1111, last}}
 ; CHECK-NOT:  {{m|n}}#9

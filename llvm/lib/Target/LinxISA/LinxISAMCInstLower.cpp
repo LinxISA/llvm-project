@@ -588,24 +588,13 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     const bool HasDestination = static_cast<unsigned>(I(0)) <= 3u;
 
     // PTO-SPEC models source lifetime independently from the descriptor L bit.
-    // Blockify records tile liveness on the implicit source operands, in source
-    // order.  Preserve a source unless its use is explicitly marked killed. If
-    // an older producer omitted the implicit liveness operand, conservatively
-    // retain the source rather than reclaiming a live tile early.
-    auto sourceReuse = [&](unsigned SourceOrdinal) {
-      unsigned SeenUses = 0;
-      for (unsigned Op = MI->getNumExplicitOperands();
-           Op < MI->getNumOperands(); ++Op) {
-        const MachineOperand &MO = MI->getOperand(Op);
-        if (!MO.isReg() || !MO.isImplicit() || !MO.isUse() || !MO.getReg())
-          continue;
-        if (SeenUses++ == SourceOrdinal)
-          return !MO.isKill();
-      }
-      return true;
-    };
-    const bool ReuseSrc0 = HasSrc0 && sourceReuse(0);
-    const bool ReuseSrc1 = HasSrc1 && sourceReuse(1);
+    // The target currently has no capability feature that promises runtime
+    // support for implicit source reclamation. Emit `.reuse` for every present
+    // source, including killed machine uses, preserving the pre-amendment words
+    // and live payload. Last-use remains available to explicit MC assembly and
+    // can be enabled in CodeGen only with a runtime capability contract.
+    const bool ReuseSrc0 = HasSrc0;
+    const bool ReuseSrc1 = HasSrc1;
     const StringRef Src0Token = ReuseSrc0 ? "SrcTile0.reuse" : "SrcTile0";
     const StringRef Src1Token = ReuseSrc1 ? "SrcTile1.reuse" : "SrcTile1";
     SmallString<128> AsmFmtStorage;

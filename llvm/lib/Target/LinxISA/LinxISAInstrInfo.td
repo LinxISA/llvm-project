@@ -895,8 +895,9 @@ let hasSideEffects = 1, isBarrier = 1, Size = 4 in {
   // PTO 0.58 B.IOT carries an explicit four-PE mask and TSize. The validity
   // operands select the zero-, one-, or two-source form; the opcode selects
   // the architectural L bit that terminates the binding sequence. Per-source
-  // reuse is derived during MC lowering from the implicit tile use operands:
-  // killed uses omit `.reuse`, while live uses preserve the source explicitly.
+  // reuse is conservatively emitted for every present source during MC
+  // lowering. Current runtimes do not yet advertise support for implicit
+  // reclamation encodings, so kill flags must not select last-use words.
   def B_IOT_G0 : LinxISAInst<(outs), (ins i64imm:$dst, i64imm:$pe_mask,
                                        i64imm:$s0v, i64imm:$s1v,
                                        i64imm:$src0, i64imm:$src1,

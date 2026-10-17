@@ -1,0 +1,12 @@
+{
+  "schema": "llvm.pto-isa-identity-lock.v1",
+  "source_repository": "https://github.com/PTO-ISA/pto-spec.git",
+  "source_revision": "f0a876e449a95d26841c5ee7affb4c905ebc5f5b",
+  "manifest_path": "spec/development-manifest.json",
+  "manifest_sha256": "0c6d0b2a1ec0b49e32e13971e751a5ea19946351a3880bfdfcef0f50351944f7",
+  "identity": {
+    "release": "0.58.7",
+    "encoding_abi": "pto-isa-0.58.7-mode-function-v1",
+    "encoding_projection_sha256": "a5f78ecd707bde4a014542158ea257c783796b95fa4fbcce37742e41fee6a881"
+  }
+}

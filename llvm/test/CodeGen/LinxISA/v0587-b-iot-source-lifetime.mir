@@ -1,13 +1,13 @@
 # RUN: llc -mtriple=linx64 -start-after=linx-blockify -filetype=asm -o - %s | FileCheck %s
 
-# B.IOT's L bit terminates a binding sequence. Source lifetime is independent:
-# a live implicit tile use must print `.reuse`, while a killed use is last-use.
-# Missing liveness metadata is conservatively treated as reuse.
+# B.IOT's L bit terminates a binding sequence. Source lifetime is independent.
+# Until the runtime advertises implicit-reclamation support, CodeGen preserves
+# every source with `.reuse`, including killed uses and missing liveness data.
 # CHECK-LABEL: b_iot_source_lifetime:
 # CHECK: B.IOT t#1.reuse, mask=1111
-# CHECK-NEXT: B.IOT t#1.reuse, u#1, mask=1111
-# CHECK-NEXT: B.IOT t#1, u#2.reuse, mask=1111, last
-# CHECK-NEXT: B.IOT u#3, mask=1111, last
+# CHECK-NEXT: B.IOT t#1.reuse, u#1.reuse, mask=1111
+# CHECK-NEXT: B.IOT t#1.reuse, u#2.reuse, mask=1111, last
+# CHECK-NEXT: B.IOT u#3.reuse, mask=1111, last
 # CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last
 
 --- |
