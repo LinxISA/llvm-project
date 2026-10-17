@@ -12,8 +12,10 @@
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/missing.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=MISSING
 # RUN: yaml2obj -DABI=71 -DREL=37 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/abi.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/abi.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=ABI
-# RUN: yaml2obj -DHASH=38 -DREL=37 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/hash.o
+# RUN: yaml2obj -DHASH=36 -DREL=37 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/hash.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/hash.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=HASH
+# RUN: yaml2obj %t/published-identity.yaml -o %t/published.o
+# RUN: not ld.lld -m elf64linx -e 0 %t/published.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=PUBLISHED
 # RUN: yaml2obj -DREL=30 -DFLAG=SHF_ALLOC %t/identity.yaml -o %t/release.o
 # RUN: not ld.lld -m elf64linx -e 0 %t/canonical.o %t/release.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=RELEASE
 # RUN: yaml2obj %t/old-identity.yaml -o %t/old.o
@@ -28,11 +30,13 @@
 # OUTPUT-SAME: 4
 # OUTPUT: 04000000 a5000000 01000000 50544f00
 # OUTPUT: 7b22656e 636f6469 6e675f61 6269223a
+# OUTPUT: 61356637 38656364
 # OUTPUT: 382e3722 7d000000
 # RELINK-COUNT-2: .note.pto.isa     NOTE
 # MISSING: error: {{.*}}missing.o: missing required .note.pto.isa identity
 # ABI: error: {{.*}}abi.o: invalid .note.pto.isa: encoding ABI mismatch
 # HASH: error: {{.*}}hash.o: invalid .note.pto.isa: encoding projection hash mismatch
+# PUBLISHED: error: {{.*}}published.o: invalid .note.pto.isa: encoding projection hash mismatch
 # RELEASE: error: {{.*}}release.o: invalid .note.pto.isa: release mismatch (expected 0.58.7)
 # OLD: error: {{.*}}old.o: invalid .note.pto.isa: release mismatch (expected 0.58.7)
 # MIXED: error: {{.*}}old.o: invalid .note.pto.isa: release mismatch (expected 0.58.7)
@@ -50,7 +54,21 @@ Sections:
     Type:         SHT_NOTE
     Flags:        [ [[FLAG]] ]
     AddressAlign: 4
-    Content:      04000000a50000000100000050544f007b22656e636f64696e675f616269223a22[[ABI=70]]746f2d6973612d302e35382e372d6d6f64652d66756e6374696f6e2d7631222c22656e636f64696e675f70726f6a656374696f6e5f736861323536223a2239[[HASH=63]]3439636466613739613465646136623237633135343862666430366566363831623631383966376430326434363664646664343366353939393362393364222c2272656c65617365223a22302e35382e[[REL]]227d000000
+    Content:      04000000a50000000100000050544f007b22656e636f64696e675f616269223a22[[ABI=70]]746f2d6973612d302e35382e372d6d6f64652d66756e6374696f6e2d7631222c22656e636f64696e675f70726f6a656374696f6e5f736861323536223a2261[[HASH=35]]6637386563643730376264653461303134353432313538656132353763373833373936623935666134666263636533373734326534316665653661383831222c2272656c65617365223a22302e35382e[[REL]]227d000000
+
+#--- published-identity.yaml
+!ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: 0xE9
+Sections:
+  - Name:         .note.pto.isa
+    Type:         SHT_NOTE
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Content:      04000000a50000000100000050544f007b22656e636f64696e675f616269223a2270746f2d6973612d302e35382e372d6d6f64652d66756e6374696f6e2d7631222c22656e636f64696e675f70726f6a656374696f6e5f736861323536223a2239633439636466613739613465646136623237633135343862666430366566363831623631383966376430326434363664646664343366353939393362393364222c2272656c65617365223a22302e35382e37227d000000
 
 #--- old-identity.yaml
 !ELF

@@ -25,7 +25,7 @@ L.BSTOP
 # ENC: B.CATR trap, atomic, aqrl, far, dr{{.*}}encoding: [0x23,0x80,0x0f,0x04]
 # ENC: B.DATR ND2NZ, FP16, Max, cmode5, rmode6, sat, canonicalize{{.*}}encoding: [0x23,0x12,0x43,0xae]
 # ENC: B.FPATR 1, 2, 3, 1, 0, 1, 1, 1, 1, 1{{.*}}encoding: [0xa3,0xa3,0x1d,0x05]
-# ENC: B.IOT t#1, mask=1111, last, ->u<64KB>{{.*}}encoding: [0x93,0x5e,0x0d,0x00]
+# ENC: B.IOT t#1, mask=1111, last, ->u<64KB>{{.*}}encoding: [0x93,0x5e,0x0d,0x04]
 # ENC: B.IOT t#1, u#2, mask=1100, last, ->m<8KB>{{.*}}encoding:
 # ENC: B.IOT m#3, mask=1100, last{{.*}}encoding:
 # ENC: B.IOT mask=0001, last, ->n<128B>{{.*}}encoding:
@@ -49,4 +49,5 @@ L.BSTOP
 # NOTE-SAME: 4
 # NOTE: 04000000 a5000000 01000000 50544f00
 # NOTE: 7b22656e 636f6469 6e675f61 6269223a
-# NOTE: 382e3522 7d000000
+# NOTE: 61356637 38656364
+# NOTE: 382e3722 7d000000

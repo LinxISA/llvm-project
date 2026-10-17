@@ -42,18 +42,18 @@ frame_template_contract:
 .endif
 
 # VALID-LABEL: <frame_template_contract>:
-# VALID: 41 00 a5 02  FENTRY{{[[:space:]]+}}[ra ~ ra], sp!, 8
-# VALID: 41 80 2b 04  FENTRY{{[[:space:]]+}}[x3 ~ a0], sp!, 16
-# VALID: 41 00 71 2d  FENTRY{{[[:space:]]+}}[a0 ~ x3], sp!, 176
-# VALID: 41 10 a5 02  FEXIT{{[[:space:]]+}}[ra ~ ra], sp!, 8
-# VALID: 41 90 2b 04  FEXIT{{[[:space:]]+}}[x3 ~ a0], sp!, 16
-# VALID: 41 10 71 2d  FEXIT{{[[:space:]]+}}[a0 ~ x3], sp!, 176
-# VALID: 41 20 a5 02  FRET.RA{{[[:space:]]+}}[ra ~ ra], sp!, 8
-# VALID: 41 a0 2b 04  FRET.RA{{[[:space:]]+}}[x3 ~ a0], sp!, 16
-# VALID: 41 20 71 2d  FRET.RA{{[[:space:]]+}}[a0 ~ x3], sp!, 176
-# VALID: 41 30 a5 02  FRET.STK{{[[:space:]]+}}[ra ~ ra], sp!, 8
-# VALID: 41 30 25 1e  FRET.STK{{[[:space:]]+}}[ra ~ a0], sp!, 120
-# VALID: 41 30 95 2c  FRET.STK{{[[:space:]]+}}[ra ~ a7], sp!, 176
+# VALID: 41 00 a5 10  FENTRY{{[[:space:]]+}}[ra ~ ra], sp!, 8
+# VALID: 41 80 2b 20  FENTRY{{[[:space:]]+}}[x3 ~ a0], sp!, 16
+# VALID: c1 00 71 61  FENTRY{{[[:space:]]+}}[a0 ~ x3], sp!, 176
+# VALID: 41 10 a5 10  FEXIT{{[[:space:]]+}}[ra ~ ra], sp!, 8
+# VALID: 41 90 2b 20  FEXIT{{[[:space:]]+}}[x3 ~ a0], sp!, 16
+# VALID: c1 10 71 61  FEXIT{{[[:space:]]+}}[a0 ~ x3], sp!, 176
+# VALID: 41 20 a5 10  FRET.RA{{[[:space:]]+}}[ra ~ ra], sp!, 8
+# VALID: 41 a0 2b 20  FRET.RA{{[[:space:]]+}}[x3 ~ a0], sp!, 16
+# VALID: c1 20 71 61  FRET.RA{{[[:space:]]+}}[a0 ~ x3], sp!, 176
+# VALID: 41 30 a5 10  FRET.STK{{[[:space:]]+}}[ra ~ ra], sp!, 8
+# VALID: 41 30 25 f0  FRET.STK{{[[:space:]]+}}[ra ~ a0], sp!, 120
+# VALID: c1 30 95 60  FRET.STK{{[[:space:]]+}}[ra ~ a7], sp!, 176
 
 .ifdef ASM_NEG
 	.text

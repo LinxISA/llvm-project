@@ -12,7 +12,6 @@
 	BSTART.VEC TREMS, FP16
 	BSTART.SFU TADD, FP16
 	BSTART.VEC TALLOC, FP16
-	B.IOT t#1.reuse, mask=0001
 	B.IOT t#1, mask=001
 	B.IOT t#1, mask=10000
 	B.IOT t#1, mask=0011
@@ -34,7 +33,6 @@
 # CHECK: error: TREMS is classified as SFU, not VEC
 # CHECK: error: TADD is classified as VEC, not SFU
 # CHECK: error: unknown PTO 0.58 tile operation 'TALLOC'
-# CHECK: error: B.IOT reuse suffix is not part of PTO ISA 0.58
 # CHECK: error: PE mask must contain exactly four binary digits
 # CHECK: error: PE mask must contain exactly four binary digits
 # CHECK: error: PE mask must be one of 0000, 1000, 0100, 0010, 0001, 1100, 1110, or 1111

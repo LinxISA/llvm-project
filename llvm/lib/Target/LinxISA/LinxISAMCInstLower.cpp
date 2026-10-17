@@ -517,7 +517,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case LinxISA::B_DATR: {
     OutMI.setOpcode(
         getSpecOpcodeByAsmFmt("B.DATR {layout, datatype, padvalue_or_byteid, "
-                              "cmode, rmode, sat, canonicalize}",
+                              "cmode, rmode, sat, canonicalize, predinv, zero}",
                               /*LengthBits=*/32));
     // Machine operand order: CMode, Layout, DataType, PadValueOrByteId,
     // RMode, Sat, Canonicalize. Catalog field order differs.
@@ -526,8 +526,10 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(I(2))); // DataType
     OutMI.addOperand(MCOperand::createImm(I(1))); // Layout
     OutMI.addOperand(MCOperand::createImm(I(3))); // PadValueOrByteId
+    OutMI.addOperand(MCOperand::createImm(0));    // PredInv
     OutMI.addOperand(MCOperand::createImm(I(4))); // RMode
     OutMI.addOperand(MCOperand::createImm(I(5))); // Sat
+    OutMI.addOperand(MCOperand::createImm(0));    // Zero
     return;
   }
 
@@ -564,8 +566,11 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 
   case LinxISA::B_IOR: {
     OutMI.setOpcode(
-        getSpecOpcodeByAsmFmt("B.IOR [<gpr>[, <gpr>[, <gpr>]]][, -><gpr>]",
+        getSpecOpcodeByAsmFmt(
+            "B.IOR [<gpr>[, <gpr>[, <gpr>]]][, -><gpr>]"
+            "[, ExecMaskPresent]",
                               /*LengthBits=*/32));
+    OutMI.addOperand(MCOperand::createImm(0));    // ExecMaskPresent
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // RegSrc0
     OutMI.addOperand(MCOperand::createImm(R(2))); // RegSrc1

@@ -1462,6 +1462,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 
     OS << "B.IOR\t[" << reg5Name(Src0) << ", " << reg5Name(Src1) << ", "
        << reg5Name(Src2) << "], ->" << reg5Name(Dst);
+    if ((findFieldImm("ExecMaskPresent").value_or(0) & 1u) != 0u)
+      OS << ", ExecMaskPresent";
     printAnnotation(OS, Annot);
     return;
   }
@@ -1480,7 +1482,10 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     };
     OS << "B.IOS\t";
     if (SizeCode == 0) {
-      OS << "S" << SharedTID << ", mask=";
+      OS << "S" << SharedTID;
+      if (AsmFmt.contains(".reuse"))
+        OS << ".reuse";
+      OS << ", mask=";
       printPEMask();
     } else {
       OS << "mask=";
@@ -1520,6 +1525,8 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     OS << mnemonicTok("<op>") << "\t[";
     OS << reg5Name(Src0) << ", " << reg5Name(Src1) << ", " << reg5Name(Src2)
        << "]";
+    if (AsmFmt.contains("->"))
+      emitArrowDest();
     printAnnotation(OS, Annot);
     return;
   }
@@ -1554,12 +1561,16 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     bool First = true;
     if (Src0Present) {
       printTileRef(OS, Src0);
+      if (AsmFmt.contains("SrcTile0.reuse"))
+        OS << ".reuse";
       First = false;
     }
     if (Src1Present) {
       if (!First)
         OS << ", ";
       printTileRef(OS, Src1);
+      if (AsmFmt.contains("SrcTile1.reuse"))
+        OS << ".reuse";
       First = false;
     }
 
@@ -1663,6 +1674,10 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
         static_cast<unsigned>(findFieldImm("Sat").value_or(0)) & 0x1u;
     const unsigned Canonicalize =
         static_cast<unsigned>(findFieldImm("Canonicalize").value_or(0)) & 0x1u;
+    const unsigned PredInv =
+        static_cast<unsigned>(findFieldImm("PredInv").value_or(0)) & 0x1u;
+    const unsigned Zero =
+        static_cast<unsigned>(findFieldImm("Zero").value_or(0)) & 0x1u;
     const StringRef DTName = dtypeName(DType);
     const StringRef PadName = padValueName(Pad);
 
@@ -1686,6 +1701,10 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
       OS << ", sat";
     if (Canonicalize)
       OS << ", canonicalize";
+    if (PredInv)
+      OS << ", predinv";
+    if (Zero)
+      OS << ", zero";
     printAnnotation(OS, Annot);
     return;
   }
@@ -1695,7 +1714,7 @@ void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
        << findFieldImm("LAST").value_or(0) << ", "
        << reg5Name(findFieldImm("RegSrc").value_or(0)) << ", "
        << findFieldImm("uimm11").value_or(0) << ", "
-       << findFieldImm("ParentSizeCode").value_or(0);
+       << findFieldImm("WriterSizeCode").value_or(0);
     printAnnotation(OS, Annot);
     return;
   }

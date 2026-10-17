@@ -10,5 +10,5 @@ B.IOT m#3, mask=1100, last
 
 # CHECK: B.IOT{{[ 	]+}}t#1, u#2, mask=1100
 # CHECK: B.IOT{{[ 	]+}}m#3, mask=1100, last
-# ENC: B.IOT{{[ 	]+}}t#1, u#2, mask=1100{{.*}}encoding: [0x13,0x4a,0x00,0x44]
-# ENC: B.IOT{{[ 	]+}}m#3, mask=1100, last{{.*}}encoding: [0x13,0x5a,0x28,0x02]
+# ENC: B.IOT{{[ 	]+}}t#1, u#2, mask=1100{{.*}}encoding: [0x13,0x2a,0x00,0x44]
+# ENC: B.IOT{{[ 	]+}}m#3, mask=1100, last{{.*}}encoding: [0x13,0x5a,0x28,0x06]
