@@ -1077,14 +1077,14 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/3));
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcR
-    int64_t SrcRType = 3;                         // default: no modifier
+    int64_t SrcRType = 0;                         // default: no modifier
     if (MI->getNumOperands() > 1) {
       const MachineOperand &SrcRMO = MI->getOperand(1);
       if (SrcRMO.isReg()) {
         if ((SrcRMO.getTargetFlags() & LinxII::MO_SRCR_SW) != 0)
-          SrcRType = 0; // .sw
+          SrcRType = 1; // .sw
         else if ((SrcRMO.getTargetFlags() & LinxII::MO_SRCR_UW) != 0)
-          SrcRType = 1; // .uw
+          SrcRType = 2; // .uw
       }
     }
     OutMI.addOperand(MCOperand::createImm(SrcRType));
@@ -1097,14 +1097,14 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.setOpcode(getSpecOpcode(Mnem, /*LengthBits=*/32, /*Fields=*/3));
     OutMI.addOperand(MCOperand::createImm(R(0))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcR
-    int64_t SrcRType = 3;                         // default: no modifier
+    int64_t SrcRType = 0;                         // default: no modifier
     if (MI->getNumOperands() > 1) {
       const MachineOperand &SrcRMO = MI->getOperand(1);
       if (SrcRMO.isReg()) {
         if ((SrcRMO.getTargetFlags() & LinxII::MO_SRCR_SW) != 0)
-          SrcRType = 0; // .sw
+          SrcRType = 1; // .sw
         else if ((SrcRMO.getTargetFlags() & LinxII::MO_SRCR_UW) != 0)
-          SrcRType = 1; // .uw
+          SrcRType = 2; // .uw
       }
     }
     OutMI.addOperand(MCOperand::createImm(SrcRType));
@@ -2097,7 +2097,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR (index)
     OutMI.addOperand(
-        MCOperand::createImm(3)); // SrcRType (default: no modifier)
+        MCOperand::createImm(0)); // SrcRType (address default: no modifier)
     OutMI.addOperand(MCOperand::createImm(I(3))); // shamt
     return;
   }
@@ -2483,7 +2483,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL (base)
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR (index)
     OutMI.addOperand(
-        MCOperand::createImm(3)); // SrcRType (default: no modifier)
+        MCOperand::createImm(0)); // SrcRType (address default: no modifier)
     return;
   }
 
@@ -2529,14 +2529,14 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(0))); // RegDst
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcL
     OutMI.addOperand(MCOperand::createImm(R(2))); // SrcR
-    int64_t SrcRType = 3;                         // default: no modifier
+    int64_t SrcRType = 0;                         // default: no modifier
     if (MI->getNumOperands() > 2) {
       const MachineOperand &SrcRMO = MI->getOperand(2);
       if (SrcRMO.isReg()) {
         if ((SrcRMO.getTargetFlags() & LinxII::MO_SRCR_SW) != 0)
-          SrcRType = 0; // .sw
+          SrcRType = 1; // .sw
         else if ((SrcRMO.getTargetFlags() & LinxII::MO_SRCR_UW) != 0)
-          SrcRType = 1; // .uw
+          SrcRType = 2; // .uw
       }
     }
     OutMI.addOperand(MCOperand::createImm(SrcRType));
@@ -2627,7 +2627,7 @@ void LinxISAMCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     OutMI.addOperand(MCOperand::createImm(R(1))); // SrcP = predicate
     OutMI.addOperand(MCOperand::createImm(R(3))); // SrcR = false case
     OutMI.addOperand(
-        MCOperand::createImm(3)); // SrcRType (default: no modifier)
+        MCOperand::createImm(0)); // SrcRType (select default: no modifier)
     return;
   }
 

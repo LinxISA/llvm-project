@@ -286,6 +286,21 @@ static bool isLegalHLPrefetchSrcRType(const linxisa_inst_form &Form,
   return false;
 }
 
+static bool isLegalScalarAddressSrcRType(const linxisa_inst_form &Form,
+                                         ArrayRef<int64_t> FieldVals) {
+  StringRef Mnemonic(Form.mnemonic ? Form.mnemonic : "");
+  StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
+  if (!AsmFmt.contains('[') || Mnemonic.starts_with_insensitive("V."))
+    return true;
+
+  for (unsigned I = 0; I != FieldVals.size(); ++I) {
+    const linxisa_field &Field = linxisa_fields[Form.field_start + I];
+    if (StringRef(Field.name ? Field.name : "") == "SrcRType")
+      return static_cast<uint64_t>(FieldVals[I]) <= 2u;
+  }
+  return true;
+}
+
 MCDisassembler::DecodeStatus
 LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
                                     ArrayRef<uint8_t> Bytes, uint64_t Address,
@@ -357,7 +372,8 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
       !isLegalFrameTemplate(*Matched, FieldVals) ||
       !isLegalBIOTDestination(*Matched, FieldVals) ||
       !isLegalTileAttributeFields(*Matched, FieldVals) ||
-      !isLegalHLPrefetchSrcRType(*Matched, FieldVals)) {
+      !isLegalHLPrefetchSrcRType(*Matched, FieldVals) ||
+      !isLegalScalarAddressSrcRType(*Matched, FieldVals)) {
     Instr.clear();
     return Fail;
   }
