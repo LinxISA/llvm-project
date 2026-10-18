@@ -219,7 +219,8 @@ tryGetTileRegDescriptor(MachineBasicBlock &MBB,
 bool runtimeDimensionsReachCopy(const TileDescriptor &Descriptor,
                                 MachineBasicBlock &Target,
                                 MachineBasicBlock::iterator Before,
-                                const TargetRegisterInfo &TRI);
+                                const TargetRegisterInfo &TRI,
+                                bool RepairLiveness = true);
 
 bool enableBFIOpt();
 
