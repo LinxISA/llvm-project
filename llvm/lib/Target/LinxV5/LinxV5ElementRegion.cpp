@@ -6506,6 +6506,30 @@ static void verifyLocalTileCallBoundaries(Function &F, DominatorTree &DT) {
     }
 }
 
+static Instruction *findMarkedElementRegion(Function &F) {
+  for (Instruction &I : instructions(F))
+    if (hasElementRegionLoopMetadata(I) ||
+        isIntrinsic(dyn_cast<CallInst>(&I),
+                    Intrinsic::linx_experimental_element_region))
+      return &I;
+  return nullptr;
+}
+
+static bool rejectUnloweredMarkedElementRegion(Function &F) {
+  Instruction *MarkedRegion = findMarkedElementRegion(F);
+  if (!MarkedRegion)
+    return false;
+  if (!EnableGenericElement)
+    return diagnose(F, MarkedRegion,
+                    "masked native lowering requires "
+                    "-linxv5-enable-generic-element=true");
+  if (F.hasFnAttribute(Attribute::OptimizeNone))
+    return diagnose(F, MarkedRegion,
+                    "masked native lowering is unsupported at -O0");
+  return diagnose(F, MarkedRegion,
+                  "required generic masked lowering did not complete");
+}
+
 static bool verifyNoResidualElementContracts(Function &F) {
   for (Instruction &I : instructions(F)) {
     if (hasElementRegionLoopMetadata(I))
@@ -6545,6 +6569,8 @@ public:
         *PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override {
+    if (rejectUnloweredMarkedElementRegion(F))
+      return false;
     return lowerRegions(
         F, getAnalysis<LoopInfoWrapperPass>().getLoopInfo(),
         getAnalysis<ScalarEvolutionWrapperPass>().getSE(),
@@ -7584,6 +7610,8 @@ LinxV5ElementRegionPromotePass::run(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses LinxV5ElementRegionPass::run(Function &F,
                                                FunctionAnalysisManager &AM) {
+  if (rejectUnloweredMarkedElementRegion(F))
+    return PreservedAnalyses::all();
   bool Changed = lowerRegions(F, AM.getResult<LoopAnalysis>(F),
                               AM.getResult<ScalarEvolutionAnalysis>(F),
                               AM.getResult<DominatorTreeAnalysis>(F),

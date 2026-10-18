@@ -1,7 +1,19 @@
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REQUIRE-GENERIC
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 \
+// RUN:   -mllvm -linxv5-enable-generic-element=false -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REQUIRE-GENERIC
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O0 \
+// RUN:   -Xclang -disable-llvm-passes \
+// RUN:   -mllvm -linxv5-enable-generic-element=true -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REJECT-O0
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S %s -o %t.ll
 // RUN: FileCheck %s --check-prefix=IR < %t.ll
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -mllvm -enable-all-vector-as-tilereg=true -c %s -o %t.o
 // RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t.o | FileCheck %s --check-prefix=OBJ
+
+// REQUIRE-GENERIC: error: PTO element region: masked native lowering requires -linxv5-enable-generic-element=true
+// REJECT-O0: error: PTO element region: masked native lowering is unsupported at -O0
 
 extern "C" void generic_i32(const int *__restrict input,
                              const int *__restrict divisor,
