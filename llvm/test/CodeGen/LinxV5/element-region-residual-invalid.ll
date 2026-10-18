@@ -11,7 +11,7 @@ entry:
   ret void
 }
 
-; CHECK: error: element-region.cpp:9:3: {{.*}}PTO element region: required region lowering did not complete
+; CHECK: error: element-region.cpp:9:3: {{.*}}PTO element region: masked native lowering requires -linxv5-enable-generic-element=true
 
 !llvm.dbg.cu = !{!1}
 !llvm.module.flags = !{!4}
