@@ -24,6 +24,7 @@
 # CHECK: dead $tile_t4 = PseudoEmptyTile 1
 # CHECK-NEXT: dead $tile_u4 = PseudoEmptyTile 1
 # CHECK: INLINEASM {{.*}} def $tile_t, {{.*}} $tile_tos1, {{.*}} $tile_uos1
+# CHECK: INLINEASM {{.*}} def $tile_t, {{.*}} $tile_tos1, {{.*}} $tile_tos1
 # CHECK-NOT: INLINEASM {{.*}} $tile_t3
 # CHECK-NOT: INLINEASM {{.*}} $tile_u3
 # JOIN-LABEL: name: negative
@@ -177,6 +178,19 @@ body: |
   bb.20:
     liveins: $tile_t3, $tile_u3
     INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_t3, 720905, $tile_u3, 13, 1
+    PseudoBR %bb.21
+  bb.21:
+    successors: %bb.22, %bb.23
+    liveins: $r2, $tile_t4
+    BEQ $r2, $r0, %bb.23
+    PseudoBR %bb.22
+  bb.22:
+    successors: %bb.21
+    liveins: $tile_t4
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_t4, 720905, $tile_t4, 13, 1
+    PseudoBR %bb.21
+  bb.23:
+    liveins: $tile_t4
     PseudoRET
 ...
 
