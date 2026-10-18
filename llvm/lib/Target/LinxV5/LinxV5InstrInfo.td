@@ -1563,103 +1563,13 @@ class Tile_DataType_FixedOp<bits<5> Opcode, bits<5> FixedTileOP,
   let AsmString = "BSTART" # HeadType # "\t$DataType";
 }
 
-class Tile_DataType_CubeFixedOp<bits<5> Opcode, bits<7> FixedTileOP,
-                               string HeadType, dag ins> : LinxV5InstBase {
-  let Format = InstFormat_BSTART_WITHOUT_TARGET_32;
-  field bits<32> SoftFail = 0;
-  field bits<32> Inst;
-  let Size = 4;
-
-  bits<5> DataType;
-
-  let OutOperandList = (outs );
-  let InOperandList = ins;
-
-  let Inst{31-27} = DataType;
-  let Inst{26-20} = FixedTileOP;
-  let Inst{19-15} = Opcode;
-  let Inst{14-12} = 0b001;
-  let Inst{11-7} = 0b00011;
-  let Inst{6-4} = 0b000;
-  let Inst{3-1} = 0b000;
-  let Inst{0} = 0b1;
-
-  let AsmString = "BSTART" # HeadType # "\t$DataType";
-}
-
 def BSTART_TMA : Tile_DataType_NoMode<0b00010, ".TLSU", (ins BstartDataType:$DataType, TileOPTMA:$TileOP)>;
 // PTO 0.58.6 (BSTART.TIMG2COL.asl): TIMG2COL is a standalone TLSU Function
 // 28 carrier whose canonical spelling is "BSTART.TIMG2COL DataType". The
 // generic .TLSU form "BSTART.TLSU TIMG2COL, DataType" encodes identically.
 def BSTART_TIMG2COL : Tile_DataType_FixedOp<0b00010, 28, ".TIMG2COL",
                                              (ins BstartDataType:$DataType)>;
-def BSTART_TLOAD : Tile_DataType_FixedOp<0b00010, 0, ".TLOAD",
-                                          (ins BstartDataType:$DataType)>;
-def BSTART_TSTORE : Tile_DataType_FixedOp<0b00010, 1, ".TSTORE",
-                                           (ins BstartDataType:$DataType)>;
-def BSTART_TMOV : Tile_DataType_FixedOp<0b00010, 2, ".TMOV",
-                                         (ins BstartDataType:$DataType)>;
-def BSTART_TPREFETCH : Tile_DataType_FixedOp<0b00010, 3, ".TPREFETCH",
-                                              (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER : Tile_DataType_FixedOp<0b00010, 4, ".MGATHER",
-                                            (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER : Tile_DataType_FixedOp<0b00010, 5, ".MSCATTER",
-                                             (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_MASK : Tile_DataType_FixedOp<0b00010, 6, ".MGATHER.MASK",
-                                                 (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_MASK : Tile_DataType_FixedOp<0b00010, 7, ".MSCATTER.MASK",
-                                                  (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_CAS : Tile_DataType_FixedOp<0b00010, 8, ".MGATHER.CAS",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_EXCH : Tile_DataType_FixedOp<0b00010, 9, ".MGATHER.EXCH",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_MAX : Tile_DataType_FixedOp<0b00010, 10, ".MGATHER.MAX",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_MIN : Tile_DataType_FixedOp<0b00010, 11, ".MGATHER.MIN",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_ADD : Tile_DataType_FixedOp<0b00010, 12, ".MGATHER.ADD",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_INC : Tile_DataType_FixedOp<0b00010, 14, ".MGATHER.INC",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_DEC : Tile_DataType_FixedOp<0b00010, 15, ".MGATHER.DEC",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_AND : Tile_DataType_FixedOp<0b00010, 16, ".MGATHER.AND",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_OR : Tile_DataType_FixedOp<0b00010, 17, ".MGATHER.OR",
-                                              (ins BstartDataType:$DataType)>;
-def BSTART_MGATHER_XOR : Tile_DataType_FixedOp<0b00010, 18, ".MGATHER.XOR",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_MAX : Tile_DataType_FixedOp<0b00010, 19, ".MSCATTER.MAX",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_MIN : Tile_DataType_FixedOp<0b00010, 20, ".MSCATTER.MIN",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_ADD : Tile_DataType_FixedOp<0b00010, 21, ".MSCATTER.ADD",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_INC : Tile_DataType_FixedOp<0b00010, 22, ".MSCATTER.INC",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_DEC : Tile_DataType_FixedOp<0b00010, 23, ".MSCATTER.DEC",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_AND : Tile_DataType_FixedOp<0b00010, 24, ".MSCATTER.AND",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_OR : Tile_DataType_FixedOp<0b00010, 25, ".MSCATTER.OR",
-                                               (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_XOR : Tile_DataType_FixedOp<0b00010, 26, ".MSCATTER.XOR",
-                                                (ins BstartDataType:$DataType)>;
-def BSTART_MSCATTER_POPC : Tile_DataType_FixedOp<0b00010, 27, ".MSCATTER.POPC",
-                                                 (ins BstartDataType:$DataType)>;
 def BSTART_CUBE: Tile_DataType_NoMode<0b00110, ".CUBE", (ins BstartDataType:$DataType, TileOPCUBE:$TileOP)>;
-def BSTART_TMATMUL : Tile_DataType_CubeFixedOp<0b00110, 0, ".TMATMUL", (ins BstartDataType:$DataType)>;
-def BSTART_TMATMUL_BIAS : Tile_DataType_CubeFixedOp<0b00110, 1, ".TMATMUL.BIAS", (ins BstartDataType:$DataType)>;
-def BSTART_TMATMUL_ACC : Tile_DataType_CubeFixedOp<0b00110, 2, ".TMATMUL.ACC", (ins BstartDataType:$DataType)>;
-def BSTART_TMATMULMX : Tile_DataType_CubeFixedOp<0b00110, 4, ".TMATMULMX", (ins BstartDataType:$DataType)>;
-def BSTART_TMATMULMX_BIAS : Tile_DataType_CubeFixedOp<0b00110, 5, ".TMATMULMX.BIAS", (ins BstartDataType:$DataType)>;
-def BSTART_TMATMULMX_ACC : Tile_DataType_CubeFixedOp<0b00110, 6, ".TMATMULMX.ACC", (ins BstartDataType:$DataType)>;
-def BSTART_TGEMV : Tile_DataType_CubeFixedOp<0b00110, 16, ".TGEMV", (ins BstartDataType:$DataType)>;
-def BSTART_TGEMV_BIAS : Tile_DataType_CubeFixedOp<0b00110, 17, ".TGEMV.BIAS", (ins BstartDataType:$DataType)>;
-def BSTART_TGEMV_ACC : Tile_DataType_CubeFixedOp<0b00110, 18, ".TGEMV.ACC", (ins BstartDataType:$DataType)>;
-def BSTART_TGEMVMX : Tile_DataType_CubeFixedOp<0b00110, 20, ".TGEMVMX", (ins BstartDataType:$DataType)>;
-def BSTART_TGEMVMX_BIAS : Tile_DataType_CubeFixedOp<0b00110, 21, ".TGEMVMX.BIAS", (ins BstartDataType:$DataType)>;
-def BSTART_TGEMVMX_ACC : Tile_DataType_CubeFixedOp<0b00110, 22, ".TGEMVMX.ACC", (ins BstartDataType:$DataType)>;
 def BSTART_TEPL_NoMode: Tile_DataType_TEPL<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP)>;
 def BSTART_GMOV : Tile_DataType_FixedOp<0b00010, 0b01101, ".GMOV",
                                        (ins BstartDataType:$DataType)>;
@@ -2289,6 +2199,98 @@ def : InstAlias<"B.DATR\t$srctype, $PadValue, $RMode, $sat", (BDATR 0, 0, Bstart
 def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue", (BDATR BArgFormat:$DataLayout, 0, BstartDataType:$SrcType, PadValue:$PadValue, 0, 0, 0, 0), 2>;
 def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue, $RMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, 0, RMode:$RMode, 0, 0), 1>;
 def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue, $RMode", (BDATR BArgFormat:$DataLayout, 0, BstartDataType:$SrcType, PadValue:$PadValue, 0, RMode:$RMode, 0, 0), 2>;
+
+// Canonical PTO operation headers emitted by the public TileOp API.
+// These are spelling aliases of the existing family/function encodings;
+// no new instruction selectors or operand-bundle semantics are introduced.
+def : InstAlias<"BSTART.TLOAD $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 0), 0>;
+def : InstAlias<"BSTART.TSTORE $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 1), 0>;
+def : InstAlias<"BSTART.TMOV $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 2), 0>;
+def : InstAlias<"BSTART.TPREFETCH $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 3), 0>;
+def : InstAlias<"BSTART.MGATHER $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 4), 0>;
+def : InstAlias<"BSTART.MSCATTER $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 5), 0>;
+def : InstAlias<"BSTART.MGATHER.MASK $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 6), 0>;
+def : InstAlias<"BSTART.MSCATTER.MASK $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 7), 0>;
+def : InstAlias<"BSTART.MGATHER.CAS $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 8), 0>;
+def : InstAlias<"BSTART.TMATMUL $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 0), 0>;
+def : InstAlias<"BSTART.TMATMUL.BIAS $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 1), 0>;
+def : InstAlias<"BSTART.TMATMUL.ACC $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 2), 0>;
+def : InstAlias<"BSTART.TMATMULMX $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 4), 0>;
+def : InstAlias<"BSTART.TMATMULMX.BIAS $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 5), 0>;
+def : InstAlias<"BSTART.TMATMULMX.ACC $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 6), 0>;
+def : InstAlias<"BSTART.TGEMV $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 16), 0>;
+def : InstAlias<"BSTART.TGEMV.BIAS $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 17), 0>;
+def : InstAlias<"BSTART.TGEMV.ACC $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 18), 0>;
+def : InstAlias<"BSTART.TGEMVMX $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 20), 0>;
+def : InstAlias<"BSTART.TGEMVMX.BIAS $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 21), 0>;
+def : InstAlias<"BSTART.TGEMVMX.ACC $DataType",
+    (BSTART_CUBE BstartDataType:$DataType, 22), 0>;
+def : InstAlias<"BSTART.MGATHER.EXCH $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 9), 0>;
+def : InstAlias<"BSTART.MGATHER.MAX $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 10), 0>;
+def : InstAlias<"BSTART.MGATHER.MIN $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 11), 0>;
+def : InstAlias<"BSTART.MGATHER.ADD $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 12), 0>;
+def : InstAlias<"BSTART.MGATHER.INC $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 14), 0>;
+def : InstAlias<"BSTART.MGATHER.DEC $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 15), 0>;
+def : InstAlias<"BSTART.MGATHER.AND $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 16), 0>;
+def : InstAlias<"BSTART.MGATHER.OR $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 17), 0>;
+def : InstAlias<"BSTART.MGATHER.XOR $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 18), 0>;
+def : InstAlias<"BSTART.MSCATTER.MAX $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 19), 0>;
+def : InstAlias<"BSTART.MSCATTER.MIN $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 20), 0>;
+def : InstAlias<"BSTART.MSCATTER.ADD $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 21), 0>;
+def : InstAlias<"BSTART.MSCATTER.INC $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 22), 0>;
+def : InstAlias<"BSTART.MSCATTER.DEC $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 23), 0>;
+def : InstAlias<"BSTART.MSCATTER.AND $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 24), 0>;
+def : InstAlias<"BSTART.MSCATTER.OR $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 25), 0>;
+def : InstAlias<"BSTART.MSCATTER.XOR $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 26), 0>;
+def : InstAlias<"BSTART.MSCATTER.POPC $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 27), 0>;
+def : InstAlias<"BSTART.TMOV.L2S.INSERT $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 2), 0>;
+def : InstAlias<"BSTART.TMOV.L2S.PUBLISH $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 2), 0>;
+def : InstAlias<"BSTART.TMOV.S2L.BROADCAST $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 2), 0>;
+def : InstAlias<"BSTART.TMOV.S2L.EXTRACT $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 2), 0>;
+def : InstAlias<"BSTART.TSTORE.SPART $DataType",
+    (BSTART_TMA BstartDataType:$DataType, 1), 0>;
 
 //def : InstAlias<"BSTART.TEPL $TileOP, $Mode", (BSTART_TEPL 31, TileOPTEPL:$TileOP, TEPLMode:$Mode), 1>;
 
@@ -3157,7 +3159,7 @@ def SharedTIDAsmOperand : AsmOperandClass {
   let ParserMethod = "parseSharedTID";
   let RenderMethod = "addImmOperands";
 }
-def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<7>(Imm);}]> {
+def SharedTIDOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<6>(Imm);}]> {
   let ParserMatchClass = SharedTIDAsmOperand;
   let PrintMethod = "printSharedTID";
   let EncoderMethod = "getImmOpValueSharedTID";
@@ -3176,14 +3178,13 @@ def SharedTIDWithArrowOp : Operand<i64>, ImmLeaf<i64, [{return isUInt<6>(Imm);}]
   let EncoderMethod = "getImmOpValueSharedTID";
 }
 def SharedRegOp : RegisterOperand<Shared_ABS>;
-def SharedSrcRegOp : RegisterOperand<Shared_SRC>;
 class B_IOT_Base<bits<3> Func, dag outs, dag ins, string opcodestr="", string argstr="">
     : LinxV5Inst<outs, ins, opcodestr, argstr> {
 let Format = InstFormatBlockModifier;
 
   let Size = 4;
   let isDisassembleOnly = 0;
-  // v5 encoding with source lifetime markers:
+  // v5 encoding (replaces v4):
   //   [31:26] SrcTile1 (6b), [25:20] SrcTile0 (6b), [19] last,
   //   [18:15] SizeCode (4b), [14:12] Func (3b), [11:9] PEMode (3b),
   //   [8:7] DstTile (2b: T/U/M/N), [6:4]/[3:1] fixed, [0] fixed 1.
@@ -3192,11 +3193,10 @@ let Format = InstFormatBlockModifier;
   // reserved) and [11:9] carries the 3-bit PEMode expanded to a 4-PE mask.
   // The TSize operand drives the SizeCode field; the PE_MASK operand drives
   // the PEMode field (the PE_MASK encoder converts a 4-bit mask to PEMode).
-  // v5 replaces v4 Group bit[19] with last and size imm4[18:15] with SizeCode.
-  // PTO issue #340 restores source lifetime: two-source Func encodes
-  // {Src0Reuse, Src1Reuse} as 010=last/last, 011=reuse/last, 111=last/reuse,
-  // 100=reuse/reuse, and one-source Func=101 uses bit 26 (SrcTile1[0]) as
-  // 0=reuse, 1=last. acc is not encoded in B.IOT.
+  // v5 replaces v4 Group bit[19] with last, size imm4[18:15] with SizeCode,
+  // Legacy reuse bits at bit{6} are retired. Canonical lifetime is selected
+  // by Func=2/3/4/7 for dual sources or bit26 under Func=5 for one source.
+  // acc is not encoded in B.IOT.
   // The GroupOp operand is reused for the last flag (its semantics: ", last").
   bits<4> TSize;      // SizeCode value 0..12 (13..15 reserved)
   bits<3> PE_MASK;    // PEMode value (encoder maps a 4-bit mask to the 3-bit mode)
@@ -3375,15 +3375,15 @@ def TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm);}]> {
 }
 
 // B.IOT destination legacy "TSize=N" spelling must honor the Local SizeCode
-// contract 1..12 (128B..256KB per PE). 0 is the source form (a destination
-// spelling with TSize=0 is illegal) and 13..15 reserved. Used only by the
+// contract 1..10 (128B..64KB per PE). 0 is the source form (a destination
+// spelling with TSize=0 is illegal) and 11..15 reserved. Used only by the
 // B.IOT_*_Dst legacy aliases; PseudoV5* keep the wide TSize_Op above.
 def B_IOT_TSizeAsmOperand : AsmOperandClass {
   let Name = "B_IOT_TSize";
   let ParserMethod = "parseTSize";
   let RenderMethod = "addImmOperands";
 }
-def B_IOT_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 12;}]> {
+def B_IOT_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 10;}]> {
   let ParserMatchClass = B_IOT_TSizeAsmOperand;
   let PrintMethod = "printTSize";
   let EncoderMethod = "getImmOpValueTSize";
@@ -3399,9 +3399,9 @@ def BIOS_Dst_TSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Im
   let DecoderMethod = "decodeBIOSDstTSize";
 }
 
-// v5: B.IOT destination-suffix SizeCode operand (1..12 for B.IOT destination,
-// 128 B..256 KB per PE; 0 is only the source form and 13..15 reserved).
-def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 12;}]> {
+// v5: B.IOT destination-suffix SizeCode operand (1..10 for B.IOT destination,
+// 128 B..64 KB per PE; 0 is only the source form and 11..15 reserved).
+def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Imm >= 1 && Imm <= 10;}]> {
   let ParserMatchClass = B_IOT_TileSizeAsmOperand;
   let PrintMethod = "printTileSizeWithBracket";
   let EncoderMethod = "getImmOpValueTSize";
@@ -3414,8 +3414,7 @@ def B_IOT_TileSize_Op : Operand<i64>, ImmLeaf<i64, [{return isUInt<4>(Imm) && Im
 // source; 1..12 selects a Shared destination capacity (128B..256KB per PE).
 //   source:      B.IOS S12, mask=1111
 //   destination: B.IOS mask=0011, ->S12<128B>
-// Encoding: [31:28]=0, [27]=0, [26]=source last-use, [25:20]=SharedTID,
-// [19]=0,
+// Encoding (ADR 0097): [31:28]=0, [27:26]=0, [25:20]=SharedTID, [19]=0,
 //           [18:15]=SizeCode (4b), [14:12]=funct3=001, [11:9]=PEMode (3b),
 //           [8:7]=00, [6:0]=0x13. match=0x00001013, mask=0xf00871ff.
 class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
@@ -3424,15 +3423,13 @@ class B_IOS_Base<bits<3> Role, dag outs, dag ins, string argstr="">
   let Size = 4;
   let isDisassembleOnly = 0;
 
-  // Synthetic operand bit 6 is the lifetime bit; bits 5:0 are the ID.
-  bits<7> SharedTID;
+  bits<6> SharedTID;
   bits<4> TSize;      // SizeCode value 0..12 (13..15 reserved); 0 = source
   bits<3> PE_MASK;    // PEMode value (encoder maps a 4-bit mask to the 3-bit mode)
 
   let Inst{31-28} = 0b0000;
-  let Inst{27} = 0b0;
-  let Inst{26} = SharedTID{6};
-  let Inst{25-20} = SharedTID{5-0};
+  let Inst{27-26} = 0b00;
+  let Inst{25-20} = SharedTID;
   let Inst{19} = 0b0;
   let Inst{18-15} = TSize;   // SizeCode field
   let Inst{14-12} = Role;
@@ -3455,7 +3452,7 @@ def B_IOS : B_IOS_Base<0b001, (outs),
 }
 // Source input: "B.IOS S17, mask=1111" (TSize defaults to 0).
 def : InstAlias<"B.IOS\t$SharedTID, $PE_MASK",
-    (B_IOS SharedTIDOp:$SharedTID, PE_MASK_Op:$PE_MASK, 0), 0>;
+    (B_IOS SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK, 0), 0>;
 // Destination input: "B.IOS mask=0011, ->S12<128B>". Must use the B.IOS
 // SizeCode operand (1..12); both Local B.IOT and Shared B.IOS use the active
 // 0.58.4 destination range.
@@ -3482,16 +3479,12 @@ def : InstAlias<"B.IOT\t$PE_MASK, $TSize, $Last, $DstTile",
     (B_IOT_NoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
                      B_IOT_TSize_Op:$TSize, GroupOp:$Last), 0>;
 
-class B_IOT_OneSrc_Dst_Base<bits<1> LastUse>: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
+def B_IOT_OneSrc_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
-  let SrcTile1{5-1} = 0;
-  let SrcTile1{0} = LastUse;
+  let SrcTile1 = 0;
   let Format = InstFormat_STACK_SIZE;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}, $DstTile$TSize";
 }
-def B_IOT_OneSrc_Dst: B_IOT_OneSrc_Dst_Base<1>;
-let isCodeGenOnly = 1 in
-def B_IOT_OneSrc_Dst_Reuse: B_IOT_OneSrc_Dst_Base<0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $TSize, $DstTile",
     (B_IOT_OneSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
                       B_IOT_TSize_Op:$TSize, 0, TILE_Src_Reg:$SrcTile0), 0>;
@@ -3500,16 +3493,10 @@ def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK, $DstTile$TSize",
                       B_IOT_TileSize_Op:$TSize, 0,
                       TILE_Src_Reg:$SrcTile0), 0>;
 
-class B_IOT_TwoSrc_Dst_Base<bits<3> Func>: B_IOT_Base<Func, (outs TILE_DstWithArrow:$DstTile),
+def B_IOT_TwoSrc_Dst: B_IOT_Base<0b100, (outs TILE_DstWithArrow:$DstTile),
         (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let Format = InstFormat_STACK_SIZE;
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}, $DstTile$TSize";
-}
-def B_IOT_TwoSrc_Dst: B_IOT_TwoSrc_Dst_Base<0b010>;
-let isCodeGenOnly = 1 in {
-def B_IOT_TwoSrc_Dst_Reuse0: B_IOT_TwoSrc_Dst_Base<0b011>;
-def B_IOT_TwoSrc_Dst_Reuse1: B_IOT_TwoSrc_Dst_Base<0b111>;
-def B_IOT_TwoSrc_Dst_ReuseBoth: B_IOT_TwoSrc_Dst_Base<0b100>;
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK, $TSize, $DstTile",
     (B_IOT_TwoSrc_Dst TILE_DstWithArrow:$DstTile, PE_MASK_Op:$PE_MASK,
@@ -3520,16 +3507,13 @@ def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK, $DstTile$TSize",
                       B_IOT_TileSize_Op:$TSize, 0,
                       TILE_Src_Reg:$SrcTile0,
                       TILE_Src_Reg:$SrcTile1), 0>;
-class B_IOT_OneSrc_NoDst_Base<bits<1> LastUse>: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
-  let SrcTile1{5-1} = 0;
-  let SrcTile1{0} = LastUse;
+
+def B_IOT_OneSrc_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
+  let SrcTile1 = 0;
   let DstTile = 0b00;
   let TSize = 0;
   let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
 }
-def B_IOT_OneSrc_NoDst: B_IOT_OneSrc_NoDst_Base<1>;
-let isCodeGenOnly = 1 in
-def B_IOT_OneSrc_NoDst_Reuse: B_IOT_OneSrc_NoDst_Base<0>;
 def : InstAlias<"B.IOT\t$SrcTile0", (B_IOT_OneSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK",
     (B_IOT_OneSrc_NoDst PE_MASK_Op:$PE_MASK, 0,
@@ -3539,21 +3523,69 @@ def : InstAlias<"B.IOT\t$SrcTile0, $PE_MASK",
 // Local Tiles only). The retired no-src/no-dst TSize-only form is removed;
 // Shared size/mask are carried by B.IOS.
 
-class B_IOT_TwoSrc_NoDst_Base<bits<3> Func>: B_IOT_Base<Func, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+def B_IOT_TwoSrc_NoDst: B_IOT_Base<0b100, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
   let DstTile = 0b00;
   let TSize = 0;
   let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
-}
-def B_IOT_TwoSrc_NoDst: B_IOT_TwoSrc_NoDst_Base<0b010>;
-let isCodeGenOnly = 1 in {
-def B_IOT_TwoSrc_NoDst_Reuse0: B_IOT_TwoSrc_NoDst_Base<0b011>;
-def B_IOT_TwoSrc_NoDst_Reuse1: B_IOT_TwoSrc_NoDst_Base<0b111>;
-def B_IOT_TwoSrc_NoDst_ReuseBoth: B_IOT_TwoSrc_NoDst_Base<0b100>;
 }
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1", (B_IOT_TwoSrc_NoDst 0b1111, 0, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 0>;
 def : InstAlias<"B.IOT\t$SrcTile0, $SrcTile1, $PE_MASK",
     (B_IOT_TwoSrc_NoDst PE_MASK_Op:$PE_MASK, 0,
      TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1), 1>;
+
+// Canonical PTO source lifetime forms. Machine code generation retains the
+// existing *_OneSrc/*_TwoSrc opcodes for reuse; textual bare sources select
+// the last-use forms in the assembler, without changing existing words.
+def B_IOT_OneSrcLast_Dst: B_IOT_Base<0b101, (outs TILE_DstWithArrow:$DstTile),
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
+  let SrcTile1 = 1; // bit 26: single-source last-use
+  let Format = InstFormat_STACK_SIZE;
+  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}, $DstTile$TSize";
+}
+def B_IOT_TwoSrcLastLast_Dst: B_IOT_Base<0b010, (outs TILE_DstWithArrow:$DstTile),
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+  let Format = InstFormat_STACK_SIZE;
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}, $DstTile$TSize";
+}
+def B_IOT_TwoSrcReuseLast_Dst: B_IOT_Base<0b011, (outs TILE_DstWithArrow:$DstTile),
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+  let Format = InstFormat_STACK_SIZE;
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}, $DstTile$TSize";
+}
+def B_IOT_TwoSrcLastReuse_Dst: B_IOT_Base<0b111, (outs TILE_DstWithArrow:$DstTile),
+        (ins PE_MASK_Op:$PE_MASK, B_IOT_TileSize_Op:$TSize, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+  let Format = InstFormat_STACK_SIZE;
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}, $DstTile$TSize";
+}
+def B_IOT_OneSrcLast_NoDst: B_IOT_Base<0b101, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0)> {
+  let SrcTile1 = 1; // bit 26: single-source last-use
+  let DstTile = 0b00;
+  let TSize = 0;
+  let AsmString = "B.IOT" # "\t$SrcTile0, ${PE_MASK}${Last}";
+}
+def B_IOT_TwoSrcLastLast_NoDst: B_IOT_Base<0b010, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+  let DstTile = 0b00;
+  let TSize = 0;
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
+}
+def B_IOT_TwoSrcReuseLast_NoDst: B_IOT_Base<0b011, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+  let DstTile = 0b00;
+  let TSize = 0;
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
+}
+def B_IOT_TwoSrcLastReuse_NoDst: B_IOT_Base<0b111, (outs), (ins PE_MASK_Op:$PE_MASK, GroupOp:$Last, TILE_Src_Reg:$SrcTile0, TILE_Src_Reg:$SrcTile1)> {
+  let DstTile = 0b00;
+  let TSize = 0;
+  let AsmString = "B.IOT" # "\t$SrcTile0, $SrcTile1, ${PE_MASK}${Last}";
+}
+def B_IOS_Last : B_IOS_Base<0b001, (outs),
+        (ins SharedTIDWithArrowOp:$SharedTID, PE_MASK_Op:$PE_MASK,
+             BIOS_Dst_TSize_Op:$TSize)> {
+  let Inst{26} = 1;
+  let TSize = 0;
+  // printInst overrides the printed form based on TSize.
+  let AsmString = "B.IOS" # "\t$PE_MASK, $SharedTID$TSize";
+}
 
 // ===-------------------------- Tile Op -----------------------------===
 def GPRPlusImmAsmOperand : AsmOperandClass {
@@ -3660,7 +3692,7 @@ def PseudoV5SharedL2S : Pseudo<(outs SharedRegOp:$SharedDst),
          PE_MASK_Op:$PE_MASK, TSize_Op:$TSize, TILE_Src_Reg:$SrcTile), []>;
 def PseudoV5SharedS2L : Pseudo<(outs TILE_DstWithArrow:$DstTile),
     (ins TileOPTMA:$Function, BstartDataType:$DataType,
-         SharedSrcRegOp:$SharedSrc, PE_MASK_Op:$PE_MASK,
+         SharedRegOp:$SharedSrc, PE_MASK_Op:$PE_MASK,
          TSize_Op:$TSize), []>;
 }
 
@@ -4124,7 +4156,7 @@ def PseudoMAMULB_Masked_SizeI : PseudoCUBE_MAMULB_Masked_Base_I<"TMATMUL">;
 class PseudoCUBE_MAMULB_SharedRight_Base_I<string TileOp> :
   PseudoCCallImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK, BstartDataType:$DataTypeA, BstartDataType:$DataTypeB,
-  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, SharedSrcRegOp:$SharedSrc)> {
+  TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile0, SharedRegOp:$SharedSrc)> {
     let AsmString = TileOp # "\t<M: $RegM$immM, N: $RegN$immN, K: $RegK$immK, ${DataTypeA}, ${DataTypeB}>" #"\t$SrcTile0, $SharedSrc, $DstTile$TileSize";
 }
 

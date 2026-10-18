@@ -81,6 +81,10 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   };
   int IAVS = IA_SHUTDOWN; // Inline Asm Validate State
   int64_t ActiveCubeTileOp = -1;
+  bool ParsingBIOT = false;
+  unsigned BIOTSourceCount = 0;
+  unsigned BIOTReuseMask = 0;
+  bool BIOSExplicitReuse = false;
   std::unique_ptr<ParsedTileMacroLine> PendingTileMacro;
 
   SMLoc getLoc() const { return getParser().getTok().getLoc(); }
@@ -598,7 +602,7 @@ public:
   }
 
   // v5: B.IOT destination legacy "TSize=N" honors the Local SizeCode
-  // contract 1..12; 0 (source-only) and 13..15 are rejected in a
+  // contract 1..10; 0 (source-only) and 11..15 are rejected in a
   // destination spelling.
   bool isB_IOT_TSize() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
@@ -607,11 +611,11 @@ public:
       return false;
     if (!evaluateConstantImm(getImm(), Imm, VK))
       return true; // symbolic form falls through to encoder
-    return Imm >= 1 && Imm <= 12;
+    return Imm >= 1 && Imm <= 10;
   }
 
   // v5: B.IOT destination-suffix SizeCode ("<8KB>"). B.IOT destination
-  // capacity is 1..12 (128B..256KB per PE); 0 is the source form and 13..15
+  // capacity is 1..10 (128B..64KB per PE); 0 is the source form and 11..15
   // reserved, all rejected at match time.
   bool isB_IOT_TileSize() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
@@ -620,7 +624,7 @@ public:
       return false;
     if (!evaluateConstantImm(getImm(), Imm, VK))
       return true; // symbolic form falls through to encoder
-    return Imm >= 1 && Imm <= 12;
+    return Imm >= 1 && Imm <= 10;
   }
 
   // v5: B.IOS destination SizeCode ("<256KB>"). A destination spelling must
@@ -1458,6 +1462,60 @@ bool LinxV5AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return Error(IDLoc, Msg);
   }
   case Match_Success:
+    // Unqualified sources are last-use in canonical PTO text. Keep the
+    // original reuse opcodes as codegen's explicit lifetime representation.
+    if (ParsingBIOT) {
+      switch (Inst.getOpcode()) {
+      case LinxV5::B_IOT_OneSrc_Dst:
+      case LinxV5::B_IOT_OneSrcLast_Dst:
+        Inst.setOpcode(BIOTReuseMask == 0
+                           ? LinxV5::B_IOT_OneSrcLast_Dst
+                           : LinxV5::B_IOT_OneSrc_Dst);
+        break;
+      case LinxV5::B_IOT_OneSrc_NoDst:
+      case LinxV5::B_IOT_OneSrcLast_NoDst:
+        Inst.setOpcode(BIOTReuseMask == 0
+                           ? LinxV5::B_IOT_OneSrcLast_NoDst
+                           : LinxV5::B_IOT_OneSrc_NoDst);
+        break;
+      case LinxV5::B_IOT_TwoSrc_Dst:
+      case LinxV5::B_IOT_TwoSrcLastLast_Dst:
+      case LinxV5::B_IOT_TwoSrcReuseLast_Dst:
+      case LinxV5::B_IOT_TwoSrcLastReuse_Dst:
+        if (BIOTReuseMask == 0)
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastLast_Dst);
+        else if (BIOTReuseMask == 1)
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrcReuseLast_Dst);
+        else if (BIOTReuseMask == 2)
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastReuse_Dst);
+        else
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrc_Dst);
+        break;
+      case LinxV5::B_IOT_TwoSrc_NoDst:
+      case LinxV5::B_IOT_TwoSrcLastLast_NoDst:
+      case LinxV5::B_IOT_TwoSrcReuseLast_NoDst:
+      case LinxV5::B_IOT_TwoSrcLastReuse_NoDst:
+        if (BIOTReuseMask == 0)
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastLast_NoDst);
+        else if (BIOTReuseMask == 1)
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrcReuseLast_NoDst);
+        else if (BIOTReuseMask == 2)
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastReuse_NoDst);
+        else
+          Inst.setOpcode(LinxV5::B_IOT_TwoSrc_NoDst);
+        break;
+      default:
+        break;
+      }
+    } else if (Inst.getOpcode() == LinxV5::B_IOS ||
+               Inst.getOpcode() == LinxV5::B_IOS_Last) {
+      // The last-use record fixes SizeCode=0, so its decoded/matched form
+      // may omit that operand. Normalize before selecting either lifetime.
+      if (Inst.getNumOperands() == 2)
+        Inst.addOperand(MCOperand::createImm(0));
+      Inst.setOpcode(Inst.getOperand(2).getImm() == 0 && !BIOSExplicitReuse
+                         ? LinxV5::B_IOS_Last : LinxV5::B_IOS);
+    }
     if (maybeValidateInlineAsm(Inst, IDLoc))
       return true;
     if (validateInstruction(Inst, Operands, IDLoc))
@@ -2538,10 +2596,18 @@ LinxV5AsmParser::parseSIMTDstVecRWithArrow(OperandVector &Operands) {
 OperandMatchResultTy
 LinxV5AsmParser::parseTileReg(OperandVector &Operands) {
   StringRef Str = getLexer().getTok().getString();
+  bool ExplicitReuse = ParsingBIOT && Str.endswith_insensitive(".reuse");
+  if (ExplicitReuse)
+    Str = Str.drop_back(StringRef(".reuse").size());
   MCRegister RegNo;
   matchTileRegisterNameHelper(RegNo, Str);
   if (RegNo == LinxV5::NoRegister)
     return MatchOperand_NoMatch;
+  if (ParsingBIOT) {
+    if (ExplicitReuse)
+      BIOTReuseMask |= 1u << BIOTSourceCount;
+    ++BIOTSourceCount;
+  }
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
   Operands.push_back(LinxV5Operand::createReg(RegNo, S, E));
@@ -2593,12 +2659,21 @@ LinxV5AsmParser::parseSharedTIDWithArrow(OperandVector &Operands) {
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
   StringRef Str = getLexer().getTok().getString();
-  if (Str == "->") {
+  bool IsDestination = Str == "->";
+  if (IsDestination) {
     getLexer().Lex();  // consume '->'
     Str = getLexer().getTok().getString();
   }
   if (Str.empty())
     Str = getLexer().getTok().getIdentifier();
+  if (!IsDestination && Str.endswith_insensitive(".reuse")) {
+    BIOSExplicitReuse = true;
+    if (getLexer().peekTok().is(AsmToken::Less)) {
+      getParser().Error(S, "Shared destination cannot have a reuse suffix");
+      return MatchOperand_ParseFail;
+    }
+    Str = Str.drop_back(StringRef(".reuse").size());
+  }
   if (!Str.startswith_insensitive("s"))
     return MatchOperand_NoMatch;
   if (Str.size() > 1 && Str[1] == '#')
@@ -4117,6 +4192,9 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
   PendingTileMacro.reset();
+  ParsingBIOT = Name.equals_insensitive("B.IOT");
+  BIOTSourceCount = BIOTReuseMask = 0;
+  BIOSExplicitReuse = false;
   bool IsLegacyColonSyntax = false;
   if (getLexer().is(AsmToken::Less)) {
     AsmToken Less = getLexer().getTok();

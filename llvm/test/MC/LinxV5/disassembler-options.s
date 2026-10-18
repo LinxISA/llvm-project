@@ -12,4 +12,4 @@ TADD <Row=8, Col=64, FP32>, T#1, T#2, ->T<2KB>
 # PHYSICAL-NEXT: C.B.DIMI 64,{{.*}}->lb0
 # PHYSICAL-NEXT: C.B.DIMI 8,{{.*}}->lb1
 # PHYSICAL-NEXT: C.B.DIMI 64,{{.*}}->lb2
-# PHYSICAL-NEXT: B.IOT t#1, t#2, mask=1111,{{.*}}->t<2KB>
+# PHYSICAL-NEXT: B.IOT t#1.reuse, t#2.reuse, mask=1111,{{.*}}->t<2KB>

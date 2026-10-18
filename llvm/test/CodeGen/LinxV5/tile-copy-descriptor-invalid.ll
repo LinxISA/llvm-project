@@ -1,5 +1,6 @@
 ; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
-; RUN:   -enable-all-vector-as-tilereg=true %s -o /dev/null 2>&1 \
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-generic-element=true %s -o /dev/null 2>&1 \
 ; RUN:   | FileCheck %s
 ; CHECK: invalid Local tile descriptor for typed COPY
 

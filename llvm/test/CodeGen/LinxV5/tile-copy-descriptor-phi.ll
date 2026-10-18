@@ -1,5 +1,6 @@
 ; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
-; RUN:   -enable-all-vector-as-tilereg=true %s -o - | FileCheck %s
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-generic-element=true %s -o - | FileCheck %s
 
 ; Equal descriptor predecessors share a canonical queue contract, so PHI
 ; coalescing need not republish the Tile. Check the typed producers/consumer;

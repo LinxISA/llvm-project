@@ -97,7 +97,8 @@ void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
   }
   // PTO v0.58 reissue: B.IOS prints a source or destination form depending on
   // TSize (0 => "S<id>, mask=...", nonzero => "mask=..., ->S<id><size>").
-  if (MI->getOpcode() == LinxV5::B_IOS) {
+  if (MI->getOpcode() == LinxV5::B_IOS ||
+      MI->getOpcode() == LinxV5::B_IOS_Last) {
     printB_IOS(MI, STI, O);
     printAnnotation(O, Annot);
     return;
@@ -437,6 +438,31 @@ void LinxV5InstPrinter::printTileSrcReg(const MCInst *MI, unsigned OpNo,
   const MCOperand &MO = MI->getOperand(OpNo);
   if (MO.isReg()) {
     O << getRegisterName(MO.getReg());
+    bool Reuse = false;
+    switch (MI->getOpcode()) {
+    case LinxV5::B_IOT_OneSrc_Dst:
+    case LinxV5::B_IOT_OneSrc_NoDst:
+    case LinxV5::B_IOT_TwoSrc_Dst:
+    case LinxV5::B_IOT_TwoSrc_NoDst:
+      Reuse = true;
+      break;
+    case LinxV5::B_IOT_TwoSrcReuseLast_Dst:
+      Reuse = OpNo == 4;
+      break;
+    case LinxV5::B_IOT_TwoSrcReuseLast_NoDst:
+      Reuse = OpNo == 2;
+      break;
+    case LinxV5::B_IOT_TwoSrcLastReuse_Dst:
+      Reuse = OpNo == 5;
+      break;
+    case LinxV5::B_IOT_TwoSrcLastReuse_NoDst:
+      Reuse = OpNo == 3;
+      break;
+    default:
+      break;
+    }
+    if (Reuse)
+      O << ".reuse";
     return;
   }
   // Keep the printer diagnostic rather than aborting when a pseudo expansion
@@ -500,7 +526,7 @@ void LinxV5InstPrinter::printSharedTID(const MCInst *MI, unsigned OpNo,
       MO.getExpr()->print(O, &MAI);
     return;
   }
-  O << "S" << (Value & 0x3f);
+  O << "S" << Value;
 }
 
 void LinxV5InstPrinter::printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
@@ -543,12 +569,13 @@ void LinxV5InstPrinter::printB_IOR(const MCInst *MI,
 // 0=SharedTID, 1=PE_MASK, 2=TSize.
 void LinxV5InstPrinter::printB_IOS(const MCInst *MI, const MCSubtargetInfo &STI,
                                    raw_ostream &O) {
-  unsigned TSize = MI->getOperand(2).getImm();
+  unsigned TSize = MI->getOpcode() == LinxV5::B_IOS_Last
+                       ? 0 : MI->getOperand(2).getImm();
   O << "\tB.IOS\t";
   if (TSize == 0) {
     // source form
     printSharedTID(MI, 0, STI, O);
-    if ((MI->getOperand(0).getImm() & 0x40) == 0)
+    if (MI->getOpcode() == LinxV5::B_IOS)
       O << ".reuse";
     O << ", ";
     printPE_MASK(MI, 1, STI, O);

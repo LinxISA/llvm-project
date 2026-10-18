@@ -1,5 +1,5 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
-# RUN:   -o - %s | FileCheck %s
+# RUN:   -linxv5-enable-generic-element=true -o - %s | FileCheck %s
 #
 # Reduction B.DIM describes the source. Typed copies must use the published
 # result geometry and (for ARGMAX) U32 dtype. NORM row results have one

@@ -17,7 +17,7 @@ B.DATR CUBE_M32.normal, Null
 C.B.DIMI 1, ->lb0
 C.B.DIMI 32, ->lb1
 C.B.DIMI 2, ->lb2
-B.IOT t#1, u#1, mask=1111, last, ->u<1>
+B.IOT t#1.reuse, u#1.reuse, mask=1111, last, ->u<1>
 B.SUBVIEW 1, zero, 0, 1
 BSTOP
 
@@ -29,7 +29,7 @@ B.DATR CUBE_M32.normal, Null
 C.B.DIMI 32, ->lb0
 C.B.DIMI 32, ->lb1
 C.B.DIMI 32, ->lb2
-B.IOT u#3, mask=1111, last, ->t<5>
+B.IOT u#3.reuse, mask=1111, last, ->t<5>
 B.SUBVIEW 0, zero, 0, 5
 BSTOP
 
@@ -40,7 +40,7 @@ BSTART.TEPL 0x5b, BF16
 C.B.DIMI 32, ->lb0
 C.B.DIMI 32, ->lb1
 C.B.DIMI 2, ->lb2
-B.IOT u#3, t#1, mask=1111, last, ->t<1>
+B.IOT u#3.reuse, t#1.reuse, mask=1111, last, ->t<1>
 B.SUBVIEW 0, zero, 0, 5
 B.DATR CUBE_M32.normal, Null
 BSTOP
