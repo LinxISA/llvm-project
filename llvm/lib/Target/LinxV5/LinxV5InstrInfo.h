@@ -16,6 +16,7 @@
 #include "LinxV5RegisterInfo.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include <array>
 
 #define GET_INSTRINFO_HEADER
 #include "LinxV5GenInstrInfo.inc"
@@ -146,6 +147,11 @@ struct TileDescriptor {
   const MachineInstr *ValidColDef = nullptr;
   const MachineInstr *PhysicalColDef = nullptr;
 
+  std::array<Register, 3> DimensionRegs = {Register(), Register(), Register()};
+  std::array<int64_t, 3> DimensionImms = {1, 1, 1};
+  bool HasRuntimeDimensions = false;
+  MachineInstr *RuntimeDimensionProducer = nullptr;
+
   bool operator==(const TileDescriptor &Other) const {
     return DataType == Other.DataType && Layout == Other.Layout &&
            ValidRow == Other.ValidRow && ValidCol == Other.ValidCol &&
@@ -155,7 +161,11 @@ struct TileDescriptor {
            ValidRowReg == Other.ValidRowReg && ValidColReg == Other.ValidColReg &&
            PhysicalColReg == Other.PhysicalColReg &&
            ValidRowDef == Other.ValidRowDef && ValidColDef == Other.ValidColDef &&
-           PhysicalColDef == Other.PhysicalColDef;
+           PhysicalColDef == Other.PhysicalColDef &&
+           DimensionRegs == Other.DimensionRegs &&
+           DimensionImms == Other.DimensionImms &&
+           HasRuntimeDimensions == Other.HasRuntimeDimensions &&
+           RuntimeDimensionProducer == Other.RuntimeDimensionProducer;
   }
 };
 
@@ -205,6 +215,11 @@ TileDescriptor getTileRegDescriptor(MachineBasicBlock &MBB,
 Optional<TileDescriptor>
 tryGetTileRegDescriptor(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator MBBI, MCRegister Reg);
+
+bool runtimeDimensionsReachCopy(const TileDescriptor &Descriptor,
+                                MachineBasicBlock &Target,
+                                MachineBasicBlock::iterator Before,
+                                const TargetRegisterInfo &TRI);
 
 bool enableBFIOpt();
 

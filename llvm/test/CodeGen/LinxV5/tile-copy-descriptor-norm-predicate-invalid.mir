@@ -1,4 +1,6 @@
-# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -linxv5-enable-generic-element=true -run-pass=postrapseudos \
+# RUN:   -o /dev/null %s 2>&1 | FileCheck %s
 # The packed payload fits 256B, but the pinned U8 descriptor legality fence
 # requires 2KB for a 2048-column predicate used by identity TMOV.
 # CHECK: invalid packed NORM predicate COPY descriptor

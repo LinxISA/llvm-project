@@ -43,7 +43,7 @@ BSTART.TEPL TCVT, FP32
 B.DATR FP16, byte0, Null, RNONE, nosat
 C.B.DIMI 1, ->lb0
 C.B.DIMI 64, ->lb1
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 C.BSTART.STD
 
 #--- cube.s
@@ -56,7 +56,7 @@ C.BSTART.STD
 BSTART.CUBE TMATMUL, FP32
 B.DATR FP32, byte0, CCTRL.RawAccumulatorInternalAccHint, RNONE, nosat
 B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-B.IOT T#1, T#2, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, T#2.reuse, mask=1111, last, ->T<128B>
 C.BSTART.STD
 
 #--- gmov.s
@@ -65,7 +65,7 @@ C.BSTART.STD
 # GMOV-OUT: BSTART.GMOV FP32
 # GMOV-OUT: B.IOT mask=1100, last, ->t<128B>
 BSTART.GMOV FP32
-B.IOT T#1, mask=1111
+B.IOT T#1.reuse, mask=1111
 B.IOT mask=1100, last, ->T<128B>
 C.BSTART.STD
 
@@ -78,7 +78,7 @@ BSTART.TEPL TADD, FP32
 C.B.DIMI 64, ->lb0
 C.B.DIMI 8, ->lb1
 C.B.DIMI 64, ->lb2
-B.IOT T#1, T#2, mask=1111, ->T<2KB>
+B.IOT T#1.reuse, T#2.reuse, mask=1111, ->T<2KB>
 C.BSTART.STD
 
 # CHECK: TEXPANDS{{ +}}<Row=32, Col=1, FP32>, a0, ->T<128B>

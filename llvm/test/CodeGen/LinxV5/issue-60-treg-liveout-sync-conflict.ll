@@ -28,13 +28,15 @@
 ; CHECK: B.IOT m#1, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
 ; CHECK: BSTART.TLSU TMOV, FP32
 ; CHECK: B.IOT m#1, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
-;; Window rotation preserves the producer's complete FP32/NORM descriptor.
+;; Queue rotation emits an explicit descriptor-bearing TMOV. A zero-mask
+;; PseudoEmptyTile would not advance the architectural queue, while an
+;; omitted B.DATR/B.DIM copy would default to NORM 1x1.
 ; CHECK: BSTART.TLSU TMOV, FP32
 ; CHECK: B.DATR NORM.normal, Zero
 ; CHECK-NEXT: C.B.DIMI 1, ->lb0
 ; CHECK-NEXT: C.B.DIMI 1, ->lb1
-; CHECK-NEXT: C.B.DIMI 1, ->lb2
-; CHECK-NEXT: B.IOT tile_{{[tu][0-9]+}}, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
+; CHECK-NEXT: C.B.DIMI 128, ->lb2
+; CHECK-NEXT: B.IOT m#{{[0-9]+}}.reuse, mask=1111, last, ->m<512B>
 
 ; ModuleID = 'i60.cpp'
 source_filename = "i60.cpp"

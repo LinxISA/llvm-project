@@ -6,8 +6,8 @@
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#2]
-// CHECK: B.IOT            [t#3, t#4], last ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#2.reuse, mask=1111
+// CHECK: B.IOT            t#3.reuse, t#4.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX <M:32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, ->ACC<64KB>
 
 // imm <Size>, same datatype
@@ -16,8 +16,8 @@ TMATMULMX <M:32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, ->ACC<64KB>
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#3]
-// CHECK: B.IOT            [t#4], last      ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#3.reuse, mask=1111
+// CHECK: B.IOT            t#4.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX <M:32, N:24, K:16, FP16, FP16> T#1, T#3, T#4, ->ACC<64KB>
 
 // imm <Size>
@@ -26,9 +26,9 @@ TMATMULMX <M:32, N:24, K:16, FP16, FP16> T#1, T#3, T#4, ->ACC<64KB>
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#2]
-// CHECK: B.IOT            [t#3, t#4]
-// CHECK: B.IOT            [u#1], last      ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#2.reuse, mask=1111
+// CHECK: B.IOT            t#3.reuse, t#4.reuse, mask=1111
+// CHECK: B.IOT            u#1.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX.BIAS <M:32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, U#1 ->ACC<64KB>
 
 // imm <Size>, ACC source
@@ -37,8 +37,8 @@ TMATMULMX.BIAS <M:32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, U#1 ->ACC<64KB
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#2]
-// CHECK: B.IOT            [t#3, t#4], last ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#2.reuse, mask=1111
+// CHECK: B.IOT            t#3.reuse, t#4.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX.ACC <M:32, N:24, K:16, FP32, FP32> T#1, T#2, T#3, T#4, ACC#1 ->ACC<64KB>
 
 // imm <Size>
@@ -47,8 +47,8 @@ TMATMULMX.ACC <M:32, N:24, K:16, FP32, FP32> T#1, T#2, T#3, T#4, ACC#1 ->ACC<64K
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#3]
-// CHECK: B.IOT            [t#4, u#1], last ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#3.reuse, mask=1111
+// CHECK: B.IOT            t#4.reuse, u#1.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX.BIAS <M:32, N:24, K:16, FP32, FP16> T#1, T#3, T#4, U#1 ->ACC<64KB>
 
 // imm <Size>, ACC source
@@ -57,8 +57,8 @@ TMATMULMX.BIAS <M:32, N:24, K:16, FP32, FP16> T#1, T#3, T#4, U#1 ->ACC<64KB>
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#3]
-// CHECK: B.IOT            [t#4], last      ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#3.reuse, mask=1111
+// CHECK: B.IOT            t#4.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX.ACC <M:32, N:24, K:16, FP32, FP16> T#1, T#3, T#4, ACC#1 ->ACC<64KB>
 
 // Reg+imm <Size>
@@ -67,8 +67,8 @@ TMATMULMX.ACC <M:32, N:24, K:16, FP32, FP16> T#1, T#3, T#4, ACC#1 ->ACC<64KB>
 // CHECK: B.DIM            a0, 32,          ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#2]
-// CHECK: B.IOT            [t#3, t#4], last ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#2.reuse, mask=1111
+// CHECK: B.IOT            t#3.reuse, t#4.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX <M:R2+32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, ->ACC<64KB>
 
 // imm <Size>
@@ -77,8 +77,8 @@ TMATMULMX <M:R2+32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, ->ACC<64KB>
 // CHECK: B.DIM            zero, 32,        ->lb0
 // CHECK: B.DIM            zero, 24,        ->lb1
 // CHECK: B.DIM            zero, 16,        ->lb2
-// CHECK: B.IOT            [t#1, t#2]
-// CHECK: B.IOT            [t#3, t#4], last ->acc<64KB>
+// CHECK: B.IOT            t#1.reuse, t#2.reuse, mask=1111
+// CHECK: B.IOT            t#3.reuse, t#4.reuse, mask=1111, last, ->acc<64KB>
 TMATMULMX <M:32, N:24, K:16, FP32, FP16> T#1, T#2, T#3, T#4, ->ACC<64KB>
 
 // imm <Size>

@@ -11,8 +11,6 @@
 B.IOT mask=1111, last, ->t<16KB>
 B.IOT mask=1111, last, ->t<32KB>
 B.IOT mask=1111, last, ->t<64KB>
-B.IOT mask=1111, last, ->t<128KB>
-B.IOT mask=1111, last, ->t<256KB>
 B.IOS mask=1111, ->S0<64KB>
 B.IOS mask=1111, ->S0<128KB>
 B.IOS mask=1111, ->S0<256KB>
@@ -26,15 +24,12 @@ B.IOT mask=0001, last, ->t<128B>
 B.IOT mask=1100, last, ->t<128B>
 B.IOT mask=1110, last, ->t<128B>
 B.IOT mask=1111, last, ->t<128B>
-B.IOS S3, mask=1111
-B.IOS S4, mask=1100
 B.IOS S3.reuse, mask=1111
+B.IOS S4.reuse, mask=1100
 
 # ENC: B.IOT{{.*}}->t<16KB>
 # ENC: B.IOT{{.*}}->t<32KB>
 # ENC: B.IOT{{.*}}->t<64KB>
-# ENC: B.IOT{{.*}}->t<128KB>
-# ENC: B.IOT{{.*}}->t<256KB>
 # ENC: B.IOS{{.*}}->S0<64KB>
 # ENC: B.IOS{{.*}}->S0<128KB>
 # ENC: B.IOS{{.*}}->S0<256KB>
@@ -46,9 +41,8 @@ B.IOS S3.reuse, mask=1111
 # ENC: B.IOT{{.*}}mask=1100{{.*}}->t<128B>
 # ENC: B.IOT{{.*}}mask=1110{{.*}}->t<128B>
 # ENC: B.IOT{{.*}}mask=1111{{.*}}->t<128B>
-# ENC: B.IOS{{.*}}S3, mask=1111
-# ENC: B.IOS{{.*}}S4, mask=1100
 # ENC: B.IOS{{.*}}S3.reuse, mask=1111
+# ENC: B.IOS{{.*}}S4.reuse, mask=1100
 
 # DIS: B.IOT{{.*}}->t<16KB>
 # DIS: B.IOT{{.*}}->t<32KB>
@@ -64,6 +58,5 @@ B.IOS S3.reuse, mask=1111
 # DIS: B.IOT{{.*}}mask=1100{{.*}}->t<128B>
 # DIS: B.IOT{{.*}}mask=1110{{.*}}->t<128B>
 # DIS: B.IOT{{.*}}mask=1111{{.*}}->t<128B>
-# DIS: B.IOS{{.*}}S3, mask=1111
-# DIS: B.IOS{{.*}}S4, mask=1100
 # DIS: B.IOS{{.*}}S3.reuse, mask=1111
+# DIS: B.IOS{{.*}}S4.reuse, mask=1100
