@@ -1069,6 +1069,84 @@ static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
   return None;
 }
 
+static unsigned getCubeAccumulatorType(unsigned Left, unsigned Right) {
+  auto IsFloating = [](unsigned Type) {
+    switch (Type) {
+    case LinxV5Op::DataType::FP64:
+    case LinxV5Op::DataType::FP32:
+    case LinxV5Op::DataType::TF32:
+    case LinxV5Op::DataType::HF32:
+    case LinxV5Op::DataType::FP16:
+    case LinxV5Op::DataType::BF16:
+    case LinxV5Op::DataType::HiF8:
+    case LinxV5Op::DataType::e4m3:
+    case LinxV5Op::DataType::e5m2:
+    case LinxV5Op::DataType::e3m2:
+    case LinxV5Op::DataType::e2m3:
+    case LinxV5Op::DataType::e2m1x2:
+    case LinxV5Op::DataType::e1m2x2:
+    case LinxV5Op::DataType::HiF4x2:
+      return true;
+    default:
+      return false;
+    }
+  };
+  auto IsSigned = [](unsigned Type) {
+    return Type == LinxV5Op::DataType::S64 ||
+           Type == LinxV5Op::DataType::S32 ||
+           Type == LinxV5Op::DataType::S16 ||
+           Type == LinxV5Op::DataType::S8 ||
+           Type == LinxV5Op::DataType::S4x2;
+  };
+  if (IsFloating(Left) || IsFloating(Right))
+    return LinxV5Op::DataType::FP32;
+  if (IsSigned(Left) || IsSigned(Right))
+    return LinxV5Op::DataType::S32;
+  return LinxV5Op::DataType::U32;
+}
+
+static Optional<unsigned> getMatrixFPATROutputType(unsigned Mode) {
+  switch (Mode) {
+  case 0:
+  case 27:
+  case 38:
+    return LinxV5Op::DataType::FP32;
+  case 1:
+  case 4:
+  case 5:
+  case 32:
+  case 33:
+    return LinxV5Op::DataType::FP16;
+  case 2:
+  case 3:
+  case 23:
+  case 24:
+    return LinxV5Op::DataType::S8;
+  case 12:
+  case 13:
+  case 19:
+  case 20:
+    return LinxV5Op::DataType::S16;
+  case 16:
+  case 34:
+  case 35:
+  case 36:
+  case 39:
+    return LinxV5Op::DataType::BF16;
+  case 17:
+  case 18:
+    return LinxV5Op::DataType::S4x2;
+  case 25:
+  case 28:
+    return LinxV5Op::DataType::HiF8;
+  case 26:
+  case 37:
+    return LinxV5Op::DataType::e4m3;
+  default:
+    return None;
+  }
+}
+
 static Optional<LinxV5::TileDescriptor>
 getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
@@ -1084,6 +1162,7 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   StringRef Text =
       MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
   Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
+  Optional<unsigned> MatrixLeftType = DataType;
   Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
   Optional<InlineAsmDimension> ValidColDim =
       getInlineAsmDimensionOperand(MI, Text, 0);
@@ -1111,8 +1190,61 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
     size_t ResultType =
         Attribute == StringRef::npos ? StringRef::npos
                                      : Text.find(":D}", Attribute);
+    Optional<unsigned> MatrixRightType =
+        Attribute == StringRef::npos ? MatrixLeftType : None;
     if (ResultType != StringRef::npos)
-      DataType = getInlineAsmOperandImmediate(MI, Text, ResultType);
+      MatrixRightType = getInlineAsmOperandImmediate(MI, Text, ResultType);
+
+    if (!MatrixLeftType || !MatrixRightType)
+      return None;
+    DataType = getCubeAccumulatorType(*MatrixLeftType, *MatrixRightType);
+    size_t FPATR = Text.find("B.FPATR");
+    if (FPATR != StringRef::npos) {
+      size_t FirstField = Text.find("${", FPATR);
+      if (FirstField == StringRef::npos)
+        return None;
+      size_t FieldEnd = Text.find(':', FirstField);
+      Optional<unsigned> Mode =
+          getInlineAsmOperandImmediate(MI, Text, FieldEnd);
+      if (!Mode)
+        return None;
+      if (*Mode != 0)
+        DataType = getMatrixFPATROutputType(*Mode);
+    }
+
+    // Matrix D is an M x N accumulator/result in A's persistent CUBE_M
+    // layout.  LB2 is K and never describes D's physical columns.
+    const bool WithAccumulator =
+        Text.contains("TGEMV.ACC") || Text.contains("TGEMVMX.ACC") ||
+        Text.contains("TMATMUL.ACC") || Text.contains("TMATMULMX.ACC");
+    MachineOperand *LeftSource = getAsmOperand(&MI, WithAccumulator ? 2 : 1);
+    if (!LeftSource || !LeftSource->isReg())
+      return None;
+    Optional<LinxV5::TileDescriptor> LeftDescriptor =
+        LinxV5::tryGetTileRegDescriptor(*MI.getParent(), MI.getIterator(),
+                                        LeftSource->getReg());
+    if (!LeftDescriptor ||
+        (LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
+         LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
+      return None;
+    Layout = LeftDescriptor->Layout;
+    Register TGEMVEncodedM = ValidColDim->Reg;
+    std::swap(ValidColDim, ValidRowDim);
+    // TGEMV is architecturally a one-row operation.  Some legacy inline-asm
+    // templates still carry a runtime LB0 operand, but it is not part of the
+    // published D descriptor.
+    if (Text.contains("TGEMV")) {
+      ValidRowDim = InlineAsmDimension{LinxV5::R0, 1};
+      // The legacy template still encodes LB0 through this operand even
+      // though TGEMV's architectural M is one.  Descriptor analysis must not
+      // leave its producer eligible for removal while the inline asm retains
+      // the explicit use.
+      if (TGEMVEncodedM && TGEMVEncodedM != LinxV5::R0)
+        for (MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg() == TGEMVEncodedM)
+            MO.setIsKill(false);
+    }
+    PhysicalColDim = ValidColDim;
   }
   bool HasRuntimeDimensions = ValidColDim->Reg != LinxV5::R0 ||
                               ValidRowDim->Reg != LinxV5::R0 ||
@@ -2120,12 +2252,11 @@ bool LinxV5InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
 
   // Handle a single conditional branch.
   if (NumTerminators == 1 && I->getDesc().isConditionalBranch()) {
-    // PseudoBRCondCARG carries only its target and an implicit CARG use,
-    // unlike the three-operand compare-and-branch instructions modeled by
-    // parseCondBranch().  Leave it intact for its dedicated lowering rather
-    // than reading nonexistent comparison operands.
-    if (I->getOpcode() == LinxV5::PseudoBRCondCARG)
-      return true;
+    if (I->getOpcode() == LinxV5::PseudoBRCondCARG) {
+      TBB = I->getOperand(0).getMBB();
+      Cond.push_back(MachineOperand::CreateImm(I->getOpcode()));
+      return false;
+    }
     parseCondBranch(*I, TBB, Cond);
     return false;
   }
@@ -2133,9 +2264,13 @@ bool LinxV5InstrInfo::analyzeBranch(MachineBasicBlock &MBB,
   // Handle a conditional branch followed by an unconditional branch.
   if (NumTerminators == 2 && std::prev(I)->getDesc().isConditionalBranch() &&
       I->getDesc().isUnconditionalBranch()) {
-    if (std::prev(I)->getOpcode() == LinxV5::PseudoBRCondCARG)
-      return true;
-    parseCondBranch(*std::prev(I), TBB, Cond);
+    if (std::prev(I)->getOpcode() == LinxV5::PseudoBRCondCARG) {
+      TBB = std::prev(I)->getOperand(0).getMBB();
+      Cond.push_back(
+          MachineOperand::CreateImm(std::prev(I)->getOpcode()));
+    } else {
+      parseCondBranch(*std::prev(I), TBB, Cond);
+    }
     FBB = getBranchDestBlock(*I);
     return false;
   }
@@ -2185,7 +2320,7 @@ unsigned LinxV5InstrInfo::insertBranch(
 
   // Shouldn't be a fall through.
   assert(TBB && "insertBranch must not be told to insert a fallthrough");
-  assert((Cond.size() == 3 || Cond.size() == 0) &&
+  assert((Cond.size() == 3 || Cond.size() == 1 || Cond.size() == 0) &&
          "LinxV5 branch conditions have two components!");
 
   // Unconditional branch.
@@ -2198,10 +2333,20 @@ unsigned LinxV5InstrInfo::insertBranch(
 
   // Either a one or two-way conditional branch.
   unsigned Opc = static_cast<unsigned>(Cond[0].getImm());
-  MachineInstr &CondMI =
-      *BuildMI(&MBB, DL, get(Opc)).add(Cond[1]).add(Cond[2]).addMBB(TBB);
+  MachineInstr *CondMI;
+  if (Cond.size() == 1) {
+    assert(Opc == LinxV5::PseudoBRCondCARG &&
+           "single-operand condition must be PseudoBRCondCARG");
+    CondMI = BuildMI(&MBB, DL, get(Opc)).addMBB(TBB).getInstr();
+  } else {
+    CondMI = BuildMI(&MBB, DL, get(Opc))
+                 .add(Cond[1])
+                 .add(Cond[2])
+                 .addMBB(TBB)
+                 .getInstr();
+  }
   if (BytesAdded)
-    *BytesAdded += getInstSizeInBytes(CondMI);
+    *BytesAdded += getInstSizeInBytes(*CondMI);
 
   // One-way conditional branch.
   if (!FBB)
@@ -2216,7 +2361,13 @@ unsigned LinxV5InstrInfo::insertBranch(
 
 bool LinxV5InstrInfo::reverseBranchCondition(
     SmallVectorImpl<MachineOperand> &Cond) const {
-  assert((Cond.size() == 3) && "Invalid branch condition!");
+  assert((Cond.size() == 1 || Cond.size() == 3) &&
+         "Invalid branch condition!");
+  if (Cond.size() == 1) {
+    assert(Cond[0].getImm() == LinxV5::PseudoBRCondCARG &&
+           "single-operand condition must be PseudoBRCondCARG");
+    return true;
+  }
   Cond[0].setImm(getOppositeOpcode(Cond[0].getImm()));
   return false;
 }

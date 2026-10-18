@@ -23,6 +23,7 @@ body:             |
     SETC_EQI $r4, 0, implicit-def $carg
     C_SETC_TGT $r10, implicit-def $carg
     PseudoBRCondCARG %bb.1, implicit $carg
+    PseudoBR %bb.2
 
   bb.1:
     successors: %bb.3(0x80000000)
