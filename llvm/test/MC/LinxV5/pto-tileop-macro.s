@@ -20,7 +20,7 @@ BSTART.TEPL TADD, FP32
 C.B.DIMI 60, ->lb0
 C.B.DIMI 7, ->lb1
 C.B.DIMI 64, ->lb2
-B.IOT T#1, T#2, mask=1100, last, ->T<2KB>
+B.IOT T#1.reuse, T#2.reuse, mask=1100, last, ->T<2KB>
 
 # CHECK: TADD{{ +}}<Row=8, Col=64, ValidRow=7, ValidCol=60, FP32, PE0_1>, T#1, T#2, ->T<2KB>
 
@@ -45,11 +45,11 @@ BSTART.TEPL TADD, FP32
 C.B.DIMI 64, ->lb0
 C.B.DIMI 8, ->lb1
 C.B.DIMI 64, ->lb2
-B.IOT T#1, T#2, mask=1111, ->T<2KB>
+B.IOT T#1.reuse, T#2.reuse, mask=1111, ->T<2KB>
 addi zero, 0, ->zero
 
 # PHYSICAL: BSTART.TEPL	TADD, FP32
 # PHYSICAL-NEXT: C.B.DIMI	64, 	->lb0
 # PHYSICAL-NEXT: C.B.DIMI	8, 	->lb1
 # PHYSICAL-NEXT: C.B.DIMI	64, 	->lb2
-# PHYSICAL-NEXT: B.IOT	t#1, t#2, mask=1111, 	->t<2KB>
+# PHYSICAL-NEXT: B.IOT	t#1.reuse, t#2.reuse, mask=1111, 	->t<2KB>

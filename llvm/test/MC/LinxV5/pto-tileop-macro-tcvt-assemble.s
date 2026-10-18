@@ -11,7 +11,7 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 B.ASSEMBLE 1, 0, zero, 0, 3
 BSTOP
 
@@ -22,7 +22,7 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 B.ASSEMBLE 0, 0, a0, 4, 3
 BSTOP
 
@@ -31,7 +31,7 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 B.ASSEMBLE 0, 1, a0, 8, 3
 BSTOP
 
@@ -59,8 +59,8 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111
-B.IOT U#1, mask=1111, last
+B.IOT T#1.reuse, mask=1111
+B.IOT U#1.reuse, mask=1111, last
 B.ASSEMBLE 0, 0, a0, 4, 3
 BSTOP
 
@@ -69,8 +69,8 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111
-B.IOT U#1, mask=1111, last
+B.IOT T#1.reuse, mask=1111
+B.IOT U#1.reuse, mask=1111, last
 B.ASSEMBLE 0, 1, a0, 8, 3
 BSTOP
 

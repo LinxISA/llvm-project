@@ -1,5 +1,6 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl -verify-machineinstrs \
-# RUN:   -run-pass=postrapseudos -o - %s | FileCheck %s
+# RUN:   -linxv5-enable-generic-element=true -run-pass=postrapseudos \
+# RUN:   -o - %s | FileCheck %s
 #
 # Indexed TLSU pseudos use LB0=columns, LB1=rows. Both logical32 and dense
 # logical64 result copies preserve payload dtype, layout and exact geometry.

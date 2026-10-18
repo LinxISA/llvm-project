@@ -1378,6 +1378,33 @@ LinxV5MCCodeEmitter::getImmOpValueTSize(const MCInst &MI, unsigned OpNo,
                                          const MCSubtargetInfo &STI) const {
   // v5 SizeCode: 4-bit immediate (0..12; 13..15 reserved by the parser).
   const MCOperand &MO = MI.getOperand(OpNo);
+  bool LocalDestination = false;
+  switch (MI.getOpcode()) {
+  case LinxV5::B_IOT_NoSrc_Dst:
+  case LinxV5::B_IOT_OneSrc_Dst:
+  case LinxV5::B_IOT_OneSrcLast_Dst:
+  case LinxV5::B_IOT_TwoSrc_Dst:
+  case LinxV5::B_IOT_TwoSrcLastLast_Dst:
+  case LinxV5::B_IOT_TwoSrcReuseLast_Dst:
+  case LinxV5::B_IOT_TwoSrcLastReuse_Dst:
+    LocalDestination = true;
+    break;
+  default:
+    break;
+  }
+  if (LocalDestination) {
+    int64_t SizeCode;
+    if (MO.isImm())
+      SizeCode = MO.getImm();
+    else if (MO.isExpr() && MO.getExpr()->evaluateAsAbsolute(SizeCode))
+      ;
+    else
+      report_fatal_error("B.IOT Local SizeCode must be a constant in 1..10");
+    if (SizeCode < 1 || SizeCode > 10)
+      report_fatal_error("B.IOT Local SizeCode must be in 1..10");
+    return static_cast<unsigned>(SizeCode);
+  }
+
   if (MO.isReg())
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
   if (MO.isImm())

@@ -818,6 +818,44 @@ bool SlotCalc::isIdle(TRCopyRange &Slot, const MachineInstr *MI) {
   return false;
 }
 
+static void buildTileDescriptorCopy(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before,
+    const TargetInstrInfo &TII, const TargetRegisterInfo &TRI, Register Dst,
+    unsigned DstFlags, Register Src, unsigned SrcFlags,
+    const LinxV5::TileDescriptor &Descriptor) {
+  if (Descriptor.HasRuntimeDimensions) {
+    if (Descriptor.PackedPredicate)
+      report_fatal_error("runtime-dimension predicate copy is unsupported");
+    if (!LinxV5::runtimeDimensionsReachCopy(Descriptor, MBB, Before, TRI))
+      report_fatal_error(
+          "cannot prove runtime Tile descriptor registers reach COPY "
+          "without a clobber");
+    MachineInstrBuilder Copy =
+        auto Copy = BuildMI(MBB, Before, DebugLoc(), TII.get(LinxV5::PseudoTMOV_SizeI))
+            .addReg(Dst, DstFlags);
+    for (unsigned I = 0; I != 3; ++I)
+      Copy.addReg(Descriptor.DimensionRegs[I] == Register()
+                      ? LinxV5::R0
+                      : Descriptor.DimensionRegs[I])
+          .addImm(Descriptor.DimensionImms[I]);
+    Copy.addImm(Descriptor.DataType)
+        .addImm(Descriptor.SizeCode)
+        .addReg(Src, SrcFlags)
+        .addImm(Descriptor.Layout)
+        .addImm(LinxV5Op::PadValue::Zero)
+        .addImm(LinxV5Op::DataType::EMPTY_DataType);
+    return;
+  }
+  auto Copy = BuildMI(MBB, Before, DebugLoc(),
+          TII.get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                             : LinxV5::PseudoTCOPYDesc))
+      .addReg(Dst, DstFlags)
+      .addImm(Descriptor.SizeCode)
+      .addReg(Src, SrcFlags);
+  LinxV5::addTileCopyDimensions(Copy, Descriptor);
+  Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
+}
+
 bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
                          Optional<size_t> SourceIdx) {
   Register TR = RegOp.Reg;
@@ -873,14 +911,9 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
       }
       const LinxV5::TileDescriptor &Descriptor = *DonorDescriptor;
       SourceIdx = Donor->Idx;
-      auto Copy = BuildMI(*MBB, Before, DebugLoc(),
-              TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
-                                                  : LinxV5::PseudoTCOPYDesc))
-          .addReg(ReserveReg, RegState::Define | RegState::Dead)
-          .addImm(Descriptor.SizeCode)
-          .addReg(Donor->RegOp.Reg);
-      LinxV5::addTileCopyDimensions(Copy, Descriptor);
-      Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
+      buildTileDescriptorCopy(*MBB, Before, *TII, *TRI, ReserveReg,
+                              RegState::Define | RegState::Dead,
+                              Donor->RegOp.Reg, 0, Descriptor);
     } else {
       if (LinxV5::SIMTCGSRegClass.contains(ReserveReg)) {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_ORI_SCAR))
@@ -917,14 +950,9 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
         if (Descriptor.SizeCode != RegSizeCode)
           report_fatal_error(
               "Local tile COPY descriptor SizeCode disagrees with allocator");
-        auto Copy = BuildMI(*MBB, Before, DebugLoc(),
-                TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
-                                                    : LinxV5::PseudoTCOPYDesc))
-            .addReg(TR, RegState::Define)
-            .addImm(RegSizeCode)
-            .addReg(TR, RegState::Kill);
-        LinxV5::addTileCopyDimensions(Copy, Descriptor);
-        Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
+        buildTileDescriptorCopy(*MBB, Before, *TII, *TRI, TR,
+                                RegState::Define, TR, RegState::Kill,
+                                Descriptor);
       } else {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_MOV))
             .addReg(TR, RegState::Define)

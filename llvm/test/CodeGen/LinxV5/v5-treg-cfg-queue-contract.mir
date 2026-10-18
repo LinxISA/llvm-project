@@ -1,5 +1,9 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -linxv5-enable-generic-element=true \
 # RUN:   -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %s \
+# RUN:   | FileCheck %s --check-prefix=LEGACY
 #
 # The preheader publishes two loop-carried values followed by a dead real Tile
 # publication.  The backedge republishes only the two live values.  The dead
@@ -19,6 +23,10 @@
 # CHECK: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
 # CHECK-NOT: PseudoEmptyTile
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
+# LEGACY-LABEL: name: trailing_publication_loop_contract
+# LEGACY: bb.2:
+# LEGACY: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
+# LEGACY-NOT: PseudoEmptyTile
 #
 # The second case moves the dead publication between the two live values. The
 # backedge must reproduce this interior hole as well; exact liveout equality
@@ -29,6 +37,10 @@
 # CHECK-COUNT-5: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}
 # CHECK-NOT: PseudoEmptyTile
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
+# LEGACY-LABEL: name: interior_publication_loop_contract
+# LEGACY: bb.2:
+# LEGACY: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
+# LEGACY-NOT: PseudoEmptyTile
 --- |
   define void @trailing_publication_loop_contract() { ret void }
   define void @interior_publication_loop_contract() { ret void }
