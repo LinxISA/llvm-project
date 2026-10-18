@@ -1,0 +1,755 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/positive.mir | FileCheck %s
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o - %t/negative.mir \
+# RUN:   | FileCheck %s --check-prefix=JOIN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/regmask.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/implicit-def.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/multi-def.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BAD
+#
+# Legacy CFG queue synchronization can become globally ambiguous while a later
+# use still has one exact reaching definition through a unique predecessor
+# chain. Both Tile banks must lower to native relative operands. PseudoEmptyTile
+# is a zero-mask placeholder and must not increase either source distance.
+# CHECK-LABEL: name: positive
+# CHECK: $tile_t = PseudoTCI_EW_SizeI
+# CHECK: $tile_u = PseudoTCI_EW_SizeI
+# CHECK: dead $tile_t4 = PseudoEmptyTile 1
+# CHECK-NEXT: dead $tile_u4 = PseudoEmptyTile 1
+# CHECK: INLINEASM {{.*}} def $tile_t, {{.*}} $tile_tos1, {{.*}} $tile_uos1
+# CHECK-NOT: INLINEASM {{.*}} $tile_t3
+# CHECK-NOT: INLINEASM {{.*}} $tile_u3
+# JOIN-LABEL: name: negative
+# JOIN: $tile_t = PseudoTCOPYDesc 1, $tile_tos2, 1, 32, 1, 25, 29
+# JOIN: INLINEASM {{.*}} def $tile_t, {{.*}} $tile_tos1, {{.*}} $tile_uos1
+# The remaining negative variants cover a call regmask clobber, an IMPLICIT_DEF
+# false producer, and a producer that publishes two values in one bank.
+# BAD: Local tile synchronization conflict use has no unique reaching native distance
+
+#--- positive.mir
+--- |
+  define void @positive() { ret void }
+...
+---
+name: positive
+tracksRegLiveness: true
+body: |
+  bb.2:
+    successors: %bb.5(0x80000000)
+    liveins: $r2
+
+    $r3 = ADDI $r0, 1
+    renamable $tile_u1 = IMPLICIT_DEF
+    renamable $tile_m1 = IMPLICIT_DEF
+    renamable $tile_t1 = IMPLICIT_DEF
+    renamable $tile_n1 = IMPLICIT_DEF
+    renamable $tile_t2 = IMPLICIT_DEF
+    renamable $tile_u2 = IMPLICIT_DEF
+    PseudoBR %bb.5
+
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1
+
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.4:
+    successors: %bb.18(0x04000000), %bb.5(0x7c000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $r3 = nuw nsw ADDI $r3, 1
+    BEQ $r2, $r0, %bb.18
+    PseudoBR %bb.5
+
+  bb.5:
+    successors: %bb.6(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.6:
+    successors: %bb.3(0x30000000), %bb.7(0x50000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.7
+
+  bb.7:
+    successors: %bb.8(0x40000000), %bb.9(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.9
+    PseudoBR %bb.8
+
+  bb.8:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_u1, $tile_u2
+
+    $tile_t2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.9:
+    successors: %bb.10(0x40000000), %bb.12(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.12
+    PseudoBR %bb.10
+
+  bb.10:
+    successors: %bb.11(0x40000000), %bb.13(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.13
+    PseudoBR %bb.11
+
+  bb.11:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.12:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.13:
+    successors: %bb.14(0x40000000), %bb.16(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.16
+    PseudoBR %bb.14
+
+  bb.14:
+    successors: %bb.15(0x40000000), %bb.17(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.17
+    PseudoBR %bb.15
+
+  bb.15:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u2
+
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.16:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.17:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    dead $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.18:
+    successors: %bb.19
+    $tile_t3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.19
+  bb.19:
+    successors: %bb.20
+    liveins: $tile_t3
+    $tile_u3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    dead $tile_t4 = PseudoEmptyTile 1
+    dead $tile_u4 = PseudoEmptyTile 1
+    PseudoBR %bb.20
+  bb.20:
+    liveins: $tile_t3, $tile_u3
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_t3, 720905, $tile_u3, 13, 1
+    PseudoRET
+...
+
+#--- negative.mir
+--- |
+  define void @negative() { ret void }
+...
+---
+name: negative
+tracksRegLiveness: true
+body: |
+  bb.2:
+    successors: %bb.5(0x80000000)
+    liveins: $r2
+
+    $r3 = ADDI $r0, 1
+    renamable $tile_u1 = IMPLICIT_DEF
+    renamable $tile_m1 = IMPLICIT_DEF
+    renamable $tile_t1 = IMPLICIT_DEF
+    renamable $tile_n1 = IMPLICIT_DEF
+    renamable $tile_t2 = IMPLICIT_DEF
+    renamable $tile_u2 = IMPLICIT_DEF
+    PseudoBR %bb.5
+
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1
+
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.4:
+    successors: %bb.18(0x04000000), %bb.5(0x7c000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $r3 = nuw nsw ADDI $r3, 1
+    BEQ $r2, $r0, %bb.18
+    PseudoBR %bb.5
+
+  bb.5:
+    successors: %bb.6(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.6:
+    successors: %bb.3(0x30000000), %bb.7(0x50000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.7
+
+  bb.7:
+    successors: %bb.8(0x40000000), %bb.9(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.9
+    PseudoBR %bb.8
+
+  bb.8:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_u1, $tile_u2
+
+    $tile_t2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.9:
+    successors: %bb.10(0x40000000), %bb.12(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.12
+    PseudoBR %bb.10
+
+  bb.10:
+    successors: %bb.11(0x40000000), %bb.13(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.13
+    PseudoBR %bb.11
+
+  bb.11:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.12:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.13:
+    successors: %bb.14(0x40000000), %bb.16(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.16
+    PseudoBR %bb.14
+
+  bb.14:
+    successors: %bb.15(0x40000000), %bb.17(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.17
+    PseudoBR %bb.15
+
+  bb.15:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u2
+
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.16:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.17:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    dead $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.18:
+    successors: %bb.19, %bb.20
+    liveins: $r2
+    BEQ $r2, $r0, %bb.19
+    PseudoBR %bb.20
+  bb.19:
+    successors: %bb.21
+    $tile_t3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    $tile_u3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.21
+  bb.20:
+    successors: %bb.21
+    $tile_t3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    $tile_u3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    $tile_t5 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.21
+  bb.21:
+    liveins: $tile_t3, $tile_u3
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_t3, 720905, $tile_u3, 13, 1
+    PseudoRET
+...
+
+#--- regmask.mir
+--- |
+  define void @regmask() { ret void }
+...
+---
+name: regmask
+tracksRegLiveness: true
+body: |
+  bb.2:
+    successors: %bb.5(0x80000000)
+    liveins: $r2
+
+    $r3 = ADDI $r0, 1
+    renamable $tile_u1 = IMPLICIT_DEF
+    renamable $tile_m1 = IMPLICIT_DEF
+    renamable $tile_t1 = IMPLICIT_DEF
+    renamable $tile_n1 = IMPLICIT_DEF
+    renamable $tile_t2 = IMPLICIT_DEF
+    renamable $tile_u2 = IMPLICIT_DEF
+    PseudoBR %bb.5
+
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1
+
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.4:
+    successors: %bb.18(0x04000000), %bb.5(0x7c000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $r3 = nuw nsw ADDI $r3, 1
+    BEQ $r2, $r0, %bb.18
+    PseudoBR %bb.5
+
+  bb.5:
+    successors: %bb.6(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.6:
+    successors: %bb.3(0x30000000), %bb.7(0x50000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.7
+
+  bb.7:
+    successors: %bb.8(0x40000000), %bb.9(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.9
+    PseudoBR %bb.8
+
+  bb.8:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_u1, $tile_u2
+
+    $tile_t2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.9:
+    successors: %bb.10(0x40000000), %bb.12(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.12
+    PseudoBR %bb.10
+
+  bb.10:
+    successors: %bb.11(0x40000000), %bb.13(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.13
+    PseudoBR %bb.11
+
+  bb.11:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.12:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.13:
+    successors: %bb.14(0x40000000), %bb.16(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.16
+    PseudoBR %bb.14
+
+  bb.14:
+    successors: %bb.15(0x40000000), %bb.17(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.17
+    PseudoBR %bb.15
+
+  bb.15:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u2
+
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.16:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.17:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    dead $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.18:
+    successors: %bb.19
+    $tile_t3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    $tile_u3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoCALLInd $r0, csr_ilp32_lp64
+  bb.19:
+    liveins: $tile_t3, $tile_u3
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_t3, 720905, $tile_u3, 13, 1
+    PseudoRET
+...
+
+#--- implicit-def.mir
+--- |
+  define void @impdef() { ret void }
+...
+---
+name: impdef
+tracksRegLiveness: true
+body: |
+  bb.2:
+    successors: %bb.5(0x80000000)
+    liveins: $r2
+
+    $r3 = ADDI $r0, 1
+    renamable $tile_u1 = IMPLICIT_DEF
+    renamable $tile_m1 = IMPLICIT_DEF
+    renamable $tile_t1 = IMPLICIT_DEF
+    renamable $tile_n1 = IMPLICIT_DEF
+    renamable $tile_t2 = IMPLICIT_DEF
+    renamable $tile_u2 = IMPLICIT_DEF
+    PseudoBR %bb.5
+
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1
+
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.4:
+    successors: %bb.18(0x04000000), %bb.5(0x7c000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $r3 = nuw nsw ADDI $r3, 1
+    BEQ $r2, $r0, %bb.18
+    PseudoBR %bb.5
+
+  bb.5:
+    successors: %bb.6(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.6:
+    successors: %bb.3(0x30000000), %bb.7(0x50000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.7
+
+  bb.7:
+    successors: %bb.8(0x40000000), %bb.9(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.9
+    PseudoBR %bb.8
+
+  bb.8:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_u1, $tile_u2
+
+    $tile_t2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.9:
+    successors: %bb.10(0x40000000), %bb.12(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.12
+    PseudoBR %bb.10
+
+  bb.10:
+    successors: %bb.11(0x40000000), %bb.13(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.13
+    PseudoBR %bb.11
+
+  bb.11:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.12:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.13:
+    successors: %bb.14(0x40000000), %bb.16(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.16
+    PseudoBR %bb.14
+
+  bb.14:
+    successors: %bb.15(0x40000000), %bb.17(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.17
+    PseudoBR %bb.15
+
+  bb.15:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u2
+
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.16:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.17:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    dead $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.18:
+    successors: %bb.19
+    $tile_t3 = IMPLICIT_DEF
+    $tile_u3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.19
+  bb.19:
+    liveins: $tile_t3, $tile_u3
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_t3, 720905, $tile_u3, 13, 1
+    PseudoRET
+...
+
+#--- multi-def.mir
+--- |
+  define void @multidef() { ret void }
+...
+---
+name: multidef
+tracksRegLiveness: true
+body: |
+  bb.2:
+    successors: %bb.5(0x80000000)
+    liveins: $r2
+
+    $r3 = ADDI $r0, 1
+    renamable $tile_u1 = IMPLICIT_DEF
+    renamable $tile_m1 = IMPLICIT_DEF
+    renamable $tile_t1 = IMPLICIT_DEF
+    renamable $tile_n1 = IMPLICIT_DEF
+    renamable $tile_t2 = IMPLICIT_DEF
+    renamable $tile_u2 = IMPLICIT_DEF
+    PseudoBR %bb.5
+
+  bb.3:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1
+
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.4:
+    successors: %bb.18(0x04000000), %bb.5(0x7c000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $r3 = nuw nsw ADDI $r3, 1
+    BEQ $r2, $r0, %bb.18
+    PseudoBR %bb.5
+
+  bb.5:
+    successors: %bb.6(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+
+  bb.6:
+    successors: %bb.3(0x30000000), %bb.7(0x50000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    BEQ $r2, $r0, %bb.3
+    PseudoBR %bb.7
+
+  bb.7:
+    successors: %bb.8(0x40000000), %bb.9(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.9
+    PseudoBR %bb.8
+
+  bb.8:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_u1, $tile_u2
+
+    $tile_t2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.9:
+    successors: %bb.10(0x40000000), %bb.12(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.12
+    PseudoBR %bb.10
+
+  bb.10:
+    successors: %bb.11(0x40000000), %bb.13(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.13
+    PseudoBR %bb.11
+
+  bb.11:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.12:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_n1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.13:
+    successors: %bb.14(0x40000000), %bb.16(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.16
+    PseudoBR %bb.14
+
+  bb.14:
+    successors: %bb.15(0x40000000), %bb.17(0x40000000)
+    liveins: $r2, $r3, $r4, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    BEQ $r2, $r0, %bb.17
+    PseudoBR %bb.15
+
+  bb.15:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u2
+
+    $tile_u1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.16:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    $tile_m1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.17:
+    successors: %bb.4(0x80000000)
+    liveins: $r2, $r3, $tile_m1, $tile_m2, $tile_n1, $tile_t1, $tile_t2, $tile_u1, $tile_u2
+
+    dead $tile_m2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoBR %bb.4
+
+  bb.18:
+    successors: %bb.19
+    $tile_t3 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0, implicit-def $tile_t4
+    PseudoBR %bb.19
+  bb.19:
+    liveins: $tile_t3
+    INLINEASM &"BSTART.TLSU TMOV, U32\0AB.DATR NORM, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t5, 720905, $tile_t3, 13, 1
+    PseudoRET
+...

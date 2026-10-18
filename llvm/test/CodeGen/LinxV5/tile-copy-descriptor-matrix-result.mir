@@ -1,0 +1,107 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=false -o - %s | FileCheck %s
+#
+# Matrix results publish accumulator/post-process dtype, MxN geometry, and A's
+# persistent CUBE_M layout.  LB2 is K, never the destination pitch.  TGEMV's
+# architectural M is one even when a legacy template carries an encoded GPR.
+# The omitted-B.DATR case defaults B=A and applies FPATR mode 1 (FP16 output).
+#
+# CHECK-LABEL: name: tgemv_raw_acc
+# CHECK: $r5 = ADDI $r0, 1
+# CHECK: $tile_m2 = PseudoTCOPYDesc 5, $tile_m1, 16, 1, 16, 1, 31
+# CHECK-LABEL: name: tmatmul_runtime_m
+# CHECK: $tile_m2 = PseudoTMOV_SizeI $r0, 16, $r5, 0, $r0, 16, 1, 5, $tile_m1, 31
+# CHECK-LABEL: name: tmatmul_omitted_bdatr
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 16, $r5, 0, $r0, 16, 4, 5, $tile_t1, 31
+# CHECK-LABEL: name: tmatmul_small_n_fp16
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 1, 4, 5, $tile_t1, 31
+# CHECK-LABEL: name: tmatmul_small_n_bf16
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 1, 5, 5, $tile_t1, 31
+# CHECK-LABEL: name: tmatmul_small_n_fp32
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 1, 1, 5, $tile_t1, 31
+--- |
+  define void @tgemv_raw_acc() { ret void }
+  define void @tmatmul_runtime_m() { ret void }
+  define void @tmatmul_omitted_bdatr() { ret void }
+  define void @tmatmul_small_n_fp16() { ret void }
+  define void @tmatmul_small_n_bf16() { ret void }
+  define void @tmatmul_small_n_fp32() { ret void }
+...
+---
+name: tgemv_raw_acc
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2
+    $r5 = ADDI $r0, 1
+    $tile_u1 = PseudoTEXPANDS_Row_SizeI $r0, 8, $r0, 32, 4, 31, 5, $r2, 32
+    $tile_t1 = IMPLICIT_DEF
+    $tile_n1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TGEMVMX.ACC ${20:D}\0AB.DATR ${21:D}, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${6:c}, ${7:c}, ${8:c}, ${9:c}, ${10:c}, ${11:c}, ${12:c}, ${13:c}, ${14:c}, ${15:c}\0AB.DIM $16, 0, ->lb0\0AB.DIM zero, ${17:c}, ->lb1\0AB.DIM zero, ${18:c}, ->lb2\0AB.IOT $1.reuse, mask=1111\0AB.IOT $2.reuse, $3.reuse, mask=1111, last, ->$0<${23:Z}>\0A", 25, 720907, def early-clobber $tile_m1, 720905, $tile_t1, 720905, $tile_u1, 720905, $tile_n1, 2293769, undef $r2, 2293769, undef $r2, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 2293769, $r5, 13, 16, 13, 32, 13, 0, 13, 4, 13, 4, 13, 5, 13, 5, 13, 5, 13, 5
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...
+---
+name: tmatmul_runtime_m
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r5
+    $tile_u1 = PseudoTEXPANDS_Row_SizeI $r0, 8, $r0, 32, 4, 31, 5, $r2, 32
+    $tile_t1 = IMPLICIT_DEF
+    $tile_n1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TMATMULMX.ACC ${20:D}\0AB.DATR ${21:D}, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${6:c}, ${7:c}, ${8:c}, ${9:c}, ${10:c}, ${11:c}, ${12:c}, ${13:c}, ${14:c}, ${15:c}\0AB.DIM $16, 0, ->lb0\0AB.DIM zero, ${17:c}, ->lb1\0AB.DIM zero, ${18:c}, ->lb2\0AB.IOT $1.reuse, mask=1111\0AB.IOT $2.reuse, $3.reuse, mask=1111, last, ->$0<${23:Z}>\0A", 25, 720907, def early-clobber $tile_m1, 720905, $tile_t1, 720905, $tile_u1, 720905, $tile_n1, 2293769, undef $r2, 2293769, undef $r2, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 2293769, $r5, 13, 16, 13, 32, 13, 0, 13, 4, 13, 4, 13, 5, 13, 5, 13, 5, 13, 5
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...
+---
+name: tmatmul_omitted_bdatr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r5
+    $tile_u1 = PseudoTEXPANDS_Row_SizeI $r0, 8, $r0, 32, 4, 31, 5, $r2, 32
+    $tile_n1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TMATMUL ${7:D}\0AB.FPATR ${3:c}, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM $4, 0, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT $1.reuse, $2.reuse, mask=1111, last, ->$0<${8:Z}>\0A", 25, 720907, def early-clobber $tile_t1, 720905, $tile_u1, 720905, $tile_n1, 13, 1, 2293769, $r5, 13, 16, 13, 32, 13, 4, 13, 5
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+
+---
+name: tmatmul_small_n_fp16
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r5
+    $tile_u1 = PseudoTEXPANDS_Row_SizeI $r0, 8, $r0, 32, 4, 31, 5, $r2, 32
+    $tile_n1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TMATMUL ${7:D}\0AB.FPATR ${3:c}, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM $4, 0, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT $1.reuse, $2.reuse, mask=1111, last, ->$0<${8:Z}>\0A", 25, 720907, def early-clobber $tile_t1, 720905, $tile_u1, 720905, $tile_n1, 13, 1, 2293769, $r5, 13, 1, 13, 32, 13, 4, 13, 5
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+
+---
+name: tmatmul_small_n_bf16
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r5
+    $tile_u1 = PseudoTEXPANDS_Row_SizeI $r0, 8, $r0, 32, 4, 31, 5, $r2, 32
+    $tile_n1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TMATMUL ${7:D}\0AB.FPATR ${3:c}, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM $4, 0, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT $1.reuse, $2.reuse, mask=1111, last, ->$0<${8:Z}>\0A", 25, 720907, def early-clobber $tile_t1, 720905, $tile_u1, 720905, $tile_n1, 13, 16, 2293769, $r5, 13, 1, 13, 32, 13, 4, 13, 5
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+
+---
+name: tmatmul_small_n_fp32
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r5
+    $tile_u1 = PseudoTEXPANDS_Row_SizeI $r0, 8, $r0, 32, 4, 31, 5, $r2, 32
+    $tile_n1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TMATMUL ${7:D}\0AB.FPATR ${3:c}, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM $4, 0, ->lb0\0AB.DIM zero, ${5:c}, ->lb1\0AB.DIM zero, ${6:c}, ->lb2\0AB.IOT $1.reuse, $2.reuse, mask=1111, last, ->$0<${8:Z}>\0A", 25, 720907, def early-clobber $tile_t1, 720905, $tile_u1, 720905, $tile_n1, 13, 0, 2293769, $r5, 13, 1, 13, 32, 13, 4, 13, 5
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
