@@ -203,12 +203,14 @@ tryGetTileRegDescriptor(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator MBBI, MCRegister Reg);
 
 /// Prove that every physical register carrying a runtime B.DIM value reaches
-/// the proposed copy without a definition or regmask clobber. Accepted paths
-/// have stale kill flags cleared and cross-block live-ins made explicit.
+/// the proposed copy without a definition or regmask clobber. When
+/// RepairLiveness is false this is a pure proof. When true, an accepted proof
+/// also clears stale kill flags and makes cross-block live-ins explicit.
 bool runtimeDimensionsReachCopy(const TileDescriptor &Descriptor,
                                 MachineBasicBlock &Target,
                                 MachineBasicBlock::iterator Before,
-                                const TargetRegisterInfo &TRI);
+                                const TargetRegisterInfo &TRI,
+                                bool RepairLiveness = true);
 
 bool enableBFIOpt();
 

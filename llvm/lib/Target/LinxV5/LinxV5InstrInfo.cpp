@@ -1577,7 +1577,8 @@ static bool instructionClobbersPhysReg(const MachineInstr &MI, Register Reg,
 
 bool LinxV5::runtimeDimensionsReachCopy(
     const TileDescriptor &Descriptor, MachineBasicBlock &Target,
-    MachineBasicBlock::iterator Before, const TargetRegisterInfo &TRI) {
+    MachineBasicBlock::iterator Before, const TargetRegisterInfo &TRI,
+    bool RepairLiveness) {
   MachineInstr *Producer = Descriptor.RuntimeDimensionProducer;
   if (!Producer || Producer->getParent()->getParent() != Target.getParent())
     return false;
@@ -1641,11 +1642,13 @@ bool LinxV5::runtimeDimensionsReachCopy(
     if (!ReachedProducer)
       return false;
   }
-  for (MachineOperand *MO : UsesWithStaleKills)
-    MO->setIsKill(false);
-  for (auto &LiveIn : NewLiveIns)
-    if (!LiveIn.first->isLiveIn(LiveIn.second))
-      LiveIn.first->addLiveIn(LiveIn.second);
+  if (RepairLiveness) {
+    for (MachineOperand *MO : UsesWithStaleKills)
+      MO->setIsKill(false);
+    for (auto &LiveIn : NewLiveIns)
+      if (!LiveIn.first->isLiveIn(LiveIn.second))
+        LiveIn.first->addLiveIn(LiveIn.second);
+  }
   return true;
 }
 

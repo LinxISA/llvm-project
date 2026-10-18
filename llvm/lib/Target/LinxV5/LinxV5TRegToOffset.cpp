@@ -23,6 +23,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
@@ -2337,8 +2338,30 @@ Optional<unsigned> LinxV5TRegToOffsetOpt::proveNativeDistance(
     MachineBasicBlock *MBB, MachineBasicBlock::iterator Before, Register Reg,
     const TargetRegisterClass *RC, unsigned Publications,
     SmallPtrSetImpl<MachineBasicBlock *> &Active) {
-  if (!Active.insert(MBB).second)
+  if (!Active.insert(MBB).second) {
+    // Closing a loop may revisit the use block at its end.  A publication
+    // after the original use is the next iteration's reaching definition;
+    // reject cycles that contain no such producer or clobber the value.
+    for (MachineInstr &Prev : reverse(*MBB)) {
+      if (llvm::any_of(Prev.operands(), [&](const MachineOperand &Op) {
+            return Op.isRegMask() && Op.clobbersPhysReg(Reg);
+          }))
+        return None;
+      if (Prev.definesRegister(Reg, TRI)) {
+        unsigned Occupation = getTSlotOccupation(Prev, RC);
+        if (Prev.isImplicitDef() ||
+            Prev.getOpcode() == LinxV5::PseudoEmptyTile || Occupation != 1)
+          return None;
+        return Publications + 1;
+      }
+      if (!Prev.isImplicitDef() &&
+          Prev.getOpcode() != LinxV5::PseudoEmptyTile)
+        Publications += getTSlotOccupation(Prev, RC);
+      if (Publications >= RC->getNumRegs())
+        return None;
+    }
     return None;
+  }
   for (MachineInstr &Prev : reverse(make_range(MBB->begin(), Before))) {
     if (llvm::any_of(Prev.operands(), [&](const MachineOperand &Op) {
           return Op.isRegMask() && Op.clobbersPhysReg(Reg);
@@ -2383,6 +2406,12 @@ Optional<unsigned> LinxV5TRegToOffsetOpt::proveNativeDistance(
 void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
   const unsigned IterationLimit =
       std::max<unsigned>(1, MF.size()) * LinxV5::Tile_NRRegClass.getNumRegs();
+  std::unique_ptr<MachineDominatorTree> MDT;
+  auto GetMDT = [&]() -> MachineDominatorTree & {
+    if (!MDT)
+      MDT = std::make_unique<MachineDominatorTree>(MF);
+    return *MDT;
+  };
   for (unsigned Iteration = 0; Iteration < IterationLimit; ++Iteration) {
     bool Changed = false;
     for (MachineBasicBlock &Succ : MF) {
@@ -2431,38 +2460,110 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
           }
           if (!ProvenAges)
             continue;
-          auto SameDescriptor = [](const LinxV5::TileDescriptor &LHS,
-                                   const LinxV5::TileDescriptor &RHS,
-                                   const TargetRegisterInfo &TRI) {
+          auto SameDescriptor = [&](const LinxV5::TileDescriptor &LHS,
+                                    const LinxV5::TileDescriptor &RHS,
+                                    MachineBasicBlock &LHSEdge,
+                                    MachineBasicBlock &RHSEdge) {
             if (LHS.DataType != RHS.DataType ||
                 LHS.Layout != RHS.Layout ||
                 LHS.SizeCode != RHS.SizeCode ||
                 LHS.PackedPredicate != RHS.PackedPredicate)
               return false;
+            bool HasSymbolicDimension = false;
             for (unsigned I = 0; I != 3; ++I) {
               Optional<int64_t> L =
-                  resolveRuntimeDimensionConstant(LHS, I, TRI);
+                  resolveRuntimeDimensionConstant(LHS, I, *TRI);
               Optional<int64_t> R =
-                  resolveRuntimeDimensionConstant(RHS, I, TRI);
-              if (!L || !R || *L != *R)
+                  resolveRuntimeDimensionConstant(RHS, I, *TRI);
+              if (L || R) {
+                if (!L || !R || *L != *R)
+                  return false;
+                continue;
+              }
+              Register LReg = LHS.DimensionRegs[I];
+              Register RReg = RHS.DimensionRegs[I];
+              if (!LReg || LReg == LinxV5::R0 || LReg != RReg ||
+                  LHS.DimensionImms[I] != RHS.DimensionImms[I] ||
+                  !LHS.RuntimeDimensionProducer ||
+                  !RHS.RuntimeDimensionProducer)
+                return false;
+              HasSymbolicDimension = true;
+              MachineInstr *LProducer = LHS.RuntimeDimensionProducer;
+              MachineInstr *RProducer = RHS.RuntimeDimensionProducer;
+              if (LProducer == RProducer)
+                continue;
+              MachineInstr *Earlier = nullptr;
+              MachineInstr *Later = nullptr;
+              if (GetMDT().dominates(LProducer, RProducer)) {
+                Earlier = LProducer;
+                Later = RProducer;
+              } else if (GetMDT().dominates(RProducer, LProducer)) {
+                Earlier = RProducer;
+                Later = LProducer;
+              } else {
+                return false;
+              }
+              LinxV5::TileDescriptor Probe;
+              Probe.DimensionRegs = {LReg, LinxV5::R0, LinxV5::R0};
+              Probe.DimensionImms = {0, 0, 0};
+              Probe.HasRuntimeDimensions = true;
+              Probe.RuntimeDimensionProducer = Earlier;
+              if (!LinxV5::runtimeDimensionsReachCopy(
+                      Probe, *Later->getParent(), Later->getIterator(), *TRI,
+                      /*RepairLiveness=*/false))
                 return false;
             }
+            if (HasSymbolicDimension &&
+                (!LinxV5::runtimeDimensionsReachCopy(
+                     LHS, LHSEdge, LHSEdge.end(), *TRI,
+                     /*RepairLiveness=*/false) ||
+                 !LinxV5::runtimeDimensionsReachCopy(
+                     RHS, RHSEdge, RHSEdge.end(), *TRI,
+                     /*RepairLiveness=*/false)))
+              return false;
             return true;
           };
-          bool Compatible = llvm::all_of(
-              Contracts, [&](ArrayRef<QueueContractEntry> Contract) {
-                if (Contract.size() != Contracts.front().size())
-                  return false;
-                for (unsigned I = 0; I < Contract.size(); ++I) {
-                  const LinxRegOp &L = Contract[I].Value;
-                  const LinxRegOp &R = Contracts.front()[I].Value;
-                  if (L.Reg != R.Reg || L.Size != R.Size || !L.Descriptor ||
-                      !R.Descriptor ||
-                      !SameDescriptor(*L.Descriptor, *R.Descriptor, *TRI))
-                    return false;
-                }
-                return true;
-              });
+          bool Compatible = true;
+          for (unsigned P = 0; P < Contracts.size() && Compatible; ++P) {
+            ArrayRef<QueueContractEntry> Contract = Contracts[P];
+            if (Contract.size() != Contracts.front().size()) {
+              Compatible = false;
+              break;
+            }
+            for (unsigned I = 0; I < Contract.size(); ++I) {
+              const LinxRegOp &L = Contract[I].Value;
+              const LinxRegOp &R = Contracts.front()[I].Value;
+              if (L.Reg != R.Reg || L.Size != R.Size || !L.Descriptor ||
+                  !R.Descriptor ||
+                  !SameDescriptor(*L.Descriptor, *R.Descriptor, *Preds[P],
+                                  *Preds[0])) {
+                Compatible = false;
+                break;
+              }
+            }
+          }
+          if (Compatible) {
+            for (unsigned P = 0; P < Contracts.size(); ++P) {
+              for (const QueueContractEntry &Entry : Contracts[P]) {
+                if (!Entry.Value.Descriptor ||
+                    !Entry.Value.Descriptor->HasRuntimeDimensions)
+                  continue;
+                bool NeedsRuntimeReachRepair = false;
+                for (unsigned I = 0; I != 3; ++I)
+                  NeedsRuntimeReachRepair |=
+                      !resolveRuntimeDimensionConstant(
+                           *Entry.Value.Descriptor, I, *TRI)
+                           .hasValue();
+                if (!NeedsRuntimeReachRepair)
+                  continue;
+                if (!LinxV5::runtimeDimensionsReachCopy(
+                        *Entry.Value.Descriptor, *Preds[P], Preds[P]->end(),
+                        *TRI))
+                  report_fatal_error(
+                      "proved runtime descriptor reach changed during repair");
+              }
+            }
+          }
           if (!Compatible) {
             bool SamePhysicalValues = llvm::all_of(
                 Contracts, [&](ArrayRef<QueueContractEntry> Contract) {
@@ -2531,6 +2632,7 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
                       report_fatal_error(
                           "preflighted Local tile critical edge did not split");
                     GlobalSlotsInfo[Edge] = GlobalSlotsInfo[OldPred];
+                    MDT.reset();
                     Preds[P] = Edge;
                   }
                   appendQueueFillers(*Preds[P], RC, Deltas[P]);
@@ -2564,6 +2666,7 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
                 report_fatal_error(
                     "preflighted Local tile critical edge did not split");
               GlobalSlotsInfo[Edge] = GlobalSlotsInfo[OldPred];
+              MDT.reset();
               Preds[P] = Edge;
             }
             appendDenseQueueContract(*Preds[P], RC, Contracts[P]);
