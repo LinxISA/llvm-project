@@ -43,6 +43,7 @@ body:             |
     liveins: $r5, $tile_t1, $tile_u1
     SETC_LTI $r5, 1, implicit-def $carg
     PseudoBRCondCARG %bb.4, implicit $carg
+    PseudoBR %bb.5
 
   bb.4:
     successors: %bb.7(0x80000000)
@@ -55,6 +56,7 @@ body:             |
     liveins: $r5, $tile_t1, $tile_u1
     SETC_LTUI $r5, 2, implicit-def $carg
     PseudoBRCondCARG %bb.6, implicit $carg
+    PseudoBR %bb.8
 
   bb.6:
     successors: %bb.7(0x80000000)
