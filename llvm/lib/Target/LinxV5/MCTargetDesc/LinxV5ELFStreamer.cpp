@@ -85,6 +85,7 @@ void LinxV5TargetELFStreamer::finish() {
 }
 
 void LinxV5TargetELFStreamer::reset() {
+  LinxV5TargetStreamer::reset();
   AttributeSection = nullptr;
   Contents.clear();
 }
