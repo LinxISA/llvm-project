@@ -1,0 +1,46 @@
+# RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s --check-prefix=ENC
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s -o %t
+# RUN: llvm-objdump -d --disassembler-options=no-tile-macros %t | FileCheck %s --check-prefix=DIS
+
+BSTART.TLOAD U8
+BSTART.TLSU TLOAD, U8
+BSTART.TSTORE U8
+BSTART.TLSU TSTORE, U8
+BSTART.MGATHER FP32
+BSTART.TLSU MGATHER, FP32
+BSTART.MSCATTER FP32
+BSTART.TLSU MSCATTER, FP32
+BSTART.MGATHER.MASK U32
+BSTART.TLSU MGATHER.MASK, U32
+BSTART.MSCATTER.POPC U32
+BSTART.TLSU MSCATTER.POPC, U32
+BSTART.TMATMUL FP32
+BSTART.TMATMULMX FP32
+BSTART.TGEMV FP32
+
+# ENC: BSTART.TLOAD{{.*}}encoding: [0x81,0x11,0x01,0xd8]
+# ENC-NEXT: BSTART.TLSU{{.*}}TLOAD, U8{{.*}}encoding: [0x81,0x11,0x01,0xd8]
+# ENC: BSTART.TSTORE{{.*}}encoding: [0x81,0x11,0x11,0xd8]
+# ENC-NEXT: BSTART.TLSU{{.*}}TSTORE, U8{{.*}}encoding: [0x81,0x11,0x11,0xd8]
+# ENC: BSTART.MGATHER{{.*}}encoding: [0x81,0x11,0x41,0x08]
+# ENC-NEXT: BSTART.TLSU{{.*}}MGATHER, FP32{{.*}}encoding: [0x81,0x11,0x41,0x08]
+# ENC: BSTART.MSCATTER{{.*}}encoding: [0x81,0x11,0x51,0x08]
+# ENC-NEXT: BSTART.TLSU{{.*}}MSCATTER, FP32{{.*}}encoding: [0x81,0x11,0x51,0x08]
+# ENC: BSTART.MGATHER.MASK{{.*}}encoding: [0x81,0x11,0x61,0xc8]
+# ENC-NEXT: BSTART.TLSU{{.*}}MGATHER.MASK, U32{{.*}}encoding: [0x81,0x11,0x61,0xc8]
+# ENC: BSTART.MSCATTER.POPC{{.*}}encoding: [0x81,0x11,0xb1,0xc9]
+# ENC-NEXT: BSTART.TLSU{{.*}}MSCATTER.POPC, U32{{.*}}encoding: [0x81,0x11,0xb1,0xc9]
+# ENC: BSTART.TMATMUL{{.*}}encoding: [0x81,0x11,0x03,0x08]
+# ENC: BSTART.TMATMULMX{{.*}}encoding: [0x81,0x11,0x43,0x08]
+# ENC: BSTART.TGEMV{{.*}}encoding: [0x81,0x11,0x03,0x09]
+
+# Standalone spellings are canonical when the fixed-op definitions are present.
+# DIS-COUNT-2: BSTART.TLOAD U8
+# DIS-COUNT-2: BSTART.TSTORE U8
+# DIS-COUNT-2: BSTART.MGATHER FP32
+# DIS-COUNT-2: BSTART.MSCATTER FP32
+# DIS-COUNT-2: BSTART.MGATHER.MASK U32
+# DIS-COUNT-2: BSTART.MSCATTER.POPC U32
+# DIS: BSTART.TMATMUL FP32
+# DIS: BSTART.TMATMULMX FP32
+# DIS: BSTART.TGEMV FP32
