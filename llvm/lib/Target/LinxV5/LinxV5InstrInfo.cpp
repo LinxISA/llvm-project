@@ -1059,12 +1059,19 @@ static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
       Selector = StringSwitch<Optional<unsigned>>(Operation)
                      .Case("TROWSUM", 64)
                      .Case("TROWMAX", 65)
+                     .Case("TROWMIN", 66)
+                     .Case("TROWPROD", 67)
                      .Case("TROWARGMAX", 76)
+                     .Case("TROWARGMIN", 77)
                      .Case("TCOLSUM", 80)
+                     .Case("TCOLMAX", 81)
+                     .Case("TCOLMIN", 82)
+                     .Case("TCOLPROD", 83)
                      .Default(None);
   }
-  if (Selector && (*Selector == 64 || *Selector == 65 || *Selector == 76 ||
-                   *Selector == 80))
+  if (Selector && ((*Selector >= 64 && *Selector <= 67) ||
+                   (*Selector >= 76 && *Selector <= 77) ||
+                   (*Selector >= 80 && *Selector <= 83)))
     return Selector;
   return None;
 }
@@ -1268,9 +1275,11 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
                       *Layout == LinxV5Op::ArgFormat::CUBE_M32;
     if (!Cube && *Layout != LinxV5Op::ArgFormat::NORM)
       return None;
-    if (*Reduction == 76)
+    const bool IsRowArg = *Reduction == 76 || *Reduction == 77;
+    const bool IsColumn = *Reduction >= 80 && *Reduction <= 83;
+    if (IsRowArg)
       *DataType = LinxV5Op::DataType::U32;
-    if (*Reduction == 80) {
+    if (IsColumn) {
       ValidRow = 1;
       if (Cube) {
         unsigned Bits = getTileDataTypeBits(*DataType);
