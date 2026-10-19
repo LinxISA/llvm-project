@@ -250,6 +250,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
 
   bool parseOperand(OperandVector &Operands, StringRef Mnemonic);
   bool parseDirectiveOption();
+  bool parseDirectiveTilePEDomain();
 
   void setFeatureBits(uint64_t Feature, StringRef FeatureString) {
     if (!(getSTI().getFeatureBits()[Feature])) {
@@ -4135,14 +4136,49 @@ bool LinxV5AsmParser::ParseDirective(AsmToken DirectiveID) {
   // chance at recognizing it.
   StringRef IDVal = DirectiveID.getString();
 
+  if (getTargetStreamer().getTilePEDomain() !=
+          LinxV5TilePEDomain::Default &&
+      (IDVal == ".word" || IDVal == ".byte" || IDVal == ".short" ||
+       IDVal == ".long" || IDVal == ".2byte" || IDVal == ".4byte" ||
+       IDVal == ".8byte" || IDVal == ".quad" || IDVal == ".value" ||
+       IDVal == ".int" || IDVal == ".inst" || IDVal == ".incbin" ||
+       IDVal == ".fill" || IDVal == ".zero" || IDVal == ".space" ||
+       IDVal == ".skip" || IDVal == ".ascii" || IDVal == ".asciz" ||
+       IDVal == ".string"))
+    return Error(DirectiveID.getLoc(),
+                 "raw data directives are forbidden in a nondefault Tile PE domain");
+
   if (IDVal == ".option")
     return parseDirectiveOption();
+  else if (IDVal == ".pto_pe_domain")
+    return parseDirectiveTilePEDomain();
   else if (IDVal == ".unsafeasm") {
     IAVS = IA_UNSAFE;
     return false;
   }
 
   return true;
+}
+
+bool LinxV5AsmParser::parseDirectiveTilePEDomain() {
+  MCAsmParser &Parser = getParser();
+  if (getTargetStreamer().isCompilerOwnedTilePEDomain())
+    return Error(Parser.getTok().getLoc(),
+                 "inline assembly cannot change the compiler-owned Tile PE domain");
+  if (Parser.getTok().isNot(AsmToken::Integer))
+    return Error(Parser.getTok().getLoc(),
+                 "expected a decimal native PE mask");
+  int64_t Value = Parser.getTok().getIntVal();
+  if (Value < 0 || Value > 15 ||
+      !LinxV5TilePEDomain::isNativeMask(static_cast<unsigned>(Value)))
+    return Error(Parser.getTok().getLoc(),
+                 "Tile PE domain must be one of 1,2,4,8,12,14,15");
+  Parser.Lex();
+  if (Parser.getTok().isNot(AsmToken::EndOfStatement))
+    return Error(Parser.getTok().getLoc(),
+                 "unexpected token after Tile PE domain");
+  getTargetStreamer().emitDirectiveTilePEDomain(static_cast<unsigned>(Value));
+  return false;
 }
 
 bool LinxV5AsmParser::parseDirectiveOption() {
@@ -4515,7 +4551,10 @@ void LinxV5AsmParser::emitToStreamer(MCStreamer &S, const MCInst &Inst) {
   MCInst CInst;
   bool Res =
       llvm::LinxV5::tryCompressInst(CInst, Inst, getSTI(), S.getContext());
-  S.emitInstruction((Res ? CInst : Inst), getSTI());
+  MCInst Emitted = Res ? CInst : Inst;
+  LinxV5TilePEDomain::stamp(Emitted,
+                            getTargetStreamer().getTilePEDomain());
+  S.emitInstruction(Emitted, getSTI());
 }
 
 void LinxV5AsmParser::emitBStartWithTarget(MCInst &Inst, SMLoc IDLoc,
@@ -4775,6 +4814,29 @@ bool LinxV5AsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
                                          MCStreamer &Out) {
   Inst.setLoc(IDLoc);
   const MCInstrDesc &Desc = MII.get(Inst.getOpcode());
+  if (getTargetStreamer().getTilePEDomain() !=
+      LinxV5TilePEDomain::Default) {
+    const unsigned Opcode = Inst.getOpcode();
+    const bool IsIndirectCall =
+        Opcode == LinxV5::BSTART_STD_WITHOUT_TARGET_32_ICALL ||
+        Opcode == LinxV5::BSTART_AUX_WITHOUT_TARGET_32_ICALL ||
+        Opcode == LinxV5::BSTART_FP_WITHOUT_TARGET_32_ICALL;
+    const bool IsDirectCall =
+        Opcode == LinxV5::BSTART_STD_WITH_TARGET_17_CALL ||
+        Opcode == LinxV5::BSTART_STD_WITH_TARGET_48_CALL ||
+        Opcode == LinxV5::BSTART_STD_WITH_TARGET_64_CALL ||
+        Opcode == LinxV5::BSTART_AUX_WITH_TARGET_17_CALL ||
+        Opcode == LinxV5::BSTART_AUX_WITH_TARGET_48_CALL ||
+        Opcode == LinxV5::BSTART_AUX_WITH_TARGET_64_CALL ||
+        Opcode == LinxV5::BSTART_FP_WITH_TARGET_17_CALL ||
+        Opcode == LinxV5::BSTART_FP_WITH_TARGET_48_CALL ||
+        Opcode == LinxV5::BSTART_FP_WITH_TARGET_64_CALL;
+    if (IsIndirectCall ||
+        (IsDirectCall &&
+         getTargetStreamer().isCompilerOwnedTilePEDomain()))
+      return Error(IDLoc,
+                   "inline assembly calls are forbidden in a nondefault Tile PE domain");
+  }
   uint64_t TSFlags = Desc.TSFlags;
   if (Inst.getOpcode() == LinxV5::BSTART_CUBE) {
     assert(Inst.getNumOperands() > 1 && Inst.getOperand(1).isImm() &&

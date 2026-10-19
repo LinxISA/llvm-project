@@ -267,3 +267,43 @@ operations/orderings, potentially overlapping ordinary indexed writes,
 wider Tile shapes/dtypes, and typed Tile spills at O0 remain unsupported.
 The GM-array, public typed-view and whole-application migration tests remain
 separate coverage lanes.
+
+Function PE domains
+-------------------
+
+``PTO_PE_DOMAIN(mask)`` declares which PEs participate in a function's Local
+Tile operations. The TileOP API exposes this annotation only on compilers that
+define ``__LINX_PTO_PE_DOMAIN__``. The mask uses architectural bit order:
+``8`` (``1000``) selects PE0. Legal masks are ``1, 2, 4, 8, 12, 14, 15``.
+
+For example, a driver may distribute scalar input preparation across four PEs,
+wait for completion, and call an annotated score/TopK stage only from PE0.
+The caller must implement that PE selection: the annotation does not predicate
+ordinary C++ statements or scalar memory accesses.
+
+The compiler preserves explicit domain boundaries before inlining and
+specializes closed direct helper calls by domain. A helper used by both domain8
+and default-domain callers retains separate bodies; externally visible
+``linkonce_odr`` definitions retain their default-domain call graph. Domain
+boundaries accept scalar/GM interfaces. Local Tile ABI helpers may be
+specialized within a domain, but Tile data may not cross a domain boundary.
+Unknown external, indirect, recursive nondefault, and conflicting explicit
+domain calls are rejected.
+
+Native PE mask ``1111`` inherits the function domain. Any explicit nondefault
+mask must be a subset of that domain; the compiler rejects incompatible masks.
+This rule applies to producers, assembly writers, consumers, and generated
+typed copies. Element execution masks in ``B.IOR`` retain their separate
+meaning and are not replaced by the PE mask. Shared/cooperative operations,
+GMOV, and TIMG2COL are outside this initial nondefault-domain profile.
+
+The domain is captured on each emitted MC instruction, including expanded
+pseudo instructions. Text assembly carries ``.pto_pe_domain`` directives and
+resets the domain after each function, so assembly and direct object output
+use the same masks. Inline assembly cannot reset the compiler-owned domain or
+hide calls/raw instructions outside the supported local Tile statement set.
+
+The optimized frontend records completion per function. Unprocessed annotations,
+including annotations introduced by linking another IR module, are rejected by
+raw code generation. ``-O0`` does not support these boundaries. These checks
+are independent of element-for's no-scalar-fallback requirement.

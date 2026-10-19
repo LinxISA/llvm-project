@@ -22,9 +22,17 @@ LinxV5TargetStreamer::LinxV5TargetStreamer(MCStreamer &S)
     : MCTargetStreamer(S) {}
 
 void LinxV5TargetStreamer::finish() { finishAttributeSection(); }
-void LinxV5TargetStreamer::reset() {}
+void LinxV5TargetStreamer::reset() {
+  TilePEDomain = LinxV5TilePEDomain::Default;
+  CompilerOwnedTilePEDomain = false;
+}
 void LinxV5TargetStreamer::emitDirectiveOptionRelax() {}
 void LinxV5TargetStreamer::emitDirectiveOptionNoRelax() {}
+void LinxV5TargetStreamer::emitDirectiveTilePEDomain(unsigned Mask) {
+  assert(LinxV5TilePEDomain::isNativeMask(Mask) &&
+         "invalid native Tile PE domain");
+  TilePEDomain = Mask;
+}
 void LinxV5TargetStreamer::emitAttribute(unsigned Attribute, unsigned Value) {}
 void LinxV5TargetStreamer::finishAttributeSection() {}
 void LinxV5TargetStreamer::emitTextAttribute(unsigned Attribute,
@@ -34,6 +42,18 @@ void LinxV5TargetStreamer::emitRawText(StringRef Str) {}
 void LinxV5TargetStreamer::setTargetABI(LinxV5ABI::ABI ABI) {
   assert(ABI != LinxV5ABI::ABI_Unknown && "Improperly initialized target ABI");
   TargetABI = ABI;
+}
+
+void LinxV5TargetStreamer::enterCompilerTilePEDomain(unsigned Mask) {
+  assert(!CompilerOwnedTilePEDomain && "nested compiler Tile PE domain");
+  CompilerOwnedTilePEDomain = true;
+  emitDirectiveTilePEDomain(Mask);
+}
+
+void LinxV5TargetStreamer::leaveCompilerTilePEDomain() {
+  assert(CompilerOwnedTilePEDomain && "no compiler Tile PE domain to leave");
+  emitDirectiveTilePEDomain(LinxV5TilePEDomain::Default);
+  CompilerOwnedTilePEDomain = false;
 }
 
 // This part is for ascii assembly output
@@ -47,6 +67,11 @@ void LinxV5TargetAsmStreamer::emitDirectiveOptionRelax() {
 
 void LinxV5TargetAsmStreamer::emitDirectiveOptionNoRelax() {
   OS << "\t.option\tnorelax\n";
+}
+
+void LinxV5TargetAsmStreamer::emitDirectiveTilePEDomain(unsigned Mask) {
+  LinxV5TargetStreamer::emitDirectiveTilePEDomain(Mask);
+  OS << "\t.pto_pe_domain\t" << Mask << "\n";
 }
 
 void LinxV5TargetAsmStreamer::emitAttribute(unsigned Attribute,

@@ -38,6 +38,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <string>
 
@@ -60,6 +61,7 @@ class LinxV5AsmPrinter : public AsmPrinter {
   }
   const LinxV5Subtarget *STI;
   const LinxV5InstrInfo *TII;
+  unsigned CurrentTilePEDomain = LinxV5TilePEDomain::Default;
 
 public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -112,7 +114,9 @@ void LinxV5AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
     else if (LinxV5II::isFPInstr(II.TSFlags))
       ++NumVecFloats;
   }
-  AsmPrinter::EmitToStreamer(*OutStreamer, Res ? CInst : Inst);
+  MCInst Emitted = Res ? CInst : Inst;
+  LinxV5TilePEDomain::stamp(Emitted, CurrentTilePEDomain);
+  AsmPrinter::EmitToStreamer(*OutStreamer, Emitted);
 }
 
 void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
@@ -392,18 +396,30 @@ bool LinxV5AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
 // SIMT Region for LLVM-MCA.
 void LinxV5AsmPrinter::emitFunctionBodyStart() {
-  if (!MF->getSubtarget<LinxV5Subtarget>().isSIMT())
-    return;
-  getTargetStreamer().emitRawText("# LLVM-MCA-BEGIN\n");
+  CurrentTilePEDomain = LinxV5TilePEDomain::Default;
+  const Function &F = MF->getFunction();
+  if (F.hasFnAttribute("linx-tile-pe-domain")) {
+    StringRef Value =
+        F.getFnAttribute("linx-tile-pe-domain").getValueAsString();
+    if (Value.getAsInteger(10, CurrentTilePEDomain) ||
+        !LinxV5TilePEDomain::isNativeMask(CurrentTilePEDomain))
+      report_fatal_error("function '" + F.getName() +
+                         "' has invalid linx-tile-pe-domain; expected one of "
+                         "1,2,4,8,12,14,15");
+  }
+  getTargetStreamer().enterCompilerTilePEDomain(CurrentTilePEDomain);
+  if (MF->getSubtarget<LinxV5Subtarget>().isSIMT())
+    getTargetStreamer().emitRawText("# LLVM-MCA-BEGIN\n");
 }
 
 // SIMT Region for LLVM-MCA.
 void LinxV5AsmPrinter::emitFunctionBodyEnd() {
-  if (!MF->getSubtarget<LinxV5Subtarget>().isSIMT())
-    return;
-
-  getTargetStreamer().emitRawText("# LLVM-MCA-END\n");
-  emitStackSizeGlobal(*MF);
+  if (MF->getSubtarget<LinxV5Subtarget>().isSIMT()) {
+    getTargetStreamer().emitRawText("# LLVM-MCA-END\n");
+    emitStackSizeGlobal(*MF);
+  }
+  getTargetStreamer().leaveCompilerTilePEDomain();
+  CurrentTilePEDomain = LinxV5TilePEDomain::Default;
 }
 
 void LinxV5AsmPrinter::emitStartOfAsmFile(Module &M) {}
