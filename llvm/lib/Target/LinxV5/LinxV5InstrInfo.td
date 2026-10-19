@@ -1563,13 +1563,103 @@ class Tile_DataType_FixedOp<bits<5> Opcode, bits<5> FixedTileOP,
   let AsmString = "BSTART" # HeadType # "\t$DataType";
 }
 
+class Tile_DataType_CubeFixedOp<bits<5> Opcode, bits<7> FixedTileOP,
+                               string HeadType, dag ins> : LinxV5InstBase {
+  let Format = InstFormat_BSTART_WITHOUT_TARGET_32;
+  field bits<32> SoftFail = 0;
+  field bits<32> Inst;
+  let Size = 4;
+
+  bits<5> DataType;
+
+  let OutOperandList = (outs );
+  let InOperandList = ins;
+
+  let Inst{31-27} = DataType;
+  let Inst{26-20} = FixedTileOP;
+  let Inst{19-15} = Opcode;
+  let Inst{14-12} = 0b001;
+  let Inst{11-7} = 0b00011;
+  let Inst{6-4} = 0b000;
+  let Inst{3-1} = 0b000;
+  let Inst{0} = 0b1;
+
+  let AsmString = "BSTART" # HeadType # "\t$DataType";
+}
+
 def BSTART_TMA : Tile_DataType_NoMode<0b00010, ".TLSU", (ins BstartDataType:$DataType, TileOPTMA:$TileOP)>;
 // PTO 0.58.6 (BSTART.TIMG2COL.asl): TIMG2COL is a standalone TLSU Function
 // 28 carrier whose canonical spelling is "BSTART.TIMG2COL DataType". The
 // generic .TLSU form "BSTART.TLSU TIMG2COL, DataType" encodes identically.
 def BSTART_TIMG2COL : Tile_DataType_FixedOp<0b00010, 28, ".TIMG2COL",
                                              (ins BstartDataType:$DataType)>;
+def BSTART_TLOAD : Tile_DataType_FixedOp<0b00010, 0, ".TLOAD",
+                                          (ins BstartDataType:$DataType)>;
+def BSTART_TSTORE : Tile_DataType_FixedOp<0b00010, 1, ".TSTORE",
+                                           (ins BstartDataType:$DataType)>;
+def BSTART_TMOV : Tile_DataType_FixedOp<0b00010, 2, ".TMOV",
+                                         (ins BstartDataType:$DataType)>;
+def BSTART_TPREFETCH : Tile_DataType_FixedOp<0b00010, 3, ".TPREFETCH",
+                                              (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER : Tile_DataType_FixedOp<0b00010, 4, ".MGATHER",
+                                            (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER : Tile_DataType_FixedOp<0b00010, 5, ".MSCATTER",
+                                             (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_MASK : Tile_DataType_FixedOp<0b00010, 6, ".MGATHER.MASK",
+                                                 (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_MASK : Tile_DataType_FixedOp<0b00010, 7, ".MSCATTER.MASK",
+                                                  (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_CAS : Tile_DataType_FixedOp<0b00010, 8, ".MGATHER.CAS",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_EXCH : Tile_DataType_FixedOp<0b00010, 9, ".MGATHER.EXCH",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_MAX : Tile_DataType_FixedOp<0b00010, 10, ".MGATHER.MAX",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_MIN : Tile_DataType_FixedOp<0b00010, 11, ".MGATHER.MIN",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_ADD : Tile_DataType_FixedOp<0b00010, 12, ".MGATHER.ADD",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_INC : Tile_DataType_FixedOp<0b00010, 14, ".MGATHER.INC",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_DEC : Tile_DataType_FixedOp<0b00010, 15, ".MGATHER.DEC",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_AND : Tile_DataType_FixedOp<0b00010, 16, ".MGATHER.AND",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_OR : Tile_DataType_FixedOp<0b00010, 17, ".MGATHER.OR",
+                                              (ins BstartDataType:$DataType)>;
+def BSTART_MGATHER_XOR : Tile_DataType_FixedOp<0b00010, 18, ".MGATHER.XOR",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_MAX : Tile_DataType_FixedOp<0b00010, 19, ".MSCATTER.MAX",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_MIN : Tile_DataType_FixedOp<0b00010, 20, ".MSCATTER.MIN",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_ADD : Tile_DataType_FixedOp<0b00010, 21, ".MSCATTER.ADD",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_INC : Tile_DataType_FixedOp<0b00010, 22, ".MSCATTER.INC",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_DEC : Tile_DataType_FixedOp<0b00010, 23, ".MSCATTER.DEC",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_AND : Tile_DataType_FixedOp<0b00010, 24, ".MSCATTER.AND",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_OR : Tile_DataType_FixedOp<0b00010, 25, ".MSCATTER.OR",
+                                               (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_XOR : Tile_DataType_FixedOp<0b00010, 26, ".MSCATTER.XOR",
+                                                (ins BstartDataType:$DataType)>;
+def BSTART_MSCATTER_POPC : Tile_DataType_FixedOp<0b00010, 27, ".MSCATTER.POPC",
+                                                 (ins BstartDataType:$DataType)>;
 def BSTART_CUBE: Tile_DataType_NoMode<0b00110, ".CUBE", (ins BstartDataType:$DataType, TileOPCUBE:$TileOP)>;
+def BSTART_TMATMUL : Tile_DataType_CubeFixedOp<0b00110, 0, ".TMATMUL", (ins BstartDataType:$DataType)>;
+def BSTART_TMATMUL_BIAS : Tile_DataType_CubeFixedOp<0b00110, 1, ".TMATMUL.BIAS", (ins BstartDataType:$DataType)>;
+def BSTART_TMATMUL_ACC : Tile_DataType_CubeFixedOp<0b00110, 2, ".TMATMUL.ACC", (ins BstartDataType:$DataType)>;
+def BSTART_TMATMULMX : Tile_DataType_CubeFixedOp<0b00110, 4, ".TMATMULMX", (ins BstartDataType:$DataType)>;
+def BSTART_TMATMULMX_BIAS : Tile_DataType_CubeFixedOp<0b00110, 5, ".TMATMULMX.BIAS", (ins BstartDataType:$DataType)>;
+def BSTART_TMATMULMX_ACC : Tile_DataType_CubeFixedOp<0b00110, 6, ".TMATMULMX.ACC", (ins BstartDataType:$DataType)>;
+def BSTART_TGEMV : Tile_DataType_CubeFixedOp<0b00110, 16, ".TGEMV", (ins BstartDataType:$DataType)>;
+def BSTART_TGEMV_BIAS : Tile_DataType_CubeFixedOp<0b00110, 17, ".TGEMV.BIAS", (ins BstartDataType:$DataType)>;
+def BSTART_TGEMV_ACC : Tile_DataType_CubeFixedOp<0b00110, 18, ".TGEMV.ACC", (ins BstartDataType:$DataType)>;
+def BSTART_TGEMVMX : Tile_DataType_CubeFixedOp<0b00110, 20, ".TGEMVMX", (ins BstartDataType:$DataType)>;
+def BSTART_TGEMVMX_BIAS : Tile_DataType_CubeFixedOp<0b00110, 21, ".TGEMVMX.BIAS", (ins BstartDataType:$DataType)>;
+def BSTART_TGEMVMX_ACC : Tile_DataType_CubeFixedOp<0b00110, 22, ".TGEMVMX.ACC", (ins BstartDataType:$DataType)>;
 def BSTART_TEPL_NoMode: Tile_DataType_TEPL<0b00011, ".TEPL", (ins BstartDataType:$DataType, TileOPTEPL:$TileOP)>;
 def BSTART_GMOV : Tile_DataType_FixedOp<0b00010, 0b01101, ".GMOV",
                                        (ins BstartDataType:$DataType)>;

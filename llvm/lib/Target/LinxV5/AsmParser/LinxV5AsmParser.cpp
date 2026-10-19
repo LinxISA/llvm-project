@@ -1560,7 +1560,9 @@ static unsigned MatchLinxV5GlobalRegisteName(StringRef Name) {
 static unsigned MatchLinxV5TileRegisteName(StringRef Name) {
   std::string LowerName = Name.lower();
   StringRef NormalizedName(LowerName);
-  bool Reuse = NormalizedName.consume_back(".reuse");
+  bool Reuse = false;
+  while (NormalizedName.consume_back(".reuse"))
+    Reuse = true;
   unsigned Reg = StringSwitch<unsigned>(NormalizedName)
       .Case("t#1", LinxV5::Tile_TOS1)
       .Case("t#2", LinxV5::Tile_TOS2)
@@ -2630,7 +2632,9 @@ LinxV5AsmParser::parseSharedTID(OperandVector &Operands) {
   StringRef Str = Tok.getString();
   if (Str.empty())
     Str = Tok.getIdentifier();
-  bool Reuse = Str.consume_back_insensitive(".reuse");
+  bool Reuse = false;
+  while (Str.consume_back_insensitive(".reuse"))
+    Reuse = true;
   if (!Str.startswith_insensitive("s"))
     return MatchOperand_NoMatch;
   // Reject the retired "S#n" spelling.
