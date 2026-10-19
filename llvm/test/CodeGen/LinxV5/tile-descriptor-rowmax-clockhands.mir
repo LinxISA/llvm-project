@@ -1,4 +1,5 @@
-# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-clockhands -o - %s \
+# RUN: llc -mtriple=linx64v5 -linxv5-enable-generic-element=true \
+# RUN:   -run-pass=linxv5-clockhands -o - %s \
 # RUN:   | FileCheck %s
 #
 # TROWMAX encodes its 16x32 source geometry in B.DIM but publishes a 16x1
@@ -7,8 +8,25 @@
 # CHECK-LABEL: name: row_max_clockhands
 # CHECK: BSTART.TEPL 65, FP32
 # CHECK: BSTART.TLSU TSTORE, FP32
+# CHECK-LABEL: name: row_min_clockhands
+# CHECK: BSTART.TEPL 66, U32
+# CHECK: BSTART.TLSU TSTORE, U32
 --- |
   define void @row_max_clockhands() { ret void }
+  define void @row_min_clockhands() { ret void }
+...
+---
+name: row_min_clockhands
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs }
+  - { id: 1, class: tile_abs }
+body: |
+  bb.0:
+    %0:tile_abs = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 66, U32\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 4, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def %1, 720905, %0, 13, 1
+    INLINEASM &"BSTART.TLSU TSTORE, U32\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 4, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $0, mask=1111, last\0A", 9, 720905, %1
+    PseudoRET
 ...
 ---
 name: row_max_clockhands
