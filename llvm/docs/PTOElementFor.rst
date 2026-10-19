@@ -181,6 +181,22 @@ Read/read pairs may overlap. A read/write pair needs whole-object NoAlias,
 except for two proven independent streams with identical addresses; a scalar
 NoAlias result between individual indices does not prove iteration independence.
 
+A fused direct load followed by an atomic update is supported when the input
+and atomic destination are proven to be different whole objects.  For a local,
+non-address-taken helper with only known direct calls, the compiler may prove
+that fact from every actual call context, including a chain of local forwarding
+helpers and argument/global-root pairs, and attach scoped alias metadata only
+to the proved access pair.  This does not add an implicit ``restrict`` contract:
+exported, recursive, address-taken, indirect, unknown, or mixed-alias call
+contexts receive no such fact and fail closed when separation is required.
+
+Two ordinary unit-stride stores may overlap only in the narrow case used by a
+fused clear: both stores have the same type, write the identical zero constant,
+and each is aligned to the full stored width.  The exception does not cover a
+load, a nonzero or differing value, insufficient alignment, or any atomic
+effect.  Mixed atomic/ordinary effects still require proved whole-object
+separation.
+
 Ordinary LLVM ``atomicrmw add`` is accepted for nonvolatile, naturally aligned
 i32 accesses with System scope and Monotonic ordering. Predication emits the
 compiler-only ``llvm.linx.experimental.element.atomic.add`` effect with vector
