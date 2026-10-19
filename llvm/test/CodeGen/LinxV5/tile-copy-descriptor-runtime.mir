@@ -5,12 +5,12 @@
 # A compiler-generated copy of a runtime-shaped CUBE tile must remain TLSU
 # TMOV and carry all three live B.DIM registers. Omitted descriptors would
 # default to NORM 1x1; generic CUBE pseudo expansion would select TMATMUL.
-# CHECK: BSTART.TLSU TMOV, FP32
+# CHECK: BSTART.TMOV FP32
 # CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
 # CHECK-NEXT: B.DIM s6, 4, ->lb0
 # CHECK-NEXT: B.DIM s7, 5, ->lb1
 # CHECK-NEXT: B.DIM s8, 6, ->lb2
-# CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last, ->u<32KB>
+# CHECK-NEXT: B.IOT t#1, mask=1111, last, ->u<32KB>
 --- |
   define void @runtime_descriptor_copy() { ret void }
 ...

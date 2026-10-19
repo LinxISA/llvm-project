@@ -4929,6 +4929,9 @@ void LinxV5TRegToOffsetOpt::markTileLastUses(MachineFunction &MF) {
               isRC(MO.getReg(), RC, MRI))
             MO.setIsKill(false);
 
+      if (EnableGenericElement)
+        continue;
+
       for (auto MII = MBB.rbegin(), MIE = MBB.rend(); MII != MIE; ++MII) {
         MachineInstr &MI = *MII;
         if (canSkipMI(MI))

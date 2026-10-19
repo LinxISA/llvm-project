@@ -110,3 +110,9 @@ B.IOT tile_n4, tile_n1, mask=1111, ->n<32KB>
 // ENC: encoding: [0x13,0x5e,0x00,0x00]
 // DIS: B.IOT t#1.reuse, mask=1111
 B.IOT tile_t1.reuse, mask=1111
+
+// Inline-asm templates may append `.reuse` to a compiler-printed reuse alias.
+// Treat repeated suffixes idempotently and print one canonical marker.
+// ENC: encoding: [0x13,0x5e,0x00,0x00]
+// DIS: B.IOT t#1.reuse, mask=1111
+B.IOT t#1.reuse.reuse, mask=1111

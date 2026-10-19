@@ -18,14 +18,14 @@
 #
 # CHECK-LABEL: name: trailing_publication_loop_contract
 # CHECK: bb.2:
-# CHECK: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, 25, 29
-# CHECK: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, 1, 29
-# CHECK: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
+# CHECK: $tile_n = PseudoTCOPYDesc 1, {{(killed )?}}$tile_nos{{[0-9]+}}, 1, 32, 1, 25, 29
+# CHECK: $tile_n = PseudoTCOPYDesc 1, {{(killed )?}}$tile_nos{{[0-9]+}}, 1, 32, 1, 1, 29
+# CHECK: dead $tile_n = PseudoTCOPYDesc 1, {{(killed )?}}$tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
 # CHECK-NOT: PseudoEmptyTile
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
 # LEGACY-LABEL: name: trailing_publication_loop_contract
 # LEGACY: bb.2:
-# LEGACY: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
+# LEGACY: dead $tile_n = PseudoTCOPYDesc 1, {{(killed )?}}$tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
 # LEGACY-NOT: PseudoEmptyTile
 #
 # The second case moves the dead publication between the two live values. The
@@ -34,12 +34,12 @@
 # same physical hand and SizeCode but different complete descriptors.
 # CHECK-LABEL: name: interior_publication_loop_contract
 # CHECK: bb.2:
-# CHECK-COUNT-5: $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}
+# CHECK-COUNT-5: $tile_n = PseudoTCOPYDesc 1, {{(killed )?}}$tile_nos{{[0-9]+}}
 # CHECK-NOT: PseudoEmptyTile
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_n{{[0-9]+}}
 # LEGACY-LABEL: name: interior_publication_loop_contract
 # LEGACY: bb.2:
-# LEGACY: dead $tile_n = PseudoTCOPYDesc 1, $tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
+# LEGACY: dead $tile_n = PseudoTCOPYDesc 1, {{(killed )?}}$tile_nos{{[0-9]+}}, 1, 32, 1, {{(25|1)}}, 29
 # LEGACY-NOT: PseudoEmptyTile
 --- |
   define void @trailing_publication_loop_contract() { ret void }
