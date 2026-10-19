@@ -303,6 +303,14 @@ resets the domain after each function, so assembly and direct object output
 use the same masks. Inline assembly cannot reset the compiler-owned domain or
 hide calls/raw instructions outside the supported local Tile statement set.
 
+Generic-element codegen conservatively retains Local Tile source generations.
+The current masked-bundle execution profile requires two-source operations to
+use ``B.IOT`` Func=4 (retain/retain); Func=2 (last-use/last-use) is outside that
+profile. This does not remove native lifetime support: explicit assembly and
+default legacy codegen continue to encode independent bare-source last-use and
+``.reuse`` retention decisions. The conservative rule applies only while
+``-linxv5-enable-generic-element`` is active.
+
 The optimized frontend records completion per function. Unprocessed annotations,
 including annotations introduced by linking another IR module, are rejected by
 raw code generation. ``-O0`` does not support these boundaries. These checks

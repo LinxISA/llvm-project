@@ -21,7 +21,7 @@ B.IOT t#1.reuse, u#1.reuse, mask=1111, last, ->u<1>
 B.SUBVIEW 1, zero, 0, 1
 BSTOP
 
-# CHECK: TADD <Row=32, Col=2, ValidCol=1, BF16, CUBE_M32>, T#1, U#1[base=zero, offset=0], ->U<128B>
+# CHECK: TADD <Row=32, Col=2, ValidCol=1, BF16, CUBE_M32>, T#1.reuse, U#1.reuse[base=zero, offset=0], ->U<128B>
 # CHECK-NOT: BSTART.TEPL
 
 BSTART.TEPL 0x41, BF16
@@ -34,7 +34,7 @@ B.SUBVIEW 0, zero, 0, 5
 BSTOP
 
 # Multi-cell (16 x 128B) source view: the folded macro must spell the size.
-# CHECK: TROWMAX <Row=32, Col=32, BF16, CUBE_M32>, U#3[base=zero, offset=0, size=5], ->T<2KB>
+# CHECK: TROWMAX <Row=32, Col=32, BF16, CUBE_M32>, U#3.reuse[base=zero, offset=0, size=5], ->T<2KB>
 
 BSTART.TEPL 0x5b, BF16
 C.B.DIMI 32, ->lb0
@@ -46,6 +46,6 @@ B.DATR CUBE_M32.normal, Null
 BSTOP
 
 # The layout B.DATR follows the binders; folding must still happen.
-# CHECK: TCOLEXPANDEXPDIF <Row=32, Col=2, ValidCol=32, BF16, CUBE_M32>, U#3[base=zero, offset=0, size=5], T#1, ->T<128B>
+# CHECK: TCOLEXPANDEXPDIF <Row=32, Col=2, ValidCol=32, BF16, CUBE_M32>, U#3.reuse[base=zero, offset=0, size=5], T#1.reuse, ->T<128B>
 
 

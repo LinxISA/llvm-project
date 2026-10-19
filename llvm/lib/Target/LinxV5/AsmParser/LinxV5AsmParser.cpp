@@ -17,6 +17,7 @@
 #include "MCTargetDesc/LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5TileOpExpand.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallString.h"
@@ -81,10 +82,6 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   };
   int IAVS = IA_SHUTDOWN; // Inline Asm Validate State
   int64_t ActiveCubeTileOp = -1;
-  bool ParsingBIOT = false;
-  unsigned BIOTSourceCount = 0;
-  unsigned BIOTReuseMask = 0;
-  bool BIOSExplicitReuse = false;
   std::unique_ptr<ParsedTileMacroLine> PendingTileMacro;
 
   SMLoc getLoc() const { return getParser().getTok().getLoc(); }
@@ -1463,60 +1460,6 @@ bool LinxV5AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return Error(IDLoc, Msg);
   }
   case Match_Success:
-    // Unqualified sources are last-use in canonical PTO text. Keep the
-    // original reuse opcodes as codegen's explicit lifetime representation.
-    if (ParsingBIOT) {
-      switch (Inst.getOpcode()) {
-      case LinxV5::B_IOT_OneSrc_Dst:
-      case LinxV5::B_IOT_OneSrcLast_Dst:
-        Inst.setOpcode(BIOTReuseMask == 0
-                           ? LinxV5::B_IOT_OneSrcLast_Dst
-                           : LinxV5::B_IOT_OneSrc_Dst);
-        break;
-      case LinxV5::B_IOT_OneSrc_NoDst:
-      case LinxV5::B_IOT_OneSrcLast_NoDst:
-        Inst.setOpcode(BIOTReuseMask == 0
-                           ? LinxV5::B_IOT_OneSrcLast_NoDst
-                           : LinxV5::B_IOT_OneSrc_NoDst);
-        break;
-      case LinxV5::B_IOT_TwoSrc_Dst:
-      case LinxV5::B_IOT_TwoSrcLastLast_Dst:
-      case LinxV5::B_IOT_TwoSrcReuseLast_Dst:
-      case LinxV5::B_IOT_TwoSrcLastReuse_Dst:
-        if (BIOTReuseMask == 0)
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastLast_Dst);
-        else if (BIOTReuseMask == 1)
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrcReuseLast_Dst);
-        else if (BIOTReuseMask == 2)
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastReuse_Dst);
-        else
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrc_Dst);
-        break;
-      case LinxV5::B_IOT_TwoSrc_NoDst:
-      case LinxV5::B_IOT_TwoSrcLastLast_NoDst:
-      case LinxV5::B_IOT_TwoSrcReuseLast_NoDst:
-      case LinxV5::B_IOT_TwoSrcLastReuse_NoDst:
-        if (BIOTReuseMask == 0)
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastLast_NoDst);
-        else if (BIOTReuseMask == 1)
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrcReuseLast_NoDst);
-        else if (BIOTReuseMask == 2)
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrcLastReuse_NoDst);
-        else
-          Inst.setOpcode(LinxV5::B_IOT_TwoSrc_NoDst);
-        break;
-      default:
-        break;
-      }
-    } else if (Inst.getOpcode() == LinxV5::B_IOS ||
-               Inst.getOpcode() == LinxV5::B_IOS_Last) {
-      // The last-use record fixes SizeCode=0, so its decoded/matched form
-      // may omit that operand. Normalize before selecting either lifetime.
-      if (Inst.getNumOperands() == 2)
-        Inst.addOperand(MCOperand::createImm(0));
-      Inst.setOpcode(Inst.getOperand(2).getImm() == 0 && !BIOSExplicitReuse
-                         ? LinxV5::B_IOS_Last : LinxV5::B_IOS);
-    }
     if (maybeValidateInlineAsm(Inst, IDLoc))
       return true;
     if (validateInstruction(Inst, Operands, IDLoc))
@@ -2597,18 +2540,10 @@ LinxV5AsmParser::parseSIMTDstVecRWithArrow(OperandVector &Operands) {
 OperandMatchResultTy
 LinxV5AsmParser::parseTileReg(OperandVector &Operands) {
   StringRef Str = getLexer().getTok().getString();
-  bool ExplicitReuse = ParsingBIOT && Str.endswith_insensitive(".reuse");
-  if (ExplicitReuse)
-    Str = Str.drop_back(StringRef(".reuse").size());
   MCRegister RegNo;
   matchTileRegisterNameHelper(RegNo, Str);
   if (RegNo == LinxV5::NoRegister)
     return MatchOperand_NoMatch;
-  if (ParsingBIOT) {
-    if (ExplicitReuse)
-      BIOTReuseMask |= 1u << BIOTSourceCount;
-    ++BIOTSourceCount;
-  }
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
   Operands.push_back(LinxV5Operand::createReg(RegNo, S, E));
@@ -2667,14 +2602,6 @@ LinxV5AsmParser::parseSharedTIDWithArrow(OperandVector &Operands) {
   }
   if (Str.empty())
     Str = getLexer().getTok().getIdentifier();
-  if (!IsDestination && Str.endswith_insensitive(".reuse")) {
-    BIOSExplicitReuse = true;
-    if (getLexer().peekTok().is(AsmToken::Less)) {
-      getParser().Error(S, "Shared destination cannot have a reuse suffix");
-      return MatchOperand_ParseFail;
-    }
-    Str = Str.drop_back(StringRef(".reuse").size());
-  }
   if (!Str.startswith_insensitive("s"))
     return MatchOperand_NoMatch;
   if (Str.size() > 1 && Str[1] == '#')
@@ -4228,9 +4155,6 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
   PendingTileMacro.reset();
-  ParsingBIOT = Name.equals_insensitive("B.IOT");
-  BIOTSourceCount = BIOTReuseMask = 0;
-  BIOSExplicitReuse = false;
   bool IsLegacyColonSyntax = false;
   if (getLexer().is(AsmToken::Less)) {
     AsmToken Less = getLexer().getTok();
@@ -4348,13 +4272,87 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
   return false;
 }
 
-static bool isTileBSTART(MCInst &Inst) {
-  return Inst.getOpcode() == LinxV5::BSTART_VPAR ||
-         Inst.getOpcode() == LinxV5::BSTART_MPAR ||
-         Inst.getOpcode() == LinxV5::BSTART_MSEQ ||
-         Inst.getOpcode() == LinxV5::BSTART_VSEQ ||
-         Inst.getOpcode() == LinxV5::BSTART_TMA ||
-         Inst.getOpcode() == LinxV5::BSTART_CUBE;
+static Optional<unsigned> getFixedCubeTileOp(unsigned Opcode) {
+  switch (Opcode) {
+  case LinxV5::BSTART_TMATMUL:
+    return LinxV5Op::TileOPCUBE::MAMULB;
+  case LinxV5::BSTART_TMATMUL_BIAS:
+    return LinxV5Op::TileOPCUBE::MAMULBAC;
+  case LinxV5::BSTART_TMATMUL_ACC:
+    return LinxV5Op::TileOPCUBE::MAMULB_ACC;
+  case LinxV5::BSTART_TMATMULMX:
+    return LinxV5Op::TileOPCUBE::MAMULBMX;
+  case LinxV5::BSTART_TMATMULMX_BIAS:
+    return LinxV5Op::TileOPCUBE::MAMULBMXAC;
+  case LinxV5::BSTART_TMATMULMX_ACC:
+    return LinxV5Op::TileOPCUBE::MAMULBMX_ACC;
+  case LinxV5::BSTART_TGEMV:
+    return LinxV5Op::TileOPCUBE::TGEMV;
+  case LinxV5::BSTART_TGEMV_BIAS:
+    return LinxV5Op::TileOPCUBE::TGEMV_BIAS;
+  case LinxV5::BSTART_TGEMV_ACC:
+    return LinxV5Op::TileOPCUBE::TGEMV_ACC;
+  case LinxV5::BSTART_TGEMVMX:
+    return LinxV5Op::TileOPCUBE::TGEMVMX;
+  case LinxV5::BSTART_TGEMVMX_BIAS:
+    return LinxV5Op::TileOPCUBE::TGEMVMX_BIAS;
+  case LinxV5::BSTART_TGEMVMX_ACC:
+    return LinxV5Op::TileOPCUBE::TGEMVMX_ACC;
+  default:
+    return None;
+  }
+}
+
+static Optional<unsigned> getCubeTileOp(const MCInst &Inst) {
+  if (Inst.getOpcode() == LinxV5::BSTART_CUBE &&
+      Inst.getNumOperands() >= 2 && Inst.getOperand(1).isImm())
+    return Inst.getOperand(1).getImm();
+  return getFixedCubeTileOp(Inst.getOpcode());
+}
+
+static bool isTileBSTART(const MCInst &Inst, uint64_t TSFlags) {
+  if (!LinxV5II::isBSTART(TSFlags))
+    return false;
+  if (getCubeTileOp(Inst))
+    return true;
+  switch (Inst.getOpcode()) {
+  case LinxV5::BSTART_VPAR:
+  case LinxV5::BSTART_MPAR:
+  case LinxV5::BSTART_MSEQ:
+  case LinxV5::BSTART_VSEQ:
+  case LinxV5::BSTART_TMA:
+  case LinxV5::BSTART_TIMG2COL:
+  case LinxV5::BSTART_TLOAD:
+  case LinxV5::BSTART_TSTORE:
+  case LinxV5::BSTART_TMOV:
+  case LinxV5::BSTART_TPREFETCH:
+  case LinxV5::BSTART_MGATHER:
+  case LinxV5::BSTART_MSCATTER:
+  case LinxV5::BSTART_MGATHER_MASK:
+  case LinxV5::BSTART_MSCATTER_MASK:
+  case LinxV5::BSTART_MGATHER_CAS:
+  case LinxV5::BSTART_MGATHER_EXCH:
+  case LinxV5::BSTART_MGATHER_MAX:
+  case LinxV5::BSTART_MGATHER_MIN:
+  case LinxV5::BSTART_MGATHER_ADD:
+  case LinxV5::BSTART_MGATHER_INC:
+  case LinxV5::BSTART_MGATHER_DEC:
+  case LinxV5::BSTART_MGATHER_AND:
+  case LinxV5::BSTART_MGATHER_OR:
+  case LinxV5::BSTART_MGATHER_XOR:
+  case LinxV5::BSTART_MSCATTER_MAX:
+  case LinxV5::BSTART_MSCATTER_MIN:
+  case LinxV5::BSTART_MSCATTER_ADD:
+  case LinxV5::BSTART_MSCATTER_INC:
+  case LinxV5::BSTART_MSCATTER_DEC:
+  case LinxV5::BSTART_MSCATTER_AND:
+  case LinxV5::BSTART_MSCATTER_OR:
+  case LinxV5::BSTART_MSCATTER_XOR:
+  case LinxV5::BSTART_MSCATTER_POPC:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static bool isBSTOP(MCInst &Inst) {
@@ -4384,7 +4382,7 @@ bool LinxV5AsmParser::maybeValidateInlineAsm(MCInst &Inst, SMLoc IDLoc) {
   const MCInstrDesc &Desc = MII.get(Inst.getOpcode());
   uint64_t TSFlags = Desc.TSFlags;
   if (IAVS == IA_START) {
-    if (LinxV5II::isTileOp(TSFlags) || isTileBSTART(Inst))
+    if (LinxV5II::isTileOp(TSFlags) || isTileBSTART(Inst, TSFlags))
       IAVS = IA_TILE;
     else if (LinxV5II::isBSTART(TSFlags) || LinxV5II::isHeaderOnly(TSFlags))
       IAVS = IA_BLOCK;
@@ -4552,6 +4550,10 @@ void LinxV5AsmParser::emitToStreamer(MCStreamer &S, const MCInst &Inst) {
   bool Res =
       llvm::LinxV5::tryCompressInst(CInst, Inst, getSTI(), S.getContext());
   MCInst Emitted = Res ? CInst : Inst;
+  // Canonicalize every direct or pseudo-expanded B.IOT at the common
+  // streaming boundary. This keeps assembly output and object emission on the
+  // same unambiguous lifetime opcode family.
+  normalizeBIOTLifetimeOpcode(Emitted);
   LinxV5TilePEDomain::stamp(Emitted,
                             getTargetStreamer().getTilePEDomain());
   S.emitInstruction(Emitted, getSTI());
@@ -4838,11 +4840,9 @@ bool LinxV5AsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
                    "inline assembly calls are forbidden in a nondefault Tile PE domain");
   }
   uint64_t TSFlags = Desc.TSFlags;
-  if (Inst.getOpcode() == LinxV5::BSTART_CUBE) {
-    assert(Inst.getNumOperands() > 1 && Inst.getOperand(1).isImm() &&
-           "BSTART.CUBE must carry a TileOP selector");
-    ActiveCubeTileOp = Inst.getOperand(1).getImm();
-  } else if (isTileBSTART(Inst) || LinxV5II::isBSTART(TSFlags) ||
+  if (Optional<unsigned> CubeTileOp = getCubeTileOp(Inst)) {
+    ActiveCubeTileOp = *CubeTileOp;
+  } else if (isTileBSTART(Inst, TSFlags) || LinxV5II::isBSTART(TSFlags) ||
              isBSTOP(Inst)) {
     ActiveCubeTileOp = -1;
   }

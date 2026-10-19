@@ -15,7 +15,7 @@ C.B.DIMI 7, ->lb1
 C.B.DIMI 64, ->lb2
 B.IOT T#1.reuse, T#2.reuse, mask=1100, last, ->T<2KB>
 
-# CHECK: TADD{{ +}}<Row=8, Col=64, ValidRow=7, ValidCol=60, FP32, PE0_1>, T#1, T#2, ->T<2KB>
+# CHECK: TADD{{ +}}<Row=8, Col=64, ValidRow=7, ValidCol=60, FP32, PE0_1>, T#1.reuse, T#2.reuse, ->T<2KB>
 
 # Fixed-default scalar fields are accepted explicitly but omitted from
 # canonical output because they do not require a B.IOR command.

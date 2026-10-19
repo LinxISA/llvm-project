@@ -5,13 +5,13 @@ target triple = "linx64v5"
 
 ; Overlapping Shared SSA values need different absolute registers.
 ; CHECK-LABEL: <overlap>:
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S1<512B>
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S0, mask=1111
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S1, mask=1111
 define void @overlap(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in0, i64 0)
@@ -27,13 +27,13 @@ define void @overlap(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
 
 ; Non-overlapping Shared SSA values may reuse the same absolute register.
 ; CHECK-LABEL: <reuse>:
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S0, mask=1111
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S0, mask=1111
 define void @reuse(ptr %in0, ptr %in1, ptr %out0, ptr %out1) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in0, i64 0)
@@ -90,9 +90,9 @@ right:
 ; Shared-right TMATMUL consumes the Shared register through B.IOS. The B.IOT
 ; stream contains only local A and the ordinary local-tile result.
 ; CHECK-LABEL: <matmul_shared>:
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
-; CHECK: BSTART.CUBE TMATMUL, FP32
+; CHECK: BSTART.TMATMUL FP32
 ; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 ; CHECK-NEXT: B.IOS S0, mask=1111
 ; CHECK-NEXT: B.IOT {{[^,]+}}, mask=1111, last, ->t<512B>
@@ -108,9 +108,9 @@ define void @matmul_shared(ptr %in_a, ptr %in_b, ptr %out) {
 ; A Shared-right matrix macro is not necessarily the final consumer. Its
 ; lowered B.IOS must preserve liveness just like the direct Shared TLSU path.
 ; CHECK-LABEL: <matmul_shared_reuse>:
-; CHECK: BSTART.CUBE TMATMUL, FP32
+; CHECK: BSTART.TMATMUL FP32
 ; CHECK: B.IOS S0.reuse, mask=1111
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S0, mask=1111
 define void @matmul_shared_reuse(ptr %in_a, ptr %in_b, ptr %out0, ptr %out1) {
   %a = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 16, i64 16, i64 1, i64 1, i64 3, i64 4, ptr %in_a, i64 16)

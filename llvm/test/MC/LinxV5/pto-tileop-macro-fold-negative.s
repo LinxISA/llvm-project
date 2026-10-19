@@ -49,7 +49,7 @@ C.BSTART.STD
 
 # CHECK: TEXPANDS{{ +}}<Row=32, Col=1, FP32>, a0, ->T<128B>
 # CHECK: TLOAD{{ +}}<Row=32, Col=1, FP32>, [base=a0, stride=a1], ->S0<128B>
-# CHECK: TCVT{{ +}}<Col=1, ValidRow=64, FP32, FP16>, T#1, ->T<128B>
-# CHECK: BSTART.CUBE TMATMUL
+# CHECK: TCVT{{ +}}<Col=1, ValidRow=64, FP32, FP16>, T#1.reuse, ->T<128B>
+# CHECK: BSTART.TMATMUL
 # CHECK: BSTART.GMOV FP32
 # CHECK: BSTART.TEPL TADD

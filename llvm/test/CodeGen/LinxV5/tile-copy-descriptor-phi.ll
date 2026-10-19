@@ -20,7 +20,7 @@
 ; CHECK-NEXT: B.DATR M322ND.normal, Null
 ; CHECK-NEXT: C.B.DIMI 4, ->lb0
 ; CHECK-NEXT: C.B.DIMI 32, ->lb1
-; CHECK-NEXT: B.IOT t#1, mask=1111, last
+; CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last
 
 target triple = "linx64v5-unknown-linux-musl"
 

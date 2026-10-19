@@ -10,11 +10,11 @@
 # Both spellings must encode identically and round-trip through the
 # disassembler.
 
-# CHECK: BSTART.TLSU TMOV, DTYPE_NONE
-# CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last, ->t<128B>
+# CHECK: BSTART.TMOV DTYPE_NONE
+# CHECK-NEXT: B.IOT t#1, mask=1111, last, ->t<128B>
 TCOPY T#1, ->T<128B>
 
-# CHECK: BSTART.TLSU TMOV, DTYPE_NONE
+# CHECK: BSTART.TMOV DTYPE_NONE
 # CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last, ->t<128B>
 # CHECK-NEXT: BSTOP
 BSTART.TLSU TMOV, DTYPE_NONE
@@ -22,7 +22,7 @@ B.IOT t#1.reuse, mask=1111, last, ->t<128B>
 BSTOP
 
 # A concrete dtype keeps its explicit carrier (source-level TMOV form).
-# CHECK: BSTART.TLSU TMOV, FP32
+# CHECK: BSTART.TMOV FP32
 # CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last, ->t<512B>
 # CHECK-NEXT: BSTOP
 BSTART.TLSU TMOV, FP32

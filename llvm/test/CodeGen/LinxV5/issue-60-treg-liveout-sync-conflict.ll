@@ -1,42 +1,21 @@
-; RUN: llc -mtriple=linx64v5 -O2 -enable-all-vector-as-tilereg=true \
+; RUN: not --crash llc -mtriple=linx64v5 -O2 -enable-all-vector-as-tilereg=true \
 ; RUN:     -linxv5-enable-HL-Inst-Opt=true -linxv5-enable-dim-opt=true \
 ; RUN:     -linxv5-enable-ldst-bridge=false \
 ; RUN:     -linxv5-enable-continuous-mem-opt=true \
 ; RUN:     -linxv5-enable-tile-clock-hand=false \
 ; RUN:     -linxv5-enable-simt-clock-hand=true -enable-misched=false \
-; RUN:     %s -o - | FileCheck %s
-; RUN: llc -mtriple=linx64v5 -O2 -enable-all-vector-as-tilereg=true \
-; RUN:     -linxv5-enable-HL-Inst-Opt=true -linxv5-enable-dim-opt=true \
-; RUN:     -linxv5-enable-ldst-bridge=false \
-; RUN:     -linxv5-enable-continuous-mem-opt=true \
-; RUN:     -linxv5-enable-tile-clock-hand=false \
-; RUN:     -linxv5-enable-simt-clock-hand=true -enable-misched=false \
-; RUN:     -filetype=obj %s -o %t
+; RUN:     %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=CONFLICT
 
 ;; Issue #60: an unrolled if-select (`if (j == cid) TMOV(upd[j], cur)` over a
 ;; Local tile array) leaves a different tile live-out at the same tail-aligned
 ;; window depth per successor arm. getLiveoutLimits used to abort with
 ;; "Liveouts sync-up error!". The conflicting register classes (here the T/U
-;; tile windows) now keep absolute tile registers instead of being rewritten
-;; to window offsets; classes without conflicts (the M window) are still
-;; rewritten.
+;; tile windows) has multiple reaching native distances at the synchronization
+;; use. Until guard correlation proves one unique distance, lowering must stop
+;; with a stable diagnostic instead of selecting one path or emitting an
+;; absolute-register compatibility fallback.
 
-; CHECK: main:
-;; Source-level TMOV keeps its FP32 BSTART dtype; the destination stays an
-;; absolute tile_ vreg because the T/U window rewrite was skipped.
-; CHECK: BSTART.TLSU TMOV, FP32
-; CHECK: B.IOT m#1, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
-; CHECK: BSTART.TLSU TMOV, FP32
-; CHECK: B.IOT m#1, mask=1111, last, ->tile_{{[tu][0-9]+}}<512B>
-;; Queue rotation emits an explicit descriptor-bearing TMOV. A zero-mask
-;; PseudoEmptyTile would not advance the architectural queue, while an
-;; omitted B.DATR/B.DIM copy would default to NORM 1x1.
-; CHECK: BSTART.TLSU TMOV, FP32
-; CHECK: B.DATR NORM.normal, Zero
-; CHECK-NEXT: C.B.DIMI 1, ->lb0
-; CHECK-NEXT: C.B.DIMI 1, ->lb1
-; CHECK-NEXT: C.B.DIMI 128, ->lb2
-; CHECK-NEXT: B.IOT m#{{[0-9]+}}.reuse, mask=1111, last, ->m<512B>
+; CONFLICT: Local tile synchronization conflict use has no unique reaching native distance
 
 ; ModuleID = 'i60.cpp'
 source_filename = "i60.cpp"
