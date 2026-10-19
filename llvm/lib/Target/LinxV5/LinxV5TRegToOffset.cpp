@@ -1476,10 +1476,11 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
             NewSlots[i]->IsAssembleParent ? LRs[i]->MI : nullptr;
         if (LRs[i]->LastUse != nullptr || LRs[i]->IsLiveout) {
           NewSlots[i]->RegOp.Reg = LRs[i]->DefMO->getReg();
-          NewSlots[i]->RegOp.Descriptor =
-              LinxV5::tryGetTileRegDescriptor(
-                  *MBB, std::next(LRs[i]->MI->getIterator()),
-                  LRs[i]->DefMO->getReg());
+          if (EnableGenericElement)
+            NewSlots[i]->RegOp.Descriptor =
+                LinxV5::tryGetTileRegDescriptor(
+                    *MBB, std::next(LRs[i]->MI->getIterator()),
+                    LRs[i]->DefMO->getReg());
         }
       }
       LLVM_DEBUG(dbgs() << "emit " << *OI.MI);

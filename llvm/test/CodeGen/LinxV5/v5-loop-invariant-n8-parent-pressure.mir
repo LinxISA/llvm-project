@@ -1,10 +1,10 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl \
-# RUN:   -linxv5-enable-tile-clock-hand=false \
+# RUN:   -linxv5-enable-tile-clock-hand=false -linxv5-enable-generic-element=true \
 # RUN:   -run-pass=linxv5-clockhands -o - %t/two-parent.mir \
 # RUN:   | FileCheck %s --check-prefix=TWO
 # RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
-# RUN:   -linxv5-enable-tile-clock-hand=false \
+# RUN:   -linxv5-enable-tile-clock-hand=false -linxv5-enable-generic-element=true \
 # RUN:   -run-pass=linxv5-clockhands -o /dev/null %t/three-parent.mir 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=THREE
 #

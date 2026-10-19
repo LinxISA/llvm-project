@@ -1528,8 +1528,9 @@ findLoopInvariantN8Tiles(MachineFunction &MF, MachineLoopInfo &MLI) {
 
 void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
   SmallVector<Register> OpenParents = findOpenAssembleParents(MF);
-  SmallVector<Register> LoopInvariantN8 =
-      findLoopInvariantN8Tiles(MF, *MLI);
+  SmallVector<Register> LoopInvariantN8;
+  if (EnableGenericElement)
+    LoopInvariantN8 = findLoopInvariantN8Tiles(MF, *MLI);
   if (!EnableTileClockHand && OpenParents.empty() &&
       LoopInvariantN8.empty()) {
     assignMultiOutput(MF);
