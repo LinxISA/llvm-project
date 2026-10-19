@@ -470,25 +470,70 @@ static bool isScalarReg(const TargetRegisterClass *RC) {
   assert(0 && "Reg Class is not offset register!");
 }
 
+#define LINXV5_TILE_BANK(Prefix)                                               \
+  LinxV5::Prefix##1, LinxV5::Prefix##2, LinxV5::Prefix##3,                   \
+      LinxV5::Prefix##4, LinxV5::Prefix##5, LinxV5::Prefix##6,               \
+      LinxV5::Prefix##7, LinxV5::Prefix##8, LinxV5::Prefix##9,               \
+      LinxV5::Prefix##10, LinxV5::Prefix##11, LinxV5::Prefix##12,            \
+      LinxV5::Prefix##13, LinxV5::Prefix##14, LinxV5::Prefix##15,            \
+      LinxV5::Prefix##16
+#define LINXV5_TILE_REUSE_BANK(Prefix)                                         \
+  LinxV5::Prefix##1##_RU, LinxV5::Prefix##2##_RU, LinxV5::Prefix##3##_RU,    \
+      LinxV5::Prefix##4##_RU, LinxV5::Prefix##5##_RU,                        \
+      LinxV5::Prefix##6##_RU, LinxV5::Prefix##7##_RU,                        \
+      LinxV5::Prefix##8##_RU, LinxV5::Prefix##9##_RU,                        \
+      LinxV5::Prefix##10##_RU, LinxV5::Prefix##11##_RU,                      \
+      LinxV5::Prefix##12##_RU, LinxV5::Prefix##13##_RU,                      \
+      LinxV5::Prefix##14##_RU, LinxV5::Prefix##15##_RU,                      \
+      LinxV5::Prefix##16##_RU
+
 static Register getTileReuseReg(Register Reg) {
-  if (Reg >= LinxV5::Tile_T1 && Reg <= LinxV5::Tile_T16)
-    return LinxV5::Tile_T1_RU + Reg - LinxV5::Tile_T1;
-  if (Reg >= LinxV5::Tile_U1 && Reg <= LinxV5::Tile_U16)
-    return LinxV5::Tile_U1_RU + Reg - LinxV5::Tile_U1;
-  if (Reg >= LinxV5::Tile_M1 && Reg <= LinxV5::Tile_M16)
-    return LinxV5::Tile_M1_RU + Reg - LinxV5::Tile_M1;
-  if (Reg >= LinxV5::Tile_N1 && Reg <= LinxV5::Tile_N16)
-    return LinxV5::Tile_N1_RU + Reg - LinxV5::Tile_N1;
-  if (Reg >= LinxV5::Tile_TOS1 && Reg <= LinxV5::Tile_TOS16)
-    return LinxV5::Tile_TOS1_RU + Reg - LinxV5::Tile_TOS1;
-  if (Reg >= LinxV5::Tile_UOS1 && Reg <= LinxV5::Tile_UOS16)
-    return LinxV5::Tile_UOS1_RU + Reg - LinxV5::Tile_UOS1;
-  if (Reg >= LinxV5::Tile_MOS1 && Reg <= LinxV5::Tile_MOS16)
-    return LinxV5::Tile_MOS1_RU + Reg - LinxV5::Tile_MOS1;
-  if (Reg >= LinxV5::Tile_NOS1 && Reg <= LinxV5::Tile_NOS16)
-    return LinxV5::Tile_NOS1_RU + Reg - LinxV5::Tile_NOS1;
+  static const MCPhysReg BaseBanks[][16] = {
+      {LINXV5_TILE_BANK(Tile_T)},   {LINXV5_TILE_BANK(Tile_U)},
+      {LINXV5_TILE_BANK(Tile_M)},   {LINXV5_TILE_BANK(Tile_N)},
+      {LINXV5_TILE_BANK(Tile_TOS)}, {LINXV5_TILE_BANK(Tile_UOS)},
+      {LINXV5_TILE_BANK(Tile_MOS)}, {LINXV5_TILE_BANK(Tile_NOS)}};
+  static const MCPhysReg ReuseBanks[][16] = {
+      {LINXV5_TILE_REUSE_BANK(Tile_T)},
+      {LINXV5_TILE_REUSE_BANK(Tile_U)},
+      {LINXV5_TILE_REUSE_BANK(Tile_M)},
+      {LINXV5_TILE_REUSE_BANK(Tile_N)},
+      {LINXV5_TILE_REUSE_BANK(Tile_TOS)},
+      {LINXV5_TILE_REUSE_BANK(Tile_UOS)},
+      {LINXV5_TILE_REUSE_BANK(Tile_MOS)},
+      {LINXV5_TILE_REUSE_BANK(Tile_NOS)}};
+  for (unsigned Bank = 0; Bank != 8; ++Bank)
+    for (unsigned Index = 0; Index != 16; ++Index)
+      if (Reg == BaseBanks[Bank][Index])
+        return ReuseBanks[Bank][Index];
   return Reg;
 }
+
+// Descriptor copies are queue-preserving TMOVs, so their source publication
+// must survive independently of the source program's explicit lifetime.  A
+// generic-element function extends that conservative rule to every Local Tile
+// source because masked execution may skip the apparent last-use consumer.
+static void preserveRequiredTileSources(MachineFunction &MF,
+                                        bool PreserveAllSources) {
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB) {
+      if (!PreserveAllSources && MI.getOpcode() != LinxV5::PseudoTCOPYDesc)
+        continue;
+      for (MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.isUse() || MO.isDef() ||
+            !MO.getReg().isPhysical())
+          continue;
+        Register ReuseReg = getTileReuseReg(MO.getReg());
+        if (ReuseReg == MO.getReg())
+          continue;
+        MO.setReg(ReuseReg);
+        MO.setIsKill(false);
+      }
+    }
+}
+
+#undef LINXV5_TILE_REUSE_BANK
+#undef LINXV5_TILE_BANK
 
 static bool isRC(Register Reg, const TargetRegisterClass *RC,
                  const MachineRegisterInfo *MRI) {
@@ -1026,7 +1071,7 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
           report_fatal_error(
               "Local tile COPY descriptor SizeCode disagrees with allocator");
         buildTileDescriptorCopy(*MBB, Before, *TII, *TRI, TR,
-                                RegState::Define, TR, RegState::Kill,
+                                RegState::Define, TR, 0,
                                 Descriptor);
       } else {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_MOV))
@@ -4584,12 +4629,17 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
   if (!EnableReg2Offset) {
-    for (MachineBasicBlock &MBB : MF)
-      for (MachineInstr &MI : MBB)
-        for (MachineOperand &MO : MI.operands())
-          if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
-              !MO.isKill())
-            MO.setReg(getTileReuseReg(MO.getReg()));
+    if (EnableGenericElement) {
+      preserveRequiredTileSources(MF, true);
+    } else {
+      for (MachineBasicBlock &MBB : MF)
+        for (MachineInstr &MI : MBB)
+          for (MachineOperand &MO : MI.operands())
+            if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
+                !MO.isKill())
+              MO.setReg(getTileReuseReg(MO.getReg()));
+      preserveRequiredTileSources(MF, false);
+    }
     eraseLocalTileABISeeds(MF);
     return true;
   }
@@ -4612,6 +4662,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
       llvm::erase_value(TBDoneMBBs, MBB);
       DoneMBBs.push_back(MBB);
     }
+    preserveRequiredTileSources(MF, false);
     eraseLocalTileABISeeds(MF);
     return true;
   }
@@ -4699,6 +4750,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     DoneMBBs.push_back(MBB);
   }
 
+  preserveRequiredTileSources(MF, true);
   eraseLocalTileABISeeds(MF);
 
   return true;
