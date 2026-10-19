@@ -742,6 +742,21 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
   return Result;
 }
 
+static bool equalIgnoringUnderscores(StringRef LHS, StringRef RHS) {
+  size_t LI = 0;
+  size_t RI = 0;
+  while (true) {
+    while (LI != LHS.size() && LHS[LI] == '_')
+      ++LI;
+    while (RI != RHS.size() && RHS[RI] == '_')
+      ++RI;
+    if (LI == LHS.size() || RI == RHS.size())
+      return LI == LHS.size() && RI == RHS.size();
+    if (LHS[LI++] != RHS[RI++])
+      return false;
+  }
+}
+
 static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
                                ArrayRef<uint8_t> Bytes, uint64_t Address,
                                const MCDisassembler *Decoder,
@@ -756,6 +771,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
   TileMacroHeaderKind HeaderKind;
   unsigned Selector = 0;
   unsigned DataType = 0;
+  const TileMacroOperationDesc *Operation = nullptr;
   if (Header.getOpcode() == LinxV5::BSTART_TEPL_NoMode &&
       Header.getNumOperands() == 2) {
     HeaderKind = TileMacroHeaderKind::TEPL;
@@ -781,16 +797,39 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     HeaderKind = TileMacroHeaderKind::GMOV;
     DataType = Header.getOperand(0).getImm();
     Selector = 13;
+  } else if (Header.getNumOperands() == 1 &&
+             Header.getOperand(0).isImm()) {
+    // Standalone PTO 0.58.7 headers use dedicated opcodes and carry only the
+    // dtype operand. Recover their catalog identity from the TableGen opcode
+    // name so every exact TLSU/CUBE form remains eligible for macro folding.
+    StringRef OpcodeName = MII.getName(Header.getOpcode());
+    if (!OpcodeName.consume_front("BSTART_"))
+      return false;
+    for (unsigned I = 0; I != TileMacroOperationCount; ++I) {
+      const TileMacroOperationDesc &Candidate = TileMacroOperations[I];
+      if ((Candidate.HeaderKind == TileMacroHeaderKind::TLSU ||
+           Candidate.HeaderKind == TileMacroHeaderKind::CUBE) &&
+          equalIgnoringUnderscores(OpcodeName, Candidate.Mnemonic)) {
+        Operation = &Candidate;
+        HeaderKind = Candidate.HeaderKind;
+        Selector = Candidate.Selector;
+        DataType = Header.getOperand(0).getImm();
+        break;
+      }
+    }
+    if (!Operation)
+      return false;
   } else {
     return false;
   }
 
-  const TileMacroOperationDesc *Operation = nullptr;
-  for (unsigned I = 0; I != TileMacroOperationCount; ++I) {
-    if (TileMacroOperations[I].HeaderKind == HeaderKind &&
-        TileMacroOperations[I].Selector == Selector) {
-      Operation = &TileMacroOperations[I];
-      break;
+  if (!Operation) {
+    for (unsigned I = 0; I != TileMacroOperationCount; ++I) {
+      if (TileMacroOperations[I].HeaderKind == HeaderKind &&
+          TileMacroOperations[I].Selector == Selector) {
+        Operation = &TileMacroOperations[I];
+        break;
+      }
     }
   }
   if (!Operation)

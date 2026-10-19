@@ -7,6 +7,7 @@
 # remain valid and disassemble with the explicit retain suffix.
 B.IOS S3, mask=1111
 B.IOS S3.reuse, mask=1111
+B.IOS S3.reuse.reuse, mask=1111
 
 # Destination B.IOS keeps bit 26 clear and does not accept a lifetime suffix.
 B.IOS mask=1111, ->S3<512B>
@@ -16,8 +17,10 @@ B.IOS mask=1111, ->S3<512B>
 
 # ENC: B.IOS{{.*}}S3, mask=1111{{.*}}encoding: [0x13,0x1e,0x30,0x04]
 # ENC: B.IOS{{.*}}S3.reuse, mask=1111{{.*}}encoding: [0x13,0x1e,0x30,0x00]
+# ENC: B.IOS{{.*}}S3.reuse, mask=1111{{.*}}encoding: [0x13,0x1e,0x30,0x00]
 # ENC: B.IOS{{.*}}->S3<512B>{{.*}}encoding: [0x13,0x9e,0x31,0x00]
 # DIS: B.IOS{{.*}}S3, mask=1111
+# DIS: B.IOS{{.*}}S3.reuse, mask=1111
 # DIS: B.IOS{{.*}}S3.reuse, mask=1111
 # DIS: B.IOS{{.*}}->S3<512B>
 # DIS-NEXT: {{.*}}<unknown>

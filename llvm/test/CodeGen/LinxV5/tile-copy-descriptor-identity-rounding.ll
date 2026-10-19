@@ -16,7 +16,7 @@
 ; CHECK: BSTART.TLSU TSTORE, U32
 ; CHECK-NEXT: B.DATR NORM.normal, Null
 ; CHECK: C.B.DIMI 128, ->lb0
-; CHECK-NEXT: B.IOT t#1, mask=1111, last
+; CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last
 target triple = "linx64v5-unknown-linux-musl"
 
 define void @identity_rounding_phi(i1 %condition, ptr %base) {

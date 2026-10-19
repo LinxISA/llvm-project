@@ -1,4 +1,5 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-treg-to-offset -linxv5-enable-reg-to-offset=false -verify-machineinstrs=false -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-treg-to-offset -linxv5-enable-reg-to-offset=false -linxv5-enable-generic-element=true -verify-machineinstrs=false -o - %s | FileCheck %s --check-prefix=GENERIC
 
 # INLINEASM has no descriptor-level definitions, so MachineInstr::uses()
 # iterates its explicit regdef operands as well. The Local last-use pass must
@@ -21,6 +22,8 @@ body:             |
     liveins: $tile_t1, $tile_u1
 
     ; CHECK-LABEL: name: inlineasm_tile_def_and_use
-    ; CHECK: INLINEASM
+    ; CHECK: INLINEASM {{.*}}def $tile_t1{{.*}}killed $tile_t1{{.*}}killed $tile_u1
+    ; GENERIC-LABEL: name: inlineasm_tile_def_and_use
+    ; GENERIC: INLINEASM {{.*}}def $tile_t1{{.*}}$tile_t1_ru{{.*}}$tile_u1_ru
     INLINEASM &"BSTART.TEPL 112, ${1:D}\0AB.IOT $2, $4, mask=1111, last, ->$0<${3:Z}>\0A", 9 /* sideeffect mayload attdialect */, 655370 /* regdef:Tile_ABS */, def $tile_t1, 13 /* imm */, 1, 655369 /* reguse:Tile_ABS */, killed $tile_t1, 13 /* imm */, 4, 655369 /* reguse:Tile_ABS */, killed $tile_u1
 ...
