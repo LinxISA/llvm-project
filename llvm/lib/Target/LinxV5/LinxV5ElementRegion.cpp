@@ -7929,8 +7929,6 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
              "Tile legalization: typed Tile spill/reload is unsupported at -O0");
 
   SmallPtrSet<MDNode *, 4> Tokens;
-  DenseMap<PHINode *, uint64_t> ImportedPhiTypes;
-  SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
   for (CallInst *Sentinel : Sentinels) {
     auto *Domain = Sentinel->getMetadata(PredicatedDomainMD);
     auto *Count = Domain && Domain->getNumOperands() == 1
@@ -7945,6 +7943,31 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
         !Token || !Tokens.insert(Token).second)
       diagnose(F, Sentinel,
                "Tile legalization: requires a unique admitted predicated domain");
+  }
+  for (Instruction &I : instructions(F))
+    if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
+      if (!Tokens.contains(Owner))
+        diagnose(F, &I, "Tile legalization: unknown predicated region token");
+
+  SmallVector<CallInst *, 8> DeadViews;
+  for (Instruction &I : instructions(F))
+    if (getViewDescriptor(&I) && I.use_empty())
+      DeadViews.push_back(cast<CallInst>(&I));
+  while (!DeadViews.empty()) {
+    CallInst *View = DeadViews.pop_back_val();
+    auto *Source = dyn_cast<CallInst>(View->getArgOperand(0));
+    View->eraseFromParent();
+    if (Source && getViewDescriptor(Source) && Source->use_empty())
+      DeadViews.push_back(Source);
+  }
+
+  DenseMap<PHINode *, uint64_t> ImportedPhiTypes;
+  SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
+  for (CallInst *Sentinel : Sentinels) {
+    auto *Count = mdconst::extract<ConstantInt>(
+        Sentinel->getMetadata(PredicatedDomainMD)->getOperand(0));
+    auto *Token = cast<MDNode>(
+        cast<MetadataAsValue>(Sentinel->getArgOperand(0))->getMetadata());
     SmallVector<Instruction *, 64> Owned;
     for (Instruction &I : instructions(F))
       if (I.getMetadata(PredicatedOwnerMD) == Token)
@@ -7954,10 +7977,6 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     Plan->preflight();
     Plans.push_back(std::move(Plan));
   }
-  for (Instruction &I : instructions(F))
-    if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
-      if (!Tokens.contains(Owner))
-        diagnose(F, &I, "Tile legalization: unknown predicated region token");
   for (Instruction &I : instructions(F)) {
     auto View = getViewDescriptor(&I);
     if (!View || I.getMetadata(PredicatedOwnerMD))
@@ -7987,6 +8006,12 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
 
 PreservedAnalyses
 LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
+  if (F.hasFnAttribute(Attribute::OptimizeNone))
+    if (Instruction *MarkedRegion = findMarkedElementRegion(F)) {
+      diagnose(F, MarkedRegion,
+               "masked native lowering is unsupported at -O0");
+      return PreservedAnalyses::all();
+    }
   bool HasRegion = false;
   for (Instruction &I : instructions(F))
     HasRegion |= isIntrinsic(dyn_cast<CallInst>(&I),

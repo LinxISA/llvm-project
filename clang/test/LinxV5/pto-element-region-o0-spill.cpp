@@ -1,4 +1,4 @@
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O0 -c -o /dev/null %s 2>&1 | FileCheck %s
+// RUN: not %clang++ --target=linx64v5 -mlxbc -mllvm -linxv5-enable-generic-element=true -O0 -c -o /dev/null %s 2>&1 | FileCheck %s
 
 using elements = unsigned int tile_size(32);
 
@@ -19,5 +19,4 @@ void rejected_until_typed_spills_are_supported(unsigned bias) {
     output_elements[element] = input_elements[element] + bias;
 }
 
-// CHECK: error: {{.*}}PTO element region: typed Tile spill/reload is unsupported at -O0
-
+// CHECK: error: {{.*}}PTO element region: masked native lowering is unsupported at -O0

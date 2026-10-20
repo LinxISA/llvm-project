@@ -1,7 +1,7 @@
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o /dev/null -DTEST_OFFSET %s 2>&1 | FileCheck %s --check-prefix=POINTER
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o /dev/null -DTEST_DYNAMIC %s 2>&1 | FileCheck %s --check-prefix=POINTER
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o /dev/null -DTEST_SELECT %s 2>&1 | FileCheck %s --check-prefix=POINTER
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o /dev/null -DTEST_OUTSIDE %s 2>&1 | FileCheck %s --check-prefix=OUTSIDE
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o /dev/null -DTEST_OFFSET %s 2>&1 | FileCheck %s --check-prefix=POINTER
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o /dev/null -DTEST_DYNAMIC %s 2>&1 | FileCheck %s --check-prefix=POINTER
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o /dev/null -DTEST_SELECT %s 2>&1 | FileCheck %s --check-prefix=POINTER
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o /dev/null -DTEST_OUTSIDE %s 2>&1 | FileCheck %s --check-prefix=OUTSIDE
 
 using elements = unsigned int tile_size(32);
 
@@ -14,7 +14,8 @@ __attribute__((annotate(
 #if defined(TEST_OFFSET) || defined(TEST_DYNAMIC) || defined(TEST_SELECT)
 void rejected_pointer_flow(elements *sink, const elements *source,
                            unsigned delta, bool choose) {
-  elements input = *source;
+  elements input;
+  asm volatile("" : "=Tr"(input));
   elements other{};
   elements output{};
   auto &input_elements = element_view(input);
@@ -31,14 +32,15 @@ void rejected_pointer_flow(elements *sink, const elements *source,
 #pragma pto element for
   for (unsigned element = 0; element < 32; ++element)
     output_elements[element] = selected[element];
-  *sink = output;
+  asm volatile("" : : "Tr"(output));
 }
 #endif
 
 #ifdef TEST_OUTSIDE
 void rejected_shared_view(elements *sink, unsigned *scalar,
                           const elements *source) {
-  elements input = *source;
+  elements input;
+  asm volatile("" : "=Tr"(input));
   elements output{};
   auto &input_elements = element_view(input);
   auto &output_elements = element_view(output);
@@ -46,9 +48,9 @@ void rejected_shared_view(elements *sink, unsigned *scalar,
   for (unsigned element = 0; element < 32; ++element)
     output_elements[element] = input_elements[element] + 1u;
   *scalar = input_elements[0];
-  *sink = output;
+  asm volatile("" : : "Tr"(output));
 }
 #endif
 
 // POINTER: PTO element region: logical view pointer must remain exact
-// OUTSIDE: PTO element region: required region lowering did not complete
+// OUTSIDE: PTO element region: Tile legalization: invalid external typed carrier boundary

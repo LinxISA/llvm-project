@@ -1,4 +1,4 @@
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o - %s 2>&1 | FileCheck %s
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o - %s 2>&1 | FileCheck %s
 
 using tile32 = unsigned int tile_size(32);
 
@@ -10,7 +10,8 @@ __attribute__((annotate(
 
 void unsupported_order(tile32 &old_values, unsigned int *hist,
                        const tile32 &indices, unsigned int valid_lanes) {
-  tile32 local_indices = indices;
+  tile32 local_indices;
+  asm volatile("" : "=Tr"(local_indices));
   tile32 local_output{};
   auto &index_elements = element_view(local_indices);
   auto &output_elements = element_view(local_output);
@@ -22,7 +23,7 @@ void unsupported_order(tile32 &old_values, unsigned int *hist,
     else
       output_elements[i] = 0;
   }
-  old_values = local_output;
+  asm volatile("" : : "Tr"(local_output));
 }
 
-// CHECK: error: PTO element region: requires non-volatile system-scope monotonic atomic add of exact i32 value one
+// CHECK: error: PTO element region: predication: atomic profile requires aligned nonvolatile system-scope monotonic i32 add

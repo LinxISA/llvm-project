@@ -1397,17 +1397,17 @@ LinxV5MCCodeEmitter::getImmOpValuePE_MASK(const MCInst &MI, unsigned OpNo,
     switch (MI.getOpcode()) {
     case LinxV5::B_IOT_NoSrc_Dst:
     case LinxV5::B_IOT_OneSrc_Dst:
-    case LinxV5::B_IOT_OneSrcLast_Dst:
+    case LinxV5::B_IOT_OneSrc_Dst_Reuse:
     case LinxV5::B_IOT_TwoSrc_Dst:
-    case LinxV5::B_IOT_TwoSrcLastLast_Dst:
-    case LinxV5::B_IOT_TwoSrcReuseLast_Dst:
-    case LinxV5::B_IOT_TwoSrcLastReuse_Dst:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
     case LinxV5::B_IOT_OneSrc_NoDst:
-    case LinxV5::B_IOT_OneSrcLast_NoDst:
+    case LinxV5::B_IOT_OneSrc_NoDst_Reuse:
     case LinxV5::B_IOT_TwoSrc_NoDst:
-    case LinxV5::B_IOT_TwoSrcLastLast_NoDst:
-    case LinxV5::B_IOT_TwoSrcReuseLast_NoDst:
-    case LinxV5::B_IOT_TwoSrcLastReuse_NoDst:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse0:
+    case LinxV5::B_IOT_TwoSrc_NoDst_Reuse1:
+    case LinxV5::B_IOT_TwoSrc_NoDst_ReuseBoth:
       LocalBinder = true;
       break;
     default:
@@ -1439,11 +1439,11 @@ LinxV5MCCodeEmitter::getImmOpValueTSize(const MCInst &MI, unsigned OpNo,
   switch (MI.getOpcode()) {
   case LinxV5::B_IOT_NoSrc_Dst:
   case LinxV5::B_IOT_OneSrc_Dst:
-  case LinxV5::B_IOT_OneSrcLast_Dst:
+  case LinxV5::B_IOT_OneSrc_Dst_Reuse:
   case LinxV5::B_IOT_TwoSrc_Dst:
-  case LinxV5::B_IOT_TwoSrcLastLast_Dst:
-  case LinxV5::B_IOT_TwoSrcReuseLast_Dst:
-  case LinxV5::B_IOT_TwoSrcLastReuse_Dst:
+  case LinxV5::B_IOT_TwoSrc_Dst_Reuse0:
+  case LinxV5::B_IOT_TwoSrc_Dst_Reuse1:
+  case LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth:
     LocalDestination = true;
     break;
   default:

@@ -1,4 +1,4 @@
-; RUN: not opt -mtriple=linx64v5 -passes='linx-v5-element-region' -disable-output %s 2>&1 | FileCheck %s
+; RUN: not opt -mtriple=linx64v5 -passes='linx-v5-element-generic-prepare,linx-v5-element-predication' -disable-output %s 2>&1 | FileCheck %s
 
 target triple = "linx64v5"
 
@@ -30,7 +30,7 @@ exit:
   ret void
 }
 
-; CHECK: PTO element region: exceptional control flow is not supported in PTO element regions
+; CHECK: PTO element region: predication: unsupported control-flow terminator
 
 !0 = distinct !{}
 !1 = distinct !{!1, !2}
