@@ -2249,6 +2249,7 @@ def MSET:     TMPL_MEM<0b001, "MSET">;
 }
 
 let hasSideEffects = 1 in {
+let PE = PET_SYS in {
 def SSR_GET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b000, (outs DstRWithArrow:$DstR), (ins uimm12:$Imm12), "ssrget"> {
   let SrcL = 0b00000;
   let AsmString = "ssrget\t$Imm12, $DstR";
@@ -2261,6 +2262,7 @@ def SSR_SET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b001, (outs), (ins GPRSrc:
 
 def SSR_SWAP : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b010, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, uimm12:$Imm12), "ssrswap"> {
   let AsmString = "ssrswap $SrcL, $Imm12, $DstR";
+}
 }
 
 def LSR_GET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b011, (outs DstRWithArrow:$DstR), (ins uimm12:$Imm12), "lsrget"> {
