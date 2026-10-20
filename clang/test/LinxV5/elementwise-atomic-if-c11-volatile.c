@@ -1,4 +1,4 @@
-// RUN: not %clang --target=linx64v5 -mlxbc -std=c11 -O2 -emit-llvm -S -o /dev/null %s 2>&1 | FileCheck %s
+// RUN: not %clang --target=linx64v5 -mlxbc -mllvm -linxv5-enable-generic-element=true -std=c11 -O2 -emit-llvm -S -o /dev/null %s 2>&1 | FileCheck %s
 
 typedef unsigned int tile_size(32) tile32;
 
@@ -14,4 +14,4 @@ void volatile_input(tile32 *out, unsigned int *hist,
   }
 }
 
-// CHECK: error: PTO element region: volatile and atomic effects are not in P1a
+// CHECK: error: PTO element region: predication: volatile/atomic load needs effect legalization

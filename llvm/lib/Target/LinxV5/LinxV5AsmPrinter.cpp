@@ -38,6 +38,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <string>
 
@@ -60,6 +61,7 @@ class LinxV5AsmPrinter : public AsmPrinter {
   }
   const LinxV5Subtarget *STI;
   const LinxV5InstrInfo *TII;
+  unsigned CurrentTilePEDomain = LinxV5TilePEDomain::Default;
 
 public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -112,7 +114,9 @@ void LinxV5AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
     else if (LinxV5II::isFPInstr(II.TSFlags))
       ++NumVecFloats;
   }
-  AsmPrinter::EmitToStreamer(*OutStreamer, Res ? CInst : Inst);
+  MCInst Emitted = Res ? CInst : Inst;
+  LinxV5TilePEDomain::stamp(Emitted, CurrentTilePEDomain);
+  AsmPrinter::EmitToStreamer(*OutStreamer, Emitted);
 }
 
 void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
@@ -126,6 +130,44 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
+  if (TmpInst.getOpcode() == LinxV5::PseudoTMOV_SizeI) {
+    // Runtime-dimension descriptor copy. PseudoTMOV_SizeI belongs to the
+    // historical C-call pseudo family, whose generic expansion selects a
+    // CUBE header. A compiler-generated identity copy is TLSU TMOV and must
+    // carry the producer's dtype/layout and all three B.DIM operands.
+    SmallVector<MCInst, 6> Commands;
+    Commands.push_back(
+        MCInstBuilder(LinxV5::BSTART_TMA)
+            .addOperand(TmpInst.getOperand(7))
+            .addOperand(MCOperand::createImm(LinxV5Op::TileOPTMA::TMOV)));
+    Commands.push_back(
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(TmpInst.getOperand(10))
+            .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
+            .addOperand(MCOperand::createImm(
+                LinxV5Op::DataType::EMPTY_DataType))
+            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Zero))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    for (unsigned Dimension = 0; Dimension != 3; ++Dimension)
+      Commands.push_back(
+          MCInstBuilder(LinxV5::B_DIM)
+              .addOperand(MCOperand::createImm(Dimension))
+              .addOperand(TmpInst.getOperand(1 + Dimension * 2))
+              .addOperand(TmpInst.getOperand(2 + Dimension * 2)));
+    Commands.push_back(
+        MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+            .addOperand(TmpInst.getOperand(0))
+            .addOperand(MCOperand::createImm(0b1111))
+            .addOperand(TmpInst.getOperand(8))
+            .addOperand(MCOperand::createImm(1))
+            .addOperand(TmpInst.getOperand(9)));
+    for (const MCInst &Command : Commands)
+      EmitToStreamer(*OutStreamer, Command);
+    return;
+  }
   if ((TmpInst.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        TmpInst.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
     // PseudoTCOPYDesc operands:
@@ -354,18 +396,30 @@ bool LinxV5AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
 // SIMT Region for LLVM-MCA.
 void LinxV5AsmPrinter::emitFunctionBodyStart() {
-  if (!MF->getSubtarget<LinxV5Subtarget>().isSIMT())
-    return;
-  getTargetStreamer().emitRawText("# LLVM-MCA-BEGIN\n");
+  CurrentTilePEDomain = LinxV5TilePEDomain::Default;
+  const Function &F = MF->getFunction();
+  if (F.hasFnAttribute("linx-tile-pe-domain")) {
+    StringRef Value =
+        F.getFnAttribute("linx-tile-pe-domain").getValueAsString();
+    if (Value.getAsInteger(10, CurrentTilePEDomain) ||
+        !LinxV5TilePEDomain::isNativeMask(CurrentTilePEDomain))
+      report_fatal_error("function '" + F.getName() +
+                         "' has invalid linx-tile-pe-domain; expected one of "
+                         "1,2,4,8,12,14,15");
+  }
+  getTargetStreamer().enterCompilerTilePEDomain(CurrentTilePEDomain);
+  if (MF->getSubtarget<LinxV5Subtarget>().isSIMT())
+    getTargetStreamer().emitRawText("# LLVM-MCA-BEGIN\n");
 }
 
 // SIMT Region for LLVM-MCA.
 void LinxV5AsmPrinter::emitFunctionBodyEnd() {
-  if (!MF->getSubtarget<LinxV5Subtarget>().isSIMT())
-    return;
-
-  getTargetStreamer().emitRawText("# LLVM-MCA-END\n");
-  emitStackSizeGlobal(*MF);
+  if (MF->getSubtarget<LinxV5Subtarget>().isSIMT()) {
+    getTargetStreamer().emitRawText("# LLVM-MCA-END\n");
+    emitStackSizeGlobal(*MF);
+  }
+  getTargetStreamer().leaveCompilerTilePEDomain();
+  CurrentTilePEDomain = LinxV5TilePEDomain::Default;
 }
 
 void LinxV5AsmPrinter::emitStartOfAsmFile(Module &M) {}

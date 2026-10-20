@@ -2464,7 +2464,22 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                              LocationSize::beforeOrAfterPointer(), B.AATags);
       bool HasAtomic =
           isa<AtomicRMWInst>(Memory[I]) || isa<AtomicRMWInst>(Memory[J]);
+      auto *AStore = dyn_cast<StoreInst>(Memory[I]);
+      auto *BStore = dyn_cast<StoreInst>(Memory[J]);
+      bool CommutingConstantStores =
+          AStore && BStore && IndependentStreams.contains(AStore) &&
+          IndependentStreams.contains(BStore) && A.Size == B.Size &&
+          AStore->getValueOperand()->getType() ==
+              BStore->getValueOperand()->getType() &&
+          AStore->getAlign().value() >=
+              DL.getTypeStoreSize(AStore->getValueOperand()->getType()) &&
+          BStore->getAlign().value() >=
+              DL.getTypeStoreSize(BStore->getValueOperand()->getType()) &&
+          isa<Constant>(AStore->getValueOperand()) &&
+          cast<Constant>(AStore->getValueOperand())->isNullValue() &&
+          AStore->getValueOperand() == BStore->getValueOperand();
       if (AA.alias(AObject, BObject) != AliasResult::NoAlias &&
+          !CommutingConstantStores &&
           !(!HasAtomic && IndependentStreams.contains(Memory[I]) &&
             IndependentStreams.contains(Memory[J]) && A.Size == B.Size &&
             SE.getSCEV(const_cast<Value *>(A.Ptr)) ==
@@ -6506,6 +6521,30 @@ static void verifyLocalTileCallBoundaries(Function &F, DominatorTree &DT) {
     }
 }
 
+static Instruction *findMarkedElementRegion(Function &F) {
+  for (Instruction &I : instructions(F))
+    if (hasElementRegionLoopMetadata(I) ||
+        isIntrinsic(dyn_cast<CallInst>(&I),
+                    Intrinsic::linx_experimental_element_region))
+      return &I;
+  return nullptr;
+}
+
+static bool rejectUnloweredMarkedElementRegion(Function &F) {
+  Instruction *MarkedRegion = findMarkedElementRegion(F);
+  if (!MarkedRegion)
+    return false;
+  if (!EnableGenericElement)
+    return diagnose(F, MarkedRegion,
+                    "masked native lowering requires "
+                    "-linxv5-enable-generic-element=true");
+  if (F.hasFnAttribute(Attribute::OptimizeNone))
+    return diagnose(F, MarkedRegion,
+                    "masked native lowering is unsupported at -O0");
+  return diagnose(F, MarkedRegion,
+                  "required generic masked lowering did not complete");
+}
+
 static bool verifyNoResidualElementContracts(Function &F) {
   for (Instruction &I : instructions(F)) {
     if (hasElementRegionLoopMetadata(I))
@@ -6545,6 +6584,8 @@ public:
         *PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override {
+    if (rejectUnloweredMarkedElementRegion(F))
+      return false;
     return lowerRegions(
         F, getAnalysis<LoopInfoWrapperPass>().getLoopInfo(),
         getAnalysis<ScalarEvolutionWrapperPass>().getSE(),
@@ -6627,6 +6668,232 @@ LinxV5ElementCallContextPass::run(Module &M, ModuleAnalysisManager &AM) {
   auto &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   const DataLayout &DL = M.getDataLayout();
+  bool Changed = false;
+
+  // Marked loops are often outlined into ordinary local helpers whose pointer
+  // parameters do not carry source-level restrict attributes.  Those helpers
+  // still have a closed set of calls.  Prove whole-object separation at every
+  // actual call site (following a chain of local forwarding helpers when
+  // needed), then attach scoped metadata only to the access pairs covered by
+  // that proof.  Exported, address-taken, recursive, or otherwise unknown call
+  // contexts deliberately receive no facts.
+  for (Function &F : M) {
+    if (F.isDeclaration() || F.isVarArg() || !F.hasLocalLinkage() ||
+        F.hasAddressTaken())
+      continue;
+
+    SmallPtrSet<BasicBlock *, 16> RegionBlocks;
+    for (Loop *L : FAM.getResult<LoopAnalysis>(F).getLoopsInPreorder())
+      if (getElementRegionToken(*L))
+        RegionBlocks.insert(L->block_begin(), L->block_end());
+    if (RegionBlocks.empty())
+      continue;
+
+    struct OrdinaryAccess {
+      Instruction *I;
+      unsigned BaseIndex;
+      bool Writes;
+    };
+    SmallVector<Value *, 8> CandidateBases;
+    SmallVector<OrdinaryAccess, 8> Accesses;
+    auto GetBaseIndex = [&](Value *Base) {
+      auto It = llvm::find(CandidateBases, Base);
+      if (It != CandidateBases.end())
+        return unsigned(It - CandidateBases.begin());
+      CandidateBases.push_back(Base);
+      return unsigned(CandidateBases.size() - 1);
+    };
+    for (BasicBlock *BB : RegionBlocks)
+      for (Instruction &I : *BB) {
+        Value *Pointer = nullptr;
+        bool Writes = false;
+        if (auto *Load = dyn_cast<LoadInst>(&I)) {
+          Pointer = Load->getPointerOperand();
+        } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+          Pointer = Store->getPointerOperand();
+          Writes = true;
+        } else if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
+          Pointer = Atomic->getPointerOperand();
+          Writes = true;
+        }
+        Value *Base = Pointer ? getUnderlyingObject(Pointer) : nullptr;
+        auto *Arg = dyn_cast_or_null<Argument>(Base);
+        bool OrdinaryBase =
+            (Arg && Arg->getParent() == &F && Arg->getType()->isPointerTy()) ||
+            isa_and_nonnull<GlobalVariable, GlobalAlias>(Base);
+        if (OrdinaryBase)
+          Accesses.push_back({&I, GetBaseIndex(Base), Writes});
+      }
+
+    SmallVector<std::pair<unsigned, unsigned>, 8> Pairs;
+    for (unsigned I = 0; I < Accesses.size(); ++I)
+      for (unsigned J = I + 1; J < Accesses.size(); ++J) {
+        if (Accesses[I].BaseIndex == Accesses[J].BaseIndex ||
+            (!Accesses[I].Writes && !Accesses[J].Writes) ||
+            (isa<AtomicRMWInst>(Accesses[I].I) &&
+             isa<AtomicRMWInst>(Accesses[J].I)))
+          continue;
+        unsigned A = Accesses[I].BaseIndex;
+        unsigned B = Accesses[J].BaseIndex;
+        if (A > B)
+          std::swap(A, B);
+        Pairs.emplace_back(A, B);
+      }
+    llvm::sort(Pairs);
+    Pairs.erase(std::unique(Pairs.begin(), Pairs.end()), Pairs.end());
+    if (Pairs.empty())
+      continue;
+
+    SmallVector<unsigned, 8> RelevantBases;
+    for (const auto &Pair : Pairs) {
+      RelevantBases.push_back(Pair.first);
+      RelevantBases.push_back(Pair.second);
+    }
+    llvm::sort(RelevantBases);
+    RelevantBases.erase(
+        std::unique(RelevantBases.begin(), RelevantBases.end()),
+        RelevantBases.end());
+
+    auto IsClosedLocalHelper = [](Function &Helper) {
+      return !Helper.isDeclaration() && !Helper.isVarArg() &&
+             Helper.hasLocalLinkage() && !Helper.hasAddressTaken();
+    };
+    std::function<bool(Function &, ArrayRef<Value *>,
+                       SmallPtrSetImpl<Function *> &)>
+        AllContextsProve;
+    AllContextsProve = [&](Function &Context, ArrayRef<Value *> Bases,
+                           SmallPtrSetImpl<Function *> &Active) {
+      AAResults &AA = FAM.getResult<AAManager>(Context);
+      bool ProvedHere = true;
+      for (const auto &Pair : Pairs) {
+        unsigned A = Pair.first;
+        unsigned B = Pair.second;
+        Value *Left = getUnderlyingObject(Bases[A]);
+        Value *Right = getUnderlyingObject(Bases[B]);
+        if (Left == Right ||
+            AA.alias(MemoryLocation(Left,
+                                    LocationSize::beforeOrAfterPointer()),
+                     MemoryLocation(Right,
+                                    LocationSize::beforeOrAfterPointer())) !=
+                AliasResult::NoAlias) {
+          ProvedHere = false;
+          break;
+        }
+      }
+      if (ProvedHere)
+        return true;
+      if (!IsClosedLocalHelper(Context) || !Active.insert(&Context).second)
+        return false;
+
+      SmallVector<CallInst *, 4> Calls;
+      for (User *U : Context.users()) {
+        auto *Call = dyn_cast<CallInst>(U);
+        if (!Call || Call->getCalledFunction() != &Context ||
+            Call->getFunction() == &Context || Call->isMustTailCall() ||
+            Call->hasOperandBundles()) {
+          Active.erase(&Context);
+          return false;
+        }
+        Calls.push_back(Call);
+      }
+      if (Calls.empty()) {
+        Active.erase(&Context);
+        return false;
+      }
+
+      for (CallInst *Call : Calls) {
+        SmallVector<Value *, 8> OuterBases(Bases.begin(), Bases.end());
+        for (unsigned BaseIndex : RelevantBases) {
+          Value *Base = getUnderlyingObject(Bases[BaseIndex]);
+          if (auto *Arg = dyn_cast<Argument>(Base)) {
+            if (Arg->getParent() != &Context) {
+              Active.erase(&Context);
+              return false;
+            }
+            OuterBases[BaseIndex] = Call->getArgOperand(Arg->getArgNo());
+          } else if (!isa<GlobalValue>(Base)) {
+            Active.erase(&Context);
+            return false;
+          }
+        }
+        if (!AllContextsProve(*Call->getFunction(), OuterBases, Active)) {
+          Active.erase(&Context);
+          return false;
+        }
+      }
+      Active.erase(&Context);
+      return true;
+    };
+
+    SmallVector<CallInst *, 4> DirectCalls;
+    bool ClosedCalls = true;
+    for (User *U : F.users()) {
+      auto *Call = dyn_cast<CallInst>(U);
+      if (!Call || Call->getCalledFunction() != &F ||
+          Call->getFunction() == &F || Call->isMustTailCall() ||
+          Call->hasOperandBundles()) {
+        ClosedCalls = false;
+        break;
+      }
+      DirectCalls.push_back(Call);
+    }
+    if (!ClosedCalls || DirectCalls.empty())
+      continue;
+    bool AllDirectCallsProved = true;
+    for (CallInst *Call : DirectCalls) {
+      SmallVector<Value *, 8> ActualBases(CandidateBases.begin(),
+                                         CandidateBases.end());
+      for (unsigned BaseIndex : RelevantBases)
+        if (auto *Arg = dyn_cast<Argument>(CandidateBases[BaseIndex]))
+          ActualBases[BaseIndex] = Call->getArgOperand(Arg->getArgNo());
+      SmallPtrSet<Function *, 8> Active;
+      Active.insert(&F);
+      if (!AllContextsProve(*Call->getFunction(), ActualBases, Active)) {
+        AllDirectCallsProved = false;
+        break;
+      }
+    }
+    if (!AllDirectCallsProved)
+      continue;
+
+    MDBuilder MDB(M.getContext());
+    MDNode *Domain = MDB.createAnonymousAliasScopeDomain(
+        "linx.pto.element.ordinary.call.context");
+    DenseMap<unsigned, MDNode *> Scopes;
+    for (unsigned BaseIndex : RelevantBases)
+      Scopes[BaseIndex] = MDB.createAnonymousAliasScope(
+          Domain,
+          (Twine("linx.pto.element.memory.base.") + Twine(BaseIndex)).str());
+    for (OrdinaryAccess &Access : Accesses) {
+      unsigned BaseIndex = Access.BaseIndex;
+      if (!Scopes.count(BaseIndex))
+        continue;
+      SmallVector<Metadata *, 4> OtherScopes;
+      for (const auto &Pair : Pairs) {
+        unsigned A = Pair.first;
+        unsigned B = Pair.second;
+        if (A == BaseIndex)
+          OtherScopes.push_back(Scopes[B]);
+        else if (B == BaseIndex)
+          OtherScopes.push_back(Scopes[A]);
+      }
+      llvm::sort(OtherScopes);
+      OtherScopes.erase(std::unique(OtherScopes.begin(), OtherScopes.end()),
+                        OtherScopes.end());
+      MDNode *Own = MDNode::get(M.getContext(), {Scopes[BaseIndex]});
+      MDNode *Others = MDNode::get(M.getContext(), OtherScopes);
+      Access.I->setMetadata(
+          LLVMContext::MD_alias_scope,
+          MDNode::concatenate(
+              Access.I->getMetadata(LLVMContext::MD_alias_scope), Own));
+      Access.I->setMetadata(
+          LLVMContext::MD_noalias,
+          MDNode::concatenate(
+              Access.I->getMetadata(LLVMContext::MD_noalias), Others));
+    }
+    Changed = true;
+  }
+
   SmallVector<Candidate, 4> Candidates;
   for (Function &F : M) {
     if (F.isDeclaration() || F.isVarArg() ||
@@ -6736,7 +7003,6 @@ LinxV5ElementCallContextPass::run(Module &M, ModuleAnalysisManager &AM) {
   }
 
   unsigned CloneID = 0;
-  bool Changed = false;
   SmallPtrSet<Function *, 8> ContextCallers;
   DenseMap<Function *, Function *> ContextOrigins;
 
@@ -7584,6 +7850,8 @@ LinxV5ElementRegionPromotePass::run(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses LinxV5ElementRegionPass::run(Function &F,
                                                FunctionAnalysisManager &AM) {
+  if (rejectUnloweredMarkedElementRegion(F))
+    return PreservedAnalyses::all();
   bool Changed = lowerRegions(F, AM.getResult<LoopAnalysis>(F),
                               AM.getResult<ScalarEvolutionAnalysis>(F),
                               AM.getResult<DominatorTreeAnalysis>(F),
@@ -7661,8 +7929,6 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
              "Tile legalization: typed Tile spill/reload is unsupported at -O0");
 
   SmallPtrSet<MDNode *, 4> Tokens;
-  DenseMap<PHINode *, uint64_t> ImportedPhiTypes;
-  SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
   for (CallInst *Sentinel : Sentinels) {
     auto *Domain = Sentinel->getMetadata(PredicatedDomainMD);
     auto *Count = Domain && Domain->getNumOperands() == 1
@@ -7677,6 +7943,31 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
         !Token || !Tokens.insert(Token).second)
       diagnose(F, Sentinel,
                "Tile legalization: requires a unique admitted predicated domain");
+  }
+  for (Instruction &I : instructions(F))
+    if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
+      if (!Tokens.contains(Owner))
+        diagnose(F, &I, "Tile legalization: unknown predicated region token");
+
+  SmallVector<CallInst *, 8> DeadViews;
+  for (Instruction &I : instructions(F))
+    if (getViewDescriptor(&I) && I.use_empty())
+      DeadViews.push_back(cast<CallInst>(&I));
+  while (!DeadViews.empty()) {
+    CallInst *View = DeadViews.pop_back_val();
+    auto *Source = dyn_cast<CallInst>(View->getArgOperand(0));
+    View->eraseFromParent();
+    if (Source && getViewDescriptor(Source) && Source->use_empty())
+      DeadViews.push_back(Source);
+  }
+
+  DenseMap<PHINode *, uint64_t> ImportedPhiTypes;
+  SmallVector<std::unique_ptr<ElementTileLegalizer>, 4> Plans;
+  for (CallInst *Sentinel : Sentinels) {
+    auto *Count = mdconst::extract<ConstantInt>(
+        Sentinel->getMetadata(PredicatedDomainMD)->getOperand(0));
+    auto *Token = cast<MDNode>(
+        cast<MetadataAsValue>(Sentinel->getArgOperand(0))->getMetadata());
     SmallVector<Instruction *, 64> Owned;
     for (Instruction &I : instructions(F))
       if (I.getMetadata(PredicatedOwnerMD) == Token)
@@ -7686,10 +7977,6 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     Plan->preflight();
     Plans.push_back(std::move(Plan));
   }
-  for (Instruction &I : instructions(F))
-    if (MDNode *Owner = I.getMetadata(PredicatedOwnerMD))
-      if (!Tokens.contains(Owner))
-        diagnose(F, &I, "Tile legalization: unknown predicated region token");
   for (Instruction &I : instructions(F)) {
     auto View = getViewDescriptor(&I);
     if (!View || I.getMetadata(PredicatedOwnerMD))
@@ -7719,6 +8006,12 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
 
 PreservedAnalyses
 LinxV5GenericElementPreparePass::run(Function &F, FunctionAnalysisManager &AM) {
+  if (F.hasFnAttribute(Attribute::OptimizeNone))
+    if (Instruction *MarkedRegion = findMarkedElementRegion(F)) {
+      diagnose(F, MarkedRegion,
+               "masked native lowering is unsupported at -O0");
+      return PreservedAnalyses::all();
+    }
   bool HasRegion = false;
   for (Instruction &I : instructions(F))
     HasRegion |= isIntrinsic(dyn_cast<CallInst>(&I),

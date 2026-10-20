@@ -1,5 +1,6 @@
 ; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
-; RUN:   -enable-all-vector-as-tilereg=true %s -o - | FileCheck %s
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-generic-element=true %s -o - | FileCheck %s
 
 ; Equal descriptor predecessors share a canonical queue contract, so PHI
 ; coalescing need not republish the Tile. Check the typed producers/consumer;
@@ -19,7 +20,7 @@
 ; CHECK-NEXT: B.DATR M322ND.normal, Null
 ; CHECK-NEXT: C.B.DIMI 4, ->lb0
 ; CHECK-NEXT: C.B.DIMI 32, ->lb1
-; CHECK-NEXT: B.IOT t#1, mask=1111, last
+; CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last
 
 target triple = "linx64v5-unknown-linux-musl"
 

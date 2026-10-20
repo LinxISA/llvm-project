@@ -1,7 +1,19 @@
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REQUIRE-GENERIC
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 \
+// RUN:   -mllvm -linxv5-enable-generic-element=false -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REQUIRE-GENERIC
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O0 \
+// RUN:   -Xclang -disable-llvm-passes \
+// RUN:   -mllvm -linxv5-enable-generic-element=true -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REJECT-O0
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S %s -o %t.ll
 // RUN: FileCheck %s --check-prefix=IR < %t.ll
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -mllvm -enable-all-vector-as-tilereg=true -c %s -o %t.o
 // RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t.o | FileCheck %s --check-prefix=OBJ
+
+// REQUIRE-GENERIC: error: PTO element region: masked native lowering requires -linxv5-enable-generic-element=true
+// REJECT-O0: error: PTO element region: masked native lowering is unsupported at -O0
 
 extern "C" void generic_i32(const int *__restrict input,
                              const int *__restrict divisor,
@@ -36,9 +48,9 @@ extern "C" void generic_i32(const int *__restrict input,
 // OBJ-LABEL: <generic_i32>:
 // OBJ: BSTART.TEPL TCMPS, U64
 // OBJ-NEXT: {{.*}}B.DATR NORM.normal, Zero, LT
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.MGATHER U32
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.TLSU MSCATTER, U32
+// OBJ: BSTART.MSCATTER U32
 // OBJ: ExecMaskPresent
 
 extern "C" void generic_compare(const unsigned *__restrict a,
@@ -58,7 +70,7 @@ extern "C" void generic_compare(const unsigned *__restrict a,
 // OBJ-LABEL: <generic_compare>:
 // OBJ: BSTART.TEPL TCMP, U32
 // OBJ: BSTART.TEPL TSEL, U32
-// OBJ: BSTART.TLSU MSCATTER, U32
+// OBJ: BSTART.MSCATTER U32
 
 extern "C" void generic_signed_store(const int *__restrict input,
                                       const int *__restrict divisor,
@@ -73,4 +85,4 @@ extern "C" void generic_signed_store(const int *__restrict input,
 // IR: ret void
 // OBJ-LABEL: <generic_signed_store>:
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.TLSU MSCATTER, S32
+// OBJ: BSTART.MSCATTER S32

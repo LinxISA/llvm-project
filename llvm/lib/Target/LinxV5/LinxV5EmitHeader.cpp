@@ -11,6 +11,7 @@
 #include "LinxV5InstrInfo.h"
 #include "LinxV5TargetMachine.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -340,9 +341,21 @@ static bool isTileBlockInstruction(const MachineInstr &MI) {
   StringRef Asm =
       StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
           .ltrim();
-  return Asm.startswith("BSTART.TEPL") || Asm.startswith("BSTART.VEC") ||
-         Asm.startswith("BSTART.SFU") || Asm.startswith("BSTART.TLSU") ||
-         Asm.startswith("BSTART.CUBE") || Asm.startswith("BSTART.GMOV");
+  StringRef Header = Asm.split('\n').first.trim();
+  StringRef Mnemonic = Header.take_while(
+      [](char C) { return !isSpace(C); });
+  // The public API may spell a Tile family header (BSTART.CUBE TGEMV, ...)
+  // or its canonical operation header (BSTART.TGEMV ...).  Both start the
+  // same architectural Tile block and must suppress a synthetic STD header.
+  // Canonical Tile operations are the T* surface plus the MGATHER/MSCATTER
+  // families; scalar BSTART.STD/FP/AUX/SYS remain outside this predicate.
+  return Mnemonic.startswith_insensitive("BSTART.T") ||
+         Mnemonic.startswith_insensitive("BSTART.VEC") ||
+         Mnemonic.startswith_insensitive("BSTART.SFU") ||
+         Mnemonic.startswith_insensitive("BSTART.CUBE") ||
+         Mnemonic.startswith_insensitive("BSTART.GMOV") ||
+         Mnemonic.startswith_insensitive("BSTART.MGATHER") ||
+         Mnemonic.startswith_insensitive("BSTART.MSCATTER");
 }
 
 static bool startsBlock(const MachineInstr &MI) {

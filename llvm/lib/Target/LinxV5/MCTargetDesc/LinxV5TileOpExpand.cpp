@@ -71,6 +71,11 @@ void normalizeBIOTLifetimeOpcode(MCInst &Inst) {
     break;
   }
 
+  if (Inst.getNumOperands() <= Src0 || !Inst.getOperand(Src0).isReg() ||
+      (!HasOneSource &&
+       (Inst.getNumOperands() <= Src1 || !Inst.getOperand(Src1).isReg())))
+    return;
+
   bool Reuse0 = isTileReuseReg(Inst.getOperand(Src0).getReg());
   if (HasOneSource) {
     Inst.setOpcode(HasDst ? (Reuse0 ? LinxV5::B_IOT_OneSrc_Dst_Reuse
@@ -557,12 +562,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     if (Inst.getOpcode() == LinxV5::PseudoMAMULBAC_SizeI) {
       // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
-                          .addOperand(Inst.getOperand(11))  // DstTile
+                          .addOperand(Inst.getOperand(0))  // DstTile
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                          .addOperand(Inst.getOperand(0))            // TSize
+                          .addOperand(Inst.getOperand(9))            // TSize
                           .addOperand(MCOperand::createImm(0))       // Last=0
-                          .addOperand(Inst.getOperand(9))            // SrcTile0
-                          .addOperand(Inst.getOperand(10)));  // SrcTile1
+                          .addOperand(Inst.getOperand(10))            // SrcTile0
+                          .addOperand(Inst.getOperand(11)));  // SrcTile1
       // v5: B_IOT_OneSrc_NoDst(PE_MASK, Last, SrcTile0)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
@@ -572,12 +577,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
     }
     // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
-                        .addOperand(Inst.getOperand(11))  // DstTile
+                        .addOperand(Inst.getOperand(0))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                        .addOperand(Inst.getOperand(0))            // TSize
+                        .addOperand(Inst.getOperand(9))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1
-                        .addOperand(Inst.getOperand(9))            // SrcTile0
-                        .addOperand(Inst.getOperand(10)));  // SrcTile1
+                        .addOperand(Inst.getOperand(10))            // SrcTile0
+                        .addOperand(Inst.getOperand(11)));  // SrcTile1
     break;
   case LinxV5::PseudoTGEMV_BIAS_SizeI:
   case LinxV5::PseudoTGEMV_ACC_SizeI:
@@ -613,11 +618,11 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(13)));        // SrcTile1
       // v5: B_IOT_OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
-                          .addOperand(Inst.getOperand(14))  // DstTile
+                          .addOperand(Inst.getOperand(0))   // DstTile
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                          .addOperand(Inst.getOperand(0))            // TSize
+                          .addOperand(Inst.getOperand(9))            // TSize
                           .addOperand(MCOperand::createImm(1))       // Last=1
-                          .addOperand(Inst.getOperand(9)));  // SrcTile0
+                          .addOperand(Inst.getOperand(14))); // SrcTile0
       break;
     }
     // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last, SrcTile0, SrcTile1)
@@ -628,12 +633,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(11)));        // SrcTile1
     // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
-                        .addOperand(Inst.getOperand(13))  // DstTile
+                        .addOperand(Inst.getOperand(0))   // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                        .addOperand(Inst.getOperand(0))            // TSize
+                        .addOperand(Inst.getOperand(9))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1
-                        .addOperand(Inst.getOperand(9))            // SrcTile0
-                        .addOperand(Inst.getOperand(12)));  // SrcTile1
+                        .addOperand(Inst.getOperand(12))            // SrcTile0
+                        .addOperand(Inst.getOperand(13)));  // SrcTile1
     break;
   case LinxV5::PseudoTGEMVMX_SizeI:
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
@@ -680,12 +685,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(11)));        // SrcTile1
       // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
       McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
-                          .addOperand(Inst.getOperand(13))  // DstTile
+                          .addOperand(Inst.getOperand(0))   // DstTile
                           .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                          .addOperand(Inst.getOperand(0))            // TSize
+                          .addOperand(Inst.getOperand(9))            // TSize
                           .addOperand(MCOperand::createImm(1))       // Last=1
-                          .addOperand(Inst.getOperand(9))            // SrcTile0
-                          .addOperand(Inst.getOperand(12)));  // SrcTile1
+                          .addOperand(Inst.getOperand(12))            // SrcTile0
+                          .addOperand(Inst.getOperand(13)));  // SrcTile1
       break;
     }
     // v5: B_IOT_TwoSrc_NoDst(PE_MASK, Last, SrcTile0, SrcTile1)
@@ -696,11 +701,11 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(Inst.getOperand(11)));        // SrcTile1
     // v5: B_IOT_OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
-                        .addOperand(Inst.getOperand(12))  // DstTile
+                        .addOperand(Inst.getOperand(0))   // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                        .addOperand(Inst.getOperand(0))            // TSize
+                        .addOperand(Inst.getOperand(9))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1
-                        .addOperand(Inst.getOperand(9)));  // SrcTile0
+                        .addOperand(Inst.getOperand(12)));  // SrcTile0
     break;
     // v5: NoSrc_Dst(PE_MASK, TSize, Last)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
@@ -736,11 +741,11 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
   case LinxV5::PseudoTMOV_SizeI:
     // v5: OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
-                        .addOperand(Inst.getOperand(9))  // DstTile
+                        .addOperand(Inst.getOperand(0))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
-                        .addOperand(Inst.getOperand(0))            // TSize
+                        .addOperand(Inst.getOperand(8))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last
-                        .addOperand(Inst.getOperand(8)));  // SrcTile0
+                        .addOperand(Inst.getOperand(9)));  // SrcTile0
     break;
   case LinxV5::PseudoTCOPY: {
     // v5: OneSrc_Dst(PE_MASK, TSize, Last, SrcTile0, DstTile)

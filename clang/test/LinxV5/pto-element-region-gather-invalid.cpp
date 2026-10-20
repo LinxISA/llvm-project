@@ -1,5 +1,5 @@
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o /dev/null -DNONZERO %s 2>&1 | FileCheck %s --check-prefix=GATHER
-// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -emit-llvm -S -o /dev/null -DWIDE %s 2>&1 | FileCheck %s --check-prefix=GATHER
+// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o - -DNONZERO %s | FileCheck %s --check-prefixes=GATHER,NONZERO --implicit-check-not='call {{.*}}@llvm.linx.experimental.element.' --implicit-check-not='call {{.*}}@llvm.vp.' --implicit-check-not=extractelement --implicit-check-not=insertelement
+// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S -o - -DWIDE %s | FileCheck %s --check-prefix=GATHER --implicit-check-not='call {{.*}}@llvm.linx.experimental.element.' --implicit-check-not='call {{.*}}@llvm.vp.' --implicit-check-not=extractelement --implicit-check-not=insertelement
 
 using elements = unsigned int tile_size(32);
 __attribute__((annotate(
@@ -16,7 +16,8 @@ using valid_type = unsigned;
 
 void rejected_gather(elements *output_pointer, const elements *index_pointer,
                      const unsigned *table, valid_type valid) {
-  elements indices = *index_pointer;
+  elements indices;
+  asm volatile("" : "=Tr"(indices));
   elements output{};
   auto &index_elements = element_view(indices);
   auto &output_elements = element_view(output);
@@ -31,7 +32,14 @@ void rejected_gather(elements *output_pointer, const elements *index_pointer,
       output_elements[element] = 0u;
 #endif
   }
-  *output_pointer = output;
+  asm volatile("" : : "Tr"(output));
 }
 
-// GATHER: PTO element region: {{P1a requires one complete carrier publication|P1b requires one proved zero-inactive gather diamond}}
+// GATHER-LABEL: define{{.*}}rejected_gather
+// GATHER: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
+// NONZERO: freeze i32 9
+// GATHER: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr
+// GATHER-NOT: extractelement
+// GATHER-NOT: insertelement
+// GATHER-NOT: call void @llvm.linx.experimental.element.region
+// GATHER: ret void

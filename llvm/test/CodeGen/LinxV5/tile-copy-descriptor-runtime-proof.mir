@@ -1,0 +1,197 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -verify-machineinstrs \
+# RUN:   -run-pass=postrapseudos -o - %t/good.mir | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=postrapseudos -o /dev/null \
+# RUN:   %t/dimension-clobber.mir 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=postrapseudos -o /dev/null \
+# RUN:   %t/conflicting-predecessor.mir 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=postrapseudos -o /dev/null \
+# RUN:   %t/nonproducer-predecessor.mir 2>&1 | FileCheck %s --check-prefix=JOIN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=postrapseudos -o /dev/null \
+# RUN:   %t/regmask-clobber.mir 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN:   -verify-machineinstrs -run-pass=postrapseudos -o /dev/null \
+# RUN:   %t/chain-clobber.mir 2>&1 | FileCheck %s --check-prefix=BAD
+
+# A physical COPY of a runtime-shaped tile is legal only while every B.DIM
+# register still contains the value read by its descriptor producer.  The
+# proof also repairs stale kill flags and block live-ins before post-RA
+# expansion exposes the dimension registers as operands of PseudoTMOV.
+#
+# CHECK-LABEL: name: same_block_killed_use
+# CHECK: $r4 = ORI $r17, 0
+# CHECK-NEXT: $r5 = ORI $r0, 23
+# CHECK-NEXT: $tile_t3 = PseudoTMOV_SizeI $r17, 4, $r18, 5, $r19, 6, 1, 9, $tile_t2, 29, 0, 31
+# CHECK-LABEL: name: cross_block_liveins
+# CHECK: bb.1:
+# CHECK: liveins: $tile_t2, $r17, $r18, $r19
+# CHECK: $tile_t3 = PseudoTMOV_SizeI $r17, 4, $r18, 5, $r19, 6, 1, 9, $tile_t2, 29, 0, 31
+# CHECK-LABEL: name: two_copy_chain
+# CHECK-COUNT-2: PseudoTMOV_SizeI $r17, 4, $r18, 5, $r19, 6, 1, 9
+# BAD: cannot lower a physical COPY with runtime Tile descriptor registers before reaching-definition proof
+# JOIN: cannot prove a complete Local tile descriptor for COPY/PHI
+
+#--- good.mir
+--- |
+  define void @same_block_killed_use() { ret void }
+  define void @cross_block_liveins() { ret void }
+  define void @two_copy_chain() { ret void }
+...
+---
+name: same_block_killed_use
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    $r4 = ORI killed $r17, 0
+    $r5 = ORI $r0, 23
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: cross_block_liveins
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    PseudoBR %bb.1
+
+  bb.1:
+    liveins: $tile_t2
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: two_copy_chain
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    $tile_t3 = COPY $tile_t2
+    $tile_t4 = COPY $tile_t3
+    PseudoRET
+...
+
+#--- dimension-clobber.mir
+--- |
+  define void @dimension_clobber() { ret void }
+...
+---
+name: dimension_clobber
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    $r17 = ORI $r0, 7
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- conflicting-predecessor.mir
+--- |
+  define void @conflicting_predecessor() { ret void }
+...
+---
+name: conflicting_predecessor
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r2, $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    BEQ $r2, $r0, %bb.1
+    PseudoBR %bb.2
+
+  bb.1:
+    successors: %bb.3
+    liveins: $tile_t2
+    PseudoBR %bb.3
+
+  bb.2:
+    successors: %bb.3
+    liveins: $tile_t2
+    $r17 = ORI $r0, 11
+    PseudoBR %bb.3
+
+  bb.3:
+    liveins: $tile_t2
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- regmask-clobber.mir
+--- |
+  define void @regmask_clobber() { ret void }
+...
+---
+name: regmask_clobber
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2, $r3, $r4, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r2, 2293769, $r3, 2293769, $r4, 13, 5, 13, 9, 720905, $tile_t1
+    PseudoCALLInd $r0, csr_ilp32_lp64
+
+  bb.1:
+    liveins: $tile_t2
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- nonproducer-predecessor.mir
+--- |
+  define void @nonproducer_predecessor() { ret void }
+...
+---
+name: nonproducer_predecessor
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r2, $r17, $r18, $r19, $tile_t1, $tile_t2
+    BEQ $r2, $r0, %bb.1
+    PseudoBR %bb.2
+
+  bb.1:
+    successors: %bb.3
+    liveins: $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    PseudoBR %bb.3
+
+  bb.2:
+    successors: %bb.3
+    liveins: $tile_t2
+    PseudoBR %bb.3
+
+  bb.3:
+    liveins: $tile_t2
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- chain-clobber.mir
+--- |
+  define void @chain_clobber() { ret void }
+...
+---
+name: chain_clobber
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17, $r18, $r19, $tile_t1
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 4, ->lb0\0AB.DIM $2, ${4:c}, ->lb1\0AB.DIM $3, 6, ->lb2\0AB.IOT $6.reuse, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t2, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5, 13, 9, 720905, $tile_t1
+    $tile_t3 = COPY $tile_t2
+    $r17 = ORI $r0, 13
+    $tile_t4 = COPY $tile_t3
+    PseudoRET
+...

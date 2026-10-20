@@ -66,6 +66,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5ElementRegionPrepareLegacyPassPass(*PR);
   initializeLinxV5ElementRegionLegacyPassPass(*PR);
   initializeLinxV5ElementRegionVerifierLegacyPassPass(*PR);
+  initializeLinxV5PEDomainRawVerifierLegacyPassPass(*PR);
   initializeLinxV5RebindGetTilePTRPass(*PR);
   initializeLinxV5ConstantRegOptPass(*PR);
   initializeLinxV5SIMTSpillFixupPass(*PR);
@@ -164,6 +165,18 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerPipelineParsingCallback(
       [](StringRef Name, ModulePassManager &MPM,
          ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "linx-v5-pe-domain-prepare") {
+          MPM.addPass(LinxV5PEDomainPreparePass());
+          return true;
+        }
+        if (Name == "linx-v5-pe-domain-specialize") {
+          MPM.addPass(LinxV5PEDomainSpecializePass());
+          return true;
+        }
+        if (Name == "linx-v5-pe-domain-unsupported") {
+          MPM.addPass(LinxV5PEDomainUnsupportedPass());
+          return true;
+        }
         if (Name == "linx-v5-element-call-context") {
           MPM.addPass(LinxV5ElementCallContextPass());
           return true;
@@ -203,12 +216,17 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         }
         return false;
       });
+  PB.registerPipelineStartEPCallback(
+      [](ModulePassManager &MPM, OptimizationLevel) {
+        MPM.addPass(LinxV5PEDomainPreparePass());
+      });
   PB.registerOptimizerLastEPCallback(
       [](ModulePassManager &MPM, OptimizationLevel) {
         FunctionPassManager FPM;
         if (EnableGenericElement) {
           MPM.addPass(LinxV5ElementCallContextPass());
           MPM.addPass(LinxV5LocalTileABIPromotionPass());
+          MPM.addPass(LinxV5PEDomainSpecializePass());
           FPM.addPass(LinxV5GenericElementPreparePass());
           FPM.addPass(LinxV5ElementPredicationPass());
           FPM.addPass(LinxV5ElementTileLegalizationPass());
@@ -232,6 +250,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       [](ModulePassManager &MPM, OptimizationLevel Level) {
         if (Level.getSpeedupLevel() > 0 || Level.getSizeLevel() > 0)
           return;
+        MPM.addPass(LinxV5PEDomainUnsupportedPass());
         FunctionPassManager FPM;
         FPM.addPass(LinxV5TileCarrierTransportPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
@@ -281,6 +300,7 @@ TargetPassConfig *LinxV5TargetMachine::createPassConfig(PassManagerBase &PM) {
 }
 
 void LinxV5PassConfig::addIRPasses() {
+  addPass(createLinxV5PEDomainRawVerifierPass());
   addPass(createLinxV5ElementRegionPreparePass());
   addPass(createLinxV5ElementRegionPass());
   addPass(createAtomicExpandPass());

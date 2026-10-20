@@ -1,5 +1,5 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
-# RUN:   -o - %s | FileCheck %s
+# RUN:   -linxv5-enable-generic-element=true -o - %s | FileCheck %s
 #
 # Ordinary backend TLOAD producers carry a complete Local descriptor too.
 # COPY lowering must preserve their dtype, layout and explicit physical shape.

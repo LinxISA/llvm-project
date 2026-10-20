@@ -15,10 +15,12 @@
 #include "LinxV5MCExpr.h"
 #include "LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
@@ -62,6 +64,40 @@ static cl::opt<bool>
                           "ABI names (such as r1 instead of sp)"),
                  cl::init(false), cl::Hidden);
 
+static Optional<unsigned> getCubeTileOp(const MCInst &MI) {
+  if (MI.getOpcode() == LinxV5::BSTART_CUBE && MI.getNumOperands() >= 2 &&
+      MI.getOperand(1).isImm())
+    return MI.getOperand(1).getImm();
+  switch (MI.getOpcode()) {
+  case LinxV5::BSTART_TMATMUL:
+    return LinxV5Op::TileOPCUBE::MAMULB;
+  case LinxV5::BSTART_TMATMUL_BIAS:
+    return LinxV5Op::TileOPCUBE::MAMULBAC;
+  case LinxV5::BSTART_TMATMUL_ACC:
+    return LinxV5Op::TileOPCUBE::MAMULB_ACC;
+  case LinxV5::BSTART_TMATMULMX:
+    return LinxV5Op::TileOPCUBE::MAMULBMX;
+  case LinxV5::BSTART_TMATMULMX_BIAS:
+    return LinxV5Op::TileOPCUBE::MAMULBMXAC;
+  case LinxV5::BSTART_TMATMULMX_ACC:
+    return LinxV5Op::TileOPCUBE::MAMULBMX_ACC;
+  case LinxV5::BSTART_TGEMV:
+    return LinxV5Op::TileOPCUBE::TGEMV;
+  case LinxV5::BSTART_TGEMV_BIAS:
+    return LinxV5Op::TileOPCUBE::TGEMV_BIAS;
+  case LinxV5::BSTART_TGEMV_ACC:
+    return LinxV5Op::TileOPCUBE::TGEMV_ACC;
+  case LinxV5::BSTART_TGEMVMX:
+    return LinxV5Op::TileOPCUBE::TGEMVMX;
+  case LinxV5::BSTART_TGEMVMX_BIAS:
+    return LinxV5Op::TileOPCUBE::TGEMVMX_BIAS;
+  case LinxV5::BSTART_TGEMVMX_ACC:
+    return LinxV5Op::TileOPCUBE::TGEMVMX_ACC;
+  default:
+    return None;
+  }
+}
+
 void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                   StringRef Annot, const MCSubtargetInfo &STI,
                                   raw_ostream &O) {
@@ -70,18 +106,16 @@ void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
   // feeds instructions sequentially through this printer, so remember
   // whether the current bundle head is a CUBE Matrix operation. Any other
   // BSTART or the bundle terminator (BSTOP) leaves the CUBE context.
-  if (MI->getOpcode() == LinxV5::BSTART_CUBE) {
+  if (Optional<unsigned> CubeTileOp = getCubeTileOp(*MI)) {
     // TileOPCUBE functions 0-2/4-6 (TMATMUL family) and 16-18/20-22 (TGEMV
     // family) are the Matrix operations whose B.DATR PadValueOrByteId is
     // the CCTRL union; the operand order is (DataType, TileOP).
     InCUBEHeader = false;
-    if (MI->getNumOperands() >= 2 && MI->getOperand(1).isImm()) {
-      unsigned Fn = MI->getOperand(1).getImm();
-      InCUBEHeader = (Fn <= 6 && Fn != 3) || (Fn >= 16 && Fn != 19);
-    }
-  } else if (MI->getOpcode() == LinxV5::BSTART_TMA ||
-             MI->getOpcode() == LinxV5::BSTART_TEPL_NoMode ||
-             MI->getOpcode() == LinxV5::BSTART_GMOV ||
+    unsigned Fn = *CubeTileOp;
+    InCUBEHeader = (Fn <= 6 && Fn != 3) || (Fn >= 16 && Fn != 19);
+  } else if ((LinxV5II::isBSTART(MII.get(MI->getOpcode()).TSFlags) &&
+              !LinxV5II::isBlockModifier(
+                  MII.get(MI->getOpcode()).TSFlags)) ||
              MI->getOpcode() == LinxV5::BSTOP) {
     InCUBEHeader = false;
   }
@@ -436,6 +470,8 @@ void LinxV5InstPrinter::printTileSrcReg(const MCInst *MI, unsigned OpNo,
                   const MCSubtargetInfo &STI,raw_ostream &O) {
   const MCOperand &MO = MI->getOperand(OpNo);
   if (MO.isReg()) {
+    // Reuse registers have canonical names ending in `.reuse`; the selected
+    // B.IOT opcode carries the same lifetime decision in the encoding.
     O << getRegisterName(MO.getReg());
     return;
   }

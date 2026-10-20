@@ -1,5 +1,5 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
-# RUN:   -o - %s | FileCheck %s
+# RUN:   -linxv5-enable-generic-element=true -o - %s | FileCheck %s
 #
 # Elementwise result pseudos omit LB2.  The common destination-shape default
 # is ValidCol, while excess SizeCode capacity supplies physical rows.  A copy

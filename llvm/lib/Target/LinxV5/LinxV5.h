@@ -28,6 +28,7 @@ class MCInst;
 class MCOperand;
 class MachineInstr;
 class MachineOperand;
+class ModulePass;
 class PassRegistry;
 
 void LowerLinxV5MachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
@@ -87,6 +88,26 @@ struct LinxV5LocalTileABIPromotionPass
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
   static bool isRequired() { return true; }
 };
+
+struct LinxV5PEDomainPreparePass : PassInfoMixin<LinxV5PEDomainPreparePass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5PEDomainSpecializePass
+    : PassInfoMixin<LinxV5PEDomainSpecializePass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+struct LinxV5PEDomainUnsupportedPass
+    : PassInfoMixin<LinxV5PEDomainUnsupportedPass> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+
+ModulePass *createLinxV5PEDomainRawVerifierPass();
+void initializeLinxV5PEDomainRawVerifierLegacyPassPass(PassRegistry &);
 
 struct LinxV5ElementCallContextPass
     : PassInfoMixin<LinxV5ElementCallContextPass> {

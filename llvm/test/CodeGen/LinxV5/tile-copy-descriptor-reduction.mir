@@ -1,17 +1,30 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
-# RUN:   -o - %s | FileCheck %s
+# RUN:   -linxv5-enable-generic-element=true -o - %s | FileCheck %s
 #
 # Reduction B.DIM describes the source. Typed copies must use the published
-# result geometry and (for ARGMAX) U32 dtype. NORM row results have one
-# physical column; CUBE row results preserve source columns. Column results
-# have one valid row, with CUBE columns rounded to destination CELL width.
+# result geometry and (for row ARG reductions) U32 dtype. NORM row results
+# have one physical column; CUBE row results preserve source columns. Column
+# results have one valid row, with CUBE columns rounded to destination CELL
+# width.
 # CHECK-LABEL: name: row_sum_norm
 # CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 3, 1, 25, 0
 # CHECK-LABEL: name: row_max_norm
 # CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 16, 1, 1, 0
+# CHECK-LABEL: name: row_min_norm
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 4, 1, 25, 0
+# CHECK-LABEL: name: row_prod_norm
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 8, 1, 25, 0
 # CHECK-LABEL: name: row_argmax_norm
 # CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 1, 1, 25, 0
+# CHECK-LABEL: name: row_argmin_norm
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 1, 1, 25, 0
 # CHECK-LABEL: name: col_sum_norm
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 3, 1, 8, 25, 0
+# CHECK-LABEL: name: col_max_norm
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 3, 1, 8, 25, 0
+# CHECK-LABEL: name: col_min_norm
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 3, 1, 8, 25, 0
+# CHECK-LABEL: name: col_prod_norm
 # CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 3, 1, 8, 25, 0
 # CHECK-LABEL: name: row_sum_m32
 # CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 1, 32, 4, 25, 29
@@ -24,8 +37,14 @@
 --- |
   define void @row_sum_norm() { ret void }
   define void @row_max_norm() { ret void }
+  define void @row_min_norm() { ret void }
+  define void @row_prod_norm() { ret void }
   define void @row_argmax_norm() { ret void }
+  define void @row_argmin_norm() { ret void }
   define void @col_sum_norm() { ret void }
+  define void @col_max_norm() { ret void }
+  define void @col_min_norm() { ret void }
+  define void @col_prod_norm() { ret void }
   define void @row_sum_m32() { ret void }
   define void @row_argmax_m16() { ret void }
   define void @col_sum_m16() { ret void }
@@ -52,6 +71,26 @@ body: |
     PseudoRET
 ...
 ---
+name: row_min_norm
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TROWMIN, U32\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 4, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: row_prod_norm
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TROWPROD, U32\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 8, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
 name: row_argmax_norm
 tracksRegLiveness: true
 body: |
@@ -62,12 +101,52 @@ body: |
     PseudoRET
 ...
 ---
+name: row_argmin_norm
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.SFU TROWARGMIN, FP16\0AB.DATR NORM, Null\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
 name: col_sum_norm
 tracksRegLiveness: true
 body: |
   bb.0:
     $tile_u1 = IMPLICIT_DEF
     INLINEASM &"BSTART.TEPL TCOLSUM, U32\0AB.DATR NORM, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_min_norm
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TCOLMIN, U32\0AB.DATR NORM, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_max_norm
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TCOLMAX, U32\0AB.DATR NORM, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_prod_norm
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TCOLPROD, U32\0AB.DATR NORM, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
     $tile_t2 = COPY $tile_t1
     PseudoRET
 ...

@@ -502,7 +502,7 @@ static DecodeStatus decodeBIOSDstTSize(MCInst &Inst, const InsnType &insn,
 }
 
 // B.IOT destination SizeCode operand decoder (Local SizeCode contract
-// 1..12). A size code of 0 encodes the source-only form, and 13..15 are
+// 1..10). A size code of 0 encodes the source-only form, and 11..15 are
 // reserved, so an instruction word that lands on a B_IOT_*_Dst form with
 // any of these must fail to decode as a destination (the decoder then falls
 // through to the source-only form for SizeCode=0).
@@ -511,8 +511,8 @@ static DecodeStatus decodeBIOTDstSizeCode(MCInst &Inst, const InsnType &insn,
                                           int64_t Address,
                                           const MCDisassembler *Decoder) {
   uint64_t SizeCode = static_cast<uint64_t>(insn) & 0xf;
-  if (SizeCode < 1 || SizeCode > 12)
-    return MCDisassembler::Fail; // source form (0) or reserved (13..15)
+  if (SizeCode < 1 || SizeCode > 10)
+    return MCDisassembler::Fail; // source form (0) or reserved (11..15)
   Inst.addOperand(MCOperand::createImm(SizeCode));
   return MCDisassembler::Success;
 }
@@ -741,6 +741,21 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
   return Result;
 }
 
+static bool equalIgnoringUnderscores(StringRef LHS, StringRef RHS) {
+  size_t LI = 0;
+  size_t RI = 0;
+  while (true) {
+    while (LI != LHS.size() && LHS[LI] == '_')
+      ++LI;
+    while (RI != RHS.size() && RHS[RI] == '_')
+      ++RI;
+    if (LI == LHS.size() || RI == RHS.size())
+      return LI == LHS.size() && RI == RHS.size();
+    if (LHS[LI++] != RHS[RI++])
+      return false;
+  }
+}
+
 static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
                                ArrayRef<uint8_t> Bytes, uint64_t Address,
                                const MCDisassembler *Decoder,
@@ -755,6 +770,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
   TileMacroHeaderKind HeaderKind;
   unsigned Selector = 0;
   unsigned DataType = 0;
+  const TileMacroOperationDesc *Operation = nullptr;
   if (Header.getOpcode() == LinxV5::BSTART_TEPL_NoMode &&
       Header.getNumOperands() == 2) {
     HeaderKind = TileMacroHeaderKind::TEPL;
@@ -775,16 +791,39 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     HeaderKind = TileMacroHeaderKind::GMOV;
     DataType = Header.getOperand(0).getImm();
     Selector = 13;
+  } else if (Header.getNumOperands() == 1 &&
+             Header.getOperand(0).isImm()) {
+    // Standalone PTO 0.58.7 headers use dedicated opcodes and carry only the
+    // dtype operand. Recover their catalog identity from the TableGen opcode
+    // name so every exact TLSU/CUBE form remains eligible for macro folding.
+    StringRef OpcodeName = MII.getName(Header.getOpcode());
+    if (!OpcodeName.consume_front("BSTART_"))
+      return false;
+    for (unsigned I = 0; I != TileMacroOperationCount; ++I) {
+      const TileMacroOperationDesc &Candidate = TileMacroOperations[I];
+      if ((Candidate.HeaderKind == TileMacroHeaderKind::TLSU ||
+           Candidate.HeaderKind == TileMacroHeaderKind::CUBE) &&
+          equalIgnoringUnderscores(OpcodeName, Candidate.Mnemonic)) {
+        Operation = &Candidate;
+        HeaderKind = Candidate.HeaderKind;
+        Selector = Candidate.Selector;
+        DataType = Header.getOperand(0).getImm();
+        break;
+      }
+    }
+    if (!Operation)
+      return false;
   } else {
     return false;
   }
 
-  const TileMacroOperationDesc *Operation = nullptr;
-  for (unsigned I = 0; I != TileMacroOperationCount; ++I) {
-    if (TileMacroOperations[I].HeaderKind == HeaderKind &&
-        TileMacroOperations[I].Selector == Selector) {
-      Operation = &TileMacroOperations[I];
-      break;
+  if (!Operation) {
+    for (unsigned I = 0; I != TileMacroOperationCount; ++I) {
+      if (TileMacroOperations[I].HeaderKind == HeaderKind &&
+          TileMacroOperations[I].Selector == Selector) {
+        Operation = &TileMacroOperations[I];
+        break;
+      }
     }
   }
   if (!Operation)
@@ -1158,6 +1197,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
 
     auto consumeRangeModifiers = [&](ArrayRef<unsigned> SourceMembers,
                                      int DestinationMember,
+                                     unsigned DestinationSize,
                                      unsigned &Position) {
       bool SourceSeen[2] = {false, false};
       bool DestinationSeen = false;
@@ -1203,12 +1243,6 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           unsigned RegSrc = Modifier.getOperand(2).getReg();
           unsigned WriterSize = Modifier.getOperand(4).getImm();
           unsigned PhaseFlag = Last ? 8 : 4;
-          unsigned DestinationSize =
-              Body[Position - 1].getOpcode() == LinxV5::B_IOT_NoSrc_Dst ||
-                      Body[Position - 1].getOpcode() == LinxV5::B_IOT_OneSrc_Dst ||
-                      Body[Position - 1].getOpcode() == LinxV5::B_IOT_TwoSrc_Dst
-                  ? Body[Position - 1].getOperand(2).getImm()
-                  : 0;
           if (Init > 1 || Last > 1 || RegSrc < LinxV5::R0 ||
               RegSrc > LinxV5::R23 || WriterSize > 12 ||
               (DestinationMember >= 0 &&
@@ -1307,7 +1341,10 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           IOTPositions.push_back(Pos++);
           if (!consumeRangeModifiers(
                   RangeSources,
-                  Actual.Destination ? DestinationMember : -1, Pos))
+                  Actual.Destination ? DestinationMember : -1,
+                  Actual.Destination ? Body[CommandStart].getOperand(2).getImm()
+                                      : 0,
+                  Pos))
             return false;
           markConsumed(CommandStart, Pos);
           SeenSources += Actual.Sources;
@@ -1344,7 +1381,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           else
             RangeSources.push_back(Member);
           unsigned CommandStart = Pos - 1;
-          if (!consumeRangeModifiers(RangeSources, RangeDestination, Pos))
+          if (!consumeRangeModifiers(RangeSources, RangeDestination, SizeCode,
+                                      Pos))
             return false;
           markConsumed(CommandStart, Pos);
         }

@@ -28,7 +28,7 @@
 ; POSITIVE: C.B.DIMI 128, ->lb0
 ; POSITIVE: C.B.DIMI 1, ->lb1
 ; POSITIVE: C.B.DIMI 128, ->lb2
-; POSITIVE: B.IOT t#1, mask=1111, last, ->t<512B>
+; POSITIVE: B.IOT t#1.reuse, mask=1111, last, ->t<512B>
 ; POSITIVE: BSTART.STD CALL, helper128
 ; POSITIVE: BSTART.TLSU TSTORE, U32
 ; POSITIVE: BSTART.TLSU TLOAD, U32
@@ -36,7 +36,7 @@
 ; POSITIVE: C.B.DIMI 32, ->lb0
 ; POSITIVE: C.B.DIMI 1, ->lb1
 ; POSITIVE: C.B.DIMI 128, ->lb2
-; POSITIVE: B.IOT t#1, mask=1111, last, ->t<512B>
+; POSITIVE: B.IOT t#1.reuse, mask=1111, last, ->t<512B>
 ; POSITIVE: BSTART.STD CALL, helper32
 ; POSITIVE: BSTART.TLSU TSTORE, U32
 ; POSITIVE: BSTART.TLSU TLOAD, U32
@@ -44,7 +44,7 @@
 ; POSITIVE: B.DIM zero, 2048, ->lb0
 ; POSITIVE: C.B.DIMI 1, ->lb1
 ; POSITIVE: B.DIM zero, 2048, ->lb2
-; POSITIVE: B.IOT t#1, mask=1111, last, ->t<8KB>
+; POSITIVE: B.IOT t#1.reuse, mask=1111, last, ->t<8KB>
 ; POSITIVE: BSTART.STD CALL, helper2048
 ; POSITIVE: BSTART.TLSU TSTORE, U32
 ; POSITIVE-LABEL: unused_result_caller:
@@ -55,7 +55,7 @@
 ; POSITIVE: BSTART.TLSU TSTORE, U32
 ; POSITIVE-LABEL: helper128:
 ; POSITIVE: BSTART.TLSU TMOV, U32
-; POSITIVE: B.IOT t#1, mask=1111, last, ->t<512B>
+; POSITIVE: B.IOT t#1.reuse, mask=1111, last, ->t<512B>
 ; POSITIVE: BSTART.STD RET
 ; POSITIVE: c.setc.tgt
 ; POSITIVE-LABEL: helper32:
@@ -66,7 +66,7 @@
 ; POSITIVE: c.setc.tgt
 ; POSITIVE-LABEL: helper2048:
 ; POSITIVE: BSTART.TLSU TMOV, U32
-; POSITIVE: B.IOT t#1, mask=1111, last, ->t<8KB>
+; POSITIVE: B.IOT t#1.reuse, mask=1111, last, ->t<8KB>
 ; POSITIVE: BSTART.STD RET
 ; POSITIVE: c.setc.tgt
 ; DESC: linx-local-tile-abi export source descriptor does not match

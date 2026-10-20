@@ -17,6 +17,7 @@
 #include "MCTargetDesc/LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5TileOpExpand.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallString.h"
@@ -246,6 +247,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
 
   bool parseOperand(OperandVector &Operands, StringRef Mnemonic);
   bool parseDirectiveOption();
+  bool parseDirectiveTilePEDomain();
 
   void setFeatureBits(uint64_t Feature, StringRef FeatureString) {
     if (!(getSTI().getFeatureBits()[Feature])) {
@@ -598,7 +600,7 @@ public:
   }
 
   // v5: B.IOT destination legacy "TSize=N" honors the Local SizeCode
-  // contract 1..12; 0 (source-only) and 13..15 are rejected in a
+  // contract 1..10; 0 (source-only) and 11..15 are rejected in a
   // destination spelling.
   bool isB_IOT_TSize() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
@@ -607,11 +609,11 @@ public:
       return false;
     if (!evaluateConstantImm(getImm(), Imm, VK))
       return true; // symbolic form falls through to encoder
-    return Imm >= 1 && Imm <= 12;
+    return Imm >= 1 && Imm <= 10;
   }
 
   // v5: B.IOT destination-suffix SizeCode ("<8KB>"). B.IOT destination
-  // capacity is 1..12 (128B..256KB per PE); 0 is the source form and 13..15
+  // capacity is 1..10 (128B..64KB per PE); 0 is the source form and 11..15
   // reserved, all rejected at match time.
   bool isB_IOT_TileSize() const {
     LinxV5MCExpr::VariantKind VK = LinxV5MCExpr::VK_LinxV5_None;
@@ -620,7 +622,7 @@ public:
       return false;
     if (!evaluateConstantImm(getImm(), Imm, VK))
       return true; // symbolic form falls through to encoder
-    return Imm >= 1 && Imm <= 12;
+    return Imm >= 1 && Imm <= 10;
   }
 
   // v5: B.IOS destination SizeCode ("<256KB>"). A destination spelling must
@@ -2593,7 +2595,8 @@ LinxV5AsmParser::parseSharedTIDWithArrow(OperandVector &Operands) {
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
   StringRef Str = getLexer().getTok().getString();
-  if (Str == "->") {
+  bool IsDestination = Str == "->";
+  if (IsDestination) {
     getLexer().Lex();  // consume '->'
     Str = getLexer().getTok().getString();
   }
@@ -4060,14 +4063,49 @@ bool LinxV5AsmParser::ParseDirective(AsmToken DirectiveID) {
   // chance at recognizing it.
   StringRef IDVal = DirectiveID.getString();
 
+  if (getTargetStreamer().getTilePEDomain() !=
+          LinxV5TilePEDomain::Default &&
+      (IDVal == ".word" || IDVal == ".byte" || IDVal == ".short" ||
+       IDVal == ".long" || IDVal == ".2byte" || IDVal == ".4byte" ||
+       IDVal == ".8byte" || IDVal == ".quad" || IDVal == ".value" ||
+       IDVal == ".int" || IDVal == ".inst" || IDVal == ".incbin" ||
+       IDVal == ".fill" || IDVal == ".zero" || IDVal == ".space" ||
+       IDVal == ".skip" || IDVal == ".ascii" || IDVal == ".asciz" ||
+       IDVal == ".string"))
+    return Error(DirectiveID.getLoc(),
+                 "raw data directives are forbidden in a nondefault Tile PE domain");
+
   if (IDVal == ".option")
     return parseDirectiveOption();
+  else if (IDVal == ".pto_pe_domain")
+    return parseDirectiveTilePEDomain();
   else if (IDVal == ".unsafeasm") {
     IAVS = IA_UNSAFE;
     return false;
   }
 
   return true;
+}
+
+bool LinxV5AsmParser::parseDirectiveTilePEDomain() {
+  MCAsmParser &Parser = getParser();
+  if (getTargetStreamer().isCompilerOwnedTilePEDomain())
+    return Error(Parser.getTok().getLoc(),
+                 "inline assembly cannot change the compiler-owned Tile PE domain");
+  if (Parser.getTok().isNot(AsmToken::Integer))
+    return Error(Parser.getTok().getLoc(),
+                 "expected a decimal native PE mask");
+  int64_t Value = Parser.getTok().getIntVal();
+  if (Value < 0 || Value > 15 ||
+      !LinxV5TilePEDomain::isNativeMask(static_cast<unsigned>(Value)))
+    return Error(Parser.getTok().getLoc(),
+                 "Tile PE domain must be one of 1,2,4,8,12,14,15");
+  Parser.Lex();
+  if (Parser.getTok().isNot(AsmToken::EndOfStatement))
+    return Error(Parser.getTok().getLoc(),
+                 "unexpected token after Tile PE domain");
+  getTargetStreamer().emitDirectiveTilePEDomain(static_cast<unsigned>(Value));
+  return false;
 }
 
 bool LinxV5AsmParser::parseDirectiveOption() {
@@ -4234,13 +4272,87 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
   return false;
 }
 
-static bool isTileBSTART(MCInst &Inst) {
-  return Inst.getOpcode() == LinxV5::BSTART_VPAR ||
-         Inst.getOpcode() == LinxV5::BSTART_MPAR ||
-         Inst.getOpcode() == LinxV5::BSTART_MSEQ ||
-         Inst.getOpcode() == LinxV5::BSTART_VSEQ ||
-         Inst.getOpcode() == LinxV5::BSTART_TMA ||
-         Inst.getOpcode() == LinxV5::BSTART_CUBE;
+static Optional<unsigned> getFixedCubeTileOp(unsigned Opcode) {
+  switch (Opcode) {
+  case LinxV5::BSTART_TMATMUL:
+    return LinxV5Op::TileOPCUBE::MAMULB;
+  case LinxV5::BSTART_TMATMUL_BIAS:
+    return LinxV5Op::TileOPCUBE::MAMULBAC;
+  case LinxV5::BSTART_TMATMUL_ACC:
+    return LinxV5Op::TileOPCUBE::MAMULB_ACC;
+  case LinxV5::BSTART_TMATMULMX:
+    return LinxV5Op::TileOPCUBE::MAMULBMX;
+  case LinxV5::BSTART_TMATMULMX_BIAS:
+    return LinxV5Op::TileOPCUBE::MAMULBMXAC;
+  case LinxV5::BSTART_TMATMULMX_ACC:
+    return LinxV5Op::TileOPCUBE::MAMULBMX_ACC;
+  case LinxV5::BSTART_TGEMV:
+    return LinxV5Op::TileOPCUBE::TGEMV;
+  case LinxV5::BSTART_TGEMV_BIAS:
+    return LinxV5Op::TileOPCUBE::TGEMV_BIAS;
+  case LinxV5::BSTART_TGEMV_ACC:
+    return LinxV5Op::TileOPCUBE::TGEMV_ACC;
+  case LinxV5::BSTART_TGEMVMX:
+    return LinxV5Op::TileOPCUBE::TGEMVMX;
+  case LinxV5::BSTART_TGEMVMX_BIAS:
+    return LinxV5Op::TileOPCUBE::TGEMVMX_BIAS;
+  case LinxV5::BSTART_TGEMVMX_ACC:
+    return LinxV5Op::TileOPCUBE::TGEMVMX_ACC;
+  default:
+    return None;
+  }
+}
+
+static Optional<unsigned> getCubeTileOp(const MCInst &Inst) {
+  if (Inst.getOpcode() == LinxV5::BSTART_CUBE &&
+      Inst.getNumOperands() >= 2 && Inst.getOperand(1).isImm())
+    return Inst.getOperand(1).getImm();
+  return getFixedCubeTileOp(Inst.getOpcode());
+}
+
+static bool isTileBSTART(const MCInst &Inst, uint64_t TSFlags) {
+  if (!LinxV5II::isBSTART(TSFlags))
+    return false;
+  if (getCubeTileOp(Inst))
+    return true;
+  switch (Inst.getOpcode()) {
+  case LinxV5::BSTART_VPAR:
+  case LinxV5::BSTART_MPAR:
+  case LinxV5::BSTART_MSEQ:
+  case LinxV5::BSTART_VSEQ:
+  case LinxV5::BSTART_TMA:
+  case LinxV5::BSTART_TIMG2COL:
+  case LinxV5::BSTART_TLOAD:
+  case LinxV5::BSTART_TSTORE:
+  case LinxV5::BSTART_TMOV:
+  case LinxV5::BSTART_TPREFETCH:
+  case LinxV5::BSTART_MGATHER:
+  case LinxV5::BSTART_MSCATTER:
+  case LinxV5::BSTART_MGATHER_MASK:
+  case LinxV5::BSTART_MSCATTER_MASK:
+  case LinxV5::BSTART_MGATHER_CAS:
+  case LinxV5::BSTART_MGATHER_EXCH:
+  case LinxV5::BSTART_MGATHER_MAX:
+  case LinxV5::BSTART_MGATHER_MIN:
+  case LinxV5::BSTART_MGATHER_ADD:
+  case LinxV5::BSTART_MGATHER_INC:
+  case LinxV5::BSTART_MGATHER_DEC:
+  case LinxV5::BSTART_MGATHER_AND:
+  case LinxV5::BSTART_MGATHER_OR:
+  case LinxV5::BSTART_MGATHER_XOR:
+  case LinxV5::BSTART_MSCATTER_MAX:
+  case LinxV5::BSTART_MSCATTER_MIN:
+  case LinxV5::BSTART_MSCATTER_ADD:
+  case LinxV5::BSTART_MSCATTER_INC:
+  case LinxV5::BSTART_MSCATTER_DEC:
+  case LinxV5::BSTART_MSCATTER_AND:
+  case LinxV5::BSTART_MSCATTER_OR:
+  case LinxV5::BSTART_MSCATTER_XOR:
+  case LinxV5::BSTART_MSCATTER_POPC:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static bool isBSTOP(MCInst &Inst) {
@@ -4270,7 +4382,7 @@ bool LinxV5AsmParser::maybeValidateInlineAsm(MCInst &Inst, SMLoc IDLoc) {
   const MCInstrDesc &Desc = MII.get(Inst.getOpcode());
   uint64_t TSFlags = Desc.TSFlags;
   if (IAVS == IA_START) {
-    if (LinxV5II::isTileOp(TSFlags) || isTileBSTART(Inst))
+    if (LinxV5II::isTileOp(TSFlags) || isTileBSTART(Inst, TSFlags))
       IAVS = IA_TILE;
     else if (LinxV5II::isBSTART(TSFlags) || LinxV5II::isHeaderOnly(TSFlags))
       IAVS = IA_BLOCK;
@@ -4437,7 +4549,14 @@ void LinxV5AsmParser::emitToStreamer(MCStreamer &S, const MCInst &Inst) {
   MCInst CInst;
   bool Res =
       llvm::LinxV5::tryCompressInst(CInst, Inst, getSTI(), S.getContext());
-  S.emitInstruction((Res ? CInst : Inst), getSTI());
+  MCInst Emitted = Res ? CInst : Inst;
+  // Canonicalize every direct or pseudo-expanded B.IOT at the common
+  // streaming boundary. This keeps assembly output and object emission on the
+  // same unambiguous lifetime opcode family.
+  normalizeBIOTLifetimeOpcode(Emitted);
+  LinxV5TilePEDomain::stamp(Emitted,
+                            getTargetStreamer().getTilePEDomain());
+  S.emitInstruction(Emitted, getSTI());
 }
 
 void LinxV5AsmParser::emitBStartWithTarget(MCInst &Inst, SMLoc IDLoc,
@@ -4697,12 +4816,33 @@ bool LinxV5AsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
                                          MCStreamer &Out) {
   Inst.setLoc(IDLoc);
   const MCInstrDesc &Desc = MII.get(Inst.getOpcode());
+  if (getTargetStreamer().getTilePEDomain() !=
+      LinxV5TilePEDomain::Default) {
+    const unsigned Opcode = Inst.getOpcode();
+    const bool IsIndirectCall =
+        Opcode == LinxV5::BSTART_STD_WITHOUT_TARGET_32_ICALL ||
+        Opcode == LinxV5::BSTART_AUX_WITHOUT_TARGET_32_ICALL ||
+        Opcode == LinxV5::BSTART_FP_WITHOUT_TARGET_32_ICALL;
+    const bool IsDirectCall =
+        Opcode == LinxV5::BSTART_STD_WITH_TARGET_17_CALL ||
+        Opcode == LinxV5::BSTART_STD_WITH_TARGET_48_CALL ||
+        Opcode == LinxV5::BSTART_STD_WITH_TARGET_64_CALL ||
+        Opcode == LinxV5::BSTART_AUX_WITH_TARGET_17_CALL ||
+        Opcode == LinxV5::BSTART_AUX_WITH_TARGET_48_CALL ||
+        Opcode == LinxV5::BSTART_AUX_WITH_TARGET_64_CALL ||
+        Opcode == LinxV5::BSTART_FP_WITH_TARGET_17_CALL ||
+        Opcode == LinxV5::BSTART_FP_WITH_TARGET_48_CALL ||
+        Opcode == LinxV5::BSTART_FP_WITH_TARGET_64_CALL;
+    if (IsIndirectCall ||
+        (IsDirectCall &&
+         getTargetStreamer().isCompilerOwnedTilePEDomain()))
+      return Error(IDLoc,
+                   "inline assembly calls are forbidden in a nondefault Tile PE domain");
+  }
   uint64_t TSFlags = Desc.TSFlags;
-  if (Inst.getOpcode() == LinxV5::BSTART_CUBE) {
-    assert(Inst.getNumOperands() > 1 && Inst.getOperand(1).isImm() &&
-           "BSTART.CUBE must carry a TileOP selector");
-    ActiveCubeTileOp = Inst.getOperand(1).getImm();
-  } else if (isTileBSTART(Inst) || LinxV5II::isBSTART(TSFlags) ||
+  if (Optional<unsigned> CubeTileOp = getCubeTileOp(Inst)) {
+    ActiveCubeTileOp = *CubeTileOp;
+  } else if (isTileBSTART(Inst, TSFlags) || LinxV5II::isBSTART(TSFlags) ||
              isBSTOP(Inst)) {
     ActiveCubeTileOp = -1;
   }

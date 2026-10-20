@@ -23,10 +23,12 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/MathExtras.h"
+#include <functional>
 #include <set>
 
 #define DEBUG_TYPE "linxv5-treg-to-offset"
@@ -159,6 +161,7 @@ private:
       RewriteTRDefInfo;
   DenseMap<const MachineOperand *, LinxRegOp> RewriteTRIdentities;
   DenseMap<const MachineOperand *, unsigned> QueueCopyUseDistances;
+  DenseMap<const MachineOperand *, unsigned> SyncConflictUseDistances;
   DenseSet<const MachineOperand *> QueueDeadPublicationDefs;
   DenseMap<MachineBasicBlock *,
            DenseMap<const TargetRegisterClass *,
@@ -186,8 +189,6 @@ private:
       AssembleParentUseDistances;
   DenseMap<const MachineInstr *, DenseMap<Register, unsigned>>
       AssembleOrdinaryUseDistances;
-  DenseMap<const MachineBasicBlock *, DenseSet<const MachineInstr *>>
-      ClosedAssembleParentsAtTail;
 
   bool canSkipMI(MachineInstr &MI);
   bool isDistanceReg(Register Reg);
@@ -202,6 +203,7 @@ private:
     RewriteTRDefInfo.clear();
     RewriteTRIdentities.clear();
     QueueCopyUseDistances.clear();
+    SyncConflictUseDistances.clear();
     QueueDeadPublicationDefs.clear();
     CanonicalEntryContracts.clear();
     CanonicalEntryLiveIns.clear();
@@ -210,7 +212,6 @@ private:
     PureAssembleRCs.clear();
     AssembleParentUseDistances.clear();
     AssembleOrdinaryUseDistances.clear();
-    ClosedAssembleParentsAtTail.clear();
   }
 
   // Phase-1
@@ -226,6 +227,9 @@ private:
   void rebuildCanonicalEntryStates(MachineFunction &MF);
   void appendQueueFillers(MachineBasicBlock &MBB,
                           const TargetRegisterClass *RC, unsigned Count);
+  void appendDenseQueueContract(
+      MachineBasicBlock &MBB, const TargetRegisterClass *RC,
+      ArrayRef<QueueContractEntry> Contract);
   void certifyEntryContracts(MachineFunction &MF);
   void simulateAndValidateQueues(MachineFunction &MF);
   SlotStatus *getInitStatus(MachineBasicBlock &MBB,
@@ -236,10 +240,14 @@ private:
 
   void legalityCheck(MachineFunction &MF);
   void markTileLastUses(MachineFunction &MF);
-  void solveAssembleParentDataflow(MachineFunction &MF,
-                                   bool CollectClosedTailProofs = false);
+  void solveAssembleParentDataflow(MachineFunction &MF);
 
   // Phase-2
+  Optional<unsigned> proveNativeDistance(
+      MachineBasicBlock *MBB, MachineBasicBlock::iterator Before,
+      Register Reg, const TargetRegisterClass *RC, unsigned Publications,
+      SmallPtrSetImpl<MachineBasicBlock *> &Active);
+  void proveSyncConflictUseDistances(MachineFunction &MF);
   void rewriteMBB(MachineBasicBlock &MBB);
   void rewriteMBB(MachineBasicBlock &MBB,
                   TRegIndexState &TRegIdx, unsigned &CurIdx,
@@ -260,6 +268,10 @@ static void resetStateAtLocalTileABISeed(
     MachineInstr &MI, const TargetRegisterClass *RC,
     TRegIndexState &State, unsigned &CurIdx,
     const MachineRegisterInfo *MRI);
+static Optional<int64_t>
+resolveRuntimeDimensionConstant(const LinxV5::TileDescriptor &Descriptor,
+                                unsigned Dimension,
+                                const TargetRegisterInfo &TRI);
 
 static Optional<LinxV5::TileDescriptor>
 getLocalTileABISeedDescriptor(const MachineInstr &MI) {
@@ -439,6 +451,13 @@ static bool isTileReg(const TargetRegisterClass *RC) {
   return false;
 }
 
+static bool isLocalTileQueueReg(const TargetRegisterClass *RC) {
+  return RC == &LinxV5::Tile_TRRegClass ||
+         RC == &LinxV5::Tile_URRegClass ||
+         RC == &LinxV5::Tile_MRRegClass ||
+         RC == &LinxV5::Tile_NRRegClass;
+}
+
 static bool isScalarReg(const TargetRegisterClass *RC) {
   if (RC == &LinxV5::LTRRegClass || RC == &LinxV5::LURRegClass)
     return true;
@@ -451,25 +470,70 @@ static bool isScalarReg(const TargetRegisterClass *RC) {
   assert(0 && "Reg Class is not offset register!");
 }
 
+#define LINXV5_TILE_BANK(Prefix)                                               \
+  LinxV5::Prefix##1, LinxV5::Prefix##2, LinxV5::Prefix##3,                   \
+      LinxV5::Prefix##4, LinxV5::Prefix##5, LinxV5::Prefix##6,               \
+      LinxV5::Prefix##7, LinxV5::Prefix##8, LinxV5::Prefix##9,               \
+      LinxV5::Prefix##10, LinxV5::Prefix##11, LinxV5::Prefix##12,            \
+      LinxV5::Prefix##13, LinxV5::Prefix##14, LinxV5::Prefix##15,            \
+      LinxV5::Prefix##16
+#define LINXV5_TILE_REUSE_BANK(Prefix)                                         \
+  LinxV5::Prefix##1##_RU, LinxV5::Prefix##2##_RU, LinxV5::Prefix##3##_RU,    \
+      LinxV5::Prefix##4##_RU, LinxV5::Prefix##5##_RU,                        \
+      LinxV5::Prefix##6##_RU, LinxV5::Prefix##7##_RU,                        \
+      LinxV5::Prefix##8##_RU, LinxV5::Prefix##9##_RU,                        \
+      LinxV5::Prefix##10##_RU, LinxV5::Prefix##11##_RU,                      \
+      LinxV5::Prefix##12##_RU, LinxV5::Prefix##13##_RU,                      \
+      LinxV5::Prefix##14##_RU, LinxV5::Prefix##15##_RU,                      \
+      LinxV5::Prefix##16##_RU
+
 static Register getTileReuseReg(Register Reg) {
-  if (Reg >= LinxV5::Tile_T1 && Reg <= LinxV5::Tile_T16)
-    return LinxV5::Tile_T1_RU + Reg - LinxV5::Tile_T1;
-  if (Reg >= LinxV5::Tile_U1 && Reg <= LinxV5::Tile_U16)
-    return LinxV5::Tile_U1_RU + Reg - LinxV5::Tile_U1;
-  if (Reg >= LinxV5::Tile_M1 && Reg <= LinxV5::Tile_M16)
-    return LinxV5::Tile_M1_RU + Reg - LinxV5::Tile_M1;
-  if (Reg >= LinxV5::Tile_N1 && Reg <= LinxV5::Tile_N16)
-    return LinxV5::Tile_N1_RU + Reg - LinxV5::Tile_N1;
-  if (Reg >= LinxV5::Tile_TOS1 && Reg <= LinxV5::Tile_TOS16)
-    return LinxV5::Tile_TOS1_RU + Reg - LinxV5::Tile_TOS1;
-  if (Reg >= LinxV5::Tile_UOS1 && Reg <= LinxV5::Tile_UOS16)
-    return LinxV5::Tile_UOS1_RU + Reg - LinxV5::Tile_UOS1;
-  if (Reg >= LinxV5::Tile_MOS1 && Reg <= LinxV5::Tile_MOS16)
-    return LinxV5::Tile_MOS1_RU + Reg - LinxV5::Tile_MOS1;
-  if (Reg >= LinxV5::Tile_NOS1 && Reg <= LinxV5::Tile_NOS16)
-    return LinxV5::Tile_NOS1_RU + Reg - LinxV5::Tile_NOS1;
+  static const MCPhysReg BaseBanks[][16] = {
+      {LINXV5_TILE_BANK(Tile_T)},   {LINXV5_TILE_BANK(Tile_U)},
+      {LINXV5_TILE_BANK(Tile_M)},   {LINXV5_TILE_BANK(Tile_N)},
+      {LINXV5_TILE_BANK(Tile_TOS)}, {LINXV5_TILE_BANK(Tile_UOS)},
+      {LINXV5_TILE_BANK(Tile_MOS)}, {LINXV5_TILE_BANK(Tile_NOS)}};
+  static const MCPhysReg ReuseBanks[][16] = {
+      {LINXV5_TILE_REUSE_BANK(Tile_T)},
+      {LINXV5_TILE_REUSE_BANK(Tile_U)},
+      {LINXV5_TILE_REUSE_BANK(Tile_M)},
+      {LINXV5_TILE_REUSE_BANK(Tile_N)},
+      {LINXV5_TILE_REUSE_BANK(Tile_TOS)},
+      {LINXV5_TILE_REUSE_BANK(Tile_UOS)},
+      {LINXV5_TILE_REUSE_BANK(Tile_MOS)},
+      {LINXV5_TILE_REUSE_BANK(Tile_NOS)}};
+  for (unsigned Bank = 0; Bank != 8; ++Bank)
+    for (unsigned Index = 0; Index != 16; ++Index)
+      if (Reg == BaseBanks[Bank][Index])
+        return ReuseBanks[Bank][Index];
   return Reg;
 }
+
+// Descriptor copies are queue-preserving TMOVs, so their source publication
+// must survive independently of the source program's explicit lifetime.  A
+// generic-element function extends that conservative rule to every Local Tile
+// source because masked execution may skip the apparent last-use consumer.
+static void preserveRequiredTileSources(MachineFunction &MF,
+                                        bool PreserveAllSources) {
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB) {
+      if (!PreserveAllSources && MI.getOpcode() != LinxV5::PseudoTCOPYDesc)
+        continue;
+      for (MachineOperand &MO : MI.operands()) {
+        if (!MO.isReg() || !MO.isUse() || MO.isDef() ||
+            !MO.getReg().isPhysical())
+          continue;
+        Register ReuseReg = getTileReuseReg(MO.getReg());
+        if (ReuseReg == MO.getReg())
+          continue;
+        MO.setReg(ReuseReg);
+        MO.setIsKill(false);
+      }
+    }
+}
+
+#undef LINXV5_TILE_REUSE_BANK
+#undef LINXV5_TILE_BANK
 
 static bool isRC(Register Reg, const TargetRegisterClass *RC,
                  const MachineRegisterInfo *MRI) {
@@ -680,19 +744,16 @@ public:
   SmallVector<TRCopyRange> LiveSlots;
   uint64_t NrCopy;
   unsigned TRNumber;
-  const DenseSet<const MachineInstr *> *ClosedParentEpochs;
   DenseMap<const MachineOperand *, unsigned> *QueueCopyUseDistances;
   DenseSet<const MachineOperand *> *QueueDeadPublicationDefs;
   bool HadUnsynchronizedOpenParent = false;
   SlotCalc(MachineBasicBlock *mbb, const TargetInstrInfo *tii,
            const TargetRegisterClass *rc, bool iScalarRC, bool isTileRC,
-           const DenseSet<const MachineInstr *> *closedParentEpochs,
            DenseMap<const MachineOperand *, unsigned> *queueCopyUseDistances,
            DenseSet<const MachineOperand *> *queueDeadPublicationDefs)
       : MBB(mbb), TII(tii), RC(rc), IsScalarRC(iScalarRC), IsTileRC(isTileRC),
         HeadIdx(0), TailIdx(0), PreIdx(0), EntryHeadIdx(0), NrCopy(0),
-        TRNumber(RC->getNumRegs()), ClosedParentEpochs(closedParentEpochs),
-        QueueCopyUseDistances(queueCopyUseDistances),
+        TRNumber(RC->getNumRegs()), QueueCopyUseDistances(queueCopyUseDistances),
         QueueDeadPublicationDefs(queueDeadPublicationDefs) {
     TRI = MBB->getParent()->getSubtarget().getRegisterInfo();
   }
@@ -830,6 +891,47 @@ bool SlotCalc::isIdle(TRCopyRange &Slot, const MachineInstr *MI) {
   return false;
 }
 
+static void buildTileDescriptorCopy(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before,
+    const TargetInstrInfo &TII, const TargetRegisterInfo &TRI, Register Dst,
+    unsigned DstFlags, Register Src, unsigned SrcFlags,
+    const LinxV5::TileDescriptor &Descriptor) {
+  if (Descriptor.HasRuntimeDimensions) {
+    if (Descriptor.PackedPredicate)
+      report_fatal_error("runtime-dimension predicate copy is unsupported");
+    if (!LinxV5::runtimeDimensionsReachCopy(Descriptor, MBB, Before, TRI))
+      report_fatal_error(
+          "cannot prove runtime Tile descriptor registers reach COPY "
+          "without a clobber");
+    MachineInstrBuilder Copy =
+        BuildMI(MBB, Before, DebugLoc(), TII.get(LinxV5::PseudoTMOV_SizeI))
+            .addReg(Dst, DstFlags);
+    for (unsigned I = 0; I != 3; ++I)
+      Copy.addReg(Descriptor.DimensionRegs[I] == Register()
+                      ? LinxV5::R0
+                      : Descriptor.DimensionRegs[I])
+          .addImm(Descriptor.DimensionImms[I]);
+    Copy.addImm(Descriptor.DataType)
+        .addImm(Descriptor.SizeCode)
+        .addReg(Src, SrcFlags)
+        .addImm(Descriptor.Layout)
+        .addImm(LinxV5Op::PadValue::Zero)
+        .addImm(LinxV5Op::DataType::EMPTY_DataType);
+    return;
+  }
+  BuildMI(MBB, Before, DebugLoc(),
+          TII.get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
+                                             : LinxV5::PseudoTCOPYDesc))
+      .addReg(Dst, DstFlags)
+      .addImm(Descriptor.SizeCode)
+      .addReg(Src, SrcFlags)
+      .addImm(Descriptor.ValidCol)
+      .addImm(Descriptor.ValidRow)
+      .addImm(Descriptor.PhysicalCol)
+      .addImm(Descriptor.DataType)
+      .addImm(Descriptor.Layout);
+}
+
 bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
                          Optional<size_t> SourceIdx) {
   Register TR = RegOp.Reg;
@@ -844,65 +946,93 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
   if (TR == LinxV5::NoRegister) {
     if (IsTileRC) {
       if (!EnableGenericElement) {
-        BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoEmptyTile))
-            .addReg(ReserveReg, RegState::Define | RegState::Dead)
-            .addImm(1);
-        LLVM_DEBUG(dbgs() << "build legacy empty tile " << *std::prev(Before));
-        return true;
-      }
-      // A queue-alignment hole must consume a real architectural Tile entry.
-      // PseudoEmptyTile is a zero-mask NoPE and cannot serve this purpose.
-      // Duplicate any closed live value into the reserved dead register; the
-      // full descriptor keeps the filler a legal identity transport while
-      // its payload remains semantically unused.
-      const TRCopyRange *Donor = nullptr;
-      Optional<LinxV5::TileDescriptor> DonorDescriptor;
-      bool SawLiveValue = false;
-      for (unsigned I = TailIdx; I < HeadIdx; ++I) {
-        const TRCopyRange &Candidate = LiveSlots[I % TRNumber];
-        SawLiveValue |= Candidate.RegOp.Reg != LinxV5::NoRegister;
-        bool IsProvenClosedParent =
-            Candidate.AssembleParentDef && ClosedParentEpochs &&
-            ClosedParentEpochs->count(Candidate.AssembleParentDef);
-        if (Candidate.RegOp.Reg != LinxV5::NoRegister &&
-            Candidate.RegOp.Descriptor &&
-            (Candidate.IsLiveout || Candidate.LastUse) &&
-            (!Candidate.AssembleParentDef || IsProvenClosedParent)) {
-          // Candidate is one exact queue slot.  A physical register may have
-          // been redefined with another descriptor since that slot was
-          // published, so resolving the register at the insertion point can
-          // describe a different payload.  Copy the slot's own descriptor;
-          // Phase-2 simulation verifies the chosen relative source still
-          // carries this exact value and descriptor.
-          if (Candidate.RegOp.Descriptor->SizeCode != Candidate.RegOp.Size)
+        // PseudoEmptyTile is a zero-mask NoPE and does not publish a Tile.
+        // A queue-alignment hole must therefore duplicate a real, currently
+        // addressable Local tile. Walk newest-to-oldest so legacy phase-2
+        // lookup, which resolves the newest occurrence of a physical hand,
+        // names the same payload selected here. Never use an older
+        // redefinition of the same hand when its newest occurrence is an
+        // OPEN assembly parent.
+        const TRCopyRange *Donor = nullptr;
+        bool SawPublishedValue = false;
+        DenseSet<Register> SeenRegisters;
+        for (size_t I = HeadIdx; I != TailIdx; --I) {
+          const TRCopyRange &Candidate = LiveSlots[(I - 1) % TRNumber];
+          Register CandidateReg = Candidate.RegOp.Reg;
+          if (CandidateReg == LinxV5::NoRegister)
             continue;
-          Donor = &Candidate;
-          DonorDescriptor = *Candidate.RegOp.Descriptor;
-          break;
+          SawPublishedValue = true;
+          if (!SeenRegisters.insert(CandidateReg).second)
+            continue;
+          // A dead ordinary publication is still defined and addressable
+          // until it ages out of the architectural queue.  Its payload is a
+          // valid filler source even though the program no longer observes
+          // it.  OPEN parents remain excluded because copying them changes
+          // assembly generation identity.
+          if (!Candidate.AssembleParentDef && Candidate.RegOp.Descriptor &&
+              Candidate.RegOp.Descriptor->SizeCode == Candidate.RegOp.Size) {
+            Donor = &Candidate;
+            break;
+          }
         }
-      }
-      if (!Donor) {
-        if (SawLiveValue)
+        if (!Donor && !SawPublishedValue)
+          return false;
+        if (!Donor)
           report_fatal_error(
-              "cannot materialize a Tile queue-alignment entry without a "
-              "closed descriptor-bearing source");
-        // An actually empty queue needs no physical alignment command. The
-        // caller must leave the software queue unchanged as well.
-        return false;
+              "cannot materialize a legacy Tile queue-alignment entry "
+              "without a closed defined source");
+        const LinxV5::TileDescriptor &Descriptor =
+            *Donor->RegOp.Descriptor;
+        SourceIdx = Donor->Idx;
+        buildTileDescriptorCopy(*MBB, Before, *TII, *TRI, ReserveReg,
+                                RegState::Define | RegState::Dead,
+                                Donor->RegOp.Reg, 0, Descriptor);
+        LLVM_DEBUG(dbgs() << "build legacy queue filler "
+                          << *std::prev(Before));
+      } else {
+        // A queue-alignment hole must consume a real architectural Tile entry.
+        // PseudoEmptyTile is a zero-mask NoPE and cannot serve this purpose.
+        // Duplicate any closed live value into the reserved dead register; the
+        // full descriptor keeps the filler a legal identity transport while
+        // its payload remains semantically unused.
+        const TRCopyRange *Donor = nullptr;
+        Optional<LinxV5::TileDescriptor> DonorDescriptor;
+        bool SawLiveValue = false;
+        for (unsigned I = TailIdx; I < HeadIdx; ++I) {
+          const TRCopyRange &Candidate = LiveSlots[I % TRNumber];
+          SawLiveValue |= Candidate.RegOp.Reg != LinxV5::NoRegister;
+          if (Candidate.RegOp.Reg != LinxV5::NoRegister &&
+              Candidate.RegOp.Descriptor &&
+              (Candidate.IsLiveout || Candidate.LastUse) &&
+              !Candidate.AssembleParentDef) {
+            // Candidate is one exact queue slot.  A physical register may have
+            // been redefined with another descriptor since that slot was
+            // published, so resolving the register at the insertion point can
+            // describe a different payload.  Copy the slot's own descriptor;
+            // Phase-2 simulation verifies the chosen relative source still
+            // carries this exact value and descriptor.
+            if (Candidate.RegOp.Descriptor->SizeCode != Candidate.RegOp.Size)
+              continue;
+            Donor = &Candidate;
+            DonorDescriptor = *Candidate.RegOp.Descriptor;
+            break;
+          }
+        }
+        if (!Donor) {
+          if (SawLiveValue)
+            report_fatal_error(
+                "cannot materialize a Tile queue-alignment entry without a "
+                "closed descriptor-bearing source");
+          // An actually empty queue needs no physical alignment command. The
+          // caller must leave the software queue unchanged as well.
+          return false;
+        }
+        const LinxV5::TileDescriptor &Descriptor = *DonorDescriptor;
+        SourceIdx = Donor->Idx;
+        buildTileDescriptorCopy(*MBB, Before, *TII, *TRI, ReserveReg,
+                                RegState::Define | RegState::Dead,
+                                Donor->RegOp.Reg, 0, Descriptor);
       }
-      const LinxV5::TileDescriptor &Descriptor = *DonorDescriptor;
-      SourceIdx = Donor->Idx;
-      BuildMI(*MBB, Before, DebugLoc(),
-              TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
-                                                  : LinxV5::PseudoTCOPYDesc))
-          .addReg(ReserveReg, RegState::Define | RegState::Dead)
-          .addImm(Descriptor.SizeCode)
-          .addReg(Donor->RegOp.Reg)
-          .addImm(Descriptor.ValidCol)
-          .addImm(Descriptor.ValidRow)
-          .addImm(Descriptor.PhysicalCol)
-          .addImm(Descriptor.DataType)
-          .addImm(Descriptor.Layout);
     } else {
       if (LinxV5::SIMTCGSRegClass.contains(ReserveReg)) {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_ORI_SCAR))
@@ -923,14 +1053,6 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
     if (!IsScalarRC) {
       if (LinxV5::Tile_ABS_CGRegClass.contains(RegOp.Reg)) {
         unsigned RegSizeCode = RegOp.Size;
-        if (!EnableGenericElement) {
-          BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::PseudoTCOPY))
-              .addReg(TR, RegState::Define)
-              .addImm(RegSizeCode)
-              .addReg(TR, RegState::Kill);
-          LLVM_DEBUG(dbgs() << "build legacy copy " << *std::prev(Before));
-          return true;
-        }
         // This pass creates PseudoTCOPYDesc directly, bypassing
         // LinxV5InstrInfo::copyPhysReg().  PseudoTCOPYDesc is a Local-tile
         // operation; Shared tile handles must only be moved by the explicit
@@ -940,24 +1062,17 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
         if (!LinxV5::Tile_ABSRegClass.contains(TR))
           report_fatal_error(
               "LinxV5 TRegToOffset attempted PseudoTCOPY with non-Local tile");
-        if (!RegOp.Descriptor)
+        if (!RegOp.Descriptor) {
           report_fatal_error(
               "cannot prove a complete Local tile descriptor for window COPY");
+        }
         LinxV5::TileDescriptor Descriptor = *RegOp.Descriptor;
         if (Descriptor.SizeCode != RegSizeCode)
           report_fatal_error(
               "Local tile COPY descriptor SizeCode disagrees with allocator");
-        BuildMI(*MBB, Before, DebugLoc(),
-                TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
-                                                    : LinxV5::PseudoTCOPYDesc))
-            .addReg(TR, RegState::Define)
-            .addImm(RegSizeCode)
-            .addReg(TR, RegState::Kill)
-            .addImm(Descriptor.ValidCol)
-            .addImm(Descriptor.ValidRow)
-            .addImm(Descriptor.PhysicalCol)
-            .addImm(Descriptor.DataType)
-            .addImm(Descriptor.Layout);
+        buildTileDescriptorCopy(*MBB, Before, *TII, *TRI, TR,
+                                RegState::Define, TR, 0,
+                                Descriptor);
       } else {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_MOV))
             .addReg(TR, RegState::Define)
@@ -978,12 +1093,16 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
         HeadIdx - *SourceIdx < 1 || HeadIdx - *SourceIdx > TRNumber)
       report_fatal_error(
           "compiler-inserted Local tile copy lacks one exact source slot");
+    unsigned SourceOperand =
+        BuiltCopy.getOpcode() == LinxV5::PseudoTMOV_SizeI ? 9 : 2;
     if ((BuiltCopy.getOpcode() != LinxV5::PseudoTCOPYDesc &&
-         BuiltCopy.getOpcode() != LinxV5::PseudoPCOPYDesc) ||
-        BuiltCopy.getNumOperands() <= 2 || !BuiltCopy.getOperand(2).isReg())
+         BuiltCopy.getOpcode() != LinxV5::PseudoPCOPYDesc &&
+         BuiltCopy.getOpcode() != LinxV5::PseudoTMOV_SizeI) ||
+        BuiltCopy.getNumOperands() <= SourceOperand ||
+        !BuiltCopy.getOperand(SourceOperand).isReg())
       report_fatal_error(
           "compiler-inserted Local tile copy has no trackable source operand");
-    (*QueueCopyUseDistances)[&BuiltCopy.getOperand(2)] =
+    (*QueueCopyUseDistances)[&BuiltCopy.getOperand(SourceOperand)] =
         HeadIdx - *SourceIdx;
     if (IsDeadPublication)
       QueueDeadPublicationDefs->insert(&BuiltCopy.getOperand(0));
@@ -1000,9 +1119,7 @@ void SlotCalc::PreAlloc(TRCopyRange Slot) {
 }
 
 bool SlotCalc::SlotCopy(MachineBasicBlock::iterator Before, TRCopyRange &Slot) {
-  if (Slot.AssembleParentDef &&
-      (!ClosedParentEpochs ||
-       !ClosedParentEpochs->count(Slot.AssembleParentDef)))
+  if (Slot.AssembleParentDef)
     report_fatal_error(
         "cannot copy a live B.ASSEMBLE parent: the INIT parent must retain "
         "its tile identity through the complete generation");
@@ -1302,9 +1419,7 @@ void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
   // advance the queue without changing parent identity; the later assembly
   // dataflow proof recomputes every ParentRef distance after copy insertion.
   const bool HasOpenParent = llvm::any_of(LiveSlots, [&](const TRCopyRange &Slot) {
-    return Slot.AssembleParentDef &&
-           (!ClosedParentEpochs ||
-            !ClosedParentEpochs->count(Slot.AssembleParentDef));
+    return Slot.AssembleParentDef;
   });
   if (HasOpenParent) {
     SmallVector<LinxRegOp> CurLiveouts(getLiveouts());
@@ -1340,10 +1455,7 @@ void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
       bool MovesParent = false;
       for (unsigned I = 0; I < Shift; ++I)
         MovesParent |= llvm::any_of(LiveSlots, [&](const TRCopyRange &Slot) {
-          return Slot.AssembleParentDef &&
-                 (!ClosedParentEpochs ||
-                  !ClosedParentEpochs->count(Slot.AssembleParentDef)) &&
-                 Slot.RegOp == CurLiveouts[I];
+          return Slot.AssembleParentDef && Slot.RegOp == CurLiveouts[I];
         });
       if (!MovesParent) {
         SafeRotation = Shift;
@@ -1497,11 +1609,13 @@ void SlotCalc::insertCopys(const SmallVector<TRLiveRange> &OriginalInstrs,
             NewSlots[i]->IsAssembleParent ? LRs[i]->MI : nullptr;
         if (LRs[i]->LastUse != nullptr || LRs[i]->IsLiveout) {
           NewSlots[i]->RegOp.Reg = LRs[i]->DefMO->getReg();
-          if (EnableGenericElement)
-            NewSlots[i]->RegOp.Descriptor =
-                LinxV5::tryGetTileRegDescriptor(
-                    *MBB, std::next(LRs[i]->MI->getIterator()),
-                    LRs[i]->DefMO->getReg());
+          // Queue-alignment copies require a closed source descriptor in both
+          // legacy and generic-element modes. Generic-element gating belongs
+          // on typed optimizations, not on proof needed to materialize a real
+          // Tile publication.
+          NewSlots[i]->RegOp.Descriptor = LinxV5::tryGetTileRegDescriptor(
+              *MBB, std::next(LRs[i]->MI->getIterator()),
+              LRs[i]->DefMO->getReg());
         }
       }
       LLVM_DEBUG(dbgs() << "emit " << *OI.MI);
@@ -1991,21 +2105,58 @@ LinxV5TRegToOffsetOpt::buildEntryContract(
     MachineBasicBlock &MBB, const TargetRegisterClass *RC,
     ArrayRef<LinxRegOp> LiveOuts) {
   SmallVector<QueueContractEntry, 8> Contract;
-  auto RequiredMBB = CanonicalEntryLiveIns.find(&MBB);
-  if (RequiredMBB == CanonicalEntryLiveIns.end() ||
-      !RequiredMBB->second.count(RC))
-    return Contract;
-  for (Register Reg : RequiredMBB->second.find(RC)->second) {
-    bool HasLocalUse = llvm::any_of(MBB, [&](const MachineInstr &MI) {
-      return llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
-        return MO.isReg() && MO.isUse() && !MO.isImplicit() &&
-               MO.getReg() == Reg;
-      });
-    });
+  SmallVector<Register, 8> Required;
+  if (EnableGenericElement) {
+    auto RequiredMBB = CanonicalEntryLiveIns.find(&MBB);
+    if (RequiredMBB == CanonicalEntryLiveIns.end() ||
+        !RequiredMBB->second.count(RC))
+      return Contract;
+    llvm::append_range(Required, RequiredMBB->second.find(RC)->second);
+  } else {
+    auto IncomingValueHasReachableUse = [&](Register Reg) {
+      SmallPtrSet<MachineBasicBlock *, 8> Visited;
+      std::function<bool(MachineBasicBlock *)> Visit =
+          [&](MachineBasicBlock *Block) {
+            if (!Visited.insert(Block).second)
+              return false;
+            for (MachineInstr &MI : *Block) {
+              if (MI.isDebugInstr() || MI.isKill())
+                continue;
+              // A tied/two-address operand consumes the incoming value before
+              // the same instruction replaces it.
+              for (const MachineOperand &MO : MI.operands())
+                if (MO.isReg() && MO.isUse() && !MO.isImplicit() &&
+                    MO.getReg() == Reg)
+                  return true;
+              if (MI.definesRegister(Reg, TRI) ||
+                  llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
+                    return MO.isRegMask() && MO.clobbersPhysReg(Reg);
+                  }))
+                return false;
+            }
+            return llvm::any_of(Block->successors(), Visit);
+          };
+      return Visit(&MBB);
+    };
+    for (const auto &LiveIn : MBB.liveins())
+      if (RC->contains(LiveIn.PhysReg) &&
+          !hasAnyReachingExplicitUndef(MBB, LiveIn.PhysReg) &&
+          IncomingValueHasReachableUse(LiveIn.PhysReg))
+        Required.push_back(LiveIn.PhysReg);
+  }
+  for (Register Reg : Required) {
     if (isOpenAssembleParentRegister(*MBB.getParent(), Reg))
       continue;
-    if (!HasLocalUse)
-      continue;
+    if (EnableGenericElement) {
+      bool HasLocalUse = llvm::any_of(MBB, [&](const MachineInstr &MI) {
+        return llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
+          return MO.isReg() && MO.isUse() && !MO.isImplicit() &&
+                 MO.getReg() == Reg;
+        });
+      });
+      if (!HasLocalUse)
+        continue;
+    }
 
     Optional<unsigned> Match;
     for (unsigned I = LiveOuts.size(); I != 0; --I) {
@@ -2075,20 +2226,17 @@ void LinxV5TRegToOffsetOpt::appendQueueFillers(
       report_fatal_error(
           "Local tile edge normalization donor exceeds the queue window");
     const LinxV5::TileDescriptor &Descriptor = *Donor->RegOp.Descriptor;
-    MachineInstrBuilder Copy =
-        BuildMI(MBB, InsertAt, DebugLoc(),
-                TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
-                                                    : LinxV5::PseudoTCOPYDesc))
-            .addReg(ReserveReg, RegState::Define | RegState::Dead)
-            .addImm(Descriptor.SizeCode)
-            .addReg(Donor->RegOp.Reg)
-            .addImm(Descriptor.ValidCol)
-            .addImm(Descriptor.ValidRow)
-            .addImm(Descriptor.PhysicalCol)
-            .addImm(Descriptor.DataType)
-            .addImm(Descriptor.Layout);
-    MachineInstr *CopyMI = Copy.getInstr();
-    QueueCopyUseDistances[&CopyMI->getOperand(2)] = Distance;
+    buildTileDescriptorCopy(MBB, InsertAt, *TII, *TRI, ReserveReg,
+                            RegState::Define | RegState::Dead,
+                            Donor->RegOp.Reg, 0, Descriptor);
+    MachineInstr *CopyMI = &*std::prev(InsertAt);
+    unsigned SourceOperand =
+        CopyMI->getOpcode() == LinxV5::PseudoTMOV_SizeI ? 9 : 2;
+    if (CopyMI->getNumOperands() <= SourceOperand ||
+        !CopyMI->getOperand(SourceOperand).isReg())
+      report_fatal_error(
+          "edge-normalization Tile copy has no trackable source operand");
+    QueueCopyUseDistances[&CopyMI->getOperand(SourceOperand)] = Distance;
     QueueDeadPublicationDefs.insert(&CopyMI->getOperand(0));
 
     TRCopyRange &Published =
@@ -2098,6 +2246,87 @@ void LinxV5TRegToOffsetOpt::appendQueueFillers(
     ++Status.HeadIdx;
     ++Status.TailIdx;
     Status.LiveOuts.push_back(LinxRegOp());
+    ++TileCFGCopy;
+  }
+}
+
+void LinxV5TRegToOffsetOpt::appendDenseQueueContract(
+    MachineBasicBlock &MBB, const TargetRegisterClass *RC,
+    ArrayRef<QueueContractEntry> Contract) {
+  SlotStatus &Status = GlobalSlotsInfo[&MBB][RC];
+  const unsigned Capacity = RC->getNumRegs();
+  if (Contract.empty() || Contract.size() > Capacity)
+    report_fatal_error("invalid dense Local tile edge contract");
+  if (Status.LiveOuts.size() + Contract.size() > Capacity)
+    report_fatal_error(
+        "dense Local tile edge contract would exceed bounded live queue state");
+  auto InsertAt = MBB.getFirstTerminator();
+  unsigned PlannedPublications = 0;
+  SmallVector<std::pair<LinxRegOp, unsigned>, 8> Plan;
+  for (const QueueContractEntry &Entry : Contract) {
+    const TRCopyRange *Donor = nullptr;
+    for (unsigned I = Status.HeadIdx; I > Status.TailIdx; --I) {
+      const TRCopyRange &Candidate =
+          Status.TRCopyRanges[(I - 1) % Capacity];
+      if (Candidate.RegOp == Entry.Value && Candidate.RegOp.Descriptor &&
+          !Candidate.AssembleParentDef) {
+        Donor = &Candidate;
+        break;
+      }
+    }
+    if (!Donor)
+      report_fatal_error(
+          "dense Local tile edge contract lacks an exact closed source");
+    unsigned Distance =
+        Status.HeadIdx - Donor->Idx + PlannedPublications;
+    if (Distance < 1 || Distance > Capacity)
+      report_fatal_error(
+          "dense Local tile edge contract source exceeds the queue window");
+    Plan.emplace_back(Donor->RegOp, Distance);
+    ++PlannedPublications;
+  }
+
+  for (const auto &Item : Plan) {
+    LinxRegOp PublishedValue = Item.first;
+    LinxV5::TileDescriptor Descriptor = *PublishedValue.Descriptor;
+    if (Descriptor.HasRuntimeDimensions &&
+        !LinxV5::runtimeDimensionsReachCopy(Descriptor, MBB, InsertAt,
+                                            *TRI)) {
+      std::array<int64_t, 3> Constants;
+      for (unsigned I = 0; I != 3; ++I) {
+        Optional<int64_t> Value =
+            resolveRuntimeDimensionConstant(Descriptor, I, *TRI);
+        if (!Value || *Value <= 0)
+          report_fatal_error(
+              "dense Local tile edge copy cannot prove runtime dimensions");
+        Constants[I] = *Value;
+        Descriptor.DimensionRegs[I] = LinxV5::R0;
+        Descriptor.DimensionImms[I] = *Value;
+      }
+      Descriptor.ValidCol = Constants[0];
+      Descriptor.ValidRow = Constants[1];
+      Descriptor.PhysicalCol = Constants[2];
+      Descriptor.HasRuntimeDimensions = false;
+      Descriptor.RuntimeDimensionProducer = nullptr;
+      PublishedValue.Descriptor = Descriptor;
+    }
+    buildTileDescriptorCopy(MBB, InsertAt, *TII, *TRI, PublishedValue.Reg,
+                            RegState::Define, PublishedValue.Reg, 0,
+                            Descriptor);
+    MachineInstr *CopyMI = &*std::prev(InsertAt);
+
+    for (TRCopyRange &Slot : Status.TRCopyRanges)
+      if (Slot.IsLiveout && Slot.RegOp == Item.first)
+        Slot.IsLiveout = false;
+    TRCopyRange &Published =
+        Status.TRCopyRanges[Status.HeadIdx % Capacity];
+    initSlot(&Published);
+    Published.RegOp = PublishedValue;
+    Published.IsLiveout = true;
+    Published.Idx = Status.HeadIdx;
+    ++Status.HeadIdx;
+    ++Status.TailIdx;
+    Status.LiveOuts.push_back(PublishedValue);
     ++TileCFGCopy;
   }
 }
@@ -2129,9 +2358,129 @@ void LinxV5TRegToOffsetOpt::rebuildCanonicalEntryStates(MachineFunction &MF) {
   }
 }
 
+static Optional<int64_t>
+resolveRuntimeDimensionConstant(const LinxV5::TileDescriptor &Descriptor,
+                                unsigned Dimension,
+                                const TargetRegisterInfo &TRI) {
+  if (!Descriptor.HasRuntimeDimensions) {
+    if (Dimension == 0)
+      return Descriptor.ValidCol;
+    if (Dimension == 1)
+      return Descriptor.ValidRow;
+    return Descriptor.PhysicalCol;
+  }
+  Register Reg = Descriptor.DimensionRegs[Dimension];
+  int64_t Offset = Descriptor.DimensionImms[Dimension];
+  if (!Reg || Reg == LinxV5::R0)
+    return Offset;
+  MachineInstr *Producer = Descriptor.RuntimeDimensionProducer;
+  if (!Producer)
+    return None;
+  MachineBasicBlock *MBB = Producer->getParent();
+  MachineBasicBlock::iterator Before(Producer);
+  SmallPtrSet<MachineBasicBlock *, 8> Visited;
+  while (Visited.insert(MBB).second) {
+    for (MachineInstr &MI :
+         reverse(make_range(MBB->begin(), Before))) {
+      if (llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
+            return MO.isRegMask() && MO.clobbersPhysReg(Reg);
+          }))
+        return None;
+      if (!MI.definesRegister(Reg, &TRI))
+        continue;
+      if (MI.getOpcode() == LinxV5::ADDI && MI.getNumOperands() >= 3 &&
+          MI.getOperand(1).isReg() &&
+          MI.getOperand(1).getReg() == LinxV5::R0 &&
+          MI.getOperand(2).isImm())
+        return MI.getOperand(2).getImm() + Offset;
+      return None;
+    }
+    if (MBB->pred_size() != 1)
+      return None;
+    MBB = *MBB->pred_begin();
+    Before = MBB->end();
+  }
+  return None;
+}
+
+Optional<unsigned> LinxV5TRegToOffsetOpt::proveNativeDistance(
+    MachineBasicBlock *MBB, MachineBasicBlock::iterator Before, Register Reg,
+    const TargetRegisterClass *RC, unsigned Publications,
+    SmallPtrSetImpl<MachineBasicBlock *> &Active) {
+  if (!Active.insert(MBB).second) {
+    // Closing a loop may revisit the use block at its end.  A publication
+    // after the original use is the next iteration's reaching definition;
+    // reject cycles that contain no such producer or clobber the value.
+    for (MachineInstr &Prev : reverse(*MBB)) {
+      if (llvm::any_of(Prev.operands(), [&](const MachineOperand &Op) {
+            return Op.isRegMask() && Op.clobbersPhysReg(Reg);
+          }))
+        return None;
+      if (Prev.definesRegister(Reg, TRI)) {
+        unsigned Occupation = getTSlotOccupation(Prev, RC);
+        if (Prev.isImplicitDef() ||
+            Prev.getOpcode() == LinxV5::PseudoEmptyTile || Occupation != 1)
+          return None;
+        return Publications + 1;
+      }
+      if (!Prev.isImplicitDef() &&
+          Prev.getOpcode() != LinxV5::PseudoEmptyTile)
+        Publications += getTSlotOccupation(Prev, RC);
+      if (Publications >= RC->getNumRegs())
+        return None;
+    }
+    return None;
+  }
+  for (MachineInstr &Prev : reverse(make_range(MBB->begin(), Before))) {
+    if (llvm::any_of(Prev.operands(), [&](const MachineOperand &Op) {
+          return Op.isRegMask() && Op.clobbersPhysReg(Reg);
+        })) {
+      Active.erase(MBB);
+      return None;
+    }
+    if (Prev.definesRegister(Reg, TRI)) {
+      unsigned Occupation = getTSlotOccupation(Prev, RC);
+      Active.erase(MBB);
+      if (Prev.isImplicitDef() ||
+          Prev.getOpcode() == LinxV5::PseudoEmptyTile || Occupation != 1)
+        return None;
+      return Publications + 1;
+    }
+    if (!Prev.isImplicitDef() &&
+        Prev.getOpcode() != LinxV5::PseudoEmptyTile)
+      Publications += getTSlotOccupation(Prev, RC);
+    if (Publications >= RC->getNumRegs()) {
+      Active.erase(MBB);
+      return None;
+    }
+  }
+  if (MBB->pred_empty()) {
+    Active.erase(MBB);
+    return None;
+  }
+  Optional<unsigned> Joined;
+  for (MachineBasicBlock *Pred : MBB->predecessors()) {
+    Optional<unsigned> Incoming =
+        proveNativeDistance(Pred, Pred->end(), Reg, RC, Publications, Active);
+    if (!Incoming || (Joined && *Joined != *Incoming)) {
+      Active.erase(MBB);
+      return None;
+    }
+    Joined = Incoming;
+  }
+  Active.erase(MBB);
+  return Joined;
+}
+
 void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
   const unsigned IterationLimit =
       std::max<unsigned>(1, MF.size()) * LinxV5::Tile_NRRegClass.getNumRegs();
+  std::unique_ptr<MachineDominatorTree> MDT;
+  auto GetMDT = [&]() -> MachineDominatorTree & {
+    if (!MDT)
+      MDT = std::make_unique<MachineDominatorTree>(MF);
+    return *MDT;
+  };
   for (unsigned Iteration = 0; Iteration < IterationLimit; ++Iteration) {
     bool Changed = false;
     for (MachineBasicBlock &Succ : MF) {
@@ -2149,8 +2498,251 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
               Succ, RC, GlobalSlotsInfo[Pred][RC].LiveOuts));
         if (Contracts.empty() || Contracts.front().empty())
           continue;
-        if (!EnableGenericElement)
+        if (!EnableGenericElement) {
+          if (!SyncConflictRCs.count(RC))
+            continue;
+          bool HasOpenParent = llvm::any_of(
+              GlobalSlotsInfo, [&](const auto &MBBInfo) {
+                auto Status = MBBInfo.second.find(RC);
+                return Status != MBBInfo.second.end() &&
+                       llvm::any_of(Status->second.TRCopyRanges,
+                                    [](const TRCopyRange &Slot) {
+                                      return Slot.AssembleParentDef != nullptr;
+                                    });
+              });
+          if (HasOpenParent)
+            continue;
+          bool ProvenAges = true;
+          for (unsigned P = 0; P < Preds.size(); ++P) {
+            for (QueueContractEntry &Entry : Contracts[P]) {
+              SmallPtrSet<MachineBasicBlock *, 8> Active;
+              Optional<unsigned> Age = proveNativeDistance(
+                  Preds[P], Preds[P]->end(), Entry.Value.Reg, RC, 0, Active);
+              if (!Age) {
+                ProvenAges = false;
+                break;
+              }
+              Entry.Age = *Age;
+            }
+            if (!ProvenAges)
+              break;
+          }
+          if (!ProvenAges)
+            continue;
+          auto SameDescriptor = [&](const LinxV5::TileDescriptor &LHS,
+                                    const LinxV5::TileDescriptor &RHS,
+                                    MachineBasicBlock &LHSEdge,
+                                    MachineBasicBlock &RHSEdge) {
+            if (LHS.DataType != RHS.DataType ||
+                LHS.Layout != RHS.Layout ||
+                LHS.SizeCode != RHS.SizeCode ||
+                LHS.PackedPredicate != RHS.PackedPredicate)
+              return false;
+            bool HasSymbolicDimension = false;
+            for (unsigned I = 0; I != 3; ++I) {
+              Optional<int64_t> L =
+                  resolveRuntimeDimensionConstant(LHS, I, *TRI);
+              Optional<int64_t> R =
+                  resolveRuntimeDimensionConstant(RHS, I, *TRI);
+              if (L || R) {
+                if (!L || !R || *L != *R)
+                  return false;
+                continue;
+              }
+              Register LReg = LHS.DimensionRegs[I];
+              Register RReg = RHS.DimensionRegs[I];
+              if (!LReg || LReg == LinxV5::R0 || LReg != RReg ||
+                  LHS.DimensionImms[I] != RHS.DimensionImms[I] ||
+                  !LHS.RuntimeDimensionProducer ||
+                  !RHS.RuntimeDimensionProducer)
+                return false;
+              HasSymbolicDimension = true;
+              MachineInstr *LProducer = LHS.RuntimeDimensionProducer;
+              MachineInstr *RProducer = RHS.RuntimeDimensionProducer;
+              if (LProducer == RProducer)
+                continue;
+              MachineInstr *Earlier = nullptr;
+              MachineInstr *Later = nullptr;
+              if (GetMDT().dominates(LProducer, RProducer)) {
+                Earlier = LProducer;
+                Later = RProducer;
+              } else if (GetMDT().dominates(RProducer, LProducer)) {
+                Earlier = RProducer;
+                Later = LProducer;
+              } else {
+                return false;
+              }
+              LinxV5::TileDescriptor Probe;
+              Probe.DimensionRegs = {LReg, LinxV5::R0, LinxV5::R0};
+              Probe.DimensionImms = {0, 0, 0};
+              Probe.HasRuntimeDimensions = true;
+              Probe.RuntimeDimensionProducer = Earlier;
+              if (!LinxV5::runtimeDimensionsReachCopy(
+                      Probe, *Later->getParent(), Later->getIterator(), *TRI,
+                      /*RepairLiveness=*/false))
+                return false;
+            }
+            if (HasSymbolicDimension &&
+                (!LinxV5::runtimeDimensionsReachCopy(
+                     LHS, LHSEdge, LHSEdge.end(), *TRI,
+                     /*RepairLiveness=*/false) ||
+                 !LinxV5::runtimeDimensionsReachCopy(
+                     RHS, RHSEdge, RHSEdge.end(), *TRI,
+                     /*RepairLiveness=*/false)))
+              return false;
+            return true;
+          };
+          bool Compatible = true;
+          for (unsigned P = 0; P < Contracts.size() && Compatible; ++P) {
+            ArrayRef<QueueContractEntry> Contract = Contracts[P];
+            if (Contract.size() != Contracts.front().size()) {
+              Compatible = false;
+              break;
+            }
+            for (unsigned I = 0; I < Contract.size(); ++I) {
+              const LinxRegOp &L = Contract[I].Value;
+              const LinxRegOp &R = Contracts.front()[I].Value;
+              if (L.Reg != R.Reg || L.Size != R.Size || !L.Descriptor ||
+                  !R.Descriptor ||
+                  !SameDescriptor(*L.Descriptor, *R.Descriptor, *Preds[P],
+                                  *Preds[0])) {
+                Compatible = false;
+                break;
+              }
+            }
+          }
+          if (Compatible) {
+            for (unsigned P = 0; P < Contracts.size(); ++P) {
+              for (const QueueContractEntry &Entry : Contracts[P]) {
+                if (!Entry.Value.Descriptor ||
+                    !Entry.Value.Descriptor->HasRuntimeDimensions)
+                  continue;
+                bool NeedsRuntimeReachRepair = false;
+                for (unsigned I = 0; I != 3; ++I)
+                  NeedsRuntimeReachRepair |=
+                      !resolveRuntimeDimensionConstant(
+                           *Entry.Value.Descriptor, I, *TRI)
+                           .hasValue();
+                if (!NeedsRuntimeReachRepair)
+                  continue;
+                if (!LinxV5::runtimeDimensionsReachCopy(
+                        *Entry.Value.Descriptor, *Preds[P], Preds[P]->end(),
+                        *TRI))
+                  report_fatal_error(
+                      "proved runtime descriptor reach changed during repair");
+              }
+            }
+          }
+          if (!Compatible) {
+            bool SamePhysicalValues = llvm::all_of(
+                Contracts, [&](ArrayRef<QueueContractEntry> Contract) {
+                  if (Contract.size() != Contracts.front().size())
+                    return false;
+                  for (unsigned I = 0; I < Contract.size(); ++I)
+                    if (Contract[I].Value.Reg !=
+                            Contracts.front()[I].Value.Reg ||
+                        Contract[I].Value.Size !=
+                            Contracts.front()[I].Value.Size)
+                      return false;
+                  return true;
+                });
+            if (SamePhysicalValues)
+              report_fatal_error(
+                  "Local tile CFG predecessors expose incompatible "
+                  "descriptors for one physical value");
+            continue;
+          }
+          unsigned Count = Contracts.front().size();
+          bool AllAgree = llvm::all_of(
+              drop_begin(Contracts), [&](ArrayRef<QueueContractEntry> C) {
+                for (unsigned I = 0; I < Count; ++I)
+                  if (C[I].Age != Contracts.front()[I].Age)
+                    return false;
+                return true;
+              });
+          if (AllAgree)
+            continue;
+          bool HasDenseCandidate = llvm::any_of(
+              Contracts, [&](ArrayRef<QueueContractEntry> C) {
+                for (unsigned I = 0; I < Count; ++I)
+                  if (C[I].Age != Count - I)
+                    return false;
+                return true;
+              });
+          if (!HasDenseCandidate) {
+            SmallVector<unsigned, 8> TargetAges(Count, 0);
+            for (const auto &C : Contracts)
+              for (unsigned I = 0; I < Count; ++I)
+                TargetAges[I] = std::max(TargetAges[I], C[I].Age);
+            SmallVector<unsigned, 4> Deltas;
+            bool UniformAndEligible = true;
+            for (unsigned P = 0; P < Preds.size(); ++P) {
+              Optional<unsigned> Delta;
+              for (unsigned I = 0; I < Count; ++I) {
+                unsigned ThisDelta = TargetAges[I] - Contracts[P][I].Age;
+                if (Delta && *Delta != ThisDelta)
+                  UniformAndEligible = false;
+                Delta = ThisDelta;
+              }
+              unsigned D = Delta.getValueOr(0);
+              if (D && Preds[P]->succ_size() != 1 &&
+                  !Preds[P]->canSplitCriticalEdge(&Succ))
+                UniformAndEligible = false;
+              Deltas.push_back(D);
+            }
+            if (UniformAndEligible) {
+              for (unsigned P = 0; P < Preds.size(); ++P)
+                if (Deltas[P]) {
+                  if (Preds[P]->succ_size() != 1) {
+                    MachineBasicBlock *OldPred = Preds[P];
+                    MachineBasicBlock *Edge =
+                        OldPred->SplitCriticalEdge(&Succ, *this);
+                    if (!Edge)
+                      report_fatal_error(
+                          "preflighted Local tile critical edge did not split");
+                    GlobalSlotsInfo[Edge] = GlobalSlotsInfo[OldPred];
+                    MDT.reset();
+                    Preds[P] = Edge;
+                  }
+                  appendQueueFillers(*Preds[P], RC, Deltas[P]);
+                  Changed = true;
+                }
+            }
+            continue;
+          }
+          bool AllMismatchesEligible = true;
+          for (unsigned P = 0; P < Preds.size(); ++P) {
+            bool Dense = true;
+            for (unsigned I = 0; I < Count; ++I)
+              Dense &= Contracts[P][I].Age == Count - I;
+            if (!Dense && Preds[P]->succ_size() != 1 &&
+                !Preds[P]->canSplitCriticalEdge(&Succ))
+              AllMismatchesEligible = false;
+          }
+          if (!AllMismatchesEligible)
+            continue;
+          for (unsigned P = 0; P < Preds.size(); ++P) {
+            bool Dense = true;
+            for (unsigned I = 0; I < Count; ++I)
+              Dense &= Contracts[P][I].Age == Count - I;
+            if (Dense)
+              continue;
+            if (Preds[P]->succ_size() != 1) {
+              MachineBasicBlock *OldPred = Preds[P];
+              MachineBasicBlock *Edge =
+                  OldPred->SplitCriticalEdge(&Succ, *this);
+              if (!Edge)
+                report_fatal_error(
+                    "preflighted Local tile critical edge did not split");
+              GlobalSlotsInfo[Edge] = GlobalSlotsInfo[OldPred];
+              MDT.reset();
+              Preds[P] = Edge;
+            }
+            appendDenseQueueContract(*Preds[P], RC, Contracts[P]);
+            Changed = true;
+          }
           continue;
+        }
         bool HasCompleteDescriptors = llvm::all_of(
             Contracts, [](ArrayRef<QueueContractEntry> Contract) {
               return llvm::all_of(Contract, [](const QueueContractEntry &Entry) {
@@ -2512,11 +3104,7 @@ void LinxV5TRegToOffsetOpt::insertCopy(MachineBasicBlock &MBB) {
     }
 
     // insert copy
-    auto ClosedIt = ClosedAssembleParentsAtTail.find(&MBB);
-    const DenseSet<const MachineInstr *> *ClosedParentEpochs =
-        ClosedIt == ClosedAssembleParentsAtTail.end() ? nullptr
-                                                      : &ClosedIt->second;
-    SlotCalc SC(&MBB, TII, RC, IsScalarRC, IsTileRC, ClosedParentEpochs,
+    SlotCalc SC(&MBB, TII, RC, IsScalarRC, IsTileRC,
                 &QueueCopyUseDistances, &QueueDeadPublicationDefs);
     SlotStatus ResultSS;
     if (IsTileRC) {
@@ -2579,12 +3167,9 @@ void LinxV5TRegToOffsetOpt::legalityCheck(MachineFunction &MF) {
     SyncConflictRCs.erase(RC);
 }
 
-void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
-    MachineFunction &MF, bool CollectClosedTailProofs) {
+void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(MachineFunction &MF) {
   AssembleParentUseDistances.clear();
   AssembleOrdinaryUseDistances.clear();
-  if (CollectClosedTailProofs)
-    ClosedAssembleParentsAtTail.clear();
   SmallVector<std::pair<Register, MachineInstr *>, 4> ParentEpochs;
   DenseMap<unsigned, unsigned> ParentEpochCounts;
   DenseSet<const MachineInstr *> ParentRefUses;
@@ -3565,31 +4150,6 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
       return Proof;
     };
 
-    if (CollectClosedTailProofs) {
-      for (MachineBasicBlock &MBB : MF) {
-        auto Before = MBB.end();
-        for (auto I = MBB.end(); I != MBB.begin(); --I) {
-          if (LinxV5::isTileOp(*std::prev(I))) {
-            Before = I;
-            break;
-          }
-          Before = MBB.begin();
-        }
-        // An end-of-block point has no stable instruction anchor.  Reject it
-        // conservatively instead of proving a different insertion position.
-        if (Before == MBB.end())
-          continue;
-        UseProof Proof =
-            proveUse(&*Before, ProofRequirement::ExactClosed);
-        if (Proof.Proven && Proof.Complete) {
-          ClosedAssembleParentsAtTail[&MBB].insert(InitMI);
-          LLVM_DEBUG(dbgs() << "proved CLOSED assembly epoch at tail of "
-                            << printMBBReference(MBB) << ": " << *InitMI);
-        }
-      }
-      continue;
-    }
-
     auto transfer = [&](MachineBasicBlock &MBB, ParentState State,
                         bool RecordUses) -> ParentState {
       for (MachineInstr &MI : MBB) {
@@ -3814,9 +4374,6 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
       (void)transfer(MBB, InState[&MBB], /*RecordUses=*/true);
   }
 
-  if (CollectClosedTailProofs)
-    return;
-
   for (const auto &MIEntry : OrdinaryAnalysisCounts) {
     const MachineInstr *MI = MIEntry.first;
     for (const auto &ParentEntry : MIEntry.second) {
@@ -3911,7 +4468,6 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   SyncConflictRCs.clear();
   PureAssembleRCs.clear();
-  ClosedAssembleParentsAtTail.clear();
   RewriteTRIdentities.clear();
   QueueCopyUseDistances.clear();
   QueueDeadPublicationDefs.clear();
@@ -4010,10 +4566,6 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   LLVM_DEBUG(dbgs() << "before insert copy:\n"; MF.dump());
 
-  // Prove exact CLOSED epochs at the real tail-copy insertion points before
-  // Phase 1 mutates the CFG queue.  These proofs allow only ordinary payload
-  // relocation; post-copy ParentRef distances are solved again below.
-  solveAssembleParentDataflow(MF, /*CollectClosedTailProofs=*/true);
   // Detect ordinary CLOSED joins before queue synchronization can introduce
   // asymmetric copies or churn a different OPEN epoch out of its hand.
   // ParentRef distance proofs remain exact and are recomputed after Phase 1.
@@ -4058,8 +4610,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     DoneMBBs.push_back(MBB);
   }
 
-  if (EnableGenericElement)
-    normalizeEntryContracts(MF);
+  normalizeEntryContracts(MF);
 
   // Clockhands reserves an OPEN parent's hand before register allocation.
   // Validate the final Phase-1 machine function, including every inserted
@@ -4078,12 +4629,17 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
   if (!EnableReg2Offset) {
-    for (MachineBasicBlock &MBB : MF)
-      for (MachineInstr &MI : MBB)
-        for (MachineOperand &MO : MI.operands())
-          if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
-              !MO.isKill())
-            MO.setReg(getTileReuseReg(MO.getReg()));
+    if (EnableGenericElement) {
+      preserveRequiredTileSources(MF, true);
+    } else {
+      for (MachineBasicBlock &MBB : MF)
+        for (MachineInstr &MI : MBB)
+          for (MachineOperand &MO : MI.operands())
+            if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
+                !MO.isKill())
+              MO.setReg(getTileReuseReg(MO.getReg()));
+      preserveRequiredTileSources(MF, false);
+    }
     eraseLocalTileABISeeds(MF);
     return true;
   }
@@ -4095,6 +4651,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   // names.  The immutable snapshot also lets two descriptor-distinct values
   // allocated to one physical hand remain separately addressable.
   RewriteTRIdentities.clear();
+  proveSyncConflictUseDistances(MF);
   if (!EnableGenericElement) {
     DoneMBBs.clear();
     for (MachineBasicBlock &MBB : MF)
@@ -4105,6 +4662,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
       llvm::erase_value(TBDoneMBBs, MBB);
       DoneMBBs.push_back(MBB);
     }
+    preserveRequiredTileSources(MF, false);
     eraseLocalTileABISeeds(MF);
     return true;
   }
@@ -4192,6 +4750,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     DoneMBBs.push_back(MBB);
   }
 
+  preserveRequiredTileSources(MF, true);
   eraseLocalTileABISeeds(MF);
 
   return true;
@@ -4215,6 +4774,16 @@ void LinxV5TRegToOffsetOpt::markTileLastUses(MachineFunction &MF) {
           if (MO.isReg() && MO.isUse() && !MO.isDef() &&
               isRC(MO.getReg(), RC, MRI))
             MO.setIsKill(false);
+
+      // The current masked-bundle execution profile requires two-source Tile
+      // operations to use B.IOT Func=4 (retain/retain); Func=2
+      // (last-use/last-use) is outside that profile even when both sources are
+      // otherwise final. Generic-element regions can execute under such a
+      // mask, so retain their Local source generations conservatively. The
+      // explicit lifetime assembler surface and legacy full-domain codegen
+      // still use the exact last-use analysis below.
+      if (EnableGenericElement)
+        continue;
 
       for (auto MII = MBB.rbegin(), MIE = MBB.rend(); MII != MIE; ++MII) {
         MachineInstr &MI = *MII;
@@ -4255,6 +4824,21 @@ bool hasImplicitDef(const TRegIndexState &TRegIdx) {
 
 static Optional<LinxV5::TileDescriptor>
 getTCOPYDescriptor(const MachineInstr &MI) {
+  if (MI.getOpcode() == LinxV5::PseudoTMOV_SizeI &&
+      MI.getNumOperands() >= 13) {
+    LinxV5::TileDescriptor Descriptor;
+    Descriptor.SizeCode = MI.getOperand(8).getImm();
+    Descriptor.DataType = MI.getOperand(7).getImm();
+    Descriptor.Layout = MI.getOperand(10).getImm();
+    for (unsigned I = 0; I != 3; ++I) {
+      Descriptor.DimensionRegs[I] = MI.getOperand(1 + I * 2).getReg();
+      Descriptor.DimensionImms[I] = MI.getOperand(2 + I * 2).getImm();
+    }
+    Descriptor.HasRuntimeDimensions = true;
+    Descriptor.RuntimeDimensionProducer =
+        const_cast<MachineInstr *>(&MI);
+    return Descriptor;
+  }
   if ((MI.getOpcode() != LinxV5::PseudoTCOPYDesc &&
        MI.getOpcode() != LinxV5::PseudoPCOPYDesc) ||
       MI.getNumOperands() < 8)
@@ -4333,6 +4917,58 @@ static void resetStateAtLocalTileABISeed(
   State.emplace_back(Imported, CurIdx - 1);
 }
 
+void LinxV5TRegToOffsetOpt::proveSyncConflictUseDistances(
+    MachineFunction &MF) {
+  SyncConflictUseDistances.clear();
+  for (const TargetRegisterClass *RC :
+       {&LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
+        &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass}) {
+    if (!SyncConflictRCs.count(RC))
+      continue;
+    for (MachineBasicBlock &MBB : MF) {
+      for (MachineInstr &MI : MBB) {
+        if (canSkipMI(MI) || MI.isKill())
+          continue;
+        for (MachineOperand &MO : MI.operands()) {
+          if (!MO.isReg() || !MO.isUse() || MO.isImplicit() ||
+              !RC->contains(MO.getReg()))
+            continue;
+          Optional<unsigned> CachedCopyDistance;
+          if (QueueCopyUseDistances.count(&MO))
+            CachedCopyDistance = QueueCopyUseDistances.lookup(&MO);
+          MachineOperand *ParentRef = getAssembleParentRefOperand(MI);
+          if (&MO == ParentRef && AssembleParentUseDistances.count(&MI) &&
+              AssembleParentUseDistances[&MI].count(MO.getReg()))
+            continue;
+          if (AssembleOrdinaryUseDistances.count(&MI) &&
+              AssembleOrdinaryUseDistances[&MI].count(MO.getReg()))
+            continue;
+
+          Register Reg = MO.getReg();
+          SmallPtrSet<MachineBasicBlock *, 8> Active;
+          Optional<unsigned> Distance = proveNativeDistance(
+              &MBB, MachineBasicBlock::iterator(&MI), Reg, RC, 0, Active);
+          if (!Distance || *Distance < 1 ||
+              *Distance > RC->getNumRegs()) {
+            LLVM_DEBUG(dbgs() << "unproved sync-conflict source "
+                              << printReg(Reg, TRI) << " in "
+                              << printMBBReference(MBB) << ": " << MI);
+            report_fatal_error(
+                "Local tile synchronization conflict use has no unique "
+                "reaching native distance");
+          }
+          if (CachedCopyDistance && *CachedCopyDistance != *Distance)
+            report_fatal_error(
+                "compiler-inserted Tile copy cached a stale native distance");
+          if (CachedCopyDistance)
+            QueueCopyUseDistances[&MO] = *Distance;
+          SyncConflictUseDistances[&MO] = *Distance;
+        }
+      }
+    }
+  }
+}
+
 void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
   for (auto RCInfo : RCsInfo) {
     const TargetRegisterClass *RC = RCInfo.first;
@@ -4375,44 +5011,51 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
       continue;
     }
     if (SyncConflictRCs.count(RC)) {
-      if (isTileReg(RC))
+      if (!isLocalTileQueueReg(RC)) {
+        // Scalar/SIMT register files do not use the Local Tile publication
+        // queue. Preserve their historical absolute-register fallback.
+        continue;
+      }
+      if (EnableGenericElement)
         report_fatal_error(
             "Local tile queue synchronization conflict has no certified "
             "native offset rewrite");
-      // Keep ordinary values absolute when queue synchronization is disabled,
-      // but an OPEN assembly ParentRef is architecturally relative and has a
-      // separately proved reaching-INIT distance. Rewrite only those exact
-      // uses; solveAssembleParentDataflow already rejected unresolved or
-      // conflicting join distances.
       Register OffsetBase = RCInfo.second[1];
       for (MachineInstr &MI : MBB) {
-        MachineOperand *ExactParentRef = getAssembleParentRefOperand(MI);
-        if (!ExactParentRef)
+        if (MI.isImplicitDef() || MI.getOpcode() == LinxV5::PseudoEmptyTile)
           continue;
-        auto UseIt = AssembleParentUseDistances.find(&MI);
-        if (UseIt == AssembleParentUseDistances.end())
-          continue;
+        MachineOperand *ParentRef = getAssembleParentRefOperand(MI);
+        SmallVector<MachineOperand *, 2> Defs;
         for (MachineOperand &MO : MI.operands()) {
-          if (!MO.isReg() || !MO.isUse() || MO.isImplicit())
+          if (!MO.isReg() || MO.isImplicit() || !RC->contains(MO.getReg()))
             continue;
-          if (&MO != ExactParentRef)
+          if (MO.isDef()) {
+            Defs.push_back(&MO);
             continue;
-          if (!RC->contains(MO.getReg()))
+          }
+          if (!MO.isUse())
             continue;
-          auto DistanceIt = UseIt->second.find(MO.getReg());
-          if (DistanceIt == UseIt->second.end())
-            continue;
-          unsigned Distance = DistanceIt->second;
-          if (Distance < 1 || Distance > RC->getNumRegs())
+          Optional<unsigned> Distance;
+          if (&MO == ParentRef && AssembleParentUseDistances.count(&MI) &&
+              AssembleParentUseDistances[&MI].count(MO.getReg()))
+            Distance = AssembleParentUseDistances[&MI].lookup(MO.getReg());
+          if (!Distance && AssembleOrdinaryUseDistances.count(&MI) &&
+              AssembleOrdinaryUseDistances[&MI].count(MO.getReg()))
+            Distance = AssembleOrdinaryUseDistances[&MI].lookup(MO.getReg());
+          if (!Distance && QueueCopyUseDistances.count(&MO))
+            Distance = QueueCopyUseDistances.lookup(&MO);
+          if (!Distance && SyncConflictUseDistances.count(&MO))
+            Distance = SyncConflictUseDistances.lookup(&MO);
+          if (!Distance || *Distance < 1 || *Distance > RC->getNumRegs())
             report_fatal_error(
-                "B.ASSEMBLE parent relative distance exceeds the Local tile "
-                "window");
-          MO.setReg(OffsetBase + (Distance - 1));
+                "Local tile synchronization conflict use lacks a proved "
+                "native distance");
+          MO.setReg(OffsetBase + *Distance - 1);
         }
+        if (getTSlotOccupation(MI, RC) != 0)
+          for (MachineOperand *Def : Defs)
+            Def->setReg(RCInfo.second[0]);
       }
-      LLVM_DEBUG(dbgs() << "skip rewrite for "
-                        << TRI->getRegClassName(RC)
-                        << ": legacy non-Tile absolute values\n");
       continue;
     }
     LLVM_DEBUG(dbgs() << "rewrite " << TRI->getRegClassName(RC) << " in "

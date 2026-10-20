@@ -11,7 +11,7 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 B.ASSEMBLE 1, 0, zero, 0, 3
 BSTOP
 
@@ -22,7 +22,7 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 B.ASSEMBLE 0, 0, a0, 4, 3
 BSTOP
 
@@ -31,13 +31,13 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111, last, ->T<128B>
+B.IOT T#1.reuse, mask=1111, last, ->T<128B>
 B.ASSEMBLE 0, 1, a0, 8, 3
 BSTOP
 
-# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1, ->T<128B>{{\[}}base=zero, offset=0, assemble=init, writer=3{{\]}}
-# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1, ->T<128B>{{\[}}base=a0, offset=4, assemble=middle, writer=3{{\]}}
-# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1, ->T<128B>{{\[}}base=a0, offset=8, assemble=last, writer=3{{\]}}
+# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1.reuse, ->T<128B>{{\[}}base=zero, offset=0, assemble=init, writer=3{{\]}}
+# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1.reuse, ->T<128B>{{\[}}base=a0, offset=4, assemble=middle, writer=3{{\]}}
+# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1.reuse, ->T<128B>{{\[}}base=a0, offset=8, assemble=last, writer=3{{\]}}
 
 # PHYS: BSTART.TEPL{{.*}}TCVT, BF16
 # PHYS: B.DATR{{.*}}e2m1x2
@@ -59,8 +59,8 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111
-B.IOT U#1, mask=1111, last
+B.IOT T#1.reuse, mask=1111
+B.IOT U#1.reuse, mask=1111, last
 B.ASSEMBLE 0, 0, a0, 4, 3
 BSTOP
 
@@ -69,13 +69,13 @@ B.DATR e2m1x2, byte0, Null, RNONE, nosat
 C.B.DIMI 32, ->lb0
 C.B.DIMI 1, ->lb1
 C.B.DIMI 1, ->lb2
-B.IOT T#1, mask=1111
-B.IOT U#1, mask=1111, last
+B.IOT T#1.reuse, mask=1111
+B.IOT U#1.reuse, mask=1111, last
 B.ASSEMBLE 0, 1, a0, 8, 3
 BSTOP
 
-# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1, {{\[}}parent=u#1, base=a0, offset=4, assemble=middle, writer=3{{\]}}
-# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1, {{\[}}parent=u#1, base=a0, offset=8, assemble=last, writer=3{{\]}}
+# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1.reuse, {{\[}}parent=u#1.reuse, base=a0, offset=4, assemble=middle, writer=3{{\]}}
+# MACRO: TCVT{{ +}}<Col=1, ValidRow=1, ValidCol=32, BF16, e2m1x2>, T#1.reuse, {{\[}}parent=u#1.reuse, base=a0, offset=8, assemble=last, writer=3{{\]}}
 
 TCVT <Col=1, ValidRow=1, BF16, e2m1x2>, T#1, [parent=U#1, base=a0, offset=4, assemble=middle, writer=3]
 TCVT <Col=1, ValidRow=1, BF16, e2m1x2>, T#1, [parent=U#1, base=a0, offset=8, assemble=last, writer=3]

@@ -1,5 +1,6 @@
 ; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
-; RUN:   -enable-all-vector-as-tilereg=true %s -o - | FileCheck %s
+; RUN:   -enable-all-vector-as-tilereg=true \
+; RUN:   -linxv5-enable-generic-element=true %s -o - | FileCheck %s
 ;
 ; The dtype-only B.DATR spelling has default NORM layout in every rounding
 ; branch. Its identity-conversion result agrees with the explicit NORM input
@@ -15,7 +16,7 @@
 ; CHECK: BSTART.TLSU TSTORE, U32
 ; CHECK-NEXT: B.DATR NORM.normal, Null
 ; CHECK: C.B.DIMI 128, ->lb0
-; CHECK-NEXT: B.IOT t#1, mask=1111, last
+; CHECK-NEXT: B.IOT t#1.reuse, mask=1111, last
 target triple = "linx64v5-unknown-linux-musl"
 
 define void @identity_rounding_phi(i1 %condition, ptr %base) {
