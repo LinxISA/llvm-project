@@ -1,4 +1,4 @@
-; RUN: not opt -mtriple=linx64v5 -passes='linx-v5-element-region' -disable-output %s 2>&1 | FileCheck %s
+; RUN: opt -mtriple=linx64v5 -passes='linx-v5-element-generic-prepare,linx-v5-element-predication,linx-v5-element-tile-legalize,linx-v5-element-region-verify,verify' -verify-each -S %s | FileCheck %s --implicit-check-not='call {{.*}}@llvm.linx.experimental.element.' --implicit-check-not='call {{.*}}@llvm.vp.' --implicit-check-not=extractelement --implicit-check-not=insertelement
 
 target triple = "linx64v5"
 
@@ -6,14 +6,16 @@ declare void @llvm.linx.experimental.element.region(metadata)
 declare <32 x i32> @llvm.linx.experimental.element.view.v32i32(
     <32 x i32>, i64, i64, i64, i64, i64, i64, i64, i64)
 
-define <32 x i32> @branch_only_publication(<32 x i32> %input, i1 %take) {
+define void @branch_only_publication(i1 %take) {
 entry:
+  %input = call <32 x i32> asm sideeffect "", "=@2Tr"()
+  %initial = call <32 x i32> asm sideeffect "", "=@2Tr"()
   call void @llvm.linx.experimental.element.region(metadata !0)
   br label %loop
 
 loop:
   %element = phi i32 [ 0, %entry ], [ %next, %latch ]
-  %output = phi <32 x i32> [ poison, %entry ], [ %output.next, %latch ]
+  %output = phi <32 x i32> [ %initial, %entry ], [ %output.next, %latch ]
   br i1 %take, label %then, label %else
 
 then:
@@ -37,12 +39,16 @@ latch:
   br i1 %more, label %loop, label %exit, !llvm.loop !1
 
 exit:
-  ret <32 x i32> %output.next
+  call void asm sideeffect "", "@2Tr"(<32 x i32> %output.next)
+  ret void
 }
 
-; CHECK: PTO element region: publication must execute on every region iteration
+; CHECK-LABEL: define void @branch_only_publication
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr.v32i32{{.*}}<32 x i32> %initial
+; CHECK: call void asm sideeffect "", "@2Tr"
+; CHECK-NOT: extractelement
+; CHECK-NOT: insertelement
 
 !0 = distinct !{}
 !1 = distinct !{!1, !2}
 !2 = !{!"llvm.loop.linx.pto.element.region", !0}
-

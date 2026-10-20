@@ -1197,6 +1197,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
 
     auto consumeRangeModifiers = [&](ArrayRef<unsigned> SourceMembers,
                                      int DestinationMember,
+                                     unsigned DestinationSize,
                                      unsigned &Position) {
       bool SourceSeen[2] = {false, false};
       bool DestinationSeen = false;
@@ -1242,22 +1243,6 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           unsigned RegSrc = Modifier.getOperand(2).getReg();
           unsigned WriterSize = Modifier.getOperand(4).getImm();
           unsigned PhaseFlag = Last ? 8 : 4;
-          unsigned DestinationSize =
-              Body[Position - 1].getOpcode() == LinxV5::B_IOT_NoSrc_Dst ||
-                      Body[Position - 1].getOpcode() ==
-                          LinxV5::B_IOT_OneSrc_Dst ||
-                      Body[Position - 1].getOpcode() ==
-                          LinxV5::B_IOT_OneSrc_Dst_Reuse ||
-                      Body[Position - 1].getOpcode() ==
-                          LinxV5::B_IOT_TwoSrc_Dst ||
-                      Body[Position - 1].getOpcode() ==
-                          LinxV5::B_IOT_TwoSrc_Dst_Reuse0 ||
-                      Body[Position - 1].getOpcode() ==
-                          LinxV5::B_IOT_TwoSrc_Dst_Reuse1 ||
-                      Body[Position - 1].getOpcode() ==
-                          LinxV5::B_IOT_TwoSrc_Dst_ReuseBoth
-                  ? Body[Position - 1].getOperand(2).getImm()
-                  : 0;
           if (Init > 1 || Last > 1 || RegSrc < LinxV5::R0 ||
               RegSrc > LinxV5::R23 || WriterSize > 12 ||
               (DestinationMember >= 0 &&
@@ -1356,7 +1341,10 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           IOTPositions.push_back(Pos++);
           if (!consumeRangeModifiers(
                   RangeSources,
-                  Actual.Destination ? DestinationMember : -1, Pos))
+                  Actual.Destination ? DestinationMember : -1,
+                  Actual.Destination ? Body[CommandStart].getOperand(2).getImm()
+                                      : 0,
+                  Pos))
             return false;
           markConsumed(CommandStart, Pos);
           SeenSources += Actual.Sources;
@@ -1393,7 +1381,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           else
             RangeSources.push_back(Member);
           unsigned CommandStart = Pos - 1;
-          if (!consumeRangeModifiers(RangeSources, RangeDestination, Pos))
+          if (!consumeRangeModifiers(RangeSources, RangeDestination, SizeCode,
+                                      Pos))
             return false;
           markConsumed(CommandStart, Pos);
         }

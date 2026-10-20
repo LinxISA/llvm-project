@@ -1,4 +1,4 @@
-; RUN: opt -mtriple=linx64v5 -passes='linx-v5-element-region' -S %s | FileCheck %s
+; RUN: opt -mtriple=linx64v5 -passes='linx-v5-element-generic-prepare,linx-v5-element-predication,linx-v5-element-tile-legalize,linx-v5-element-region-verify,verify' -verify-each -S %s | FileCheck %s --implicit-check-not='call {{.*}}@llvm.linx.experimental.element.' --implicit-check-not='call {{.*}}@llvm.vp.' --implicit-check-not=extractelement --implicit-check-not=insertelement
 
 target triple = "linx64v5"
 
@@ -6,15 +6,18 @@ declare void @llvm.linx.experimental.element.region(metadata)
 declare <32 x i32> @llvm.linx.experimental.element.view.v32i32(
     <32 x i32>, i64, i64, i64, i64, i64, i64, i64, i64)
 
-define <32 x i32> @expression_chain(<32 x i32> %input, i32 %bias,
-                                    i32 %multiplier) {
+define void @expression_chain(i32 %bias, i32 %multiplier) {
 entry:
+  %input = call <32 x i32> asm sideeffect "", "=@2Tr"()
+  %seed = call <32 x i32> @llvm.linx.experimental.element.view.v32i32(
+      <32 x i32> zeroinitializer, i64 2, i64 2, i64 0, i64 128, i64 25,
+      i64 32, i64 1, i64 29)
   call void @llvm.linx.experimental.element.region(metadata !0)
   br label %loop
 
 loop:
   %element = phi i32 [ 0, %entry ], [ %next, %latch ]
-  %output = phi <32 x i32> [ poison, %entry ], [ %published, %latch ]
+  %output = phi <32 x i32> [ %seed, %entry ], [ %published, %latch ]
   %input.view = call <32 x i32> @llvm.linx.experimental.element.view.v32i32(
       <32 x i32> %input, i64 1, i64 1, i64 0, i64 128, i64 25,
       i64 32, i64 1, i64 29)
@@ -44,25 +47,25 @@ latch:
 
 exit:
   %result = phi <32 x i32> [ %published, %latch ]
-  ret <32 x i32> %result
+  call void asm sideeffect "", "@2Tr"(<32 x i32> %result)
+  ret void
 }
 
-; CHECK-LABEL: define <32 x i32> @expression_chain
+; CHECK-LABEL: define void @expression_chain
 ; CHECK-NOT: llvm.linx.experimental.element.region
 ; CHECK-NOT: llvm.linx.experimental.element.view
 ; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 0,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 2,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 1,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 3,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 4,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 8,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 9,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 5,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 6,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 7,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 1,
-; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32{{.*}}i64 7,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 2,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 3,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 4,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 8,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 8,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 5,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 6,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 7,
+; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0,
 ; CHECK-NOT: extractelement
 ; CHECK-NOT: insertelement
 

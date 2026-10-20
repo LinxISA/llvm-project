@@ -38,18 +38,18 @@
 # STATIC-LABEL: name: live_through_static
 # STATIC: dead $tile_u = PseudoTCI_EW_SizeI
 # STATIC-NEXT: $tile_u = PseudoTCI_EW_SizeI
-# STATIC-NEXT: $tile_u = PseudoTCOPYDesc 1, $tile_uos3, 1, 32, 1, 25, 29
-# STATIC-NEXT: $tile_u = PseudoTCOPYDesc 1, $tile_uos2, 1, 32, 1, 25, 29
+# STATIC-NEXT: $tile_u = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
+# STATIC-NEXT: $tile_u = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # STATIC: INLINEASM {{.*}} $tile_uos2, {{.*}} $tile_uos1
 # EQUAL-LABEL: name: equal_sparse_loop
 # EQUAL: bb.16:
 # EQUAL: $tile_u = PseudoTCI_EW_SizeI
 # EQUAL-NEXT: dead $tile_u = PseudoTCI_EW_SizeI
 # EQUAL-NEXT: PseudoBR
-# EQUAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos2, 1, 32, 1, 25, 29
+# EQUAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # CONST-CLOBBER-LABEL: name: runtime_constant_clobber
 # CONST-CLOBBER: $r17 = ORI $r0, 7
-# CONST-CLOBBER: $tile_u = PseudoTCOPYDesc 1, $tile_uos3, 32, 1, 32, 25, 29
+# CONST-CLOBBER: $tile_u = PseudoTCOPYDesc 1, $tile_uos3_ru, 32, 1, 32, 25, 29
 # CONST-CLOBBER-NOT: PseudoTMOV_SizeI $r17
 # CONST-CLOBBER: INLINEASM {{.*}} $tile_uos2, {{.*}} $tile_uos1
 # RUNTIME-REGMASK: Local tile synchronization conflict use has no unique reaching native distance
@@ -68,18 +68,18 @@
 # CRITICAL: bb.[[SPLIT]]:
 # CRITICAL-NEXT: successors: %bb.[[HEADER:[0-9]+]]
 # CRITICAL: liveins: $r2, $tile_u3
-# CRITICAL: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos2, 1, 32, 1, 25, 29
+# CRITICAL: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # CRITICAL: bb.[[HEADER]]:
-# CRITICAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos3, 1, 32, 1, 25, 29
+# CRITICAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
 # CRITICAL: bb.[[OTHER]]:
 # CRITICAL: PseudoRET
 # UNIFORM-LABEL: name: uniform_age_loop
 # UNIFORM: bb.16:
 # UNIFORM: $tile_u = PseudoTCI_EW_SizeI
 # UNIFORM-NEXT: dead $tile_u = PseudoTCI_EW_SizeI
-# UNIFORM-NEXT: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos2, 1, 32, 1, 25, 29
+# UNIFORM-NEXT: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # UNIFORM-NEXT: PseudoBR
-# UNIFORM: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos3, 1, 32, 1, 25, 29
+# UNIFORM: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
 # UNIFORM-NOT: PseudoEmptyTile
 # RUNTIME-LABEL: name: live_through_runtime
 # RUNTIME: INLINEASM {{.*}} def $tile_u

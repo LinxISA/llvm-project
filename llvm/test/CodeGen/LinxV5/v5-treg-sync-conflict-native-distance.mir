@@ -28,7 +28,7 @@
 # CHECK-NOT: INLINEASM {{.*}} $tile_t3
 # CHECK-NOT: INLINEASM {{.*}} $tile_u3
 # JOIN-LABEL: name: negative
-# JOIN: $tile_t = PseudoTCOPYDesc 1, $tile_tos2, 1, 32, 1, 25, 29
+# JOIN: $tile_t = PseudoTCOPYDesc 1, $tile_tos2_ru, 1, 32, 1, 25, 29
 # JOIN: INLINEASM {{.*}} def $tile_t, {{.*}} $tile_tos1, {{.*}} $tile_uos1
 # The remaining negative variants cover a call regmask clobber, an IMPLICIT_DEF
 # false producer, and a producer that publishes two values in one bank.

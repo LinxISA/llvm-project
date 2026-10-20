@@ -48,9 +48,9 @@ extern "C" void generic_i32(const int *__restrict input,
 // OBJ-LABEL: <generic_i32>:
 // OBJ: BSTART.TEPL TCMPS, U64
 // OBJ-NEXT: {{.*}}B.DATR NORM.normal, Zero, LT
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.MGATHER U32
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.TLSU MSCATTER, U32
+// OBJ: BSTART.MSCATTER U32
 // OBJ: ExecMaskPresent
 
 extern "C" void generic_compare(const unsigned *__restrict a,
@@ -70,7 +70,7 @@ extern "C" void generic_compare(const unsigned *__restrict a,
 // OBJ-LABEL: <generic_compare>:
 // OBJ: BSTART.TEPL TCMP, U32
 // OBJ: BSTART.TEPL TSEL, U32
-// OBJ: BSTART.TLSU MSCATTER, U32
+// OBJ: BSTART.MSCATTER U32
 
 extern "C" void generic_signed_store(const int *__restrict input,
                                       const int *__restrict divisor,
@@ -85,4 +85,4 @@ extern "C" void generic_signed_store(const int *__restrict input,
 // IR: ret void
 // OBJ-LABEL: <generic_signed_store>:
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.TLSU MSCATTER, S32
+// OBJ: BSTART.MSCATTER S32
