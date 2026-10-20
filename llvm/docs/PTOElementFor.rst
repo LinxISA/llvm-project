@@ -7,6 +7,16 @@ for the loop body.  The pragma does not select a source-expression pattern and
 does not expose a hardware lane, layout, predicate carrier, or temporary Tile
 to the programmer.
 
+Branch scope
+------------
+
+This copy documents ``codex/pto-element-region-compiler`` at
+``57905671c87c4e95fa3998bb4e25d29baa7c461e``. The Model #925 frozen run used
+the earlier compiler revision ``482b4207e88adf312fd1b1a8a567b83f5a4e207b``;
+that exact compiler/API/model combination remains the reproducibility anchor.
+Do not interpret later capabilities on this branch as having been covered by
+the historical 13-case gfrun/gfsim qualification.
+
 Ordering contract
 -----------------
 
@@ -108,7 +118,7 @@ verifier.  It does not fall back to the older publication/gather/atomic profile
 recognizer when an operation is unsupported.  This option remains off by
 default while broader shape and control-flow support is developed.
 
-Current machine-code scope is 32 logical elements of S32/U32 or FP32 data, public typed
+The original logical32 machine-code profile covers S32/U32 or FP32 data, public typed
 Tile views, independent i32 stores, varying indexed i32 gathers, monotonic i32
 atomic add, and the acyclic iteration CFG
 already accepted by the predicator.  The backend chooses M32 internally;
@@ -236,7 +246,8 @@ diagnosed during preflight before any physical producer is emitted.
 LLVM may narrow scalar control arithmetic to i8 or i16. The generic predicator
 represents those integer bits in i32 vectors, explicitly normalizes arithmetic
 and truncation modulo the original width, and sign-extends signed operations
-and casts before widening. This does not admit sub-i32 GM memory accesses.
+and casts before widening. This control-bit representation does not by itself
+admit sub-i32 GM accesses; native memory profiles have separate legality checks.
 
 The predicator attaches the original region token and domain to the IR it
 emits.  The legalizer preflights all token-owned regions before mutation,
@@ -245,9 +256,89 @@ the complete owned VP/vector-pointer graph.  Missing ownership, escaping
 values, unsupported domains, partial EVL, effects or types receive diagnostics.
 Unmarked functions do not run the extra generic CFG canonicalization pipeline.
 
-The executable profile covers ordinary integer GM arrays and the official
-S32/U32/FP32 TileOp -> element-for -> TileOp bridge. Varying inner loops, other atomic
-operations/orderings, potentially overlapping ordinary indexed writes,
-wider Tile shapes/dtypes, and typed Tile spills at O0 remain unsupported.
+The logical32 profile covers ordinary integer GM arrays and the official
+S32/U32/FP32 TileOp -> element-for -> TileOp bridge. Additional exact profiles
+on this branch are listed below. Varying inner loops, other atomic
+operations/orderings, unproved overlapping ordinary indexed writes,
+arbitrary shapes/dtypes, and typed Tile spills at O0 remain unsupported.
 The GM-array, public typed-view and whole-application migration tests remain
 separate coverage lanes.
+
+Later source coverage on this branch
+------------------------------------
+
+The original logical32 description above is not the full profile inventory at
+``57905671c87c``. ``elementProfile`` and ``elementViewProfile`` also admit:
+
+* S64/U64 CUBE_M32 logical32 with 256-byte carriers;
+* F16/U16 CUBE_M32 logical64 with 32x2 geometry and 128-byte carriers;
+* S32/U32 CUBE_M32 logical64 with 32x2 geometry and 256-byte carriers;
+* exact U32 NORM row profiles and FP32 NORM 1x32 / 16x32 profiles.
+
+These are exact dtype/shape/layout contracts, not permission to cast an
+arbitrary vector or Tile into an element view. Native memory, arithmetic,
+casts, comparison masks and valid domains are checked separately. The NORM
+profiles in particular do not imply arbitrary divergent CFG or GM access.
+Representative positive and negative coverage includes
+``pto-element-generic-i64-memory.cpp``, ``pto-element-generic-f16x64.cpp``,
+``pto-element-generic-f16x64-memory.cpp``, ``pto-element-norm-f32.cpp``,
+``element-predication-i64-leaf32*.ll`` and
+``element-predication-unordered-f32-scatter*.ll``.
+
+Local Tile ABI preparation and private closure/capture proofs are also present.
+The call-context pass specializes proved private contexts, including supported
+nested immutable captures; it does not add implicit noalias to arbitrary
+ordinary pointer parameters. See ``element-call-context-alias.ll``,
+``element-nested-call-context-alias.ll`` and
+``pto-local-tile-abi-call-boundary.ll``. Do not substitute PR #131's later
+ordinary-pointer whole-callgraph proof for this branch's narrower rules.
+
+The frozen TileOP API at ``b223de6`` exposes only U32/S32/F32
+``ElementTile<T,32/128>`` and logical32 typed views. Compiler-only tests of
+additional profiles are not evidence that those public API types exist at
+that revision. Conversely, the presence of an F32 API view does not imply that
+the frozen LLVM ``482b4207`` has the later FP32 executable coverage.
+
+Historical Model #925 qualification
+-----------------------------------
+
+`SuperScalarModel PR #925
+<https://github.com/LinxISA/SuperScalarModel/pull/925>`_ captured the
+historical TopK combination with these exact revisions:
+
+* SuperNPUBench ``codex/pto059-element-if-integration`` at
+  ``9076bd082544e273cdb93f39675df42510d8c071``;
+* LLVM ``codex/pto-element-region-compiler`` at
+  ``482b4207e88adf312fd1b1a8a567b83f5a4e207b``;
+* Linx-TileOP-API at ``b223de6a80c1d9b7c2f1ac3a1ff4517b1951d650``;
+* SuperScalarModel ``codex/pto-element-generic-timing`` at
+  ``8e8d8ac7b1becc8937e77989c2762139f946b8af`` for both gfrun and gfsim.
+
+That result covered 13 element/atomic/TopK cases and Original777 TopK across
+nine memory segments on both models. It is a historical execution result, not
+an assertion that the current branch or current model HEAD reproduces it.
+The Original777 case has 777 inputs and K=37. Benchmark PR #202 was later
+reverted from main; the benchmark branch name alone is not an immutable pin.
+The API revision is still retained by ``codex/elementwise-public-api``.
+
+Build and use the frozen compiler through the main ``linx-toolchain-build``
+checkout with the exact LLVM and API revisions. Do not overwrite an existing
+dirty build checkout or substitute a binary from another LLVM tree. Record
+the compiler version, header revision, model revision and ELF hashes. A
+documentation-only update does not require regenerating the historical ELF
+or replacing its recorded hash.
+
+Capabilities added on this LLVM branch after the frozen compiler capture include
+additional native element arithmetic and memory profiles: native i64 logical32,
+F16/U16 logical64, selected FP32 and NORM profiles, bounded casts and gathers,
+closed local call-context alias proofs, and stricter Tile producer/PHI checks.
+Those source-level capabilities still require their corresponding tests and
+matching API/model revisions; they must not be retroactively attributed to the
+frozen Model #925 run.
+
+This branch does not contain the later PR #131 PE-domain implementation. In
+particular, do not document ``pto.pe_domain`` specialization, MC round-trip
+preservation, or the PR #131 fused zero-store exception as available in this
+historical branch. The safe public contract here remains the typed producer,
+whole-object memory proof, supported effect, and fail-closed diagnostics
+already described above.
