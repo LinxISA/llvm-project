@@ -51,11 +51,11 @@ void histogram_selected_c(unsigned int *restrict old_values,
 // OBJ-LABEL: <histogram_tail_c>:
 // OBJ-DAG: BSTART.TEPL TCMPS, U64
 // OBJ-DAG: BSTART.TEPL TLEA, U32
-// OBJ-DAG: BSTART.TLSU MGATHER.ADD, U32
+// OBJ-DAG: BSTART.MGATHER.ADD U32
 // OBJ-DAG: ExecMaskPresent
 // OBJ-LABEL: <histogram_selected_c>:
 // OBJ-DAG: BSTART.TEPL TCMPS, U64
 // OBJ-DAG: BSTART.TEPL TCMPS, U32
 // OBJ-DAG: BSTART.TEPL TLEA, U32
-// OBJ-DAG: BSTART.TLSU MGATHER.ADD, U32
+// OBJ-DAG: BSTART.MGATHER.ADD U32
 // OBJ-DAG: ExecMaskPresent
