@@ -1,0 +1,68 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=linxv5-tile-fixup \
+# RUN:   -linxv5-enable-generic-element=true %s -o - | FileCheck %s
+
+--- |
+  target triple = "linx64v5-unknown-linux-musl"
+  define void @spill_loop() { ret void }
+  define void @copy_loop() { ret void }
+...
+---
+name: spill_loop
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    successors: %bb.1
+    $r3 = ADDI $r0, 0
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 17, 29, 1, $r0, $r0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2
+    PseudoTSpill $tile_u2, %stack.0 :: (store (s1024) into %stack.0, align 256)
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1, %bb.3
+    $tile_u2 = PseudoTReload %stack.0 :: (load (s1024) from %stack.0, align 256)
+    $r3 = ADDI $r3, 1
+    SETC_EQI_BR $r3, 8, %bb.3
+    PseudoBR %bb.1
+  bb.3:
+    PseudoRET
+
+# CHECK-LABEL: name: spill_loop
+# CHECK: PseudoTSpillDesc $tile_u2, %stack.0, 1, 32, 1, 17, 29, 1
+# CHECK: $tile_u2 = PseudoTReloadDesc %stack.0, 1, 32, 1, 17, 29, 1
+...
+---
+name: copy_loop
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 128, alignment: 256 }
+  - { id: 1, type: spill-slot, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    successors: %bb.1
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 17, 29, 1, $r0, $r0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2
+    $tile_t2 = COPY $tile_u2
+    PseudoTSpill $tile_t2, %stack.0 :: (store (s1024) into %stack.0, align 256)
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.3
+    $tile_t1 = PseudoTReload %stack.0 :: (load (s1024) from %stack.0, align 256)
+    $tile_u3 = COPY $tile_t1
+    PseudoTSpill $tile_u3, %stack.1 :: (store (s1024) into %stack.1, align 256)
+    PseudoBR %bb.3
+  bb.3:
+    successors: %bb.1
+    $tile_u2 = PseudoTReload %stack.1 :: (load (s1024) from %stack.1, align 256)
+    PseudoBR %bb.1
+
+# CHECK-LABEL: name: copy_loop
+# CHECK: PseudoTSpillDesc $tile_t2, %stack.0, 1, 32, 1, 17, 29, 1
+# CHECK: $tile_t1 = PseudoTReloadDesc %stack.0, 1, 32, 1, 17, 29, 1
+# CHECK: PseudoTSpillDesc $tile_u3, %stack.1, 1, 32, 1, 17, 29, 1
+# CHECK: $tile_u2 = PseudoTReloadDesc %stack.1, 1, 32, 1, 17, 29, 1
