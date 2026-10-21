@@ -633,6 +633,61 @@ static CallInst *findRegionSentinel(Function &F, MDNode *Token) {
   return nullptr;
 }
 
+static bool refreshClonedRegionTokens(Function &F, LoopInfo &LI,
+                                     DominatorTree &DT) {
+  DenseMap<MDNode *, SmallVector<CallInst *, 2>> Sentinels;
+  for (Instruction &Inst : instructions(F)) {
+    auto *Call = dyn_cast<CallInst>(&Inst);
+    if (!isIntrinsic(Call, Intrinsic::linx_experimental_element_region) ||
+        Call->arg_size() != 1)
+      continue;
+    auto *Argument = dyn_cast<MetadataAsValue>(Call->getArgOperand(0));
+    auto *Token = Argument ? dyn_cast<MDNode>(Argument->getMetadata()) : nullptr;
+    if (Token)
+      Sentinels[Token].push_back(Call);
+  }
+  SmallVector<std::pair<Loop *, CallInst *>, 4> Clones;
+  SmallPtrSet<CallInst *, 4> Claimed;
+  for (Loop *RegionLoop : LI.getLoopsInPreorder()) {
+    MDNode *Token = getElementRegionToken(*RegionLoop);
+    auto Found = Sentinels.find(Token);
+    if (Found == Sentinels.end() || Found->second.size() < 2)
+      continue;
+    CallInst *Closest = nullptr;
+    for (CallInst *Candidate : Found->second)
+      if (!Candidate->getMetadata(PredicatedDomainMD) &&
+          DT.dominates(Candidate, RegionLoop->getHeader()) &&
+          (!Closest || DT.dominates(Closest, Candidate)))
+        Closest = Candidate;
+    if (!Closest || !Claimed.insert(Closest).second)
+      diagnose(F, RegionLoop->getHeader()->getTerminator(),
+               "cloned element region requires a unique dominating sentinel");
+    Clones.emplace_back(RegionLoop, Closest);
+  }
+  for (auto &Clone : Clones) {
+    Loop &RegionLoop = *Clone.first;
+    CallInst *Sentinel = Clone.second;
+    MDNode *Token = MDNode::getDistinct(F.getContext(), {});
+    Sentinel->setArgOperand(0, MetadataAsValue::get(F.getContext(), Token));
+    SmallVector<Metadata *, 8> Properties{nullptr};
+    for (const MDOperand &Operand :
+         drop_begin(RegionLoop.getLoopID()->operands())) {
+      auto *Property = dyn_cast_or_null<MDNode>(Operand.get());
+      auto *Name = Property && Property->getNumOperands() == 2
+                       ? dyn_cast_or_null<MDString>(Property->getOperand(0))
+                       : nullptr;
+      if (Name && Name->getString() == RegionLoopMD)
+        Properties.push_back(MDNode::get(F.getContext(), {Name, Token}));
+      else
+        Properties.push_back(Operand.get());
+    }
+    MDNode *LoopID = MDNode::getDistinct(F.getContext(), Properties);
+    LoopID->replaceOperandWith(0, LoopID);
+    RegionLoop.setLoopID(LoopID);
+  }
+  return !Clones.empty();
+}
+
 static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L,
                                   SmallPtrSetImpl<Value *> &Active) {
   if (!Active.insert(V).second)
@@ -7873,6 +7928,8 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool Changed = rewriteF32ViewImportBitcasts(F);
   if (Changed)
     AM.invalidate(F, PreservedAnalyses::none());
+  Changed |= refreshClonedRegionTokens(F, AM.getResult<LoopAnalysis>(F),
+                                      AM.getResult<DominatorTreeAnalysis>(F));
   for (;;) {
     auto &LI = AM.getResult<LoopAnalysis>(F);
     Loop *Selected = nullptr;

@@ -24,6 +24,9 @@ Clang records the contract on the marked loop with these queryable properties:
 
 The loop also carries ``llvm.loop.linx.pto.element.region`` and shares its
 identity token with ``llvm.linx.experimental.element.region``.
+Repeated inlining gives each cloned loop and its dominating region sentinel
+a fresh identity before predication. Ambiguous sentinel/loop pairings remain
+errors; cloned regions do not share a predicated-domain owner.
 
 Control-flow boundary
 ---------------------
