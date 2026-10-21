@@ -586,8 +586,9 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (Args.hasArg(options::OPT_mlinx_group_runtime) &&
       getToolChain().getTriple().isLinxV5()) {
-    // LinxV5 compiler-rt carries the worker carrier.  Keep this opt-in and
-    // force extraction from the archive without changing ordinary hosted CRT.
+    // Hosted LinxV5 targets use this GNU-style linker path. The bare-metal
+    // LinxV5 toolchain has a distinct linker implementation and performs the
+    // same opt-in extraction there.
     CmdArgs.push_back("-u");
     CmdArgs.push_back("__linx_group_worker_start");
   }
