@@ -179,6 +179,12 @@ LLVM semantics and use a real retag when required. The source-level semantics
 do not change.
 
 Indexed reads may use an element-dependent index with one loop-invariant base.
+Aggregate addresses such as ``hist[row][bins[element]]`` may include a
+dominating loop-invariant aggregate prefix. The compiler computes that prefix
+as a scalar base outside the region and retains one varying aggregate index
+with constant field suffixes. Multiple varying aggregate indices remain
+unsupported. This decomposition preserves signed index and byte-stride
+semantics and does not establish new aliasing facts.
 Ordinary writes still require a proven injective, unit-stride element stream.
 Read/read pairs may overlap. A read/write pair needs whole-object NoAlias,
 except for two proven independent streams with identical addresses; a scalar

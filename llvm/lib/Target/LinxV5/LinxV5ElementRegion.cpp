@@ -700,6 +700,64 @@ static bool specializeRegionInstances(Function &F, LoopInfo &LI,
   return !Bindings.empty();
 }
 
+static bool splitInvariantAggregateBases(Loop &RegionLoop,
+                                         DominatorTree &DT) {
+  BasicBlock *Preheader = RegionLoop.getLoopPreheader();
+  if (!Preheader)
+    return false;
+  SmallVector<GetElementPtrInst *, 4> Candidates;
+  for (BasicBlock *Block : RegionLoop.blocks())
+    for (Instruction &Inst : *Block)
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(&Inst))
+        if (GEP->getSourceElementType()->isAggregateType() &&
+            RegionLoop.isLoopInvariant(GEP->getPointerOperand()))
+          Candidates.push_back(GEP);
+  bool Changed = false;
+  for (GetElementPtrInst *GEP : Candidates) {
+    SmallVector<Value *, 4> Prefix;
+    SmallVector<Value *, 4> Suffix;
+    bool HasInvariantIndex = false;
+    bool HasVariantIndex = false;
+    bool Supported = true;
+    for (Value *Index : GEP->indices()) {
+      if (!HasVariantIndex && RegionLoop.isLoopInvariant(Index)) {
+        if (auto *IndexInst = dyn_cast<Instruction>(Index))
+          if (!DT.dominates(IndexInst, Preheader->getTerminator())) {
+            Supported = false;
+            break;
+          }
+        Prefix.push_back(Index);
+        HasInvariantIndex |= !isa<Constant>(Index);
+      } else {
+        if (HasVariantIndex && !isa<Constant>(Index)) {
+          Supported = false;
+          break;
+        }
+        HasVariantIndex = true;
+        Suffix.push_back(Index);
+      }
+    }
+    if (!Supported || !HasInvariantIndex || !HasVariantIndex || Prefix.empty())
+      continue;
+    Type *BaseTy =
+        GetElementPtrInst::getIndexedType(GEP->getSourceElementType(), Prefix);
+    if (!BaseTy || !BaseTy->isAggregateType())
+      continue;
+    IRBuilder<> BaseBuilder(Preheader->getTerminator());
+    Value *Base = BaseBuilder.CreateGEP(GEP->getSourceElementType(),
+                                       GEP->getPointerOperand(), Prefix,
+                                       "pto.aggregate.base");
+    Suffix.insert(Suffix.begin(), BaseBuilder.getInt32(0));
+    IRBuilder<> AddressBuilder(GEP);
+    Value *Address = AddressBuilder.CreateGEP(BaseTy, Base, Suffix,
+                                              "pto.aggregate.address");
+    GEP->replaceAllUsesWith(Address);
+    GEP->eraseFromParent();
+    Changed = true;
+  }
+  return Changed;
+}
+
 static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L,
                                   SmallPtrSetImpl<Value *> &Active) {
   if (!Active.insert(V).second)
@@ -2186,6 +2244,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     APInt DynamicScale(DL.getIndexSizeInBits(0), 0);
     unsigned DynamicOccurrences = 0;
     while (auto *GEP = dyn_cast<GetElementPtrInst>(Current)) {
+      if (L.isLoopInvariant(GEP))
+        break;
       unsigned BitWidth =
           DL.getIndexSizeInBits(GEP->getPointerAddressSpace());
       MapVector<Value *, APInt> Variables;
@@ -7992,6 +8052,12 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
       }
     if (!Selected)
       break;
+    if (splitInvariantAggregateBases(
+            *Selected, AM.getResult<DominatorTreeAnalysis>(F))) {
+      AM.invalidate(F, PreservedAnalyses::none());
+      Changed = true;
+      continue;
+    }
     auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
     auto &LVI = AM.getResult<LazyValueAnalysis>(F);
