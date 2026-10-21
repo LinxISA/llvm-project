@@ -423,76 +423,113 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
       }
     }
   };
-  DenseSet<Register> ResolvingDescriptorRegs;
-  std::function<Optional<LinxV5::TileDescriptor>(
-      MachineBasicBlock &, MachineBasicBlock::iterator, Register)>
-      TryResolveRegisterDescriptor;
-  TryResolveRegisterDescriptor =
-      [&](MachineBasicBlock &TargetMBB, MachineBasicBlock::iterator Before,
-          Register Reg) -> Optional<LinxV5::TileDescriptor> {
-    if (!ResolvingDescriptorRegs.insert(Reg).second)
-      return None;
-    DenseMap<MachineBasicBlock *, State> In, Out;
-    auto Transfer = [&](MachineBasicBlock &MBB, State S,
-                        MachineBasicBlock::iterator Stop) {
-      for (auto It = MBB.begin(); It != Stop; ++It) {
-        MachineInstr &MI = *It;
+  DenseSet<Register> DescriptorRegs;
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB)
+      if (MI.getOpcode() == LinxV5::PseudoTSpill ||
+          MI.getOpcode() == LinxV5::PseudoTReload ||
+          MI.getOpcode() == LinxV5::PseudoTSpillDesc ||
+          MI.getOpcode() == LinxV5::PseudoTReloadDesc)
+        DescriptorRegs.insert(MI.getOperand(0).getReg());
+  bool AddedRegister = true;
+  while (AddedRegister) {
+    AddedRegister = false;
+    for (MachineBasicBlock &MBB : MF)
+      for (MachineInstr &MI : MBB)
+        if (MI.getOpcode() == TargetOpcode::COPY &&
+            DescriptorRegs.contains(MI.getOperand(0).getReg()))
+          AddedRegister |=
+              DescriptorRegs.insert(MI.getOperand(1).getReg()).second;
+  }
+  struct DescriptorState {
+    DenseMap<Register, State> Registers;
+    DenseMap<int, State> Slots;
+  };
+  auto Merge = [&](State &Into, const State &Incoming) {
+    if (Incoming.Kind == StateKind::Uninitialized)
+      return;
+    if (Into.Kind == StateKind::Uninitialized) {
+      Into = Incoming;
+      return;
+    }
+    if (!Same(Into, Incoming)) {
+      Into.Kind = StateKind::Conflict;
+      Into.Descriptor = None;
+    }
+  };
+  DenseMap<MachineInstr *, State> SpillDescriptors;
+  auto TransferDescriptors = [&](MachineBasicBlock &MBB, DescriptorState S) {
+    for (MachineInstr &MI : MBB) {
+      State CopySource;
+      if (MI.getOpcode() == TargetOpcode::COPY)
+        CopySource = S.Registers.lookup(MI.getOperand(1).getReg());
+      for (Register Reg : DescriptorRegs) {
         if (!MI.definesRegister(Reg))
           continue;
+        State &Current = S.Registers[Reg];
         if (MI.getOpcode() == LinxV5::PseudoTReload) {
-          SetAbsent(S);
-          continue;
-        }
-        Optional<LinxV5::TileDescriptor> D;
-        if (MI.getOpcode() == TargetOpcode::COPY)
-          D = TryResolveRegisterDescriptor(MBB, It,
-                                           MI.getOperand(1).getReg());
-        else
-          D = LinxV5::tryGetTileRegDescriptor(MBB, std::next(It), Reg);
-        if (!D) {
-          SetAbsent(S);
-          continue;
-        }
-        S.Kind = StateKind::Exact;
-        S.Descriptor = *D;
-      }
-      return S;
-    };
-    bool DataflowProgress = true;
-    while (DataflowProgress) {
-      DataflowProgress = false;
-      for (MachineBasicBlock &MBB : MF) {
-        State Joined;
-        bool SawInitializedPredecessor = false;
-        for (MachineBasicBlock *Pred : MBB.predecessors()) {
-          State P = Out.lookup(Pred);
-          if (P.Kind == StateKind::Uninitialized)
-            continue;
-          if (!SawInitializedPredecessor) {
-            Joined = P;
-            SawInitializedPredecessor = true;
-          } else if (!Same(Joined, P)) {
-            Joined.Kind = StateKind::Conflict;
-            Joined.Descriptor = None;
+          Current = S.Slots.lookup(MI.getOperand(1).getIndex());
+        } else if (MI.getOpcode() == TargetOpcode::COPY) {
+          Current = CopySource;
+        } else {
+          auto Descriptor = LinxV5::tryGetTileRegDescriptor(
+              MBB, std::next(MI.getIterator()), Reg);
+          if (Descriptor) {
+            Current.Kind = StateKind::Exact;
+            Current.Descriptor = *Descriptor;
+          } else {
+            SetAbsent(Current);
           }
         }
-        if (MBB.pred_empty())
-          Joined.Kind = StateKind::Absent;
-        State NewOut = Transfer(MBB, Joined, MBB.end());
-        if (!Same(In.lookup(&MBB), Joined) ||
-            !Same(Out.lookup(&MBB), NewOut)) {
-          In[&MBB] = Joined;
-          Out[&MBB] = NewOut;
-          DataflowProgress = true;
-        }
       }
+      if (MI.getOpcode() == LinxV5::PseudoTSpill) {
+        State Source = S.Registers.lookup(MI.getOperand(0).getReg());
+        SpillDescriptors[&MI] = Source;
+        S.Slots[MI.getOperand(1).getIndex()] = Source;
+        continue;
+      }
+      if (MI.getOpcode() == LinxV5::PseudoTSpillDesc) {
+        SetExact(S.Slots[MI.getOperand(1).getIndex()], MI);
+        continue;
+      }
+      for (MachineMemOperand *MMO : MI.memoperands())
+        if (MMO->isStore())
+          if (auto FI = FixedFI(MMO))
+            if (SpillFIs.contains(*FI))
+              SetAbsent(S.Slots[*FI]);
     }
-    State AtUse = Transfer(TargetMBB, In.lookup(&TargetMBB), Before);
-    ResolvingDescriptorRegs.erase(Reg);
-    if (AtUse.Kind != StateKind::Exact || !AtUse.Descriptor)
-      return None;
-    return AtUse.Descriptor;
+    return S;
   };
+  DenseMap<MachineBasicBlock *, DescriptorState> DescriptorOut;
+  bool DescriptorProgress = true;
+  while (DescriptorProgress) {
+    DescriptorProgress = false;
+    for (MachineBasicBlock &MBB : MF) {
+      DescriptorState Joined;
+      for (MachineBasicBlock *Pred : MBB.predecessors()) {
+        const DescriptorState &Incoming = DescriptorOut[Pred];
+        for (Register Reg : DescriptorRegs)
+          Merge(Joined.Registers[Reg], Incoming.Registers.lookup(Reg));
+        for (int FI : SpillFIs)
+          Merge(Joined.Slots[FI], Incoming.Slots.lookup(FI));
+      }
+      if (MBB.pred_empty()) {
+        for (Register Reg : DescriptorRegs)
+          SetAbsent(Joined.Registers[Reg]);
+        for (int FI : SpillFIs)
+          SetAbsent(Joined.Slots[FI]);
+      }
+      DescriptorState NewOut = TransferDescriptors(MBB, std::move(Joined));
+      DescriptorState &OldOut = DescriptorOut[&MBB];
+      for (Register Reg : DescriptorRegs)
+        DescriptorProgress |=
+            !Same(OldOut.Registers.lookup(Reg), NewOut.Registers.lookup(Reg));
+      for (int FI : SpillFIs)
+        DescriptorProgress |=
+            !Same(OldOut.Slots.lookup(FI), NewOut.Slots.lookup(FI));
+      OldOut = std::move(NewOut);
+    }
+  }
 
   bool Progress = true;
   while (Progress) {
@@ -510,10 +547,9 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
         if (Status == SourceStatus::Invalid)
           report_fatal_error(
               "raw Tile spill source is OPEN, alias-bearing, or unresolved");
-        if (Status == SourceStatus::Pending)
-          continue;
-        Optional<LinxV5::TileDescriptor> MaybeD = TryResolveRegisterDescriptor(
-            MBB, MI.getIterator(), MI.getOperand(0).getReg());
+        State Proven = SpillDescriptors.lookup(&MI);
+        Optional<LinxV5::TileDescriptor> MaybeD =
+            Proven.Kind == StateKind::Exact ? Proven.Descriptor : None;
         if (!MaybeD)
           continue;
         const LinxV5::TileDescriptor &D = *MaybeD;

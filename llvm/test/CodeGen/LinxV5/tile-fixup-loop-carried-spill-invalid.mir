@@ -1,0 +1,85 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/wrong-slot.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/clobber.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/conflict.mir -o /dev/null 2>&1 | FileCheck %s
+# CHECK: LLVM ERROR: cannot prove a complete Local tile descriptor for raw spill
+
+#--- wrong-slot.mir
+--- |
+  define void @wrong_slot() { ret void }
+...
+---
+name: wrong_slot
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 128, alignment: 256 }
+  - { id: 1, type: spill-slot, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    successors: %bb.1
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 17, 29, 1, $r0, $r0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2
+    PseudoTSpill $tile_u2, %stack.0 :: (store (s1024) into %stack.0, align 256)
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1
+    $tile_u2 = PseudoTReload %stack.1 :: (load (s1024) from %stack.1, align 256)
+    PseudoBR %bb.1
+...
+
+#--- clobber.mir
+--- |
+  define void @clobber() { ret void }
+...
+---
+name: clobber
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    successors: %bb.1
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 17, 29, 1, $r0, $r0
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2
+    PseudoTSpill $tile_u2, %stack.0 :: (store (s1024) into %stack.0, align 256)
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.3
+    INLINEASM &"", 17 :: (store (s32) into %stack.0)
+    PseudoBR %bb.3
+  bb.3:
+    successors: %bb.1
+    $tile_u2 = PseudoTReload %stack.0 :: (load (s1024) from %stack.0, align 256)
+    PseudoBR %bb.1
+...
+
+#--- conflict.mir
+--- |
+  define void @conflict() { ret void }
+...
+---
+name: conflict
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 128, alignment: 256 }
+  - { id: 1, type: spill-slot, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    successors: %bb.1
+    $tile_u2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 17, 29, 1, $r0, $r0
+    $tile_t2 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    PseudoTSpill $tile_t2, %stack.1 :: (store (s1024) into %stack.1, align 256)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2
+    PseudoTSpill $tile_u2, %stack.0 :: (store (s1024) into %stack.0, align 256)
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1
+    $tile_u2 = PseudoTReload %stack.1 :: (load (s1024) from %stack.1, align 256)
+    PseudoBR %bb.1
+...
