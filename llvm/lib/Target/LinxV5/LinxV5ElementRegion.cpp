@@ -2557,9 +2557,46 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       Memory.push_back(&I);
     }
   }
-  if (Plan.UnorderedScatters.size() > 1)
-    return Fail(*Plan.UnorderedScatters.begin(),
-                "unordered scatter requires one isolated output stream");
+  if (Plan.UnorderedScatters.size() > 1) {
+    for (StoreInst *Store : Plan.UnorderedScatters) {
+      auto *Address = dyn_cast<GetElementPtrInst>(Store->getPointerOperand());
+      if (!Address || Address->getNumIndices() != 1 ||
+          !L.isLoopInvariant(Address->getPointerOperand()))
+        return Fail(Store, "multiple unordered streams require direct "
+                           "atomic slot indices and uniform output bases");
+      Value *Index = Address->getOperand(1);
+      if (auto *Extension = dyn_cast<CastInst>(Index))
+        if (Extension->getOpcode() == Instruction::SExt ||
+            Extension->getOpcode() == Instruction::ZExt)
+          Index = Extension->getOperand(0);
+      auto *Allocator = dyn_cast<AtomicRMWInst>(Index);
+      auto *Increment = Allocator
+                            ? dyn_cast<ConstantInt>(Allocator->getValOperand())
+                            : nullptr;
+      if (!Allocator || !L.contains(Allocator) ||
+          Allocator->getOperation() != AtomicRMWInst::Add || !Increment ||
+          !Increment->isOne() ||
+          !L.isLoopInvariant(Allocator->getPointerOperand()))
+        return Fail(Store, "multiple unordered streams require direct "
+                           "unit-increment atomic slot allocation");
+      MemoryLocation Counter = MemoryLocation::get(Allocator);
+      MemoryLocation CounterObject(
+          getUnderlyingObject(Counter.Ptr),
+          LocationSize::beforeOrAfterPointer(), Counter.AATags);
+      for (Instruction *Effect : Memory) {
+        auto *Other = dyn_cast<AtomicRMWInst>(Effect);
+        if (!Other || Other == Allocator)
+          continue;
+        MemoryLocation OtherCounter = MemoryLocation::get(Other);
+        MemoryLocation OtherObject(
+            getUnderlyingObject(OtherCounter.Ptr),
+            LocationSize::beforeOrAfterPointer(), OtherCounter.AATags);
+        if (AA.alias(CounterObject, OtherObject) != AliasResult::NoAlias)
+          return Fail(Store, "multiple unordered streams require "
+                             "disjoint atomic counters");
+      }
+    }
+  }
   if (!Plan.UnorderedScatters.empty() && !hasUnorderedSourceContract(L))
     return Fail(
         *Plan.UnorderedScatters.begin(),

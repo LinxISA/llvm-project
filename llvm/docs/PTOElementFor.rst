@@ -222,6 +222,17 @@ when needed; signed typed publications are restored at the output boundary.
 Unsupported operations, stronger orderings, non-System scopes and misaligned
 atomic accesses are diagnosed before predication mutates the loop.
 
+Under the explicit unordered/source loop contract, multiple atomic-addressed
+output streams are also accepted. Each output address must use one uniform
+base and the direct old value of a loop-invariant i32 ``atomicrmw add 1``
+counter, optionally sign- or zero-extended for GEP indexing. Every allocator
+counter must be proved disjoint from all other atomic effects in the region;
+the existing whole-object NoAlias checks still separate outputs, counters and
+inputs. Unproved counter/output separation, non-unit allocation and transformed
+slot indices are rejected. Distinct streams need not have mutually exclusive
+predicates. As with ordinary C++ indexing, callers must provide sufficient
+capacity for the allocated slots; the compiler does not insert capacity checks.
+
 The public ``TPARTELEMENT`` annotation is prepared before ordinary SROA and
 promotion. Typed carriers retain their vector SSA type: an exact-IV extract
 maps to the current carrier, an exact-IV insert becomes a masked value update,
