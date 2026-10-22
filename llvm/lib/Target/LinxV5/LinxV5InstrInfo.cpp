@@ -844,16 +844,13 @@ void LinxV5::generateMatIntSeq(int64_t Val, LinxV5MatInt::InstSeq &Res,
       } else {
         generateInt32InstSeq(NewVal, Res);
       }
-      // HL.BFI uses raw immr/imms semantics.  To insert SymmWidth bits at
-      // offset SymmWidth, encode immr=SymmWidth and
-      // imms=2*SymmWidth-1.  The uimm6_plus1 TableGen operand takes imms+1,
-      // so the second assembly operand is 2*SymmWidth (16/32/64), not the
-      // field width itself.  Using SymmWidth for both operands gives the
-      // wrapping encoding and materializes the wrong constant in consumers
-      // that implement the canonical immr/imms contract.
-      unsigned M = static_cast<unsigned>(SymmWidth);
-      unsigned N = 2u * static_cast<unsigned>(SymmWidth);
-      Res.push_back(LinxV5MatInt::Inst(LinxV5::HL_BFI, (N << 6) | M));
+      // PTO ASL defines inclusive raw first/last fields.  Insert SymmWidth
+      // source bits at [2*SymmWidth-1:SymmWidth] without the legacy width or
+      // imms+1 transformation.
+      unsigned First = static_cast<unsigned>(SymmWidth);
+      unsigned Last = 2u * static_cast<unsigned>(SymmWidth) - 1u;
+      Res.push_back(
+          LinxV5MatInt::Inst(LinxV5::HL_BFI, (Last << 6) | First));
       return;
     }
   }
