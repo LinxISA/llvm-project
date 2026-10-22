@@ -12,6 +12,7 @@
 
 #include "LinxV5InstPrinter.h"
 #include "LinxV5BaseInfo.h"
+#include "LinxV5FPATR.h"
 #include "LinxV5MCExpr.h"
 #include "LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
@@ -107,10 +108,39 @@ void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
     printAnnotation(O, Annot);
     return;
   }
+  if (MI->getOpcode() == LinxV5::B_FPATR) {
+    printFPATR(MI, O);
+    printAnnotation(O, Annot);
+    return;
+  }
   if (NoAliases || !printAliasInstr(MI, Address, STI, O)) {
     printInstruction(MI, Address, STI, O);
   }
   printAnnotation(O, Annot);
+}
+
+void LinxV5InstPrinter::printFPATR(const MCInst *MI, raw_ostream &O) {
+  O << "\tB.FPATR\t";
+  for (auto Field : enumerate(LinxV5FPATR::getFieldNames())) {
+    if (Field.index())
+      O << ", ";
+    int64_t Value = MI->getOperand(Field.index()).getImm();
+    auto ModeNames = LinxV5FPATR::getModeNames(Field.index());
+    if (Field.index() == 2) {
+      auto Widths = LinxV5FPATR::getGroupWidths();
+      if (Value >= 0 && static_cast<uint64_t>(Value) < Widths.size())
+        O << Field.value() << '=' << Widths[Value];
+      else
+        O << "GroupNCode=" << Value;
+    } else {
+      O << Field.value() << '=';
+      if (Value >= 0 && static_cast<uint64_t>(Value) < ModeNames.size() &&
+          !ModeNames[Value].empty())
+        O << ModeNames[Value];
+      else
+        O << Value;
+    }
+  }
 }
 
 void LinxV5InstPrinter::printRegName(raw_ostream &O, unsigned RegNo) const {

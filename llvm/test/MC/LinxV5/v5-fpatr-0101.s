@@ -8,7 +8,7 @@
 .byte 0x23, 0x22, 0x00, 0x00 // CScaleEn=1
 .byte 0x23, 0x24, 0x00, 0x00 // reserved bit 10
 
-// CHECK: B.FPATR 0, 0, 0, 0, 0, 0, 0, 1, 0, 0
-// CHECK: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
-// CHECK: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+// CHECK: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=1, TransB=0, CScaleEn=0
+// CHECK: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=1, CScaleEn=0
+// CHECK: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=1
 // CHECK: <unknown>

@@ -9,6 +9,7 @@
 #include "LinxV5Subtarget.h"
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
+#include "MCTargetDesc/LinxV5FPATR.h"
 #include "MCTargetDesc/LinxV5InstPrinter.h"
 #include "MCTargetDesc/LinxV5MCExpr.h"
 #include "MCTargetDesc/LinxV5MCTargetDesc.h"
@@ -104,6 +105,8 @@ class LinxV5AsmParser : public MCTargetAsmParser {
 
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
+
+  bool parseFPATRNamedOperands(OperandVector &Operands);
 
   bool ParseDirective(AsmToken DirectiveID) override;
 
@@ -4082,6 +4085,76 @@ bool LinxV5AsmParser::parseDirectiveOption() {
   return false;
 }
 
+bool LinxV5AsmParser::parseFPATRNamedOperands(OperandVector &Operands) {
+  auto Fields = LinxV5FPATR::getFieldNames();
+  SmallVector<int64_t, 10> Values(Fields.size(), 0);
+  SmallVector<SMLoc, 10> Locations(Fields.size());
+  SmallBitVector Present(Fields.size());
+  while (true) {
+    SMLoc FieldLoc = getLexer().getLoc();
+    if (getLexer().isNot(AsmToken::Identifier))
+      return Error(FieldLoc, "expected a B.FPATR field name");
+    StringRef Name = getLexer().getTok().getIdentifier();
+    bool IsGroupCode = Name.equals_insensitive("GroupNCode");
+    unsigned FieldIndex = Fields.size();
+    for (auto Field : enumerate(Fields))
+      if (Name.equals_insensitive(Field.value()) ||
+          (IsGroupCode && Field.index() == 2)) {
+        FieldIndex = Field.index();
+        break;
+      }
+    if (FieldIndex == Fields.size())
+      return Error(FieldLoc, "unknown B.FPATR field");
+    if (Present[FieldIndex])
+      return Error(FieldLoc, "duplicate B.FPATR field");
+    getLexer().Lex();
+    if (getLexer().isNot(AsmToken::Equal))
+      return Error(getLexer().getLoc(), "expected '=' after B.FPATR field");
+    getLexer().Lex();
+    SMLoc ValueLoc = getLexer().getLoc();
+    int64_t Value = 0;
+    bool HasModeName = false;
+    if (getLexer().is(AsmToken::Identifier)) {
+      StringRef ModeName = getLexer().getTok().getIdentifier();
+      for (auto Mode : enumerate(LinxV5FPATR::getModeNames(FieldIndex)))
+        if (!Mode.value().empty() &&
+            ModeName.equals_insensitive(Mode.value())) {
+          Value = Mode.index();
+          HasModeName = true;
+          getLexer().Lex();
+          break;
+        }
+    }
+    if (!HasModeName && getParser().parseAbsoluteExpression(Value))
+      return true;
+    if (FieldIndex == 2 && !IsGroupCode) {
+      auto Widths = LinxV5FPATR::getGroupWidths();
+      auto Width = llvm::find(Widths, Value);
+      if (Width == Widths.end())
+        return Error(ValueLoc, "invalid B.FPATR GroupN column count");
+      Value = Width - Widths.begin();
+    }
+    Values[FieldIndex] = Value;
+    Locations[FieldIndex] = ValueLoc;
+    Present.set(FieldIndex);
+    if (getLexer().is(AsmToken::EndOfStatement))
+      break;
+    if (getLexer().isNot(AsmToken::Comma))
+      return Error(getLexer().getLoc(), "expected ',' between B.FPATR fields");
+    getLexer().Lex();
+  }
+  for (auto Field : enumerate(Fields)) {
+    if (!Present[Field.index()])
+      return Error(getLexer().getLoc(),
+                   Twine("missing B.FPATR field '") + Field.value() + "'");
+    Operands.push_back(LinxV5Operand::createImm(
+        MCConstantExpr::create(Values[Field.index()], getContext()),
+        Locations[Field.index()], Locations[Field.index()]));
+  }
+  getParser().Lex();
+  return false;
+}
+
 bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
@@ -4161,6 +4234,11 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
 
   // First operand is token for instruction
   Operands.push_back(LinxV5Operand::createToken(Name, NameLoc));
+
+  if (Name.equals_insensitive("B.FPATR") &&
+      getLexer().is(AsmToken::Identifier) &&
+      getLexer().peekTok().is(AsmToken::Equal))
+    return parseFPATRNamedOperands(Operands);
 
   do {
     switch (getLexer().getKind()) {
