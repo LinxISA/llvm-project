@@ -22,10 +22,6 @@ BUILTIN(__builtin_linx_get_thread_id, "Ui", "nc")
 // Compatibility spelling retained for existing sources.
 BUILTIN(__builtin_linx_get_thread_idx, "Ui", "nc")
 
-// Rendezvous PE0..PE3 in the current Core.  This may block indefinitely when
-// any participant fails to reach the same dynamic SYNC.CORE instance.
-BUILTIN(__builtin_linx_sync_core, "v", "")
-
 BUILTIN(blkv_max,  "v.", "nt")
 BUILTIN(blkv_min, "v.", "nt")
 BUILTIN(blkv_fabs, "v.", "nt")
