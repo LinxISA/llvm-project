@@ -57,9 +57,6 @@ def linxv5_blk_tload : SDNode<"LinxV5ISD::BLK_TLOAD", SDT_LinxV5Call, [SDNPHasCh
 
 def linxv5_blk_acccvt : SDNode<"LinxV5ISD::BLK_ACCCVT", SDT_LinxV5Call, [SDNPHasChain]>;
 
-def linxv5_sync_core : SDNode<"LinxV5ISD::SYNC_CORE", SDTNone,
-                              [SDNPHasChain]>;
-
 def DstRWithArrowAsmOperand : AsmOperandClass {
   let Name = "DstRWithArrow";
   let ParserMethod = "parseDstRWithArrow";
@@ -1317,10 +1314,6 @@ def BSTART_STD_WITHOUT_TARGET_32_RET : BSTART_WITHOUT_TARGET_32<0b111, 0b00000, 
 def BSTART_STD_WITHOUT_TARGET_32_IND : BSTART_WITHOUT_TARGET_32<0b101, 0b00000, ".STD ", "IND">;
 def BSTART_STD_WITHOUT_TARGET_32_ICALL : BSTART_WITHOUT_TARGET_32<0b110, 0b00000, ".STD ", "ICALL">;
 def BSTART_AUX_WITHOUT_TARGET_32_FALL : BSTART_WITHOUT_TARGET_32<0b001, 0b00001, ".AUX ", "FALL">;
-// Explicit 32-bit header reserved for the SYNC.CORE envelope.  It has the
-// same architectural encoding as BSTART.SYS FALL but is intentionally not
-// compressed by the MC layer.
-def BSTART_AUX_WITHOUT_TARGET_32_FALL_SYNC : BSTART_WITHOUT_TARGET_32<0b001, 0b00001, ".SYS ", "FALL">;
 def BSTART_AUX_WITHOUT_TARGET_32_RET : BSTART_WITHOUT_TARGET_32<0b111, 0b00001, ".AUX ", "RET">;
 def BSTART_AUX_WITHOUT_TARGET_32_IND : BSTART_WITHOUT_TARGET_32<0b101, 0b00001, ".AUX ", "IND">;
 def BSTART_AUX_WITHOUT_TARGET_32_ICALL : BSTART_WITHOUT_TARGET_32<0b110, 0b00001, ".AUX ", "ICALL">;
@@ -1977,28 +1970,6 @@ def BSTOP : LinxV5InstBase {
   let AsmString = "BSTOP";
 }
 
-// Four-PE rendezvous for the current Core.  The architectural encoding is a
-// fully fixed L32 word and the instruction is only legal as the sole body of
-// a BSTART.SYS FALL ... BSTOP envelope.  LinxV5EmitHeader constructs that
-// envelope for compiler-generated instances.
-def SYNC_CORE : LinxV5InstBase {
-  field bits<32> SoftFail = 0;
-  field bits<32> Inst;
-  let Size = 4;
-  let Inst{31-0} = 0x0330a02b;
-  let OutOperandList = (outs);
-  let InOperandList = (ins);
-  let AsmString = "SYNC.CORE";
-  let PE = PET_SYS;
-  let hasSideEffects = 1;
-  // The SelectionDAG chain carries the ordering edge; marking this patterned
-  // no-operand instruction as a load/store conflicts with its SDNode shape.
-  let mayLoad = 0;
-  let mayStore = 0;
-  let isNotDuplicable = 1;
-  let Pattern = [(linxv5_sync_core)];
-}
-
 def XB : BlockModifierBase {
   field bits<32> SoftFail = 0;
   field bits<32> Inst;
@@ -2249,7 +2220,7 @@ def : InstAlias<"C.BSTART.SYS $BrType", (BSTART_AUX_WITHOUT_TARGET_16 BStartWith
 
 //bstart.sys
 def : InstAlias<"BSTART.SYS", (BSTART_AUX_WITHOUT_TARGET_32_FALL), 0>;
-def : InstAlias<"BSTART.SYS FALL", (BSTART_AUX_WITHOUT_TARGET_32_FALL_SYNC), 0>;
+def : InstAlias<"BSTART.SYS FALL", (BSTART_AUX_WITHOUT_TARGET_32_FALL), 0>;
 def : InstAlias<"BSTART.SYS FALL, $Src", (BSTART_AUX_WITH_FIXUP_17_FALL simm18_lsb0_bnext:$Src), 0>;
 
 //hl.bstart

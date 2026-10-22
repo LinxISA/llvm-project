@@ -92,7 +92,6 @@ public:
   void emitFunctionBlockHeader(MachineBasicBlock &MBB,
                                MachineBasicBlock::iterator MBBI);
   void appendBstopToFunction(MachineFunction &MF);
-  void completeSyncCoreEnvelopes(MachineFunction &MF);
   bool isBlockWithoutHeader(const MachineBasicBlock *MBB);
   bool isBlockWithoutHeader(MachineBasicBlock *MBB);
   bool splitMultiBranchBlock(MachineBasicBlock &MBB);
@@ -149,7 +148,6 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
       // Isolate them just like ordinary Tile operations so a Local TCOPY/TMOV
       // inserted by TRegToOffset cannot become part of the same final block.
       if (LinxV5II::isTileOp(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
-          MI.getOpcode() == LinxV5::SYNC_CORE ||
           MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
           MI.getOpcode() == LinxV5::PseudoV5SharedS2L) {
         if (MI.getIterator() == MBB->getLastNonDebugInstr()) {
@@ -189,8 +187,7 @@ void LinxV5EmitHeader::addKillInst(MachineBasicBlock &MBB) {
     return;
 
   for (MachineInstr &MI : MBB)
-    if (LinxV5::isIsolateInstr(MI) ||
-        MI.getOpcode() == LinxV5::SYNC_CORE)
+    if (LinxV5::isIsolateInstr(MI))
       return;
 
   DebugLoc DL = DebugLoc();
@@ -654,32 +651,6 @@ void LinxV5EmitHeader::appendBstopToFunction(MachineFunction &MF) {
   emitBlockStartWithoutTargetFall(MF.back(), MF.back().end());
 }
 
-void LinxV5EmitHeader::completeSyncCoreEnvelopes(MachineFunction &MF) {
-  for (MachineBasicBlock &MBB : MF) {
-    for (MachineInstr &MI : make_early_inc_range(MBB)) {
-      if (MI.getOpcode() != LinxV5::SYNC_CORE)
-        continue;
-
-      // Ordinary SYS fall headers are compressible.  Give this envelope a
-      // distinct opcode with the same encoding so the explicit 32-bit header
-      // survives the MC compression pass.
-      for (auto It = MI.getIterator(); It != MBB.begin();) {
-        --It;
-        if (It->isDebugInstr() || It->isCFIInstruction())
-          continue;
-        if (It->getOpcode() == LinxV5::BSTART_AUX_WITHOUT_TARGET_32_FALL)
-          It->setDesc(TII->get(LinxV5::BSTART_AUX_WITHOUT_TARGET_32_FALL_SYNC));
-        break;
-      }
-
-      // SYNC.CORE must retain an explicit L32 BSTOP; unlike ordinary blocks,
-      // a following BSTART is not an architectural substitute for this stop.
-      BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
-              TII->get(LinxV5::BSTOP));
-    }
-  }
-}
-
 // split block if end with two or more terminators
 bool LinxV5EmitHeader::splitMultiBranchBlock(MachineBasicBlock &MBB) {
   if (MBB.getParent()->getSubtarget<LinxV5Subtarget>().isSIMT())
@@ -836,7 +807,6 @@ bool LinxV5EmitHeader::runOnMachineFunction(MachineFunction &MF) {
 
     emitBranchHint(&MBB);
   }
-  completeSyncCoreEnvelopes(MF);
   appendBstopToFunction(MF);
   omitRedundantFallthroughHeaders(MF);
 
