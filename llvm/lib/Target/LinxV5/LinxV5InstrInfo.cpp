@@ -725,7 +725,7 @@ unsigned LinxV5::getTileRegSize(MachineBasicBlock &MBB,
   return getTileRegSizeImpl(MBB, MBBI, Reg, isSpill) - 1;
 }
 
-static unsigned getTileDataTypeBits(unsigned DataType) {
+unsigned LinxV5::getTileDataTypeBits(unsigned DataType) {
   using namespace LinxV5Op;
   switch (DataType) {
   case DataType::FP64:
@@ -1220,7 +1220,7 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
       report_fatal_error("invalid runtime Local tile COPY descriptor");
     return Descriptor;
   }
-  unsigned TypeBits = getTileDataTypeBits(Descriptor.DataType);
+  unsigned TypeBits = LinxV5::getTileDataTypeBits(Descriptor.DataType);
   if (!TypeBits || (!Descriptor.ValidRow && !Descriptor.ValidRowReg) ||
       (!Descriptor.ValidCol && !Descriptor.ValidColReg) ||
       (!Descriptor.PhysicalCol && !Descriptor.PhysicalColReg) ||
@@ -1561,6 +1561,19 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
       !Layout || (!HasRuntimeDimensions && (!ValidCol || !ValidRow)))
     return None;
 
+  if (!HasRuntimeDimensions && Text.contains("TLOAD") &&
+      (*Layout == LinxV5Op::ArgFormat::CUBE_M32 ||
+       *Layout == LinxV5Op::ArgFormat::CUBE_M16) &&
+      (Text.contains("B.DATR ND2M32") ||
+       Text.contains("B.DATR ND2M16"))) {
+    unsigned ParentRows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+    unsigned TypeBits = LinxV5::getTileDataTypeBits(*DataType);
+    uint64_t CapacityBits = (uint64_t{1} << (*SizeCode + 6)) * 8;
+    if (!TypeBits || CapacityBits % (ParentRows * TypeBits))
+      return None;
+    PhysicalCol = CapacityBits / (ParentRows * TypeBits);
+  }
+
   // PTO destination-shape defaults resolve an omitted LB2 to ValidCol.  Tile
   // capacity determines the remaining physical rows; it must never invent
   // additional columns.  Public CUBE TCI forms carry LB2 explicitly.
@@ -1578,7 +1591,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
     if (IsColumn) {
       ValidRow = 1;
       if (Cube) {
-        unsigned Bits = getTileDataTypeBits(*DataType);
+        unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
         if (!Bits)
           return None;
         unsigned CellBits = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 64 : 32;
