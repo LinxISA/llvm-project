@@ -163,6 +163,8 @@ struct LocalTileABIInfo {
   TileDescriptor Descriptor;
 };
 
+unsigned getTileDataTypeBits(unsigned DataType);
+
 /// Parse and validate the closed Local-Tile call-boundary contract carried by
 /// `linx-local-tile-abi`. Invalid or partial contracts fail closed; absence of
 /// the attribute returns None.

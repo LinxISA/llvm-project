@@ -1,10 +1,10 @@
 # RUN: llc -mtriple=linx64v5 -run-pass=prologepilog -o - %s | FileCheck %s
 
 # CHECK-LABEL: name: sequential_sizes
-# CHECK: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 16, $r0, 1, $r0, 16, 16, 0, killed $r{{[0-9]+}} :: (store (s128) into %stack.0, align 256)
-# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 16, $r0, 1, $r0, 16, 16, 1, 0, 0, 32, 1, 32, 25, 29, 1, killed $r{{[0-9]+}} :: (load (s128) from %stack.0, align 256)
-# CHECK: PseudoTSTORE_noDsrc_noDdst killed $tile_m1, $r0, 128, $r0, 1, $r0, 128, 16, 0, killed $r{{[0-9]+}} :: (store (s1024) into %stack.0, align 256)
-# CHECK: dead $tile_t1 = PseudoTLOADSpillDesc $r0, 128, $r0, 1, $r0, 128, 16, 4, 0, 0, 4, 32, 4, 17, 29, 4, killed $r{{[0-9]+}} :: (load (s1024) from %stack.0, align 256)
+# CHECK: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 1, $r0, 32, $r0, 1, 25, 24, killed $r{{[0-9]+}}, killed $r{{[0-9]+}} :: (store (s128) into %stack.0, align 256)
+# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 1, $r0, 32, $r0, 1, 25, 1, 21, 0, 1, 32, 1, 25, 29, 1, killed $r{{[0-9]+}}, killed $r{{[0-9]+}} :: (load (s128) from %stack.0, align 256)
+# CHECK: PseudoTSTORE_noDsrc_noDdst killed $tile_m1, $r0, 4, $r0, 32, $r0, 1, 17, 24, killed $r{{[0-9]+}}, killed $r{{[0-9]+}} :: (store (s4096) into %stack.0, align 256)
+# CHECK: dead $tile_t1 = PseudoTLOADSpillDesc $r0, 4, $r0, 32, $r0, 1, 17, 3, 21, 0, 4, 32, 4, 17, 29, 3, killed $r{{[0-9]+}}, killed $r{{[0-9]+}} :: (load (s4096) from %stack.0, align 256)
 # CHECK-LABEL: name: large_offset
 # CHECK: $t{{[0-9]+}} = LUI
 # CHECK: $r{{[0-9]+}} = ADD $r1, killed $t{{[0-9]+}}, 0
@@ -24,10 +24,10 @@ stack:
 body: |
   bb.0:
     liveins: $tile_u1, $tile_m1
-    PseudoTSpillDesc killed $tile_u1, %stack.0, 32, 1, 32, 25, 29, 1 :: (store (s128) into %stack.0, align 256)
-    $tile_n1 = PseudoTReloadDesc %stack.0, 32, 1, 32, 25, 29, 1 :: (load (s128) from %stack.0, align 256)
-    PseudoTSpillDesc killed $tile_m1, %stack.0, 4, 32, 4, 17, 29, 4 :: (store (s1024) into %stack.0, align 256)
-    dead $tile_t1 = PseudoTReloadDesc %stack.0, 4, 32, 4, 17, 29, 4 :: (load (s1024) from %stack.0, align 256)
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 1, 32, 1, 25, 29, 1 :: (store (s128) into %stack.0, align 256)
+    $tile_n1 = PseudoTReloadDesc %stack.0, 1, 32, 1, 25, 29, 1 :: (load (s128) from %stack.0, align 256)
+    PseudoTSpillDesc killed $tile_m1, %stack.0, 4, 32, 4, 17, 29, 3 :: (store (s4096) into %stack.0, align 256)
+    dead $tile_t1 = PseudoTReloadDesc %stack.0, 4, 32, 4, 17, 29, 3 :: (load (s4096) from %stack.0, align 256)
     PseudoRET
 ...
 ---
@@ -41,6 +41,6 @@ stack:
 body: |
   bb.0:
     liveins: $tile_u1
-    PseudoTSpillDesc killed $tile_u1, %stack.0, 32, 1, 32, 25, 29, 1 :: (store (s128) into %stack.0, align 256)
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 1, 32, 1, 25, 29, 1 :: (store (s128) into %stack.0, align 256)
     PseudoRET
 ...

@@ -402,6 +402,31 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     if (RegSizeCode < 1 || RegSizeCode > 10)
       report_fatal_error("raw Tile spill SizeCode must be 1..10");
     unsigned RegSize = 1u << (RegSizeCode + 6);
+    unsigned ValidCol = MI.getOperand(2).getImm();
+    unsigned ValidRow = MI.getOperand(3).getImm();
+    unsigned PhysicalCol = MI.getOperand(4).getImm();
+    unsigned DataType = MI.getOperand(5).getImm();
+    unsigned Layout = MI.getOperand(6).getImm();
+    unsigned TypeBits = LinxV5::getTileDataTypeBits(DataType);
+    if (!TypeBits || !ValidCol || !ValidRow || PhysicalCol < ValidCol)
+      report_fatal_error("invalid Tile spill transport geometry");
+    unsigned TransportLayout = Layout;
+    unsigned TransportCol = PhysicalCol;
+    if (Layout == LinxV5Op::ArgFormat::CUBE_M32)
+      TransportLayout = IsSpill ? LinxV5Op::ArgFormat::M322ND
+                                : LinxV5Op::ArgFormat::ND2M32;
+    else if (Layout == LinxV5Op::ArgFormat::CUBE_M16)
+      TransportLayout = IsSpill ? LinxV5Op::ArgFormat::M162ND
+                                : LinxV5Op::ArgFormat::ND2M16;
+    else if (Layout != LinxV5Op::ArgFormat::NORM)
+      report_fatal_error("unsupported Tile spill transport layout");
+    if (Layout != LinxV5Op::ArgFormat::NORM) {
+      unsigned ParentRows = Layout == LinxV5Op::ArgFormat::CUBE_M32 ? 32 : 16;
+      if (ValidRow > ParentRows ||
+          uint64_t(ParentRows) * PhysicalCol * TypeBits != RegSize * 8)
+        report_fatal_error("Tile spill CUBE geometry does not match capacity");
+      TransportCol = 1;
+    }
     if (RegSize > MF.getFrameInfo().getObjectSize(FI))
       report_fatal_error("raw Tile spill exceeds its colored frame object");
     // B.IOT SizeCode 1..10 encodes 128 B..64 KiB at PE granularity
@@ -430,25 +455,34 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
           .addImm(0);
     }
 
+    Register StrideReg = MRI.createVirtualRegister(&LinxV5::GRRegClass);
+    uint64_t StrideBytes =
+        (uint64_t(Layout == LinxV5Op::ArgFormat::NORM ? PhysicalCol : ValidCol) *
+             TypeBits +
+         7) /
+        8;
+    TII->movImm(MBB, II, DL, StrideReg, StrideBytes);
+
     if (IsSpill)
       BuildMI(MBB, II, DL, TII->get(LinxV5::PseudoTSTORE_noDsrc_noDdst))
           .add(MI.getOperand(0))
-          .addReg(LinxV5::R0).addImm(RegSize / 8)   // M
-          .addReg(LinxV5::R0).addImm(1)             // N
-          .addReg(LinxV5::R0).addImm(RegSize / 8)   // K
-          .addImm(LinxV5Op::DataType::S64)          // DataType
-          .addImm(LinxV5Op::ArgFormat::NORM)        // LayOut
+          .addReg(LinxV5::R0).addImm(ValidCol)
+          .addReg(LinxV5::R0).addImm(ValidRow)
+          .addReg(LinxV5::R0).addImm(TransportCol)
+          .addImm(DataType)
+          .addImm(TransportLayout)
           .addReg(AddrReg, RegState::Kill)
+          .addReg(StrideReg, RegState::Kill)
           .cloneMemRefs(MI);                        // GPR
     else
       BuildMI(MBB, II, DL, TII->get(LinxV5::PseudoTLOADSpillDesc))
           .add(MI.getOperand(0))
-          .addReg(LinxV5::R0).addImm(RegSize / 8)   // M
-          .addReg(LinxV5::R0).addImm(1)             // N
-          .addReg(LinxV5::R0).addImm(RegSize / 8)   // K
-          .addImm(LinxV5Op::DataType::S64)          // DataType
+          .addReg(LinxV5::R0).addImm(ValidCol)
+          .addReg(LinxV5::R0).addImm(ValidRow)
+          .addReg(LinxV5::R0).addImm(TransportCol)
+          .addImm(DataType)
           .addImm(RegSizeCode)                      // RegSizeCode
-          .addImm(LinxV5Op::ArgFormat::NORM)        // LayOut
+          .addImm(TransportLayout)
           .addImm(LinxV5Op::PadValue::Zero)         // PadValue
           .addImm(MI.getOperand(2).getImm())         // Original ValidCol
           .addImm(MI.getOperand(3).getImm())         // Original ValidRow
@@ -457,6 +491,7 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
           .addImm(MI.getOperand(6).getImm())         // Original Layout
           .addImm(MI.getOperand(7).getImm())         // Original SizeCode
           .addReg(AddrReg, RegState::Kill)
+          .addReg(StrideReg, RegState::Kill)
           .cloneMemRefs(MI);                        // GPR
 
     MI.eraseFromParent();
