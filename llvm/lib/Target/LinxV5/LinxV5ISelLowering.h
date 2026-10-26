@@ -127,6 +127,7 @@ enum NodeType : unsigned {
   Copy2PTerm,
   MERGE_CF,
   IMPLICIT_DEF,
+  SYNC_CORE,
 };
 } // namespace LinxV5ISD
 
