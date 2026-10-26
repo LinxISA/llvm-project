@@ -427,7 +427,6 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::Copy2PTerm)
     MAKE_CASE(LinxV5ISD::MERGE_CF)
     MAKE_CASE(LinxV5ISD::IMPLICIT_DEF)
-    MAKE_CASE(LinxV5ISD::SYNC_CORE)
   }
 #undef MAKE_CASE
   return nullptr;
@@ -2874,8 +2873,6 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerElementwiseMScatterGPRMasked(DL, Op, DAG);
   } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_add) {
     return lowerElementwiseMScatterAdd(DL, Op, DAG);
-  } else if (IntNo == Intrinsic::linx_sync_core) {
-    return DAG.getNode(LinxV5ISD::SYNC_CORE, DL, MVT::Other, Chain);
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =
@@ -3200,8 +3197,7 @@ SDValue LinxV5TargetLowering::lowerShiftLeftParts(SDValue Op,
 SDValue LinxV5TargetLowering::lowerGetThreadIdx(SDValue Op,
                                                 SelectionDAG &DAG) const {
   SDLoc DL(Op);
-  // PTO ISA SystemRegister_THREAD_ID is at SSR address 0x0026.
-  SDValue SSRId = DAG.getTargetConstant(0x0026, DL, MVT::i64);
+  SDValue SSRId = DAG.getTargetConstant(0x0802, DL, MVT::i64);
   return SDValue(DAG.getMachineNode(LinxV5::SSR_GET, DL, Op.getValueType(),
                                     SSRId),
                  0);

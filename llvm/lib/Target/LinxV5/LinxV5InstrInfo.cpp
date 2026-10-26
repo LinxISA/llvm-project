@@ -1346,9 +1346,6 @@ bool LinxV5InstrInfo::isSchedulingBoundary(const MachineInstr &MI,
   if (LinxV5::isTileOp(MI))
     return true;
 
-  if (MI.getOpcode() == LinxV5::SYNC_CORE)
-    return true;
-
   if (MF.getSubtarget<LinxV5Subtarget>().isSIMT() &&
       MI.modifiesRegister(LinxV5::SIMT_P, STI.getRegisterInfo()))
     return true;

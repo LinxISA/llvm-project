@@ -67,13 +67,6 @@ def int_linx_get_sysreg : DefaultAttrsIntrinsic<[llvm_i64_ty],
 def int_linx_get_thread_id : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 def int_linx_get_thread_idx : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 
-// Rendezvous all four PEs in the current Core.  Deliberately use the
-// conservative read/write-any-memory model: SYNC.CORE cannot release until
-// every earlier GM obligation has completed.  Intrinsic<> also suppresses the
-// default nosync/willreturn attributes, both of which would be invalid here.
-def int_linx_sync_core : Intrinsic<[], [],
-    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate]>;
-
 // Logical element-wise masks. These intrinsics describe frontend mask SSA and
 // are canonicalized to ordinary LLVM vector operations before instruction
 // selection. They do not imply the Linx SIMT register file or execution model.
