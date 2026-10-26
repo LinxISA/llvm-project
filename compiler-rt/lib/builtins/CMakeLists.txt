@@ -690,7 +690,6 @@ set(linx64v4_SOURCES
 set(linx64v4be_SOURCES ${linx64v4_SOURCES})
 
 set(linx64v5_SOURCES
-  linx64v5/group_worker.c
   linx64v5/tnop.S
   ${GENERIC_SOURCES}
   ${GENERIC_TF_SOURCES}

@@ -2277,7 +2277,6 @@ def MSET:     TMPL_MEM<0b001, "MSET">;
 }
 
 let hasSideEffects = 1 in {
-let PE = PET_SYS in {
 def SSR_GET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b000, (outs DstRWithArrow:$DstR), (ins uimm12:$Imm12), "ssrget"> {
   let SrcL = 0b00000;
   let AsmString = "ssrget\t$Imm12, $DstR";
@@ -2290,7 +2289,6 @@ def SSR_SET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b001, (outs), (ins GPRSrc:
 
 def SSR_SWAP : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b010, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, uimm12:$Imm12), "ssrswap"> {
   let AsmString = "ssrswap $SrcL, $Imm12, $DstR";
-}
 }
 
 def LSR_GET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b011, (outs DstRWithArrow:$DstR), (ins uimm12:$Imm12), "lsrget"> {
@@ -4599,17 +4597,13 @@ def HL_MISUB : V5Inst_48_Mul_Arith<0b001, "hl.misub">;
 }
 
 let PE = PET_STD in {
-def HL_BFI : V5Inst_48_M_A<0b010, (outs DstRWithArrow:$Dst),
-    (ins GPRSrc:$SrcL, GPRSrc:$SrcR, uimm6:$ImmR, uimm6:$ImmS),
-    "hl.bfi"> {
+def HL_BFI :  V5Inst_48_M_A<0b010, (outs DstRWithArrow:$Dst), (ins GPRSrc:$SrcL, GPRSrc:$SrcR, uimm6:$ImmR, uimm6:$ImmS), "hl.bfi"> {
   bits<6> ImmR;
   bits<6> ImmS;
 
   let Inst{47-41} = 0b0000000;
-  // PTO ASL: immr is the inclusive first bit and imms is the inclusive last
-  // bit.  Both fields are raw 0..63 encodings; last < first denotes wrapping.
-  let Inst{9-4} = ImmR;
   let Inst{15-10} = ImmS;
+  let Inst{9-4} = ImmR;
   let AsmString = "hl.bfi" # "\t$SrcL, $SrcR, $ImmR, $ImmS, $Dst";
 }
 }

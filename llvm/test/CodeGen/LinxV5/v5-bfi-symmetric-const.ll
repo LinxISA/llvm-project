@@ -5,8 +5,9 @@
 ; (bit width divided by 8, then a 3-bit M field). It emitted
 ; `hl.bfi t, t, 4, 3` which selects a wrapping interval, so the SWAR masks of
 ; the ctzll expansion — and any symmetric 64-bit constant in an integer-only
-; function — silently received a wrong value. HL.BFI uses inclusive raw
-; first/last fields. A W-bit field at offset W therefore uses W,2W-1.
+; function — silently received a wrong value. HL.BFI directly encodes the raw
+; inclusive immr/imms endpoints. A W-bit field at offset W therefore uses
+; assembly operands W,2W-1.
 ;
 ; The SWAR ctzll lowering exercises exactly this: it multiplies by
 ; 0x0101010101010101 and shifts right by 56, which is 0 when the upper half

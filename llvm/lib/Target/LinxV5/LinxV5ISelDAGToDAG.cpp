@@ -79,8 +79,8 @@ static SDNode *selectImmSeq(SelectionDAG *CurDAG, const SDLoc &DL,
       SDValue Zero = CurDAG->getRegister(LinxV5::R0, VT);
       Res = CurDAG->getMachineNode(I.Opc, DL, VT, {Zero, Src, SDImm});
     } else if (LinxV5::enableBFIOpt() && I.Opc == LinxV5::HL_BFI) {
-      // Packing mirrors generateMatIntSeq: inclusive first in the low six
-      // bits and inclusive last above it.  HL.BFI encodes both fields raw.
+      // Packing mirrors generateMatIntSeq: the raw inclusive immr endpoint is
+      // in the low six bits and the raw inclusive imms endpoint is above it.
       unsigned First = static_cast<unsigned>(I.Imm) & 0x3F;
       unsigned Last = static_cast<unsigned>(I.Imm) >> 6;
       SDValue SDImm1 = CurDAG->getTargetConstant(First, DL, MVT::i64);

@@ -499,27 +499,9 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(12)));         // SrcTile0
       break;
     }
-    // TMATMUL.ACC has ordered local sources C, A, B followed by D.  The
-    // The pseudo operand layout is SrcTile0=A (10), SrcTile1=B (11),
-    // ACC=C (12), and DstTile=D (0); emit the architectural C/A source pair
-    // first, then B with the newly allocated D destination.
-    if (Inst.getOpcode() == LinxV5::PseudoMAMULBACC_SizeI) {
-      McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
-                          .addOperand(MCOperand::createImm(0b1111))
-                          .addOperand(MCOperand::createImm(0))
-                          .addOperand(Inst.getOperand(12)) // C
-                          .addOperand(Inst.getOperand(10))); // A
-      McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
-                          .addOperand(Inst.getOperand(0)) // D
-                          .addOperand(MCOperand::createImm(0b1111))
-                          .addOperand(Inst.getOperand(9))
-                          .addOperand(MCOperand::createImm(1))
-                          .addOperand(Inst.getOperand(11))); // B
-      break;
-    }
-    // TMATMUL.BIAS: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, A, B, D)
+    // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
-                        .addOperand(Inst.getOperand(11))  // DstTile (legacy bias layout)
+                        .addOperand(Inst.getOperand(11))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK
                         .addOperand(Inst.getOperand(0))            // TSize
                         .addOperand(MCOperand::createImm(1))       // Last=1

@@ -30,25 +30,3 @@ define void @two_syncs() {
 ; CHECK: BSTART.SYS FALL
 ; CHECK-NEXT: SYNC.CORE
 ; CHECK-NEXT: BSTOP
-
-; SETC must not be hoisted across SYNC.CORE.  EmitHeader isolates the sync in
-; a SYS block, and condition state is local to the following COND block.
-define i64 @conditional_after_sync(i64 %value) {
-entry:
-  call void @llvm.linx.sync.core()
-  %condition = icmp ne i64 %value, 1
-  br i1 %condition, label %true, label %false
-
-true:
-  ret i64 2
-
-false:
-  ret i64 1
-}
-
-; CHECK-LABEL: conditional_after_sync:
-; CHECK: BSTART.SYS FALL
-; CHECK-NEXT: SYNC.CORE
-; CHECK-NEXT: BSTOP
-; CHECK: BSTART.STD{{[[:space:]]+}}COND
-; CHECK-NEXT: setc.eqi{{[[:space:]]+}}{{[^,]+}}, 1

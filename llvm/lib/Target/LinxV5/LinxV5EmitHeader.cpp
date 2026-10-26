@@ -149,7 +149,6 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
       // Isolate them just like ordinary Tile operations so a Local TCOPY/TMOV
       // inserted by TRegToOffset cannot become part of the same final block.
       if (LinxV5II::isTileOp(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
-          MI.getOpcode() == LinxV5::SSR_GET ||
           MI.getOpcode() == LinxV5::SYNC_CORE ||
           MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
           MI.getOpcode() == LinxV5::PseudoV5SharedS2L) {

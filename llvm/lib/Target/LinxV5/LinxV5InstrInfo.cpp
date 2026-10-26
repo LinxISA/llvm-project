@@ -1690,9 +1690,8 @@ void LinxV5::generateMatIntSeq(int64_t Val, LinxV5MatInt::InstSeq &Res,
       } else {
         generateInt32InstSeq(NewVal, Res);
       }
-      // PTO ASL defines inclusive raw first/last fields.  Insert SymmWidth
-      // source bits at [2*SymmWidth-1:SymmWidth] without the legacy width or
-      // imms+1 transformation.
+      // HL.BFI directly encodes the inclusive immr/imms endpoints. Copy the
+      // low SymmWidth bits into [2*SymmWidth-1:SymmWidth].
       unsigned First = static_cast<unsigned>(SymmWidth);
       unsigned Last = 2u * static_cast<unsigned>(SymmWidth) - 1u;
       Res.push_back(

@@ -208,13 +208,6 @@ void LinxV5::Linker::ConstructJob(Compilation &C, const JobAction &JA,
         D.InstalledDir + "/../linx64v5-unknown-elf/lib/crt0.o"));
   }
 
-  if (Args.hasArg(options::OPT_mlinx_group_runtime)) {
-    // The worker carrier lives in compiler-rt builtins.  Force its entry
-    // member into the image; normal programs remain single-context.
-    CmdArgs.push_back("-u");
-    CmdArgs.push_back("__linx_group_worker_start");
-  }
-
   CmdArgs.push_back(Args.MakeArgString("-L" + D.InstalledDir +
                                        "/../linx64v5-unknown-elf/lib"));
 

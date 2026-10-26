@@ -673,12 +673,7 @@ LinxV5ExpandPseudo::calcSETCPos(MachineBasicBlock::iterator UseMI) {
   for (; MBBI != MBBB;) {
     MachineInstr &MI = *(--MBBI);
 
-    // The condition argument belongs to the block that consumes it.  In
-    // particular, SYNC.CORE is isolated into its own SYS block later by
-    // LinxV5EmitHeader and starts a new architectural condition scope.  Do
-    // not hoist SETC across it, otherwise the following COND header observes
-    // the new block's initial (false) condition instead of this comparison.
-    if (LinxV5::isIsolateInstr(MI) || MI.getOpcode() == LinxV5::SYNC_CORE)
+    if (LinxV5::isIsolateInstr(MI))
       return std::next(MI.getIterator());
 
     for (auto &DefMO : MI.defs()) {

@@ -584,15 +584,6 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   addLinkerCompressDebugSectionsOption(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
-  if (Args.hasArg(options::OPT_mlinx_group_runtime) &&
-      getToolChain().getTriple().isLinxV5()) {
-    // Hosted LinxV5 targets use this GNU-style linker path. The bare-metal
-    // LinxV5 toolchain has a distinct linker implementation and performs the
-    // same opt-in extraction there.
-    CmdArgs.push_back("-u");
-    CmdArgs.push_back("__linx_group_worker_start");
-  }
-
   addHIPRuntimeLibArgs(ToolChain, Args, CmdArgs);
 
   // The profile runtime also needs access to system libraries.
