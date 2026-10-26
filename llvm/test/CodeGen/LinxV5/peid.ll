@@ -8,4 +8,5 @@ define i64 @get_peid() {
 }
 
 ; CHECK-LABEL: get_peid:
-; CHECK: ssrget 2050,
+; THREAD_ID is SSR 0x0026 (38), as defined by the current PTO ISA spec.
+; CHECK: ssrget 38,
