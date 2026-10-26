@@ -37,33 +37,33 @@ B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 // 9-14) must be rejected by the assembler. They live in v5-matmul-reserved.s.
 
 // CHECK: BSTART.CUBE TMATMUL, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TMATMUL.BIAS, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TMATMUL.ACC, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TMATMULMX, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TMATMULMX.BIAS, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TMATMULMX.ACC, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TGEMV, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TGEMV.BIAS, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TGEMV.ACC, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TGEMVMX, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TGEMVMX.BIAS, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // CHECK: BSTART.CUBE TGEMVMX.ACC, FP32
-// CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 
 // DIS: BSTART.CUBE TMATMUL, FP32
-// DIS-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// DIS-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // DIS: BSTART.CUBE TGEMV, FP32
-// DIS-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// DIS-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 // DIS: BSTART.CUBE TGEMVMX.ACC, FP32
-// DIS-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+// DIS-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0

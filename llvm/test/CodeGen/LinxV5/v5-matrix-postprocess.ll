@@ -19,7 +19,7 @@ target triple = "linx64v5"
 
 ; CHECK-LABEL: <plain>:
 ; CHECK: BSTART.CUBE TMATMUL, FP32
-; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+; CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 ; CHECK-NOT: B.FPATR
 ; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last
 define void @plain(ptr %in_a, ptr %in_b, ptr %out) {

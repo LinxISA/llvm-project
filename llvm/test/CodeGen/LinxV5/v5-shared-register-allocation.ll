@@ -93,7 +93,7 @@ right:
 ; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK: BSTART.TMATMUL FP32
-; CHECK-NEXT: B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+; CHECK-NEXT: B.FPATR PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0, TransA=0, TransB=0, CScaleEn=0
 ; CHECK-NEXT: B.IOS S0, mask=1111
 ; CHECK-NEXT: B.IOT {{[^,]+}}, mask=1111, last, ->t<512B>
 define void @matmul_shared(ptr %in_a, ptr %in_b, ptr %out) {

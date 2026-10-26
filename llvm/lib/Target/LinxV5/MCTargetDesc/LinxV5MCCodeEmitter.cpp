@@ -1256,6 +1256,24 @@ void LinxV5MCCodeEmitter::expandPseudoCCall(const MCInst &MI, raw_ostream &OS,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
     unsigned Dummy = 0;
+    // PTO-CUBE-ACCUMULATOR-OUTPUT-001: after TRegToOffset has rewritten the
+    // final physical operands, the encoded C selector must not equal the
+    // zero-extended D destination hand.  Early-clobber constraints alone do
+    // not establish this property because the two operands use different
+    // register classes and can converge after relative-offset rewriting.
+    if (MI.getOpcode() == LinxV5::PseudoMAMULBACC_SizeI &&
+        MI.getNumOperands() > 12 && MI.getOperand(0).isReg() &&
+        MI.getOperand(12).isReg()) {
+      const unsigned DstSel =
+          Ctx.getRegisterInfo()->getEncodingValue(MI.getOperand(0).getReg()) &
+          0x3f;
+      const unsigned CSel =
+          Ctx.getRegisterInfo()->getEncodingValue(MI.getOperand(12).getReg()) &
+          0x3f;
+      if (DstSel == CSel)
+        report_fatal_error(
+            "TMATMUL.ACC encoded C selector aliases zero-extended DstTile");
+    }
     // bstart.par
     writeBinaryCodes(OS, Fixups, STI, MI.getFlags(),
                      {MCInstBuilder(LinxV5::BSTART_CUBE)

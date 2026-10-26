@@ -25,7 +25,7 @@ BSTART.TLSU MGATHER.INC, FP32
 # CHECK: B.IOS{{.*}}S0, mask=1111
 # CHECK: B.IOS{{.*}}S63, mask=1111
 # CHECK: BSTART.CUBE{{.*}}TMATMUL
-# CHECK: B.FPATR{{.*}}0, 0, 0, 0, 0, 0, 0
+# CHECK: B.FPATR{{.*}}PreQuantMode=NoQuant, ReluMode=None, GroupN=0, RowMaxEn=0, GroupMaxEn=0, RowMaxInit=0, MaxAbsEn=0
 # CHECK: BSTART.CUBE{{.*}}TGEMV
 # CHECK: BSTART.TLSU{{.*}}TPREFETCH, FP32{{.*}}encoding: [0x81,0x11,0x31,0x08]
 # CHECK: BSTART.TLSU{{.*}}MGATHER.CAS, FP32{{.*}}encoding: [0x81,0x11,0x81,0x08]

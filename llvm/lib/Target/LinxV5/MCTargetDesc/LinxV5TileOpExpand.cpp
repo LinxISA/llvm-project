@@ -575,7 +575,30 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                           .addOperand(Inst.getOperand(12)));         // SrcTile0
       break;
     }
-    // v5: B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
+    // TMATMUL.ACC built from the tile macro has ordered local sources C, A, B
+    // followed by the newly allocated D.  The macro parser places the
+    // accumulator tile in the ACC slot (12) with A (10) and B (11) in the
+    // SrcTile slots; emit the architectural C/A source pair first, then B
+    // with the newly allocated D destination.  The standalone ACC#1 form
+    // instead parses ACC#1 into slot 12 as the Tile_ACCOS1 sentinel and is
+    // handled by the single A/B packet below.
+    if (Inst.getOpcode() == LinxV5::PseudoMAMULBACC_SizeI &&
+        Inst.getOperand(12).getReg() != LinxV5::Tile_ACCOS1) {
+      McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                          .addOperand(MCOperand::createImm(0b1111))
+                          .addOperand(MCOperand::createImm(0))
+                          .addOperand(Inst.getOperand(12)) // C
+                          .addOperand(Inst.getOperand(10))); // A
+      McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+                          .addOperand(Inst.getOperand(0)) // D
+                          .addOperand(MCOperand::createImm(0b1111))
+                          .addOperand(Inst.getOperand(9))
+                          .addOperand(MCOperand::createImm(1))
+                          .addOperand(Inst.getOperand(11))); // B
+      break;
+    }
+    // TMATMUL.ACC with the inline ACC#1 accumulator:
+    // B_IOT_TwoSrc_Dst(PE_MASK, TSize, Last, SrcTile0, SrcTile1, DstTile)
     McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
                         .addOperand(Inst.getOperand(0))  // DstTile
                         .addOperand(MCOperand::createImm(0b1111))  // PE_MASK

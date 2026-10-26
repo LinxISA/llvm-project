@@ -159,6 +159,8 @@ public:
   static const char *getRegisterName(unsigned RegNo, unsigned AltIdx);
 
 private:
+  void printFPATR(const MCInst *MI, raw_ostream &O);
+
   // PTO-ISA #236: inside a BSTART.CUBE Matrix bundle (TMATMUL*/TGEMV*
   // functions), B.DATR PadValueOrByteId[1:0] is reinterpreted as CCTRL.
   // The disassembler prints instructions sequentially through one printer

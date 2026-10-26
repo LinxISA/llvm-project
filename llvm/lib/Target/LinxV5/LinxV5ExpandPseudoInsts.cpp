@@ -189,13 +189,7 @@ static bool rewriteInlineAsmDim(StringRef Input, unsigned AsmOperand,
 
   Output = Input.str();
   size_t Length = Prefix.size() + 1;
-  if (Value == 1) {
-    // LB0/ValidCol is architecturally required for non-transport operations
-    // (issue SuperScalarModel#740): folding it away makes the bundle illegal
-    // at ValidateReduceAndExpandTepl. Only the TLSU/CUBE families accept an
-    // omitted LB0.
-    if (Slot == '0' && !bundleHeadMayOmitLB0(Input))
-      return false;
+  if (Value == 1 && (Slot != '0' || bundleHeadMayOmitLB0(Input))) {
     size_t End = Output.find('\n', Pos + Length);
     Output.erase(Pos,
                  End == std::string::npos ? std::string::npos : End - Pos + 1);
@@ -559,18 +553,7 @@ bool LinxV5ExpandPseudo::foldInlineAsmDimConstants(MachineFunction &MF) {
             InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
         std::string Rewritten;
         if (!rewriteInlineAsmDim(Asm, Use.AsmOperand, Value, Rewritten)) {
-          // rewriteInlineAsmDim refuses exactly one legal case: a required
-          // LB0 whose folded value is the constant 1 on a non-transport
-          // head (issue SuperScalarModel#740). The B.DIM line and its
-          // defining ADDI simply stay — that is a valid program. Anything
-          // else (placeholder shape not found) is a real failure.
-          char Slot = 0;
-          std::string Prefix = "B.DIM $" + utostr(Use.AsmOperand) + ", 0, ->lb";
-          size_t Pos = Asm.find(Prefix);
-          if (Pos != StringRef::npos && Pos + Prefix.size() < Asm.size())
-            Slot = Asm[Pos + Prefix.size()];
-          if (Value != 1 || Slot != '0' || bundleHeadMayOmitLB0(Asm))
-            Safe = false;
+          Safe = false;
           break;
         }
         InlineAsmMI.getOperand(InlineAsm::MIOp_AsmString)
@@ -690,7 +673,12 @@ LinxV5ExpandPseudo::calcSETCPos(MachineBasicBlock::iterator UseMI) {
   for (; MBBI != MBBB;) {
     MachineInstr &MI = *(--MBBI);
 
-    if (LinxV5::isIsolateInstr(MI))
+    // The condition argument belongs to the block that consumes it.  In
+    // particular, SYNC.CORE is isolated into its own SYS block later by
+    // LinxV5EmitHeader and starts a new architectural condition scope.  Do
+    // not hoist SETC across it, otherwise the following COND header observes
+    // the new block's initial (false) condition instead of this comparison.
+    if (LinxV5::isIsolateInstr(MI) || MI.getOpcode() == LinxV5::SYNC_CORE)
       return std::next(MI.getIterator());
 
     for (auto &DefMO : MI.defs()) {
