@@ -3525,6 +3525,10 @@ def mlinx_single_layer : Flag<["-"], "mlinx-single-layer">, Group<m_linx_Feature
   HelpText<"Enable Linx single-layer (scalar-only) architecture: reject __mtc__/__vec__ function attributes.">,
   MarshallingInfoFlag<LangOpts<"LinxSingleLayer">>;
 
+def mlinx_group_runtime : Flag<["-"], "mlinx-group-runtime">,
+  Group<m_linx_Features_Group>, Flags<[NoXarchOption]>,
+  HelpText<"Link the explicit Linx multi-PE worker runtime and retain its worker entry symbol.">;
+
 def munaligned_access : Flag<["-"], "munaligned-access">, Group<m_arm_Features_Group>,
   HelpText<"Allow memory accesses to be unaligned (AArch32/AArch64 only)">;
 def mno_unaligned_access : Flag<["-"], "mno-unaligned-access">, Group<m_arm_Features_Group>,
