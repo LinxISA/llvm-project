@@ -1,4 +1,10 @@
 # RUN: llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=linxv5-tile-fixup,prologepilog -o - %s | FileCheck %s --check-prefix=FRAME
+# FRAME: offset: -16384, size: 16384, alignment: 256
+# FRAME: offset: -24576, size: 8192, alignment: 256
+# FRAME: offset: -40960, size: 16384, alignment: 256
+# FRAME: PseudoTSTORE_noDsrc_noDdst killed $tile_n2, $r0, 2048, $r0, 1, $r0, 2048, 16, 0, killed $r{{[0-9]+}} :: (store (s131072) into %stack.0, align 256)
+# FRAME: $tile_n3 = PseudoTLOADSpillDesc $r0, 2048, $r0, 1, $r0, 2048, 16, 8, 0, 0, 128, 32, 128, 1, 29, 8, killed $r{{[0-9]+}} :: (load (s131072) from %stack.0, align 256)
 # CHECK-LABEL: name: mx_descriptor
 # CHECK: PseudoTSpillDesc killed $tile_n2, %stack.0, 128, 32, 128, 1, 29, 8
 # CHECK: $tile_n3 = PseudoTReloadDesc %stack.0, 128, 32, 128, 1, 29, 8

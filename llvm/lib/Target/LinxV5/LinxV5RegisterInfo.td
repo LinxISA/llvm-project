@@ -435,6 +435,27 @@ def Tile_NR  : RegisterClass<"LinxV5", [vAny], 64, (add
   let Size = 64;
 }
 
+def Tile_UM : RegisterClass<"LinxV5", [vAny], 64,
+                            (add Tile_UR, Tile_MR)> {
+  let Size = 64;
+}
+def Tile_UN : RegisterClass<"LinxV5", [vAny], 64,
+                            (add Tile_UR, Tile_NR)> {
+  let Size = 64;
+}
+def Tile_MN : RegisterClass<"LinxV5", [vAny], 64,
+                            (add Tile_MR, Tile_NR)> {
+  let Size = 64;
+}
+def Tile_UMN : RegisterClass<"LinxV5", [vAny], 64,
+                             (add Tile_UR, Tile_MR, Tile_NR)> {
+  let Size = 64;
+}
+def Tile_TUM : RegisterClass<"LinxV5", [vAny], 64,
+                             (add Tile_TR, Tile_UR, Tile_MR)> {
+  let Size = 64;
+}
+
 def Tile_ABS  : RegisterClass<"LinxV5", [vAny], 64, (add
   Tile_T1,  Tile_U1,  Tile_M1,  Tile_N1,
   Tile_T2,  Tile_U2,  Tile_M2,  Tile_N2,

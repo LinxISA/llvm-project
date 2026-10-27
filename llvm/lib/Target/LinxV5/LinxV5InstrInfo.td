@@ -3594,6 +3594,7 @@ def PseudoTLOADSpillDesc : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
 def PseudoTSTORE_noDsrc_noDdst : PseudoMTClImpl<(outs),
   (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN, GPRPlusImm:$RegK, PlusImm17:$immK,
   BstartDataType:$DataType, BArgFormat:$Layout, GPRList:$List)> {
+    let mayStore = 1;
     let AsmString = "TSTORE.$Layout\t<LB0: $RegM$immM, LB1: $RegN$immN, LB2: $RegK$immK, ${DataType}>, $SrcTile," #"\t[$List]";
 }
 

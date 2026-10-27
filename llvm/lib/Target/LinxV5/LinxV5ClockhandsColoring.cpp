@@ -1753,14 +1753,48 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
       CIC.assign();
     }
   }
-  // Register coalescing can leave ordinary Tile_ABS values with multiple
-  // definitions.  ColoringInChain deliberately skips those non-SSA values,
-  // but standard RA must not place them in a hand reserved by an OPEN parent.
-  // N is excluded from parent coloring above and remains the dedicated writer
-  // hand for every such residual value.
   if (!OpenParents.empty() || !LoopInvariantN8.empty()) {
     assert(!CurRCs.empty() && "OPEN parents must leave a writer hand");
-    const TargetRegisterClass *WriterRC = CurRCs.back();
+    const TargetRegisterClass *WriterRC = nullptr;
+    unsigned AvailableHands = 0;
+    for (const TargetRegisterClass *RC : CurRCs) {
+      if (RC == &LinxV5::Tile_TRRegClass)
+        AvailableHands |= 1;
+      else if (RC == &LinxV5::Tile_URRegClass)
+        AvailableHands |= 2;
+      else if (RC == &LinxV5::Tile_MRRegClass)
+        AvailableHands |= 4;
+      else if (RC == &LinxV5::Tile_NRRegClass)
+        AvailableHands |= 8;
+    }
+    switch (AvailableHands) {
+    case 2:
+      WriterRC = &LinxV5::Tile_URRegClass;
+      break;
+    case 4:
+      WriterRC = &LinxV5::Tile_MRRegClass;
+      break;
+    case 6:
+      WriterRC = &LinxV5::Tile_UMRegClass;
+      break;
+    case 7:
+      WriterRC = &LinxV5::Tile_TUMRegClass;
+      break;
+    case 8:
+      WriterRC = &LinxV5::Tile_NRRegClass;
+      break;
+    case 10:
+      WriterRC = &LinxV5::Tile_UNRegClass;
+      break;
+    case 12:
+      WriterRC = &LinxV5::Tile_MNRegClass;
+      break;
+    case 14:
+      WriterRC = &LinxV5::Tile_UMNRegClass;
+      break;
+    default:
+      llvm_unreachable("unexpected available Local tile hands");
+    }
     for (unsigned I = 0, E = MRI->getNumVirtRegs(); I != E; ++I) {
       Register Reg = Register::index2VirtReg(I);
       if (MRI->getRegClassOrNull(Reg) == &LinxV5::Tile_ABSRegClass)

@@ -236,6 +236,8 @@ merge:
 ;
 ; SINGLE-LABEL: name: open_parent_with_multidef_writer
 ; SINGLE-NOT: class: tile_abs,
+; SINGLE: class: tile_umn
+; SINGLE-NOT: class: tile_nr
 ; SINGLE: - { id: [[OPEN:[0-9]+]], class: tile_tr
 ; SINGLE: def %[[OPEN]]
 ; SINGLE: def %[[WRITER:[0-9]+]]

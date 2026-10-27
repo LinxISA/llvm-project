@@ -1,0 +1,60 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -linxv5-enable-tile-clock-hand=false -run-pass=linxv5-clockhands %s -o - | FileCheck %s --check-prefix=CLASS
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -linxv5-enable-tile-clock-hand=false -verify-machineinstrs -run-pass=linxv5-clockhands,greedy,virtregrewriter %s -o - | FileCheck %s --check-prefix=ALLOC
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -linxv5-enable-tile-clock-hand=false -run-pass=linxv5-clockhands %s -o - | sed 's/tile_umn/tile_nr/g' > %t.mir
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -verify-machineinstrs -run-pass=greedy,virtregrewriter,linxv5-tile-fixup,prologepilog %t.mir -o - | FileCheck %s --check-prefix=SPILL
+# CLASS-COUNT-19: class: tile_umn
+# CLASS: class: tile_tr
+# ALLOC-NOT: PseudoTSpill
+# ALLOC-NOT: PseudoTReload
+# ALLOC: PseudoRET
+# SPILL: size: 128, alignment: 256
+# SPILL: PseudoTSTORE_noDsrc_noDdst
+# SPILL: PseudoTLOADSpillDesc
+# SPILL: PseudoRET
+--- |
+  define void @open_parent_writer_pressure() { ret void }
+...
+---
+name: open_parent_writer_pressure
+tracksRegLiveness: true
+body: |
+  bb.0:
+    %0:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def %1:tile_abs, 720905, %0, 13, 2, 13, 1, 13, 0
+    %2:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %3:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %4:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %5:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %6:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %7:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %8:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %9:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %10:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %11:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %12:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %13:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %14:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %15:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %16:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %17:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    %18:tile_abs = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"consume $0", 1, 720905, %2
+    INLINEASM &"consume $0", 1, 720905, %3
+    INLINEASM &"consume $0", 1, 720905, %4
+    INLINEASM &"consume $0", 1, 720905, %5
+    INLINEASM &"consume $0", 1, 720905, %6
+    INLINEASM &"consume $0", 1, 720905, %7
+    INLINEASM &"consume $0", 1, 720905, %8
+    INLINEASM &"consume $0", 1, 720905, %9
+    INLINEASM &"consume $0", 1, 720905, %10
+    INLINEASM &"consume $0", 1, 720905, %11
+    INLINEASM &"consume $0", 1, 720905, %12
+    INLINEASM &"consume $0", 1, 720905, %13
+    INLINEASM &"consume $0", 1, 720905, %14
+    INLINEASM &"consume $0", 1, 720905, %15
+    INLINEASM &"consume $0", 1, 720905, %16
+    INLINEASM &"consume $0", 1, 720905, %17
+    INLINEASM &"consume $0", 1, 720905, %18
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, %1, 720905, %0, 13, 0, 13, 1
+    PseudoRET
+...

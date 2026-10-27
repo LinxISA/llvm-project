@@ -1,0 +1,39 @@
+# RUN: llc -mtriple=linx64v5 -start-before=linxv5-tile-fixup %s -o - | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -start-before=linxv5-tile-fixup -filetype=obj %s -o %t.o
+# RUN: llvm-objdump -d %t.o | FileCheck %s --check-prefix=OBJ
+# RUN: llc -mtriple=linx64v5 -start-before=linxv5-tile-fixup %s -o %t.s
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %t.s -o %t.roundtrip.o
+# RUN: llvm-objdump -d %t.roundtrip.o | FileCheck %s --check-prefix=ROUND
+# CHECK-LABEL: spill_raw_full_lowering:
+# CHECK: TSTORE{{.*}}LB0: 2048{{.*}}S64
+# CHECK: BSTART.TLSU{{.*}}TLOAD, S64
+# CHECK: B.DIM{{.*}}2048{{.*}}lb0
+# CHECK: B.IOT{{.*}}->n<16KB>
+# CHECK: B.IOR
+# CHECK: TSTORE{{.*}}LB0: 128{{.*}}FP32
+# OBJ: TSTORE{{.*}}Col=2048{{.*}}S64
+# OBJ: BSTART.TLSU{{.*}}TLOAD, S64
+# OBJ: B.IOT{{.*}}->n<16KB>
+# OBJ: TSTORE{{.*}}Col=128{{.*}}FP32
+# ROUND: BSTART.TLSU{{.*}}TLOAD, S64
+# ROUND: B.DIM{{.*}}2048{{.*}}lb0
+# ROUND: B.DIM{{.*}}2048{{.*}}lb2
+# ROUND: B.IOT{{.*}}->n<16KB>
+# ROUND: B.IOR{{.*}}a0
+--- |
+  define void @spill_raw_full_lowering() { ret void }
+...
+---
+name: spill_raw_full_lowering
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 8, alignment: 8, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r20
+    INLINEASM &"BSTART.TEPL 102, 1\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9, 720906, def $tile_u1, 13, 8
+    PseudoTSpill killed $tile_u1, %stack.0 :: (store (s64) into %stack.0)
+    $tile_n1 = PseudoTReload %stack.0 :: (load (s64) from %stack.0)
+    PseudoTSTORE_noDsrc_noDdst killed $tile_n1, $r0, 128, $r0, 32, $r0, 128, 1, 29, $r20
+    PseudoRET
+...

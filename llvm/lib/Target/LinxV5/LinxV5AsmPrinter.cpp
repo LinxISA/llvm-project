@@ -126,6 +126,48 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
+  if (TmpInst.getOpcode() == LinxV5::PseudoTLOADSpillDesc) {
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::BSTART_TMA)
+                       .addOperand(TmpInst.getOperand(7))
+                       .addOperand(MCOperand::createImm(
+                           LinxV5Op::TileOPTMA::TLOAD)));
+    EmitToStreamer(
+        *OutStreamer,
+        MCInstBuilder(LinxV5::BDATR)
+            .addOperand(TmpInst.getOperand(9))
+            .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
+            .addOperand(MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
+            .addOperand(TmpInst.getOperand(10))
+            .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
+            .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
+            .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
+            .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
+    for (unsigned Dimension = 0; Dimension != 3; ++Dimension) {
+      unsigned OperandIndex = 1 + 2 * Dimension;
+      if (TmpInst.getOperand(OperandIndex).getReg() == LinxV5::R0 &&
+          TmpInst.getOperand(OperandIndex + 1).getImm() == 1)
+        continue;
+      EmitToStreamer(*OutStreamer,
+                     MCInstBuilder(LinxV5::B_DIM)
+                         .addOperand(MCOperand::createImm(Dimension))
+                         .addOperand(TmpInst.getOperand(OperandIndex))
+                         .addOperand(TmpInst.getOperand(OperandIndex + 1)));
+    }
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                       .addOperand(TmpInst.getOperand(0))
+                       .addOperand(MCOperand::createImm(0b1111))
+                       .addOperand(TmpInst.getOperand(8))
+                       .addOperand(MCOperand::createImm(1)));
+    SmallVector<unsigned> AddressRegisters;
+    for (unsigned OperandIndex = 17; OperandIndex < TmpInst.getNumOperands();
+         ++OperandIndex)
+      AddressRegisters.push_back(TmpInst.getOperand(OperandIndex).getReg());
+    for (const MCInst &Command : getBIORFromInst(TmpInst, AddressRegisters))
+      EmitToStreamer(*OutStreamer, Command);
+    return;
+  }
   if ((TmpInst.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        TmpInst.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
     // PseudoTCOPYDesc operands:
