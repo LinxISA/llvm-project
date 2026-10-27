@@ -178,6 +178,9 @@ void initializeLinxV5ClockhandsColoringPass(PassRegistry &);
 FunctionPass *createLinxV5SharedRegAllocPass();
 void initializeLinxV5SharedRegAllocPass(PassRegistry &);
 
+FunctionPass *createLinxV5SharedHandleLegalizePass();
+void initializeLinxV5SharedHandleLegalizePass(PassRegistry &);
+
 FunctionPass *createLinxV5SharedCopyElimPass();
 void initializeLinxV5SharedCopyElimPass(PassRegistry &);
 

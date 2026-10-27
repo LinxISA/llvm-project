@@ -8,6 +8,7 @@
 
 #include "LinxV5.h"
 #include "LinxV5RegisterInfo.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -20,6 +21,19 @@ using namespace llvm;
 #define DEBUG_TYPE "linxv5-shared-regalloc"
 
 namespace {
+
+class LinxV5SharedHandleLegalize : public MachineFunctionPass {
+public:
+  static char ID;
+
+  LinxV5SharedHandleLegalize() : MachineFunctionPass(ID) {}
+
+  StringRef getPassName() const override {
+    return "LinxV5 Shared Handle Legalization";
+  }
+
+  bool runOnMachineFunction(MachineFunction &MF) override;
+};
 
 class LinxV5SharedRegAlloc : public MachineFunctionPass {
 public:
@@ -44,9 +58,80 @@ public:
 } // namespace
 
 char LinxV5SharedRegAlloc::ID = 0;
+char LinxV5SharedHandleLegalize::ID = 0;
+
+INITIALIZE_PASS(LinxV5SharedHandleLegalize, "linxv5-shared-handle-legalize",
+                "LinxV5 Shared Handle Legalization", false, false)
 
 INITIALIZE_PASS(LinxV5SharedRegAlloc, DEBUG_TYPE,
                 "LinxV5 Shared Register Allocation", false, false)
+
+bool LinxV5SharedHandleLegalize::runOnMachineFunction(MachineFunction &MF) {
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+  DenseSet<Register> Handles;
+  SmallVector<Register, 16> Worklist;
+  for (unsigned Index = 0; Index < MRI.getNumVirtRegs(); ++Index) {
+    Register Reg = Register::index2VirtReg(Index);
+    if (!MRI.reg_nodbg_empty(Reg) &&
+        MRI.getRegClass(Reg) == &LinxV5::Shared_ABSRegClass) {
+      Handles.insert(Reg);
+      Worklist.push_back(Reg);
+    }
+  }
+
+  while (!Worklist.empty()) {
+    Register Handle = Worklist.pop_back_val();
+    for (MachineOperand &Operand : MRI.reg_nodbg_operands(Handle)) {
+      MachineInstr &MI = *Operand.getParent();
+      if (MI.isCopy() || MI.isPHI()) {
+        for (MachineOperand &Connected : MI.operands()) {
+          if (!Connected.isReg() || !Connected.getReg())
+            continue;
+          Register Reg = Connected.getReg();
+          if (!Reg.isVirtual())
+            report_fatal_error(
+                "LinxV5 Shared handle cannot cross a physical register ABI");
+          const TargetRegisterClass *RegClass = MRI.getRegClass(Reg);
+          if (RegClass != &LinxV5::Shared_ABSRegClass &&
+              RegClass != &LinxV5::MixedGPRRegClass &&
+              RegClass != &LinxV5::MixedGPRNoRARegClass &&
+              RegClass != &LinxV5::GRRegClass &&
+              RegClass != &LinxV5::GRNoRARegClass &&
+              RegClass != &LinxV5::GRNoR0RegClass)
+            report_fatal_error(
+                "LinxV5 Shared handle cannot alias a Local tile register");
+          if (Handles.insert(Reg).second)
+            Worklist.push_back(Reg);
+        }
+        continue;
+      }
+      if (MI.isImplicitDef())
+        continue;
+      unsigned OperandIndex = &Operand - &MI.getOperand(0);
+      if (MI.getRegClassConstraint(OperandIndex, TII, TRI) !=
+          &LinxV5::Shared_ABSRegClass)
+        report_fatal_error(
+            "LinxV5 Shared handle requires Shared-only COPY/PHI aliases and "
+            "B.IOS operands; integer operations, memory bridges and calls "
+            "cannot preserve Shared identity");
+    }
+  }
+
+  bool Changed = false;
+  for (Register Handle : Handles) {
+    if (MRI.getRegClass(Handle) != &LinxV5::Shared_ABSRegClass) {
+      MRI.setRegClass(Handle, &LinxV5::Shared_ABSRegClass);
+      Changed = true;
+    }
+  }
+  return Changed;
+}
+
+FunctionPass *llvm::createLinxV5SharedHandleLegalizePass() {
+  return new LinxV5SharedHandleLegalize();
+}
 
 bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
   MachineRegisterInfo &MRI = MF.getRegInfo();

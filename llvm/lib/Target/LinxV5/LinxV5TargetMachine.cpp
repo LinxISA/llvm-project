@@ -56,6 +56,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5ClockhandsPostAllocPass(*PR);
   initializeLinxV5ClockhandsColoringPass(*PR);
   initializeLinxV5SharedRegAllocPass(*PR);
+  initializeLinxV5SharedHandleLegalizePass(*PR);
   initializeLinxV5SharedCopyElimPass(*PR);
   initializeLinxV5TRegToOffsetOptPass(*PR);
   initializeLinxV5TileFixupPass(*PR);
@@ -368,6 +369,8 @@ bool LinxV5PassConfig::addPostFastRegAllocRewrite() {
 void LinxV5PassConfig::addPostRegAlloc() {}
 
 void LinxV5PassConfig::addPreRegAlloc() {
+  if (getOptLevel() != CodeGenOpt::None)
+    addPass(createLinxV5SharedHandleLegalizePass());
   addPass(createLinxV5CanonicalizeBlockPass());
 }
 
