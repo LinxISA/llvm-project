@@ -298,10 +298,15 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
           else if (Def.isInlineAsm()) {
             StringRef Text =
                 Def.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
-            if (Text.contains("B.SUBVIEW"))
-              Status = SourceStatus::Invalid;
-            else if (Text.contains("B.ASSEMBLE") &&
-                     !IsAssemblyClosedAt(UseMBB, UseBefore, Reg))
+            if (Text.contains("B.SUBVIEW")) {
+              LinxV5::SingleAsm Asm = LinxV5::parseSingleAsm(&Def);
+              if (!llvm::any_of(Asm.Defs, [&](const MachineOperand *Operand) {
+                    return Operand->getReg() == Reg;
+                  }))
+                Status = SourceStatus::Invalid;
+            }
+            if (Text.contains("B.ASSEMBLE") &&
+                !IsAssemblyClosedAt(UseMBB, UseBefore, Reg))
               Status = SourceStatus::Invalid;
           }
           Active.pop_back();
@@ -424,6 +429,18 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
     }
   };
   DenseSet<Register> ResolvingDescriptorRegs;
+  bool IsLinear = !MF.empty();
+  MachineBasicBlock *Previous = nullptr;
+  for (MachineBasicBlock &MBB : MF) {
+    if ((!Previous && !MBB.pred_empty()) ||
+        (Previous && (MBB.pred_size() != 1 ||
+                      *MBB.pred_begin() != Previous ||
+                      Previous->succ_size() != 1 ||
+                      *Previous->succ_begin() != &MBB)))
+      IsLinear = false;
+    Previous = &MBB;
+  }
+  IsLinear &= Previous && Previous->succ_empty();
   std::function<Optional<LinxV5::TileDescriptor>(
       MachineBasicBlock &, MachineBasicBlock::iterator, Register)>
       TryResolveRegisterDescriptor;
@@ -432,6 +449,33 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
           Register Reg) -> Optional<LinxV5::TileDescriptor> {
     if (!ResolvingDescriptorRegs.insert(Reg).second)
       return None;
+    if (IsLinear) {
+      MachineBasicBlock *Block = &TargetMBB;
+      auto Stop = Before;
+      Optional<LinxV5::TileDescriptor> Descriptor;
+      bool Found = false;
+      while (Block && !Found) {
+        for (MachineInstr &MI : reverse(make_range(Block->begin(), Stop))) {
+          if (!MI.definesRegister(Reg))
+            continue;
+          Found = true;
+          if (MI.isCopy())
+            Descriptor = TryResolveRegisterDescriptor(
+                *Block, MI.getIterator(), MI.getOperand(1).getReg());
+          else if (MI.getOpcode() != LinxV5::PseudoTReload)
+            Descriptor = LinxV5::tryGetTileRegDescriptor(
+                *Block, std::next(MI.getIterator()), Reg);
+          break;
+        }
+        if (!Found) {
+          Block = Block->pred_empty() ? nullptr : *Block->pred_begin();
+          if (Block)
+            Stop = Block->end();
+        }
+      }
+      ResolvingDescriptorRegs.erase(Reg);
+      return Descriptor;
+    }
     DenseMap<MachineBasicBlock *, State> In, Out;
     auto Transfer = [&](MachineBasicBlock &MBB, State S,
                         MachineBasicBlock::iterator Stop) {
@@ -497,12 +541,45 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
   bool Progress = true;
   while (Progress) {
     Progress = false;
+    DenseMap<int, State> LinearSpills;
 
     for (MachineBasicBlock &MBB : MF) {
       for (auto It = MBB.begin(); It != MBB.end();) {
         MachineInstr &MI = *It++;
+        if (IsLinear) {
+          if (MI.getOpcode() == LinxV5::PseudoTSpillDesc)
+            SetExact(LinearSpills[MI.getOperand(1).getIndex()], MI);
+          else if (MI.getOpcode() == LinxV5::PseudoTReload) {
+            int FI = MI.getOperand(1).getIndex();
+            State S = LinearSpills.lookup(FI);
+            if (S.Kind == StateKind::Exact && S.Descriptor) {
+              const LinxV5::TileDescriptor &D = *S.Descriptor;
+              MachineInstrBuilder New = BuildMI(
+                  MBB, MI, MI.getDebugLoc(), TII->get(LinxV5::PseudoTReloadDesc));
+              New.add(MI.getOperand(0))
+                  .addFrameIndex(FI)
+                  .addImm(D.ValidCol)
+                  .addImm(D.ValidRow)
+                  .addImm(D.PhysicalCol)
+                  .addImm(D.DataType)
+                  .addImm(D.Layout)
+                  .addImm(D.SizeCode);
+              RewriteMemRef(*New, FI, CapacityBytes(D), false);
+              MI.eraseFromParent();
+              Progress = Changed = true;
+              continue;
+            }
+          } else if (MI.getOpcode() != LinxV5::PseudoTSpill) {
+            for (MachineMemOperand *MMO : MI.memoperands())
+              if (MMO->isStore())
+                if (Optional<int> FI = FixedFI(MMO))
+                  SetAbsent(LinearSpills[*FI]);
+          }
+        }
         if (MI.getOpcode() != LinxV5::PseudoTSpill)
           continue;
+        if (IsLinear)
+          SetAbsent(LinearSpills[MI.getOperand(1).getIndex()]);
         SmallVector<std::pair<MachineBasicBlock *, Register>, 8> Active;
         SourceStatus Status = ClassifySpillSource(
             MBB, MI.getIterator(), MI.getOperand(0).getReg(), MBB,
@@ -533,11 +610,15 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
             .addImm(D.Layout)
             .addImm(D.SizeCode);
         RewriteMemRef(*New, FI, Bytes, /*IsStore=*/true);
+        if (IsLinear)
+          SetExact(LinearSpills[FI], *New);
         MI.eraseFromParent();
         Progress = Changed = true;
       }
     }
 
+    if (IsLinear)
+      continue;
     for (int FI : SpillFIs) {
       DenseMap<MachineBasicBlock *, State> In, Out;
       ComputeFIStates(FI, In, Out);

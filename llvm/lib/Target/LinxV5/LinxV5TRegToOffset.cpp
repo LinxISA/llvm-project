@@ -179,6 +179,7 @@ private:
   // rewrite; only legacy non-Tile classes may retain absolute registers.
   DenseSet<const TargetRegisterClass *> SyncConflictRCs;
   DenseSet<const TargetRegisterClass *> PureAssembleRCs;
+  DenseSet<Register> OpenAssembleParentRegisters;
   // Exact post-RA INIT definitions for OPEN B.ASSEMBLE parents.  Phase 1 may
   // insert copies, so this map is populated only after copy insertion and
   // after validating that the reserved hand contains no other allocation.
@@ -208,6 +209,7 @@ private:
     CanonicalRewriteEntryStates.clear();
     SyncConflictRCs.clear();
     PureAssembleRCs.clear();
+    OpenAssembleParentRegisters.clear();
     AssembleParentUseDistances.clear();
     AssembleOrdinaryUseDistances.clear();
     ClosedAssembleParentsAtTail.clear();
@@ -479,20 +481,6 @@ static bool hasAnyReachingExplicitUndef(MachineBasicBlock &MBB,
                                         Register Reg) {
   DenseSet<MachineBasicBlock *> Visited;
   return hasReachingExplicitUndef(MBB, Reg, Visited);
-}
-
-static bool isOpenAssembleParentRegister(MachineFunction &MF, Register Reg) {
-  for (MachineBasicBlock &MBB : MF)
-    for (MachineInstr &MI : MBB) {
-      Optional<bool> Init = LinxV5::getAssembleControlBit(MI, 0);
-      Optional<bool> Last = LinxV5::getAssembleControlBit(MI, 1);
-      if (!Init || !*Init || !Last || *Last)
-        continue;
-      for (const MachineOperand &MO : MI.operands())
-        if (MO.isReg() && MO.isDef() && MO.getReg() == Reg)
-          return true;
-    }
-  return false;
 }
 
 static DenseSet<Register>
@@ -1077,17 +1065,19 @@ SlotCalc::allocNewSlot(SmallVectorImpl<const TRLiveRange *> &LRs) {
     }
     return num;
   };
-  auto findFirstKill = [&](MachineInstr *MI) {
+  auto findFirstKill = [&](MachineInstr *MI) -> TRCopyRange * {
     for (unsigned i = TailIdx; i < HeadIdx; ++i) {
       if (isKill(LiveSlots[i % TRNumber], MI))
         return &LiveSlots[i % TRNumber];
     }
+    return nullptr;
   };
-  auto findFirstLive = [&](MachineInstr *MI) {
+  auto findFirstLive = [&](MachineInstr *MI) -> TRCopyRange * {
     for (unsigned i = TailIdx; i < HeadIdx; ++i) {
       if (!isIdle(LiveSlots[i % TRNumber], MI))
         return &LiveSlots[i % TRNumber];
     }
+    return nullptr;
   };
   while (free() < LRs.size()) {
     assert(i++ < TRNumber * TRNumber);
@@ -1115,6 +1105,10 @@ SlotCalc::allocNewSlot(SmallVectorImpl<const TRLiveRange *> &LRs) {
       LLVM_DEBUG(dbgs() << "first is "
                         << (isIdle(first(), MI) ? "idle" : "live") << "\n");
       Slot = isIdle(first(), MI) ? findFirstKill(MI) : findFirstLive(MI);
+      if (!Slot)
+        Slot = findFirstLive(MI);
+      if (!Slot)
+        report_fatal_error("Tile allocation pressure has no live queue source");
     }
     unsigned Copys = PreIdx - HeadIdx + 1;
     NrCopy += Copys;
@@ -1981,7 +1975,7 @@ LinxV5TRegToOffsetOpt::buildEntryContract(
                MO.getReg() == Reg;
       });
     });
-    if (isOpenAssembleParentRegister(*MBB.getParent(), Reg))
+    if (OpenAssembleParentRegisters.count(Reg))
       continue;
     if (!HasLocalUse)
       continue;
@@ -2566,6 +2560,7 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
     ClosedAssembleParentsAtTail.clear();
   SmallVector<std::pair<Register, MachineInstr *>, 4> ParentEpochs;
   DenseMap<unsigned, unsigned> ParentEpochCounts;
+  DenseSet<const MachineInstr *> ParentEpochDefinitions;
   DenseSet<const MachineInstr *> ParentRefUses;
   DenseMap<const MachineInstr *, unsigned> ParentRefProofCounts;
   DenseMap<const MachineInstr *, unsigned> ParentRefAnalysisCounts;
@@ -2586,6 +2581,18 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
   DenseMap<const MachineInstr *, DenseSet<Register>>
       ConflictOrdinaryUses;
   DenseMap<const MachineInstr *, DenseSet<Register>> OpenOrdinaryUses;
+  bool IsLinear = !MF.empty();
+  MachineBasicBlock *Previous = nullptr;
+  for (MachineBasicBlock &MBB : MF) {
+    if ((!Previous && !MBB.pred_empty()) ||
+        (Previous && (MBB.pred_size() != 1 ||
+                      *MBB.pred_begin() != Previous ||
+                      Previous->succ_size() != 1 ||
+                      *Previous->succ_begin() != &MBB)))
+      IsLinear = false;
+    Previous = &MBB;
+  }
+  IsLinear &= Previous && Previous->succ_empty();
 
   for (MachineBasicBlock &MBB : MF) {
     for (MachineInstr &MI : MBB) {
@@ -2603,10 +2610,149 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
             LinxV5::Tile_ABSRegClass.contains(MO.getReg())) {
           Register Parent = MO.getReg();
           ParentEpochs.emplace_back(Parent, &MI);
+          ParentEpochDefinitions.insert(&MI);
           ++ParentEpochCounts[Parent.id()];
         }
       }
     }
+  }
+
+  if (IsLinear) {
+    bool SawOpenOrdinaryUse = false;
+    struct LinearParentState {
+      MachineInstr *Epoch = nullptr;
+      bool Open = false;
+      bool OrdinaryDefinition = false;
+      unsigned Distance = 0;
+      const TargetRegisterClass *RC = nullptr;
+    };
+    DenseMap<Register, LinearParentState> States;
+    for (const auto &Entry : ParentEpochs) {
+      for (const TargetRegisterClass *RC :
+           {&LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
+            &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass})
+        if (RC->contains(Entry.first))
+          States[Entry.first].RC = RC;
+    }
+    for (MachineBasicBlock &MBB : MF) {
+      MachineInstr *Tail = nullptr;
+      if (CollectClosedTailProofs) {
+        for (auto Position = MBB.rbegin(); Position != MBB.rend(); ++Position)
+          if (LinxV5::isTileOp(*Position)) {
+            auto After = std::next(Position->getIterator());
+            if (After != MBB.end())
+              Tail = &*After;
+            break;
+          }
+      }
+      for (MachineInstr &MI : MBB) {
+        if (&MI == Tail)
+          for (const auto &Entry : States)
+            if (Entry.second.Epoch && !Entry.second.Open)
+              ClosedAssembleParentsAtTail[&MBB].insert(Entry.second.Epoch);
+        Register ParentRef = LinxV5::getAssembleParentRef(MI);
+        if (!CollectClosedTailProofs && ParentRef != LinxV5::NoRegister &&
+            !States.count(ParentRef))
+          report_fatal_error(
+              "B.ASSEMBLE continuation requires one exact OPEN parent epoch at "
+              "a uniform relative distance");
+        DenseSet<Register> KilledParents;
+        for (const MachineOperand &MO : MI.operands()) {
+          if (!MO.isReg() || !MO.isUse() || MO.isImplicit())
+            continue;
+          auto Found = States.find(MO.getReg());
+          if (Found == States.end())
+            continue;
+          const LinearParentState &State = Found->second;
+          if (MO.isKill())
+            KilledParents.insert(MO.getReg());
+          if (CollectClosedTailProofs)
+            continue;
+          if (MO.getReg() == ParentRef) {
+            if (!State.Epoch || !State.Open)
+              report_fatal_error(
+                  "B.ASSEMBLE continuation requires one exact OPEN parent epoch at "
+                  "a uniform relative distance");
+            AssembleParentUseDistances[&MI][ParentRef] = State.Distance;
+          } else if (State.Epoch) {
+            if (State.Open) {
+              if (MI.getOpcode() == LinxV5::PseudoTCOPY ||
+                  MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+                  MI.getOpcode() == LinxV5::PseudoPCOPYDesc)
+                report_fatal_error(
+                    "cannot copy an OPEN B.ASSEMBLE parent source before LAST");
+              SawOpenOrdinaryUse = true;
+            }
+            AssembleOrdinaryUseDistances[&MI][MO.getReg()] = State.Distance;
+          } else if (!State.OrdinaryDefinition) {
+            SawOpenOrdinaryUse = true;
+          }
+        }
+        auto ParentPosition = States.find(ParentRef);
+        if (ParentPosition != States.end()) {
+          Optional<bool> Last = LinxV5::getAssembleControlBit(MI, 1);
+          if (Last && *Last)
+            ParentPosition->second.Open = false;
+        }
+        if (MI.isImplicitDef()) {
+          for (const MachineOperand &MO : MI.operands())
+            if (MO.isReg() && MO.isDef()) {
+              auto Found = States.find(MO.getReg());
+              if (Found != States.end()) {
+                Found->second.Epoch = nullptr;
+                Found->second.OrdinaryDefinition = false;
+              }
+            }
+          continue;
+        }
+        if (MI.getOpcode() != LinxV5::PseudoEmptyTile)
+          for (const MachineOperand &MO : MI.operands()) {
+            if (!MO.isReg() || !MO.isDef() || MO.isImplicit())
+              continue;
+            for (auto &Entry : States) {
+              LinearParentState &State = Entry.second;
+              if (!State.RC->contains(MO.getReg()))
+                continue;
+              if (Entry.first == MO.getReg()) {
+                if (State.Epoch && State.Open && !CollectClosedTailProofs)
+                  report_fatal_error(
+                      "OPEN B.ASSEMBLE parent register has a second real definition");
+                State.Epoch = ParentEpochDefinitions.count(&MI) ? &MI : nullptr;
+                State.Open = State.Epoch != nullptr;
+                State.OrdinaryDefinition = !State.Epoch;
+                State.Distance = 1;
+              } else if (State.Epoch) {
+                const bool Rotation =
+                    (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
+                     MI.getOpcode() == LinxV5::PseudoPCOPYDesc) &&
+                    MI.getNumOperands() > 2 && MI.getOperand(0).isReg() &&
+                    MI.getOperand(2).isReg() &&
+                    MI.getOperand(0).getReg() == MI.getOperand(2).getReg();
+                if (State.Open && !Rotation && !CollectClosedTailProofs)
+                  report_fatal_error(
+                      "OPEN B.ASSEMBLE parent hand contains another real tile "
+                      "definition after CFG copy insertion");
+                if (++State.Distance > State.RC->getNumRegs())
+                  report_fatal_error(
+                      "B.ASSEMBLE parent relative distance exceeds the 16-entry "
+                      "Local tile window");
+              }
+            }
+          }
+        for (Register Parent : KilledParents) {
+          LinearParentState &State = States[Parent];
+          if (State.Epoch && !State.Open && !isSelfTileCopyOf(MI, Parent)) {
+            State.Epoch = nullptr;
+            State.OrdinaryDefinition = false;
+          }
+        }
+      }
+    }
+    if (SawOpenOrdinaryUse)
+      report_fatal_error(
+          "cannot use an OPEN B.ASSEMBLE parent as an ordinary tile source "
+          "before LAST");
+    return;
   }
 
   for (const auto &Entry : ParentEpochs) {
@@ -2677,6 +2823,7 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
       bool Reached = false;
       bool Complete = false;
       unsigned Distance = 0;
+      bool OtherAssemblyEpoch = false;
     };
     enum class ProofRequirement {
       OpenParent,
@@ -3540,6 +3687,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
       Proof.Complete = true;
       if (ReachingParentDistance)
         Proof.Distance = *ReachingParentDistance;
+      Proof.OtherAssemblyEpoch =
+          ReachingOtherDef && ParentEpochDefinitions.count(ReachingOtherDef);
       ProofCache[UseMI] = Proof;
       return Proof;
     };
@@ -3625,7 +3774,7 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
           UseProof Proof =
               proveUse(&MI, ProofRequirement::PublishedSource);
           ++OrdinaryAnalysisCounts[&MI][Parent];
-          if (Proof.Reached)
+          if (Proof.Reached && !Proof.OtherAssemblyEpoch)
             ++OrdinaryReachedCounts[&MI][Parent];
           if (!Proof.Complete)
             IncompleteOrdinaryUses[&MI].insert(Parent);
@@ -3644,7 +3793,8 @@ void LinxV5TRegToOffsetOpt::solveAssembleParentDataflow(
                   "distances across parent epochs");
             Agreed = Proof.Distance;
           }
-          if (Proof.Proven && Proof.Reached && Proof.Distance == 0)
+          if (Proof.Proven && Proof.Reached && Proof.Distance == 0 &&
+              !Proof.OtherAssemblyEpoch)
             ++OrdinaryOtherReachedCounts[&MI][Parent];
         }
 
@@ -3890,6 +4040,17 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   SyncConflictRCs.clear();
   PureAssembleRCs.clear();
+  OpenAssembleParentRegisters.clear();
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB) {
+      Optional<bool> Init = LinxV5::getAssembleControlBit(MI, 0);
+      Optional<bool> Last = LinxV5::getAssembleControlBit(MI, 1);
+      if (!Init || !*Init || !Last || *Last)
+        continue;
+      for (const MachineOperand &MO : MI.operands())
+        if (MO.isReg() && MO.isDef())
+          OpenAssembleParentRegisters.insert(MO.getReg());
+    }
   ClosedAssembleParentsAtTail.clear();
   RewriteTRIdentities.clear();
   QueueCopyUseDistances.clear();

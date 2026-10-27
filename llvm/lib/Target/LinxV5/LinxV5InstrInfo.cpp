@@ -18,6 +18,7 @@
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -36,6 +37,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <queue>
+#include <tuple>
 
 using namespace llvm;
 
@@ -776,6 +778,37 @@ static Optional<unsigned> getInlineAsmOperandImmediate(MachineInstr &MI,
   return static_cast<unsigned>(MO->getImm());
 }
 
+static Optional<unsigned> getStaticTileDimensionRegister(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg) {
+  SmallPtrSet<MachineBasicBlock *, 8> Visited;
+  MachineBasicBlock *Block = &MBB;
+  while (Visited.insert(Block).second) {
+    if (Reg == LinxV5::R0)
+      return 0u;
+    for (MachineInstr &Def : reverse(make_range(Block->begin(), Before))) {
+      if (!Def.definesRegister(Reg))
+        continue;
+      if (Def.isCopy()) {
+        Reg = Def.getOperand(1).getReg();
+        if (Reg == LinxV5::R0)
+          return 0u;
+        continue;
+      }
+      if (Def.getOpcode() == LinxV5::ADDI &&
+          Def.getOperand(1).getReg() == LinxV5::R0 &&
+          Def.getOperand(2).getImm() >= 0 &&
+          Def.getOperand(2).getImm() <= 65535)
+        return static_cast<unsigned>(Def.getOperand(2).getImm());
+      return None;
+    }
+    if (Block->pred_size() != 1)
+      return None;
+    Block = *Block->pred_begin();
+    Before = Block->end();
+  }
+  return None;
+}
+
 static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
                                                 StringRef Text,
                                                 unsigned Dimension) {
@@ -788,8 +821,20 @@ static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
     return None;
   StringRef Line = Text.slice(Start, End);
   size_t Zero = Line.find("zero,");
-  if (Zero == StringRef::npos)
-    return None; // A runtime GPR dimension has no static descriptor value.
+  if (Zero == StringRef::npos) {
+    StringRef RegisterText = Line.drop_front(strlen("B.DIM")).trim();
+    MachineOperand *Operand = nullptr;
+    const char *After = parseAsmOperand(&MI, RegisterText.data(), Operand);
+    if (!After || !Operand || !Operand->isReg())
+      return None;
+    StringRef Immediate = Text.slice(After - Text.data(), End)
+                              .split(',').second.split(',').first.trim();
+    unsigned Offset;
+    if (Immediate.getAsInteger(10, Offset) || Offset != 0)
+      return None;
+    return getStaticTileDimensionRegister(*MI.getParent(), MI.getIterator(),
+                                          Operand->getReg());
+  }
   StringRef Value = Line.drop_front(Zero + strlen("zero,")).trim();
   if (Value.startswith("${"))
     return getInlineAsmOperandImmediate(MI, Text, Start + Zero +
@@ -1016,8 +1061,16 @@ static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
   return None;
 }
 
-static Optional<LinxV5::TileDescriptor>
-getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
+using DescriptorPosition =
+    std::tuple<MachineBasicBlock *, const MachineInstr *, Register>;
+
+static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
+    SmallVectorImpl<DescriptorPosition> &Active);
+
+static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
+    MachineInstr &MI, Register Reg,
+    SmallVectorImpl<DescriptorPosition> &Active) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1036,6 +1089,76 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   Optional<unsigned> ValidRow = getInlineAsmDimension(MI, Text, 1);
   Optional<unsigned> PhysicalCol = getInlineAsmDimension(MI, Text, 2);
   bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
+  bool IsMX = Text.startswith("BSTART.CUBE TMATMULMX,") ||
+              Text.startswith("BSTART.CUBE TMATMULMX.ACC,");
+  bool IsConvert = Text.startswith("BSTART.TEPL 27,");
+  bool HasDerivedPhysicalCol = false;
+  if (IsMX || IsConvert) {
+    size_t Binding = Text.find("B.IOT");
+    if (Binding == StringRef::npos)
+      return None;
+    StringRef SourceText = Text.drop_front(Binding + strlen("B.IOT")).ltrim();
+    MachineOperand *Source = nullptr;
+    if (!parseAsmOperand(&MI, SourceText.data(), Source) || !Source ||
+        !Source->isReg())
+      return None;
+    Optional<LinxV5::TileDescriptor> SourceDescriptor = resolveTileDescriptor(
+        *MI.getParent(), MI.getIterator(), Source->getReg(), Active);
+    if (!SourceDescriptor)
+      return None;
+    bool CubeSource = SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+                      SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M32;
+    if (IsConvert) {
+      if (!DataType || !ValidCol || !ValidRow)
+        return None;
+      if (CubeSource) {
+        Layout = SourceDescriptor->Layout;
+        unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+        unsigned Bits = getTileDataTypeBits(*DataType);
+        if (!Bits)
+          return None;
+        PhysicalCol = ((uint64_t{1} << (*SizeCode + 6)) * 8) / (Rows * Bits);
+        HasDerivedPhysicalCol = true;
+        if (Text.contains("B.ASSEMBLE")) {
+          ValidRow = Rows;
+          ValidCol = PhysicalCol;
+        }
+      }
+    } else {
+      if (!CubeSource || SA.Defs.empty() || SA.Defs.front()->getReg() != Reg)
+        return None;
+      Layout = SourceDescriptor->Layout;
+      size_t Attributes = Text.find("B.FPATR");
+      if (Attributes == StringRef::npos)
+        return None;
+      StringRef QuantText = Text.drop_front(Attributes + strlen("B.FPATR"))
+                                .split(',').first.trim();
+      Optional<unsigned> Quant;
+      if (QuantText.startswith("${") && QuantText.endswith(":c}"))
+        Quant = getInlineAsmOperandImmediate(
+            MI, Text, QuantText.data() - Text.data() + QuantText.find(':'));
+      else {
+        unsigned Value;
+        if (!QuantText.getAsInteger(10, Value))
+          Quant = Value;
+      }
+      if (!Quant || *Quant != 0 || !ValidCol || !ValidRow)
+        return None;
+      DataType = LinxV5Op::DataType::FP32;
+      unsigned SharedCount = Text.count("B.IOS");
+      if (SharedCount) {
+        if (SharedCount != 2 || (*ValidCol != 64 && *ValidCol != 128))
+          return None;
+        *ValidCol /= 4;
+      }
+      std::swap(ValidCol, ValidRow);
+      if (*Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
+          *Layout != LinxV5Op::ArgFormat::CUBE_M32)
+        return None;
+      unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+      PhysicalCol = ((uint64_t{1} << (*SizeCode + 6)) * 8) / (Rows * 32);
+    }
+  }
   if (!DataType || *DataType == LinxV5Op::DataType::EMPTY_DataType ||
       !Layout || !ValidCol || !ValidRow || !PhysicalCol || !*ValidCol ||
       !*ValidRow)
@@ -1044,7 +1167,7 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   // PTO destination-shape defaults resolve an omitted LB2 to ValidCol.  Tile
   // capacity determines the remaining physical rows; it must never invent
   // additional columns.  Public CUBE TCI forms carry LB2 explicitly.
-  if (!HasPhysicalCol)
+  if (!HasPhysicalCol && !HasDerivedPhysicalCol)
     *PhysicalCol = *ValidCol;
   if (Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text)) {
     const bool Cube = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
@@ -1073,8 +1196,9 @@ getInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
       *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
 }
 
-static Optional<LinxV5::TileDescriptor>
-getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
+static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
+    MachineInstr &MI, Register Reg,
+    SmallVectorImpl<DescriptorPosition> &Active) {
   if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed)
     return checkedTileDescriptor(LinxV5::TileDescriptor{
         static_cast<unsigned>(MI.getOperand(5).getImm()),
@@ -1269,14 +1393,14 @@ getDefinedTileDescriptor(MachineInstr &MI, Register Reg) {
     break;
   }
   if (MI.isInlineAsm())
-    return getInlineAsmTileDescriptor(MI, Reg);
+    return getInlineAsmTileDescriptor(MI, Reg, Active);
   return None;
 }
 
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<std::pair<MachineBasicBlock *, Register>> &Active) {
-  std::pair<MachineBasicBlock *, Register> Key{&MBB, Reg};
+    SmallVectorImpl<DescriptorPosition> &Active) {
+  DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
   if (is_contained(Active, Key))
     return None;
   Active.push_back(Key);
@@ -1289,7 +1413,7 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
       Result = resolveTileDescriptor(MBB, MI.getIterator(),
                                      MI.getOperand(1).getReg(), Active);
     else
-      Result = getDefinedTileDescriptor(MI, Reg);
+      Result = getDefinedTileDescriptor(MI, Reg, Active);
     Active.pop_back();
     return Result;
   }
@@ -1327,7 +1451,7 @@ Optional<LinxV5::TileDescriptor>
 LinxV5::tryGetTileRegDescriptor(MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MBBI,
                                 MCRegister Reg) {
-  SmallVector<std::pair<MachineBasicBlock *, Register>, 8> Active;
+  SmallVector<DescriptorPosition, 8> Active;
   return resolveTileDescriptor(MBB, MBBI, Reg, Active);
 }
 

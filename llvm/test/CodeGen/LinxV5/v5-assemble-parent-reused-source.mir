@@ -1,0 +1,51 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset %s -o - | FileCheck %s
+# RUN: %python %S/Inputs/assemble-parent-reused-source.py %s > %t.mir
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset %t.mir -o /dev/null
+# CHECK-LABEL: name: two_epochs
+# CHECK-COUNT-2: BSTART.TLSU TSTORE
+# CHECK-LABEL: name: two_epochs_join
+# CHECK-COUNT-2: BSTART.TLSU TSTORE
+--- |
+  define void @two_epochs() { ret void }
+  define void @two_epochs_join() { ret void }
+...
+---
+name: two_epochs
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2
+    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 13 /* imm */, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 2, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 2, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+    PseudoRET
+...
+
+---
+name: two_epochs_join
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r2
+    BEQ $r2, $r0, %bb.2
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2
+    liveins: $r2
+    PseudoBR %bb.2
+  bb.2:
+    liveins: $r2
+    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 13 /* imm */, 1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 2, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 2, 13 /* imm */, 1, 13 /* imm */, 0
+    INLINEASM &"BSTART.TEPL 27, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9 /* sideeffect mayload attdialect */, 720905 /* reguse:Tile_ABS */, $tile_t1, 720905 /* reguse:Tile_ABS */, $tile_u1, 13 /* imm */, 0, 13 /* imm */, 1
+    INLINEASM &"BSTART.TLSU TSTORE, 17\0AB.DATR M322ND.normal, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last\0AB.IOR [$0,zero], []\0A", 1 /* sideeffect attdialect */, 2293769 /* reguse:GR */, $r2, 720905 /* reguse:Tile_ABS */, $tile_t1
+    PseudoRET
+...
