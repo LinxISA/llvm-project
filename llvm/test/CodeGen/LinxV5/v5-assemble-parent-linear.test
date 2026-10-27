@@ -1,0 +1,16 @@
+# RUN: %python %S/Inputs/assemble-parent-linear.py %t-long.mir long
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-clockhands -linxv5-enable-tile-clock-hand=false %t-long.mir -o /dev/null
+# RUN: %python %S/Inputs/assemble-parent-linear.py %t-many.mir many
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-clockhands %t-many.mir -o - | FileCheck %s --check-prefix=MANY
+# RUN: %python %S/Inputs/assemble-parent-linear.py %t-overlap.mir overlap
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-clockhands %t-overlap.mir -o - | FileCheck %s --check-prefix=OVERLAP
+# RUN: %python %S/Inputs/assemble-parent-linear.py %t-overflow.mir overflow
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-clockhands %t-overflow.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=OVERFLOW
+# RUN: %python %S/Inputs/assemble-parent-linear.py %t-invalid.mir invalid
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-clockhands %t-invalid.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=INVALID
+
+# MANY-COUNT-512: class: tile_tr
+# OVERLAP: class: tile_tr
+# OVERLAP: class: tile_mr
+# OVERFLOW: more than three overlapping OPEN B.ASSEMBLE parents
+# INVALID: B.ASSEMBLE continuation may execute without an OPEN parent

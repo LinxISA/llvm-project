@@ -12,5 +12,7 @@
 # exhaust preprocessing before path proof. A larger acyclic scalar prefix that
 # reuses the event loop's physical counter remains irrelevant and must compile.
 # CHECK: LLVM ERROR: unable to prove bounded B.ASSEMBLE parent phase behavior
+# CHECK-SAME: preprocessing budget exhausted; parent=
+# CHECK-SAME: processed={{[0-9]+}}, limit=65536, function=assemble_parent_phase_offset_cycle, blocks=
 # IRRELEVANT-LABEL: name: assemble_parent_phase_offset_cycle
 # IRRELEVANT: class: tile_tr

@@ -197,11 +197,9 @@ merge:
 
 ; POS-LABEL: name: assemble_parent_loop
 ; POS: - { id: [[PARENT:[0-9]+]], class: tile_tr
-; POS: - { id: [[SCRATCH:[0-9]+]], class: tile_nr
-; POS: - { id: [[WRITER:[0-9]+]], class: tile_ur
 ; POS: %[[PARENT]]:tile_tr = IMPLICIT_DEF
-; POS: INLINEASM {{.*}}B.ASSEMBLE ${4:c}, ${5:c}, $3, 0, 1{{.*}}def %[[PARENT]]{{.*}}%[[WRITER]]
-; POS: INLINEASM {{.*}}B.ASSEMBLE ${3:c}, ${4:c}, $2, 0, 1{{.*}}%[[PARENT]]{{.*}}%[[SCRATCH]]
+; POS: INLINEASM {{.*}}B.ASSEMBLE ${4:c}, ${5:c}, $3, 0, 1{{.*}}def %[[PARENT]]{{.*}}%[[WRITER:[0-9]+]]
+; POS: INLINEASM {{.*}}B.ASSEMBLE ${3:c}, ${4:c}, $2, 0, 1{{.*}}%[[PARENT]]{{.*}}%[[SCRATCH:[0-9]+]]
 ; POS: INLINEASM {{.*}}TSTORE{{.*}}%[[PARENT]]
 ;
 ; SINGLE-LABEL: name: assemble_init_last
@@ -223,16 +221,15 @@ merge:
 ; POS4-COUNT-4: class: tile_tr
 ;
 ; SINGLE-LABEL: name: completed_writer_is_not_parent
+; SINGLE-NOT: class: tile_abs,
 ; SINGLE: - { id: [[P0:[0-9]+]], class: tile_tr
 ; SINGLE: - { id: [[P1:[0-9]+]], class: tile_mr
 ; SINGLE: - { id: [[P2:[0-9]+]], class: tile_ur
-; SINGLE: - { id: [[BASE:[0-9]+]], class: tile_nr
-; SINGLE: - { id: [[COMPLETED:[0-9]+]], class: tile_nr
-; SINGLE: BSTART.TEPL 102{{.*}}def %[[BASE]]
+; SINGLE: BSTART.TEPL 102{{.*}}def %[[BASE:[0-9]+]]
 ; SINGLE: B.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1{{.*}}def %[[P0]]{{.*}}%[[BASE]]
 ; SINGLE: B.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1{{.*}}def %[[P1]]{{.*}}%[[BASE]]
 ; SINGLE: B.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1{{.*}}def %[[P2]]{{.*}}%[[BASE]]
-; SINGLE: B.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1{{.*}}def %[[COMPLETED]]{{.*}}%[[BASE]]
+; SINGLE: B.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1{{.*}}def %[[COMPLETED:[0-9]+]]{{.*}}%[[BASE]]
 ; SINGLE: B.IOT $1, $0{{.*}}%[[P0]]{{.*}}%[[COMPLETED]]
 ; SINGLE: B.IOT $1, $2, $0{{.*}}%[[P1]]{{.*}}%[[COMPLETED]]{{.*}}%[[BASE]]
 ; SINGLE: B.IOT $1, $0{{.*}}%[[P2]]{{.*}}%[[BASE]]

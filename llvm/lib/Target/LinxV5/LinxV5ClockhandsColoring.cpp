@@ -120,6 +120,7 @@ private:
   VirtRegMap *VRM;
   MachineLoopInfo *MLI;
   SmallVector<SmallVector<MachineInstr *>> Chains;
+  Optional<SmallVector<SmallVector<uint8_t, 8>, 8>> LinearParentInterference;
 
 private:
   bool assignLoopInvar(MachineFunction &MF,
@@ -128,7 +129,10 @@ private:
   bool assignAccrosChain(MachineFunction &MF,
                          DenseSet<const TargetRegisterClass *> &OriRCs,
                          const TargetRegisterClass *AssignRC);
-  void clear() { Chains.clear(); }
+  void clear() {
+    Chains.clear();
+    LinearParentInterference.reset();
+  }
 };
 } // namespace
 
@@ -333,6 +337,77 @@ static AssembleParentEvent getAssembleParentEvent(MachineInstr &MI,
 }
 
 enum class ParentPhaseResult { Disjoint, Overlap, Invalid, UnableToProve };
+
+static Optional<SmallVector<SmallVector<uint8_t, 8>, 8>>
+analyzeLinearAssembleParentPhases(MachineFunction &MF,
+                                  ArrayRef<Register> Parents) {
+  SmallVector<MachineBasicBlock *, 32> Blocks;
+  DenseSet<MachineBasicBlock *> Visited;
+  MachineBasicBlock *Block = &MF.front();
+  while (true) {
+    if (!Visited.insert(Block).second || Block->succ_size() > 1)
+      return None;
+    Blocks.push_back(Block);
+    if (Block->succ_empty())
+      break;
+    Block = *Block->succ_begin();
+  }
+
+  SmallVector<SmallVector<uint8_t, 8>, 8> Interferes(
+      Parents.size(), SmallVector<uint8_t, 8>(Parents.size(), 0));
+  DenseMap<Register, unsigned> ParentIndices;
+  for (unsigned Index = 0; Index < Parents.size(); ++Index)
+    ParentIndices[Parents[Index]] = Index;
+  DenseSet<unsigned> Open;
+  for (MachineBasicBlock *Current : Blocks) {
+    for (MachineInstr &MI : *Current) {
+      if (!isAssemble(MI))
+        continue;
+      Register ParentRef = LinxV5::getAssembleParentRef(MI);
+      auto Reference = ParentIndices.find(ParentRef);
+      bool Last = *LinxV5::getAssembleControlBit(MI, /*LastIdx=*/1);
+      if (Reference != ParentIndices.end()) {
+        if (!Open.count(Reference->second))
+          report_fatal_error(
+              "B.ASSEMBLE continuation may execute without an OPEN parent");
+        if (Last)
+          Open.erase(Reference->second);
+      }
+      for (MachineOperand *Def : getDefOperands(&MI)) {
+        auto Definition = ParentIndices.find(Def->getReg());
+        if (Definition == ParentIndices.end())
+          continue;
+        if (!*LinxV5::getAssembleControlBit(MI, /*InitIdx=*/0))
+          report_fatal_error("B.ASSEMBLE parent definition requires Init=1");
+        unsigned Index = Definition->second;
+        if (Last) {
+          Open.erase(Index);
+          continue;
+        }
+        for (unsigned Other : Open)
+          if (Other != Index)
+            Interferes[Index][Other] = Interferes[Other][Index] = 1;
+        Open.insert(Index);
+      }
+    }
+  }
+  return Interferes;
+}
+
+static std::string parentPhaseBudgetFailure(MachineFunction &MF,
+                                            Register ParentA, Register ParentB,
+                                            StringRef Kind, size_t Processed,
+                                            size_t Limit) {
+  std::string Message;
+  raw_string_ostream Stream(Message);
+  Stream << "unable to prove bounded B.ASSEMBLE parent phase behavior: " << Kind
+         << " budget exhausted; parent=" << printReg(ParentA);
+  if (ParentB)
+    Stream << ", other=" << printReg(ParentB);
+  Stream << ", processed=" << Processed << ", limit=" << Limit
+         << ", function=" << MF.getName() << ", blocks=" << MF.size();
+  return Stream.str();
+}
 
 // Register IDs occupy 32 bits. Higher keys name compiler-private scalar spill
 // locations; keeping both in the same lattice preserves facts across joins and
@@ -565,7 +640,8 @@ static ConstantRange widenParentRangeAtLoopHeader(
 
 static ParentPhaseResult analyzeAssembleParentPhasesWithLoopScope(
     MachineFunction &MF, MachineLoopInfo &MLI, const TargetRegisterInfo &TRI,
-    Register ParentA, Register ParentB, bool IncludeAncestorLoops) {
+    Register ParentA, Register ParentB, bool IncludeAncestorLoops,
+    std::string &BudgetFailure) {
   std::set<ParentRangeLocation> RelevantLocations;
   std::map<ParentSpillAccess, ParentRangeLocation> SpillLocations;
   const MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -579,6 +655,9 @@ static ParentPhaseResult analyzeAssembleParentPhasesWithLoopScope(
   unsigned PreprocessWork = 0;
   auto consumePreprocessWork = [&](size_t Work) {
     if (Work > MaxPhaseProofWork - PreprocessWork) {
+      BudgetFailure =
+          parentPhaseBudgetFailure(MF, ParentA, ParentB, "preprocessing",
+                                   PreprocessWork + Work, MaxPhaseProofWork);
       LLVM_DEBUG(dbgs() << "B.ASSEMBLE phase preprocessing cap for "
                         << printReg(ParentA) << " / " << printReg(ParentB)
                         << "\n");
@@ -854,6 +933,8 @@ static ParentPhaseResult analyzeAssembleParentPhasesWithLoopScope(
     ParentPhaseStateKey Key = Worklist.pop_back_val();
     ParentRangeEnvironment Environment = EntryStates.find(Key)->second;
     if (++ProcessedStates > MaxPathStates) {
+      BudgetFailure = parentPhaseBudgetFailure(
+          MF, ParentA, ParentB, "path-state", ProcessedStates, MaxPathStates);
       LLVM_DEBUG(dbgs() << "B.ASSEMBLE phase state cap for "
                         << printReg(ParentA) << " / " << printReg(ParentB)
                         << ", pending " << Worklist.size() << "\n");
@@ -1095,11 +1176,13 @@ static ParentPhaseResult analyzeAssembleParentPhasesWithLoopScope(
   return ParentPhaseResult::Disjoint;
 }
 
-static ParentPhaseResult analyzeAssembleParentPhases(
-    MachineFunction &MF, MachineLoopInfo &MLI, const TargetRegisterInfo &TRI,
-    Register ParentA, Register ParentB = Register()) {
+static ParentPhaseResult
+analyzeAssembleParentPhases(MachineFunction &MF, MachineLoopInfo &MLI,
+                            const TargetRegisterInfo &TRI, Register ParentA,
+                            Register ParentB, std::string &BudgetFailure) {
   ParentPhaseResult Local = analyzeAssembleParentPhasesWithLoopScope(
-      MF, MLI, TRI, ParentA, ParentB, /*IncludeAncestorLoops=*/false);
+      MF, MLI, TRI, ParentA, ParentB, /*IncludeAncestorLoops=*/false,
+      BudgetFailure);
   if (Local == ParentPhaseResult::Disjoint)
     return Local;
 
@@ -1110,7 +1193,8 @@ static ParentPhaseResult analyzeAssembleParentPhases(
   // keeping the common self-contained inner loop independent of sibling-loop
   // physical-register reuse.
   return analyzeAssembleParentPhasesWithLoopScope(
-      MF, MLI, TRI, ParentA, ParentB, /*IncludeAncestorLoops=*/true);
+      MF, MLI, TRI, ParentA, ParentB, /*IncludeAncestorLoops=*/true,
+      BudgetFailure);
 }
 
 void ColoringInChain::updateRCSlotIndex(
@@ -1484,16 +1568,22 @@ LinxV5ClockhandsColoring::findOpenAssembleParents(MachineFunction &MF) {
       }
     }
   }
+  LinearParentInterference.reset();
+  if (Parents.empty())
+    return Parents;
+  LinearParentInterference = analyzeLinearAssembleParentPhases(MF, Parents);
+  if (LinearParentInterference)
+    return Parents;
   const TargetRegisterInfo &TRI = *MRI->getTargetRegisterInfo();
   for (Register Parent : Parents) {
-    ParentPhaseResult Result =
-        analyzeAssembleParentPhases(MF, *MLI, TRI, Parent);
+    std::string BudgetFailure;
+    ParentPhaseResult Result = analyzeAssembleParentPhases(
+        MF, *MLI, TRI, Parent, Register(), BudgetFailure);
     if (Result == ParentPhaseResult::Invalid)
       report_fatal_error(
           "B.ASSEMBLE continuation may execute without an OPEN parent");
     if (Result == ParentPhaseResult::UnableToProve)
-      report_fatal_error(
-          "unable to prove bounded B.ASSEMBLE parent phase behavior");
+      report_fatal_error(StringRef(BudgetFailure));
   }
   return Parents;
 }
@@ -1558,28 +1648,38 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
     // still govern allocation inside each selected hand.
     ArrayRef<const TargetRegisterClass *> ParentRCs(CurRCs.data(), 3);
     const unsigned ParentCount = OpenParents.size();
-    SmallVector<SmallVector<uint8_t, 8>, 8> Interferes(
-        ParentCount, SmallVector<uint8_t, 8>(ParentCount, 0));
+    SmallVector<SmallVector<uint8_t, 8>, 8> Interferes =
+        LinearParentInterference
+            ? std::move(*LinearParentInterference)
+            : SmallVector<SmallVector<uint8_t, 8>, 8>(
+                  ParentCount, SmallVector<uint8_t, 8>(ParentCount, 0));
     const TargetRegisterInfo &TRI = *MRI->getTargetRegisterInfo();
-    for (unsigned I = 0; I < ParentCount; ++I) {
-      for (unsigned J = I + 1; J < ParentCount; ++J) {
-        ParentPhaseResult Result = analyzeAssembleParentPhases(
-            MF, *MLI, TRI, OpenParents[I], OpenParents[J]);
-        if (Result == ParentPhaseResult::UnableToProve)
-          report_fatal_error(
-              "unable to prove bounded B.ASSEMBLE parent phase behavior");
-        if (Result == ParentPhaseResult::Invalid)
-          report_fatal_error(
-              "B.ASSEMBLE continuation may execute without an OPEN parent");
-        if (Result == ParentPhaseResult::Overlap) {
-          Interferes[I][J] = Interferes[J][I] = 1;
-          LLVM_DEBUG(dbgs() << "OPEN parent conflict "
-                            << printReg(OpenParents[I]) << " / "
-                            << printReg(OpenParents[J]) << "\n");
+    if (!LinearParentInterference) {
+      for (unsigned I = 0; I < ParentCount; ++I) {
+        for (unsigned J = I + 1; J < ParentCount; ++J) {
+          std::string BudgetFailure;
+          ParentPhaseResult Result = analyzeAssembleParentPhases(
+              MF, *MLI, TRI, OpenParents[I], OpenParents[J], BudgetFailure);
+          if (Result == ParentPhaseResult::UnableToProve)
+            report_fatal_error(StringRef(BudgetFailure));
+          if (Result == ParentPhaseResult::Invalid)
+            report_fatal_error(
+                "B.ASSEMBLE continuation may execute without an OPEN parent");
+          if (Result == ParentPhaseResult::Overlap) {
+            Interferes[I][J] = Interferes[J][I] = 1;
+            LLVM_DEBUG(dbgs()
+                       << "OPEN parent conflict " << printReg(OpenParents[I])
+                       << " / " << printReg(OpenParents[J]) << "\n");
+          }
         }
       }
     }
 
+    SmallVector<SmallVector<unsigned, 4>, 8> Neighbors(ParentCount);
+    for (unsigned Index = 0; Index < ParentCount; ++Index)
+      for (unsigned Other = 0; Other < ParentCount; ++Other)
+        if (Interferes[Index][Other])
+          Neighbors[Index].push_back(Other);
     SmallVector<int, 8> Colors(ParentCount, -1);
     std::function<bool(unsigned)> ColorParents = [&](unsigned Colored) {
       if (Colored == ParentCount)
@@ -1592,11 +1692,8 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
         if (Colors[I] != -1)
           continue;
         bool NeighborColors[3] = {false, false, false};
-        unsigned Degree = 0;
-        for (unsigned J = 0; J < ParentCount; ++J) {
-          if (!Interferes[I][J])
-            continue;
-          ++Degree;
+        unsigned Degree = Neighbors[I].size();
+        for (unsigned J : Neighbors[I]) {
           if (Colors[J] != -1)
             NeighborColors[Colors[J]] = true;
         }
@@ -1614,8 +1711,8 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
       for (int Attempt = 0; Attempt != 3; ++Attempt) {
         int Color = ColorPreference[Attempt];
         bool Conflict = false;
-        for (unsigned J = 0; J < ParentCount; ++J)
-          Conflict |= Interferes[Best][J] && Colors[J] == Color;
+        for (unsigned J : Neighbors[Best])
+          Conflict |= Colors[J] == Color;
         if (Conflict)
           continue;
         Colors[Best] = Color;
@@ -1645,14 +1742,16 @@ void LinxV5ClockhandsColoring::assignTileReg(MachineFunction &MF) {
     report_fatal_error(
         "Local tile hand reservations leave no writer hand");
 
-  const TargetRegisterClass *LoopRC = CurRCs.back();
-  const TargetRegisterClass *AcrossRC =
-      CurRCs.size() > 1 ? CurRCs[CurRCs.size() - 2] : CurRCs.back();
-  bool LoopAssignRes = assignLoopInvar(MF, OriRCs, LoopRC);
-  assignAccrosChain(MF, OriRCs, LoopAssignRes ? AcrossRC : LoopRC);
-  for (auto Chain : Chains) {
-    ColoringInChain CIC(Chain, OriRCs, CurRCs, MRI, LIS, VRM);
-    CIC.assign();
+  if (EnableTileClockHand) {
+    const TargetRegisterClass *LoopRC = CurRCs.back();
+    const TargetRegisterClass *AcrossRC =
+        CurRCs.size() > 1 ? CurRCs[CurRCs.size() - 2] : CurRCs.back();
+    bool LoopAssignRes = assignLoopInvar(MF, OriRCs, LoopRC);
+    assignAccrosChain(MF, OriRCs, LoopAssignRes ? AcrossRC : LoopRC);
+    for (auto Chain : Chains) {
+      ColoringInChain CIC(Chain, OriRCs, CurRCs, MRI, LIS, VRM);
+      CIC.assign();
+    }
   }
   // Register coalescing can leave ordinary Tile_ABS values with multiple
   // definitions.  ColoringInChain deliberately skips those non-SSA values,
