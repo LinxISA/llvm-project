@@ -23,6 +23,35 @@
 
 namespace llvm {
 
+bool expandPredicateScatterAdd(const MCInst &Inst,
+                              SmallVectorImpl<MCInst> &Expanded) {
+  if (Inst.getOpcode() != LinxV5::PseudoMSCATTER_ADD_Predicate)
+    return false;
+  Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TMA)
+                         .addOperand(Inst.getOperand(7))
+                         .addImm(LinxV5Op::TileOPTMA::MSCATTER_ADD));
+  Expanded.push_back(MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+                         .addOperand(Inst.getOperand(8)).addImm(0).addImm(31)
+                         .addImm(0).addImm(0).addImm(0).addImm(0).addImm(0)
+                         .addOperand(Inst.getOperand(9)).addImm(0));
+  for (unsigned Dimension = 0; Dimension < 3; ++Dimension)
+    Expanded.push_back(MCInstBuilder(LinxV5::B_DIM)
+                           .addImm(Dimension).addReg(LinxV5::R0)
+                           .addOperand(Inst.getOperand(
+                               Dimension == 0 ? 5 : Dimension == 1 ? 4 : 6)));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+                         .addImm(15).addImm(0)
+                         .addOperand(Inst.getOperand(1))
+                         .addOperand(Inst.getOperand(0)));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
+                         .addImm(15).addImm(1)
+                         .addOperand(Inst.getOperand(2)));
+  Expanded.push_back(MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
+                         .addOperand(Inst.getOperand(3))
+                         .addReg(LinxV5::R0).addReg(LinxV5::R0));
+  return true;
+}
+
 bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
                             MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded) {
   const bool Scalar = Inst.getOpcode() == LinxV5::PseudoTCMPS_GPR_Masked;

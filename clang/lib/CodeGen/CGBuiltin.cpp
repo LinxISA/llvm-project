@@ -19731,6 +19731,21 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
     return EmitLinxV5ElementwiseMGatherAdd(E);
   case LinxV5::BIew_mscatter_add:
     return EmitLinxV5ElementwiseMScatterAdd(E);
+  case LinxV5::BIew_mscatter_add_predicate: {
+    SmallVector<llvm::Value *> Arguments;
+    for (unsigned Index = 0; Index < 5; ++Index)
+      Arguments.push_back(Builder.CreateIntCast(
+          EmitScalarExpr(E->getArg(Index)), Builder.getInt64Ty(), false));
+    for (unsigned Index = 5; Index < 9; ++Index)
+      Arguments.push_back(EmitScalarExpr(E->getArg(Index)));
+    Arguments.push_back(Builder.CreateIntCast(
+        EmitScalarExpr(E->getArg(9)), Builder.getInt64Ty(), false));
+    llvm::Function *Function = CGM.getIntrinsic(
+        Intrinsic::linx_experimental_ew_mscatter_add_predicate,
+        {Arguments[6]->getType(), Arguments[7]->getType(),
+         Arguments[8]->getType()});
+    return Builder.CreateCall(Function, Arguments);
+  }
   }
 }
 

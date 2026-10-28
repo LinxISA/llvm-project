@@ -126,6 +126,12 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
+  SmallVector<MCInst, 8> PredicateCommands;
+  if (expandPredicateScatterAdd(TmpInst, PredicateCommands)) {
+    for (const MCInst &Command : PredicateCommands)
+      EmitToStreamer(*OutStreamer, Command);
+    return;
+  }
   if (TmpInst.getOpcode() == LinxV5::PseudoTLOADSpillDesc) {
     EmitToStreamer(*OutStreamer,
                    MCInstBuilder(LinxV5::BSTART_TMA)

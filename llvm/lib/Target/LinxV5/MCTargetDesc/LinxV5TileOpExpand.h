@@ -49,6 +49,8 @@ bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
                          MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded);
 
 unsigned getPseudoTILEOpcode(unsigned Opcode);
+bool expandPredicateScatterAdd(const MCInst &Inst,
+                              SmallVectorImpl<MCInst> &Expanded);
 
 bool isActiveMatrixPseudo(unsigned Opcode);
 

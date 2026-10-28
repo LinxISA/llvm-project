@@ -1445,6 +1445,16 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           LinxV5::PseudoMSCATTER_ADD_SizeI));
     return;
   }
+  case LinxV5ISD::EW_MSCATTER_ADD_PREDICATE: {
+    SmallVector<SDValue> Ops;
+    for (unsigned Index = 1; Index < Node->getNumOperands(); ++Index)
+      Ops.push_back(Node->getOperand(Index));
+    Ops.push_back(Node->getOperand(0));
+    ReplaceNode(Node, CurDAG->getMachineNode(
+                          LinxV5::PseudoMSCATTER_ADD_Predicate, DL,
+                          MVT::Other, Ops));
+    return;
+  }
   case LinxV5ISD::EW_TCMP: {
     ReplaceNode(Node, selectElementwiseTCmp(
                           DL, CurDAG, Node, LinxV5::PseudoTCMP_SizeI));

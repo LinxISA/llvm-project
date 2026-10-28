@@ -437,6 +437,13 @@ def int_linx_experimental_ew_mscatter_add :
                llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
 
+def int_linx_experimental_ew_mscatter_add_predicate :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty],
+              [IntrHasSideEffects]>;
+
 def int_linx_blk_acccvt : Intrinsic<[llvm_anyvector_ty], [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_anyvector_ty], [IntrHasSideEffects]>;
 
 def int_linx_blkv_fabs : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>], [IntrHasSideEffects]>;

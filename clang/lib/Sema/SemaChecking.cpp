@@ -4881,6 +4881,31 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
     return CheckLinxV5BuiltinElementwiseMGatherAdd(TheCall);
   case LinxV5::BIew_mscatter_add:
     return CheckLinxV5BuiltinElementwiseMScatterAdd(TheCall);
+  case LinxV5::BIew_mscatter_add_predicate: {
+    if (checkArgCount(*this, TheCall, 10))
+      return true;
+    for (unsigned Index : {0u, 1u, 2u, 3u, 4u, 9u}) {
+      Expr *Argument = TheCall->getArg(Index);
+      if (!Argument->getType()->isIntegerType() ||
+          !Argument->isIntegerConstantExpr(Context))
+        return Diag(Argument->getBeginLoc(),
+                    diag::err_linx_builtin_requires_imm)
+               << Argument->getSourceRange();
+    }
+    QualType ValueType = TheCall->getArg(6)->getType();
+    if (!TheCall->getArg(5)->getType()->isPointerType())
+      return Diag(TheCall->getArg(5)->getBeginLoc(),
+                  diag::err_linx_builtin_type_mismatch)
+             << ValueType << TheCall->getArg(5)->getType();
+    for (unsigned Index : {6u, 7u, 8u}) {
+      Expr *Argument = TheCall->getArg(Index);
+      if (!Argument->getType()->isVectorType())
+        return Diag(Argument->getBeginLoc(),
+                    diag::err_linx_builtin_type_mismatch)
+               << ValueType << Argument->getType();
+    }
+    return false;
+  }
   case LinxV5::BIblkv_fabs:
   case LinxV5::BIblkv_fsqrt:
   case LinxV5::BIblkv_fexp:

@@ -98,6 +98,7 @@ enum NodeType : unsigned {
   EW_MGATHER_ADD,
   EW_MGATHER_ADD_MASKED,
   EW_MSCATTER_ADD,
+  EW_MSCATTER_ADD_PREDICATE,
   EW_TCMP,
   EW_TCMP_ROW,
   EW_TCMP_GPR,
@@ -352,7 +353,9 @@ private:
   SDValue lowerElementwiseMGatherAddMasked(SDLoc &DL, SDValue Op,
                                            SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterAdd(SDLoc &DL, SDValue Op,
-                                      SelectionDAG &DAG) const;
+                                     SelectionDAG &DAG) const;
+  SDValue lowerElementwiseMScatterAddPredicate(SDLoc &DL, SDValue Op,
+                                              SelectionDAG &DAG) const;
   SDValue lowerElementwiseTCmp(SDLoc &DL, SDValue Op, SelectionDAG &DAG,
                                bool ExplicitRow = false) const;
   SDValue lowerElementwiseTCmpGPR(SDLoc &DL, SDValue Op,

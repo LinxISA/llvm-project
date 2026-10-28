@@ -3701,6 +3701,16 @@ def PseudoMSCATTER_ADD_SizeI : PseudoMTClImpl<(outs),
   let AsmString = "MSCATTER.ADD\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}>\t$SrcTile, $OffsetTile, [$List]";
 }
 
+let isCodeGenOnly = 1 in
+def PseudoMSCATTER_ADD_Predicate : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$Value, TILE_Src_Reg:$Offsets,
+       PRED_TILE_Src_Reg:$Predicate, GPRSrc:$Base,
+       uimm16:$Rows, uimm16:$Columns, uimm16:$PhysicalColumns,
+       BstartDataType:$DataType, BArgFormat:$Layout, uimm1:$PredInv)> {
+  let mayLoad = 1;
+  let mayStore = 1;
+}
+
 // Cube Call
 class PseudoCCallImpl<dag outs, dag ins> : PseudoTileOplImpl<outs, ins> {
   let TOP = TileOp_CUBE;

@@ -397,6 +397,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_MGATHER_ADD)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_ADD_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_ADD)
+    MAKE_CASE(LinxV5ISD::EW_MSCATTER_ADD_PREDICATE)
     MAKE_CASE(LinxV5ISD::EW_TCMP)
     MAKE_CASE(LinxV5ISD::EW_TCMP_ROW)
     MAKE_CASE(LinxV5ISD::EW_TCMP_GPR)
@@ -2164,6 +2165,66 @@ SDValue LinxV5TargetLowering::lowerElementwiseMGatherAddMasked(
                      DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
 
+SDValue LinxV5TargetLowering::lowerElementwiseMScatterAddPredicate(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  uint64_t Rows = getV5ConstantOperand(
+      Op.getOperand(2), "predicate atomic rows", 65535, false);
+  uint64_t Columns = getV5ConstantOperand(
+      Op.getOperand(3), "predicate atomic columns", 65535, false);
+  uint64_t PhysicalColumns = getV5ConstantOperand(
+      Op.getOperand(4), "predicate atomic physical columns", 65535, false);
+  uint64_t DataType = getV5ConstantOperand(
+      Op.getOperand(5), "predicate atomic data type", 31);
+  uint64_t Layout = getV5ConstantOperand(
+      Op.getOperand(6), "predicate atomic layout", 31);
+  uint64_t Invert = getV5ConstantOperand(
+      Op.getOperand(11), "predicate atomic inversion", 1);
+  EVT ValueType = Op.getOperand(8).getValueType();
+  EVT OffsetType = Op.getOperand(9).getValueType();
+  EVT PredicateType = Op.getOperand(10).getValueType();
+  unsigned ElementBits = DataType == LinxV5Op::DataType::U32 ||
+                                 DataType == LinxV5Op::DataType::S32 ||
+                                 DataType == LinxV5Op::DataType::FP32 ? 32 : 0;
+  if (ElementBits == 0 || Layout != 29 ||
+      Rows > 32 || Columns > PhysicalColumns ||
+      !isPowerOf2_64(PhysicalColumns) || !ValueType.isFixedLengthVector() ||
+      !OffsetType.isFixedLengthVector() || !PredicateType.isFixedLengthVector() ||
+      ValueType.getScalarSizeInBits() != ElementBits ||
+      !(ValueType.getScalarType().isInteger() ||
+        (ValueType.getScalarType() == MVT::f32 &&
+         DataType == LinxV5Op::DataType::FP32)) ||
+      !OffsetType.getScalarType().isInteger() ||
+      (OffsetType.getScalarSizeInBits() != 64 &&
+       OffsetType.getScalarSizeInBits() != 32) ||
+      (PredicateType.getScalarType() != MVT::i8 &&
+       PredicateType.getScalarType() != MVT::i32) ||
+      ValueType.getVectorNumElements() != 32 * PhysicalColumns ||
+      ValueType.getSizeInBits() > 262144 * 8 ||
+      OffsetType.getSizeInBits() < 32 * Columns * 64 ||
+      OffsetType.getSizeInBits() % 2048 != 0 ||
+      !isPowerOf2_64(OffsetType.getSizeInBits() / 2048) ||
+      OffsetType.getSizeInBits() > 262144 * 8 ||
+      PredicateType.getSizeInBits() < 32 * Columns * 8 ||
+      PredicateType.getSizeInBits() % 1024 != 0 ||
+      !isPowerOf2_64(PredicateType.getSizeInBits() / 1024) ||
+      PredicateType.getSizeInBits() < 1024 ||
+      PredicateType.getSizeInBits() > 262144 * 8)
+    report_fatal_error("predicate MSCATTER_ADD requires Local CUBE M32, "
+                       "exact physical S32/U32/FP32 values, 64-bit byte offsets "
+                       "and a U8 PredicateCell carrier");
+  SmallVector<SDValue> Operands = {
+      Op.getOperand(0), Op.getOperand(8), Op.getOperand(9),
+      Op.getOperand(10), Op.getOperand(7)};
+  for (unsigned Index : {1u, 2u, 3u})
+    while (Operands[Index].getOpcode() == ISD::BITCAST)
+      Operands[Index] = Operands[Index].getOperand(0);
+  for (uint64_t Immediate : {Rows, Columns, PhysicalColumns, DataType, Layout,
+                             Invert})
+    Operands.push_back(DAG.getTargetConstant(Immediate, DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_MSCATTER_ADD_PREDICATE, DL,
+                     DAG.getVTList(MVT::Other), Operands);
+}
+
 SDValue LinxV5TargetLowering::lowerElementwiseMScatterAdd(
     SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
   getV5ConstantOperand(Op.getOperand(2), "MSCATTER_ADD rows", 32, false);
@@ -2873,6 +2934,8 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     return lowerElementwiseMScatterGPRMasked(DL, Op, DAG);
   } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_add) {
     return lowerElementwiseMScatterAdd(DL, Op, DAG);
+  } else if (IntNo == Intrinsic::linx_experimental_ew_mscatter_add_predicate) {
+    return lowerElementwiseMScatterAddPredicate(DL, Op, DAG);
   } else if (IntNo == Intrinsic::blkv_end_cf) {
     SDValue OldMask = Op->getOperand(2);
     SDValue RestoreMask =
