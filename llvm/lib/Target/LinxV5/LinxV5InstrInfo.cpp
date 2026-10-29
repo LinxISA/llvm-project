@@ -998,12 +998,22 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
   unsigned TypeBits = getTileDataTypeBits(Descriptor.DataType);
   if (!TypeBits || !Descriptor.ValidRow || !Descriptor.ValidCol ||
       !Descriptor.PhysicalCol ||
-      Descriptor.PhysicalCol < Descriptor.ValidCol ||
       Descriptor.SizeCode == 0 || Descriptor.SizeCode > 12)
     report_fatal_error("invalid Local tile descriptor for typed COPY");
 
   uint64_t CapacityBits =
       (uint64_t{1} << (Descriptor.SizeCode + 6)) * 8;
+  if (Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+      Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M32) {
+    unsigned Rows = Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16
+                        ? 16 : 32;
+    if (CapacityBits % (Rows * TypeBits) || Descriptor.ValidRow > Rows ||
+        Descriptor.ValidCol > CapacityBits / (Rows * TypeBits))
+      report_fatal_error("CUBE descriptor geometry does not fit exact capacity");
+    Descriptor.PhysicalCol = CapacityBits / (Rows * TypeBits);
+  }
+  if (Descriptor.PhysicalCol < Descriptor.ValidCol)
+    report_fatal_error("invalid Local tile descriptor for typed COPY");
   if (Descriptor.PackedPredicate) {
     bool SupportedShape =
         (Descriptor.ValidRow == 1 &&

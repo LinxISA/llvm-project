@@ -1707,7 +1707,7 @@ def BDATR_EXEC_MASK : BlockModifierBase {
   let Inst{6-4} = 0b010;
   let Inst{3-1} = 0b001;
   let Inst{0} = 0b1;
-  let AsmString = "B.DATR\t$DataLayout, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, $sat, $PredInv, $Zero";
+  let AsmString = "B.DATR\t$DataLayout$canon, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, $sat, $PredInv, $Zero";
 }
 
 // B.SUBVIEW / B.ASSEMBLE: PTO-ISA 0.58.4 range modifiers (ADR-0098,
@@ -2123,6 +2123,13 @@ def ADDPC : LinxV5InstBase {
 
 } // end hasSideEffects = 0, mayLoad = 0, mayStore = 0
 
+def : InstAlias<"BSTART.TLOAD $DataType",
+                (BSTART_TMA BstartDataType:$DataType, 0), 0>;
+def : InstAlias<"BSTART.TSTORE $DataType",
+                (BSTART_TMA BstartDataType:$DataType, 1), 0>;
+def : InstAlias<"BSTART.TMOV $DataType",
+                (BSTART_TMA BstartDataType:$DataType, 2), 0>;
+
 def : InstAlias<"B.DATR $PadValue", (BDATR 0, 0, 31, PadValue:$PadValue, 0, 0, 0, 0), 1>;
 def : InstAlias<"B.DATR $PadValue, $CmpMode", (BDATR 0, 0, 31, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 1>;
 def : InstAlias<"B.DATR $PadValue, $CmpMode, $RMode, $sat", (BDATR 0, 0, 31, PadValue:$PadValue, CmpMode:$CmpMode, RMode:$RMode, Sat:$sat, 0), 1>;
@@ -2136,6 +2143,10 @@ def : InstAlias<"B.DATR\t$srctype, $RMode", (BDATR 0, 0, BstartDataType:$srctype
 //def : InstAlias<"B.DATR\t$srctype, $datalayout", (BDATR BArgFormat:$datalayout, 0,  BstartDataType:$srctype, 3, 0, 0, 0, 0), 1>;
 //def : InstAlias<"B.DATR $DataLayout", (BDATR BArgFormat:$DataLayout, 0, 31, 3, 0, 0, 0, 0), 3>;
 def : InstAlias<"B.DATR $DataLayout$canon, $PadValue", (BDATR BArgFormat:$DataLayout, Canon:$canon, 31, PadValue:$PadValue, 0, 0, 0, 0), 2>;
+def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue, $ByteId, $CmpMode, $RMode, $sat, $PredInv, $Zero",
+    (BDATR_EXEC_MASK BArgFormat:$DataLayout, 0, BstartDataType:$SrcType,
+     PadValue:$PadValue, CmpMode:$CmpMode, RMode:$RMode, Sat:$sat,
+     ByteID:$ByteId, uimm1:$PredInv, uimm1:$Zero), 1>;
 def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, 0, 0, 0, 0), 1>;
 def : InstAlias<"B.DATR $DataLayout$canon, $PadValue, $CmpMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, 31, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 2>;
 def : InstAlias<"B.DATR $DataLayout$canon, $SrcType, $PadValue, $CmpMode", (BDATR BArgFormat:$DataLayout, Canon:$canon, BstartDataType:$SrcType, PadValue:$PadValue, CmpMode:$CmpMode, 0, 0, 0), 1>;

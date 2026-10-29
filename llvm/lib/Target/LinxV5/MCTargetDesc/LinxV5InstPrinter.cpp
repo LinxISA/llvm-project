@@ -766,7 +766,7 @@ void LinxV5InstPrinter::printCmpMode(const MCInst *MI, unsigned OpNo,
     O << "GE";
     break;
   default:
-    O << "Others";
+    O << Imm;
     break;
   }
 }

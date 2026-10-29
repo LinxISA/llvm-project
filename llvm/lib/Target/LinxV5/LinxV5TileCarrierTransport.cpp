@@ -215,9 +215,9 @@ class TileCarrierTransport {
     } else {
       return false;
     }
-    // LB2 carries the physical column count; encoding ValidCol matches the
-    // omitted-LB2 transport semantics (omission selects Col=ValidCol).
-    Value *Col = ValidCol;
+    Value *Col = C.Layout == BLayout_CubeM16 || C.Layout == BLayout_CubeM32
+                     ? B.getInt64(1)
+                     : ValidCol;
     Value *Stride =
         B.getInt64((uint64_t)C.Cols * dataTypeElementBytes(C.DataType));
 
@@ -412,6 +412,19 @@ static bool getAsmTileProvenance(CallInst *Asm, TileProvenance &P) {
     return false;
   }
 
+  size_t Attribute = AsmStr.find("B.DATR ${");
+  if (Attribute != StringRef::npos) {
+    unsigned Index = 0;
+    size_t End = nextAsmOperandRef(AsmStr, Attribute + 7, Index);
+    if (End != StringRef::npos && AsmStr.substr(Attribute, End - Attribute)
+                                         .endswith(":D}")) {
+      auto *DataType = dyn_cast_or_null<ConstantInt>(Arg(Index));
+      if (!DataType)
+        return false;
+      P.DataType = DataType->getZExtValue();
+    }
+  }
+
   // Layout: the ".if ${N:c} == 29/31" template conditional when present
   // (TMUL and friends encode the destination CUBE layout), otherwise the
   // single unreferenced constant 29/31 argument (TCVT preserves the source
@@ -486,21 +499,6 @@ class TileCallCrossing {
     P.ValidCol = ToI64(P.ValidCol);
     P.ValidRow = ToI64(P.ValidRow);
 
-    // The asm's BSTART dtype may describe the SOURCE (TCVT passes the source
-    // type in ${1:D}), so the provenance DataType can carry the wrong width
-    // for the value being demoted. The slot is private scratch: derive the
-    // element width from the physical payload and pick a width-matched
-    // integer carrier, which preserves the bytes and keeps the CUBE
-    // transport width-legal.
-    if (auto *VC = dyn_cast<ConstantInt>(P.ValidCol))
-      if (auto *VR = dyn_cast<ConstantInt>(P.ValidRow)) {
-        uint64_t Elems = VC->getZExtValue() * VR->getZExtValue();
-        if (Elems && PhysBytes % Elems == 0) {
-          unsigned Derived = PhysBytes / Elems;
-          if (Derived == 1 || Derived == 2 || Derived == 4 || Derived == 8)
-            ElemBytes = Derived;
-        }
-      }
     if (!ElemBytes)
       return;
     switch (ElemBytes) {
@@ -535,7 +533,7 @@ class TileCallCrossing {
         F.getParent(), Intrinsic::linx_blk_tstore, {VT});
     CallInst *Store = B.CreateCall(
         TStore,
-        {P.ValidCol, P.ValidRow, P.ValidCol, B.getInt64(P.DataType),
+        {P.ValidCol, P.ValidRow, B.getInt64(1), B.getInt64(P.DataType),
          B.getInt64(StoreTransportForDirect(P.Layout)), Slot, Stride, Def});
 
     Function *TLoad =
@@ -548,7 +546,7 @@ class TileCallCrossing {
       IRBuilder<> LB(User);
       Value *Reload = LB.CreateCall(
           TLoad,
-          {P.ValidCol, P.ValidRow, P.ValidCol, B.getInt64(P.DataType),
+          {P.ValidCol, P.ValidRow, B.getInt64(1), B.getInt64(P.DataType),
            B.getInt64(0), B.getInt64(LoadTransportForDirect(P.Layout)), Slot,
            Stride},
           "linx.tile.slot.load");

@@ -1,0 +1,37 @@
+# RUN: not llvm-mc -triple=linx64v5 %s 2>&1 | FileCheck %s
+
+BSTART.TLSU TMOV, FP32
+B.DATR ND2M32, DTYPE_NONE, Zero
+# CHECK: error:
+BSTART.TLSU TMOV, FP32
+B.DATR N82ND, DTYPE_NONE, Zero
+# CHECK: error:
+BSTART.TLSU TMOV, FP32
+B.DATR 21, DTYPE_NONE, Zero
+# CHECK: error:
+BSTART.TLSU TSTORE, U32
+B.DATR NORM.canon, DTYPE_NONE, Zero, 8
+# CHECK: error:
+BSTART.TLSU TSTORE, U32
+B.DATR NORM.normal, DTYPE_NONE, Zero, 6
+# CHECK: error:
+BSTART.TLSU TLOAD, U32
+B.DATR NORM.canon, DTYPE_NONE, Zero, byte0, 7, RNONE, nosat
+# CHECK: error:
+BSTART.TLSU TMOV, U32
+B.DATR NORM.normal, DTYPE_NONE, Zero, byte0, 6, RNONE, nosat
+# CHECK: error:
+BSTART.TSTORE U32
+BSTART.TMOV FP32
+B.DATR NORM.canon, DTYPE_NONE, Zero, byte0, 7, RNONE, nosat, 1, 0
+# CHECK: error:
+BSTART.TLSU 0, U32
+B.DATR NORM.canon, DTYPE_NONE, Zero, byte0, 6, RNONE, nosat, 0, 1
+# CHECK: error:
+BSTART.TMOV FP32
+B.DATR 26, DTYPE_NONE, Zero
+# CHECK: error:
+BSTART.TSTORE U32
+BSTOP
+B.DATR NORM.canon, DTYPE_NONE, Zero, byte0, 6, RNONE, nosat, 0, 0
+# CHECK: error:

@@ -1,7 +1,7 @@
 ; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
 ; RUN:   -enable-all-vector-as-tilereg=true %s -o /dev/null 2>&1 \
 ; RUN:   | FileCheck %s
-; CHECK: invalid Local tile descriptor for typed COPY
+; CHECK: CUBE descriptor geometry does not fit exact capacity
 
 target triple = "linx64v5-unknown-linux-musl"
 
@@ -21,4 +21,3 @@ join:
   call void asm sideeffect "BSTART.TLSU TSTORE, ${1:D}\0AB.IOT $0, mask=1111, last\0A", "@2Tr,i,~{memory}"(<128 x half> %tile, i32 4)
   ret void
 }
-

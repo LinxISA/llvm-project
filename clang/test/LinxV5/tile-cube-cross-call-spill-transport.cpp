@@ -44,7 +44,7 @@ extern "C" void kernel(void) {
 // The slot round-trip uses the M322ND store / ND2M32 load transports with
 // the static shape (256 columns, 32 rows, 4-byte elements => 1024-byte
 // stride) and a width-matched integer carrier for the private slot.
-// CHECK: TSTORE.M322ND <LB0: 256, LB1: 32, LB2: 256, S32>
-// CHECK: TLOAD.ND2M32 <LB0: 256, LB1: 32, LB2: 256, S32, Zero>
+// CHECK: TSTORE.M322ND <LB0: 256, LB1: 32, LB2: 1, S32>
+// CHECK: TLOAD.ND2M32 <LB0: 256, LB1: 32, LB2: 1, S32, Zero>
 // No raw S64/NORM spill remains anywhere.
 // CHECK-NOT: S64

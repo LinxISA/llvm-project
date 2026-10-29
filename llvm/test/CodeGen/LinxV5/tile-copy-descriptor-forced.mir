@@ -7,7 +7,7 @@
 # CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, 4, 32, 4, 4, 29
 # CHECK-NOT: PseudoTCOPY 
 # CHECK-LABEL: name: m32_one_col_fp16
-# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 32, 1, 4, 29
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 1, 32, 2, 4, 29
 # CHECK-NOT: PseudoTCOPY 
 # CHECK-LABEL: name: m16_fp16
 # CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 4, 8, 4, 4, 31

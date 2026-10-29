@@ -2400,6 +2400,15 @@ OperandMatchResultTy LinxV5AsmParser::parseCmpMode(OperandVector &Operands) {
   SMLoc S = getLoc();
   SMLoc E = SMLoc::getFromPointer(S.getPointer());
 
+  if (getLexer().is(AsmToken::Integer)) {
+    int64_t Value = getLexer().getTok().getIntVal();
+    if (Value < 0 || Value > 7)
+      return MatchOperand_NoMatch;
+    getParser().Lex();
+    Operands.push_back(LinxV5Operand::createCmpModeType(Value, S, E));
+    return MatchOperand_Success;
+  }
+
   if (getLexer().getKind() != AsmToken::String &&
       getLexer().getKind() != AsmToken::Identifier)
     return MatchOperand_NoMatch;
@@ -3592,9 +3601,11 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
   if (LinxV5Op::isCubeConversion(Format)) {
     bool InTLoad = CurLayoutDirection == 1;
     bool InTStore = CurLayoutDirection == 2;
-    if (!InTLoad && !InTStore) {
+    if (CurLayoutDirection == 3 && Format != 24 && Format != 25)
+      return MatchOperand_ParseFail;
+    if (!InTLoad && !InTStore && CurLayoutDirection != 3) {
       getParser().Error(S, "CUBE layout selectors are legal only on "
-                           "TLOAD/TSTORE");
+                           "TLOAD/TSTORE or forward TMOV to Shared ND");
       return MatchOperand_ParseFail;
     }
     if (InTLoad && !LinxV5Op::isCubeLoadConversion(Format))
@@ -4190,11 +4201,11 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
     }
   }
   CurLayoutDirection = PendingLayoutDirection;
-  if (!Name.startswith_insensitive("BSTART.TLSU") &&
-      !Name.startswith_insensitive("BSTART.TLOAD") &&
-      !Name.startswith_insensitive("BSTART.TSTORE") &&
-      !Name.startswith_insensitive("B.DATR"))
+  if (Name.contains_insensitive("BSTART") ||
+      Name.contains_insensitive("BSTOP")) {
+    CurLayoutDirection = 0;
     PendingLayoutDirection = 0;
+  }
   if (Name.startswith_insensitive("TLOAD.")) {
     getLexer().UnLex(llvm::AsmToken(AsmToken::Identifier, Name.substr(6)));
     Name = "tload.";
@@ -4218,7 +4229,8 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
     PendingLayoutDirection = CurLayoutDirection = 1;
   } else if (Name.startswith_insensitive("BSTART.TLSU") ||
              Name.startswith_insensitive("BSTART.TLOAD") ||
-             Name.startswith_insensitive("BSTART.TSTORE")) {
+             Name.startswith_insensitive("BSTART.TSTORE") ||
+             Name.equals_insensitive("BSTART.TMOV")) {
     StringRef Op = getLexer().getTok().getString();
     if (Op.empty())
       Op = getLexer().getTok().getIdentifier();
@@ -4226,10 +4238,14 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
       PendingLayoutDirection = CurLayoutDirection = 1;
     else if (Op.startswith_insensitive("TSTORE"))
       PendingLayoutDirection = CurLayoutDirection = 2;
+    else if (Op.equals_insensitive("TMOV"))
+      PendingLayoutDirection = CurLayoutDirection = 3;
     if (Name.startswith_insensitive("BSTART.TLOAD"))
       PendingLayoutDirection = CurLayoutDirection = 1;
     else if (Name.startswith_insensitive("BSTART.TSTORE"))
       PendingLayoutDirection = CurLayoutDirection = 2;
+    else if (Name.equals_insensitive("BSTART.TMOV"))
+      PendingLayoutDirection = CurLayoutDirection = 3;
   }
 
   // First operand is token for instruction
@@ -4357,14 +4373,42 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       llvm::LinxV5II::IsDisassembleOnlyMask) {
     return true;
   }
+  if (LinxV5II::isBSTART(MII.get(Inst.getOpcode()).TSFlags) &&
+      !LinxV5II::isBlockModifier(MII.get(Inst.getOpcode()).TSFlags)) {
+    unsigned Direction = 0;
+    switch (Inst.getOpcode()) {
+    case LinxV5::BSTART_TIMG2COL:
+      Direction = 1;
+      break;
+    case LinxV5::BSTART_TMA:
+      switch (Inst.getOperand(1).getImm()) {
+      case 0:
+      case 28:
+        Direction = 1;
+        break;
+      case 1:
+        Direction = 2;
+        break;
+      case 2:
+        Direction = 3;
+        break;
+      }
+      break;
+    }
+    PendingLayoutDirection = CurLayoutDirection = Direction;
+  }
   // B.DATR numeric-Layout legality (PTO-FIELD-BLOCK-DATR): the named
   // spelling path gates the layout in parseBArgFormat, but a numeric first
   // operand reaches here through the generic immediate parser with no
   // spelling to check. Validate the resolved value instead: unassigned
   // codes reject, the weight layouts 10/11 are TLOAD-only, and the CUBE
   // transport selectors follow the recorded BSTART direction.
-  if (Inst.getOpcode() == LinxV5::BDATR) {
+  if (Inst.getOpcode() == LinxV5::BDATR ||
+      Inst.getOpcode() == LinxV5::BDATR_EXEC_MASK) {
     unsigned Layout = Inst.getOperand(0).getImm();
+    if (Inst.getOperand(4).getImm() > 5 &&
+        (CurLayoutDirection != 2 || Inst.getOperand(1).getImm() != 1))
+      return true;
     if (Layout == 2 || Layout == 5 || Layout == 7 ||
         (Layout >= 12 && Layout <= 16) || Layout == 19)
       return true; // unassigned layout code
@@ -4373,7 +4417,9 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
     if (LinxV5Op::isCubeConversion(Layout)) {
       bool InTLoad = CurLayoutDirection == 1;
       bool InTStore = CurLayoutDirection == 2;
-      if (!InTLoad && !InTStore)
+      if (CurLayoutDirection == 3 && Layout != 24 && Layout != 25)
+        return true;
+      if (!InTLoad && !InTStore && CurLayoutDirection != 3)
         return true;
       if (InTLoad && !LinxV5Op::isCubeLoadConversion(Layout))
         return true;
