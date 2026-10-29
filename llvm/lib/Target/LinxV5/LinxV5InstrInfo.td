@@ -3964,7 +3964,7 @@ class PseudoTEPL_TEXPANDS_Row_Base :
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
        GPRPlusImm:$RegN, PlusImm17:$immN,
        BstartDataType:$DataType, BArgFormat:$Layout,
-       TileSizeWithBracket:$TileSize, GRNoR0:$Scalar, uimm16:$PhysicalCols)> {
+       TileSizeWithBracket:$TileSize, GPRSrc:$Scalar, uimm16:$PhysicalCols)> {
   let AsmString = "TEXPANDS\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Scalar, $DstTile$TileSize";
 }
 

@@ -15,11 +15,17 @@
 # CHECK-LABEL: name: norm_u32
 # CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 128, 1, 128, 25, 0
 # CHECK-NOT: PseudoTCOPY 
+# CHECK-LABEL: name: resident_accumulator
+# CHECK: $tile_t2 = PseudoTCOPYDesc 9, $tile_t1, 512, 16, 512, 1, 31
+# CHECK-LABEL: name: narrow_reduction
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 1, 16, 128, 1, 31
 --- |
   define void @m32_fp16() { ret void }
   define void @m32_one_col_fp16() { ret void }
   define void @m16_fp16() { ret void }
   define void @norm_u32() { ret void }
+  define void @resident_accumulator() { ret void }
+  define void @narrow_reduction() { ret void }
 ...
 ---
 name: m32_fp16
@@ -58,6 +64,26 @@ body: |
   bb.0:
     liveins: $r2
     $tile_t1 = PseudoTEXPANDS_Row_SizeI $r0, 1, $r0, 128, 25, 0, 3, $r2, 128
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: resident_accumulator
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_t1 = PseudoTEXPANDS_Row_SizeI $r0, 16, $r0, 512, 1, 31, 9, $r2, 512
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: narrow_reduction
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2
+    $tile_t1 = PseudoTEXPANDS_Row_SizeI $r0, 16, $r0, 1, 1, 31, 7, $r2, 128
     $tile_t2 = COPY $tile_t1
     PseudoRET
 ...

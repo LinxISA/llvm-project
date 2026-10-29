@@ -409,6 +409,10 @@ static bool isSharedTileReg(const MachineRegisterInfo &MRI, Register Reg) {
 }
 
 unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
+  if (MI.getOpcode() == LinxV5::PseudoV5GMOV)
+    return MI.getOperand(3).getImm();
+  if (MI.getOpcode() == LinxV5::PseudoV5SharedS2L)
+    return MI.getOperand(5).getImm();
   if (MI.getOpcode() == LinxV5::PseudoTCOPY ||
       (MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
@@ -1009,7 +1013,11 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
                         ? 16 : 32;
     if (CapacityBits % (Rows * TypeBits) || Descriptor.ValidRow > Rows ||
         Descriptor.ValidCol > CapacityBits / (Rows * TypeBits))
-      report_fatal_error("CUBE descriptor geometry does not fit exact capacity");
+      report_fatal_error(
+          Twine("CUBE descriptor geometry does not fit exact capacity: rows=") +
+          Twine(Descriptor.ValidRow) + ", cols=" + Twine(Descriptor.ValidCol) +
+          ", dtype=" + Twine(Descriptor.DataType) +
+          ", size=" + Twine(Descriptor.SizeCode));
     Descriptor.PhysicalCol = CapacityBits / (Rows * TypeBits);
   }
   if (Descriptor.PhysicalCol < Descriptor.ValidCol)
@@ -1076,7 +1084,7 @@ using DescriptorPosition =
 
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active);
+    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent = nullptr);
 
 static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     MachineInstr &MI, Register Reg,
@@ -1102,6 +1110,17 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   bool IsMX = Text.startswith("BSTART.CUBE TMATMULMX,") ||
               Text.startswith("BSTART.CUBE TMATMULMX.ACC,");
   bool IsConvert = Text.startswith("BSTART.TEPL 27,");
+  if (IsConvert && Text.contains(":D}")) {
+    size_t Attributes = Text.find("B.DATR");
+    if (Attributes == StringRef::npos)
+      return None;
+    StringRef ResultType = Text.drop_front(Attributes + strlen("B.DATR"))
+                               .split(',').first.trim();
+    if (!ResultType.startswith("${") || !ResultType.endswith(":D}"))
+      return None;
+    DataType = getInlineAsmOperandImmediate(
+        MI, Text, ResultType.data() - Text.data() + ResultType.find(":D}"));
+  }
   bool HasDerivedPhysicalCol = false;
   if (IsMX || IsConvert) {
     size_t Binding = Text.find("B.IOT");
@@ -1202,6 +1221,18 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
         *PhysicalCol = 1;
     }
   }
+  bool CubePredicate =
+      (Text.startswith("BSTART.TEPL TCMPS,") ||
+       Text.startswith("BSTART.TEPL TCMP,")) &&
+      (*Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+       *Layout == LinxV5Op::ArgFormat::CUBE_M32);
+  if (CubePredicate) {
+    LinxV5::TileDescriptor Descriptor{
+        LinxV5Op::DataType::U8, *Layout, *ValidRow, *ValidCol, *PhysicalCol,
+        *SizeCode};
+    Descriptor.PredicateBasisType = *DataType;
+    return checkedTileDescriptor(Descriptor);
+  }
   return checkedTileDescriptor(LinxV5::TileDescriptor{
       *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
 }
@@ -1209,6 +1240,15 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
 static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     MachineInstr &MI, Register Reg,
     SmallVectorImpl<DescriptorPosition> &Active) {
+  if (MI.getOpcode() == LinxV5::PseudoV5GMOV)
+    return resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
+                                 MI.getOperand(5).getReg(), Active);
+  if (MI.getOpcode() == LinxV5::PseudoV5SharedS2L)
+    return resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
+                                 MI.getOperand(3).getReg(), Active);
+  if (MI.getOpcode() == LinxV5::PseudoV5SharedL2S)
+    return resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
+                                 MI.getOperand(5).getReg(), Active);
   if (MI.getOpcode() == LinxV5::PseudoLocalTileABISeed)
     return checkedTileDescriptor(LinxV5::TileDescriptor{
         static_cast<unsigned>(MI.getOperand(5).getImm()),
@@ -1219,8 +1259,8 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
         static_cast<unsigned>(MI.getOperand(1).getImm()), false});
 
   if ((MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
-       MI.getOpcode() == LinxV5::PseudoPCOPYDesc))
-    return checkedTileDescriptor(
+       MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
+    auto Descriptor = checkedTileDescriptor(
         LinxV5::TileDescriptor{static_cast<unsigned>(MI.getOperand(6).getImm()),
                                static_cast<unsigned>(MI.getOperand(7).getImm()),
                                static_cast<unsigned>(MI.getOperand(4).getImm()),
@@ -1228,6 +1268,15 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
                                static_cast<unsigned>(MI.getOperand(5).getImm()),
                                static_cast<unsigned>(MI.getOperand(1).getImm()),
                                MI.getOpcode() == LinxV5::PseudoPCOPYDesc});
+    if (Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+        Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M32) {
+      auto Source = resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
+                                          MI.getOperand(2).getReg(), Active);
+      if (Source)
+        Descriptor.PredicateBasisType = Source->PredicateBasisType;
+    }
+    return Descriptor;
+  }
 
   if (MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
@@ -1409,19 +1458,27 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
 
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active) {
+    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent) {
+  if (Absent)
+    *Absent = false;
   DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
-  if (is_contained(Active, Key))
+  if (is_contained(Active, Key)) {
+    if (Absent)
+      *Absent = true;
     return None;
+  }
   Active.push_back(Key);
 
   for (MachineInstr &MI : reverse(make_range(MBB.begin(), Before))) {
     if (!MI.definesRegister(Reg))
       continue;
     Optional<LinxV5::TileDescriptor> Result;
-    if (MI.getOpcode() == TargetOpcode::COPY)
+    if (MI.isImplicitDef()) {
+      if (Absent)
+        *Absent = true;
+    } else if (MI.getOpcode() == TargetOpcode::COPY)
       Result = resolveTileDescriptor(MBB, MI.getIterator(),
-                                     MI.getOperand(1).getReg(), Active);
+                                     MI.getOperand(1).getReg(), Active, Absent);
     else
       Result = getDefinedTileDescriptor(MI, Reg, Active);
     Active.pop_back();
@@ -1430,8 +1487,11 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
 
   Optional<LinxV5::TileDescriptor> Joined;
   for (MachineBasicBlock *Pred : MBB.predecessors()) {
+    bool IncomingAbsent = false;
     Optional<LinxV5::TileDescriptor> Incoming =
-        resolveTileDescriptor(*Pred, Pred->end(), Reg, Active);
+        resolveTileDescriptor(*Pred, Pred->end(), Reg, Active, &IncomingAbsent);
+    if (!Incoming && IncomingAbsent)
+      continue;
     if (!Incoming) {
       Active.pop_back();
       return None;
@@ -1442,6 +1502,8 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     Joined = *Incoming;
   }
   Active.pop_back();
+  if (!Joined && Absent && !MBB.pred_empty())
+    *Absent = true;
   return Joined;
 }
 
@@ -1613,13 +1675,6 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
       }
     }
   } else if (LinxV5::Tile_ABS_CGRegClass.contains(DstReg)) {
-    if (!EnableGenericElement) {
-      unsigned RegSizeCode = LinxV5::getTileRegSize(MBB, MBBI, SrcReg, false);
-      BuildMI(MBB, MBBI, DL, get(LinxV5::PseudoTCOPY), DstReg)
-          .addImm(RegSizeCode)
-          .addReg(SrcReg, getKillRegState(KillSrc));
-      return;
-    }
     LinxV5::TileDescriptor Descriptor =
         LinxV5::getTileRegDescriptor(MBB, MBBI, SrcReg);
     BuildMI(MBB, MBBI, DL,

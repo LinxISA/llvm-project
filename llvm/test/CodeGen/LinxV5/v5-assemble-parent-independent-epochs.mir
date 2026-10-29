@@ -26,7 +26,7 @@ body:             |
   bb.0.entry:
     successors: %bb.1(0x40000000), %bb.2(0x40000000)
     liveins: $r2
-    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 13 /* imm */, 1
+    INLINEASM &"BSTART.TEPL 102, 17\0AB.DATR CUBE_M32, RNONE\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9 /* sideeffect mayload attdialect */, 720906 /* regdef:Tile_ABS */, def $tile_u1, 13 /* imm */, 1
     BEQ $r2, $r0, %bb.2
     PseudoBR %bb.1
 

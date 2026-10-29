@@ -32,9 +32,9 @@ body: |
     INLINEASM &"BSTART.CUBE TMATMULMX, ${1:D}\0AB.DATR ${1:D}, byte0, Null, RNONE, NOSAT\0AB.FPATR ${2:c}, 0, 0, 0, 0, 0, 0, 0, 1, 0\0AB.DIM $3, 0, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 256, ->lb2\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOT $6, $7, mask=1111, last, ->$0<${8:Z}>\0A", 25, 720907, def early-clobber $tile_n2, 13, 11, 13, 0, 2293769, $r3, 655369, $shared_s8, 655369, $shared_s9, 720905, killed $tile_n1, 720905, killed $tile_n5, 13, 8
     PseudoTSpill killed $tile_n2, %stack.0 :: (store (s64) into %stack.0)
     $tile_n3 = PseudoTReload %stack.0 :: (load (s64) from %stack.0)
-    INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNE\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_n4, 13, 5, 13, 1, 720905, killed $tile_n3, 13, 7
+    INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNE\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_n4, 13, 1, 13, 5, 720905, killed $tile_n3, 13, 7
     PseudoTSpill $tile_n4, %stack.1 :: (store (s64) into %stack.1)
-    INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNE\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_n4, 13, 1, 13, 5, 720905, killed $tile_n4, 13, 8
+    INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNE\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_n4, 13, 5, 13, 1, 720905, killed $tile_n4, 13, 8
     PseudoTSpill killed $tile_n4, %stack.2 :: (store (s64) into %stack.2)
     PseudoRET
 ...

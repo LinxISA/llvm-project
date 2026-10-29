@@ -1,0 +1,29 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -linxv5-enable-generic-element -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
+# CHECK-LABEL: name: undef_accumulator
+# CHECK: $tile_u = PseudoTEXPANDS_Row_SizeI $r0, 16, $r0, 512, 1, 31, 9, $r0, 512
+# CHECK-NOT: IMPLICIT_DEF
+# CHECK: PseudoTBinary_SizeI
+# CHECK-NOT: $tile_u1
+--- |
+  define void @undef_accumulator() { ret void }
+...
+---
+name: undef_accumulator
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r2
+    $tile_u1 = IMPLICIT_DEF
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.1, %bb.2
+    liveins: $r2, $tile_u1
+    $tile_u1 = PseudoTBinary_SizeI $r0, 16, $r0, 512, 1, 31, 9, $tile_u1, $tile_u1, 0
+    SETC_EQ $r2, $r0, implicit-def $carg
+    PseudoBRCondCARG %bb.1, implicit $carg
+    PseudoBR %bb.2
+  bb.2:
+    PseudoRET
+...

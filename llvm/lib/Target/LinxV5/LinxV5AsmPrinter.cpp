@@ -126,6 +126,52 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   MCInst TmpInst;
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
+  if (TmpInst.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
+      TmpInst.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI) {
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                       .addOperand(TmpInst.getOperand(5))
+                       .addImm(59));
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::BDATR)
+                       .addOperand(TmpInst.getOperand(6))
+                       .addImm(LinxV5Op::Canon::NORMAL_CANON)
+                       .addImm(LinxV5Op::DataType::EMPTY_DataType)
+                       .addImm(LinxV5Op::PadValue::Null)
+                       .addImm(LinxV5Op::CmpMode::EQ)
+                       .addImm(LinxV5Op::RMode::RNONE)
+                       .addImm(LinxV5Op::Sat::NOSAT)
+                       .addImm(LinxV5Op::ByteID::BYTE0));
+    for (unsigned Dimension = 0; Dimension != 3; ++Dimension) {
+      unsigned RegIndex = Dimension == 0 ? 3 : 1;
+      unsigned ImmIndex = RegIndex + 1;
+      if (Dimension == 2)
+        ImmIndex = TmpInst.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI
+                       ? 9
+                       : 4;
+      EmitToStreamer(*OutStreamer,
+                     MCInstBuilder(LinxV5::B_DIM)
+                         .addImm(Dimension)
+                         .addReg(Dimension == 2
+                                     ? LinxV5::R0
+                                     : TmpInst.getOperand(RegIndex).getReg())
+                         .addOperand(TmpInst.getOperand(ImmIndex)));
+    }
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                       .addOperand(TmpInst.getOperand(0))
+                       .addImm(0b1111)
+                       .addOperand(TmpInst.getOperand(7))
+                       .addImm(1));
+    if (TmpInst.getOperand(8).getReg() != LinxV5::R0)
+      EmitToStreamer(*OutStreamer,
+                     MCInstBuilder(LinxV5::B_IO)
+                         .addReg(LinxV5::R0)
+                         .addOperand(TmpInst.getOperand(8))
+                         .addReg(LinxV5::R0)
+                         .addReg(LinxV5::R0));
+    return;
+  }
   SmallVector<MCInst, 8> PredicateCommands;
   if (expandPredicateScatterAdd(TmpInst, PredicateCommands)) {
     for (const MCInst &Command : PredicateCommands)

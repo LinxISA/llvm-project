@@ -1,0 +1,32 @@
+# RUN: llc -mtriple=linx64v5 -start-before=linxv5-tile-fixup %s -o %t.s
+# RUN: FileCheck %s < %t.s
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %t.s -o %t.o
+# RUN: llvm-objdump -d %t.o | FileCheck %s --check-prefix=OBJ
+# RUN: llc -mtriple=linx64v5 -start-before=linxv5-tile-fixup -filetype=obj %s -o %t.direct.o
+# RUN: llvm-objdump -d %t.direct.o | FileCheck %s --check-prefix=OBJ
+# CHECK-LABEL: expand_roundtrip
+# CHECK: BSTART.{{(VEC|TEPL)}}{{.*}}TEXPANDS, FP32
+# CHECK: B.DIM{{.*}}1{{.*}}lb0
+# CHECK: B.DIM{{.*}}16{{.*}}lb1
+# CHECK: B.DIM{{.*}}128{{.*}}lb2
+# CHECK: B.IOT{{.*}}->u<8KB>
+# CHECK-NOT: B.IOR
+# CHECK: BSTART.{{(VEC|TEPL)}}{{.*}}TEXPANDS, FP32
+# CHECK: B.IOT{{.*}}->u<32KB>
+# CHECK: B.IOR{{[ \t]+}}[x0], []
+# OBJ-LABEL: <expand_roundtrip>:
+# OBJ: TEXPANDS{{.*}}<Row=16, Col=128, ValidCol=1, FP32, CUBE_M16>, ->U<8KB>
+# OBJ: TEXPANDS{{.*}}<Row=16, Col=512, FP32, CUBE_M16>, x0, ->U<32KB>
+--- |
+  define void @expand_roundtrip() { ret void }
+...
+---
+name: expand_roundtrip
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r20
+    $tile_u = PseudoTEXPANDS_Row_SizeI $r0, 16, $r0, 1, 1, 31, 7, $r0, 128
+    $tile_u = PseudoTEXPANDS_Row_SizeI $r0, 16, $r0, 512, 1, 31, 9, $r20, 512
+    PseudoRET
+...

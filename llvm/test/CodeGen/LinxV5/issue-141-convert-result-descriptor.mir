@@ -1,0 +1,16 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
+# CHECK-LABEL: name: convert_result
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 512, 16, 512, 5, 31
+--- |
+  define void @convert_result() { ret void }
+...
+---
+name: convert_result
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 512, 1, 31, 9, $r0, $r0, 512
+    INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNONE\0AB.DIM zero, 512, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_t1, 13, 1, 13, 5, 720905, $tile_u1, 13, 8
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

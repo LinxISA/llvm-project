@@ -58,6 +58,7 @@ Getting Started, How-tos, Developer Guides, and Tutorials.
    Reference
    UserGuides
    DiscourseMigrationGuide
+   LinxV5TileQueue
 
 :doc:`GettingStartedTutorials`
   For those new to the LLVM system.
