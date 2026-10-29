@@ -32,3 +32,16 @@ The normative contracts are ``asl/block/execution/BSTART.TMOV.asl``,
 ``asl/tile/model/state/descriptors.asl``, and
 ``asl/tile/tile-scalar-and-immediate/initialization/TEXPANDS.asl`` in pto-spec.
 No model assertion or ISA legality rule is relaxed by this lowering.
+
+PredicateCell logical composition
+--------------------------------
+
+U8 CUBE_M16/M32 TAND, TOR and TXOR derive destination identity from both
+source identities. Two PredicateCells produce a PredicateCell with U8 basis,
+independently of their comparison bases. A mixed Numeric source produces
+Numeric U8. These identities cannot join merely because capacity and vector
+register types match. Descriptor-bearing TMOV and B.SUBVIEW preserve basis.
+A closed two-writer B.ASSEMBLE result has completed parent geometry, not the
+first writer's columns. TSEL/TSELS publish Numeric results using the operation
+type, independently of predicate basis. Runtime definedness, canonical 0/1
+values, ZERO/MERGE and pinned-Q recovery rules remain unchanged.

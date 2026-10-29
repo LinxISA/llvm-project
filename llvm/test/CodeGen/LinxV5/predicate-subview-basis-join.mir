@@ -1,0 +1,32 @@
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join
+--- |
+  define void @subview_basis_join() { ret void }
+...
+---
+name: subview_basis_join
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 8, 25, 29, 4, $r0, $r0, 8
+    INLINEASM &"BSTART.TEPL 45, U32\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 8, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_n1, 720905, $tile_u1, 13, 2
+    $tile_n2 = PseudoTBinary_SizeI $r0, 32, $r0, 8, 27, 29, 2, $tile_n1, $tile_n1, 6
+    SETC_EQ $r0, $r0, implicit-def $carg
+    PseudoBRCondCARG %bb.2, implicit $carg
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3
+    liveins: $tile_n1
+    INLINEASM &"BSTART.TLSU TMOV, U8\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.SUBVIEW 0, zero, 1, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_n1, 13, 1
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3
+    liveins: $tile_n2
+    INLINEASM &"BSTART.TLSU TMOV, U8\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0AB.SUBVIEW 0, zero, 1, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_n2, 13, 1
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

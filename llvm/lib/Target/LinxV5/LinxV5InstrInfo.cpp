@@ -1086,6 +1086,33 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
     SmallVectorImpl<DescriptorPosition> &Active, bool *Absent = nullptr);
 
+static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
+    MachineInstr &MI, LinxV5::TileDescriptor Result, Register Left,
+    Register Right, SmallVectorImpl<DescriptorPosition> &Active) {
+  if (Result.DataType != LinxV5Op::DataType::U8 ||
+      (Result.Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
+       Result.Layout != LinxV5Op::ArgFormat::CUBE_M32))
+    return checkedTileDescriptor(Result);
+  auto LeftDescriptor = resolveTileDescriptor(
+      *MI.getParent(), MI.getIterator(), Left, Active);
+  auto RightDescriptor = resolveTileDescriptor(
+      *MI.getParent(), MI.getIterator(), Right, Active);
+  if (!LeftDescriptor || !RightDescriptor)
+    return None;
+  if (LeftDescriptor->PredicateBasisType == 31 &&
+      RightDescriptor->PredicateBasisType == 31)
+    return checkedTileDescriptor(Result);
+  for (const auto &Source : {*LeftDescriptor, *RightDescriptor})
+    if (Source.PackedPredicate || getTileDataTypeBits(Source.DataType) != 8 ||
+        Source.Layout != Result.Layout || Source.ValidRow != Result.ValidRow ||
+        Source.ValidCol != Result.ValidCol || Source.SizeCode != Result.SizeCode)
+      return None;
+  if (LeftDescriptor->PredicateBasisType != 31 &&
+      RightDescriptor->PredicateBasisType != 31)
+    Result.PredicateBasisType = LinxV5Op::DataType::U8;
+  return checkedTileDescriptor(Result);
+}
+
 static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     MachineInstr &MI, Register Reg,
     SmallVectorImpl<DescriptorPosition> &Active) {
@@ -1223,7 +1250,9 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   }
   bool CubePredicate =
       (Text.startswith("BSTART.TEPL TCMPS,") ||
-       Text.startswith("BSTART.TEPL TCMP,")) &&
+       Text.startswith("BSTART.TEPL TCMP,") ||
+       Text.startswith("BSTART.TEPL 45,") ||
+       Text.startswith("BSTART.TEPL 13,")) &&
       (*Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
        *Layout == LinxV5Op::ArgFormat::CUBE_M32);
   if (CubePredicate) {
@@ -1232,6 +1261,94 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
         *SizeCode};
     Descriptor.PredicateBasisType = *DataType;
     return checkedTileDescriptor(Descriptor);
+  }
+  bool IsLogical = Text.startswith("BSTART.TEPL TAND,") ||
+                   Text.startswith("BSTART.TEPL TOR,") ||
+                   Text.startswith("BSTART.TEPL TXOR,") ||
+                   Text.startswith("BSTART.TEPL 6,") ||
+                   Text.startswith("BSTART.TEPL 7,") ||
+                   Text.startswith("BSTART.TEPL 8,");
+  if (Text.startswith("BSTART.TEPL ${")) {
+    auto Selector = getInlineAsmOperandImmediate(MI, Text, Text.find(':'));
+    IsLogical = Selector && (*Selector == 6 || *Selector == 7 || *Selector == 8);
+  }
+  bool IsMove = Text.startswith("BSTART.TLSU TMOV,");
+  if (IsLogical || IsMove) {
+    size_t Binding = Text.find("B.IOT");
+    if (Binding == StringRef::npos)
+      return None;
+    StringRef Sources = Text.drop_front(Binding + strlen("B.IOT")).ltrim();
+    MachineOperand *Left = nullptr;
+    const char *After = parseAsmOperand(&MI, Sources.data(), Left);
+    if (!After || !Left || !Left->isReg())
+      return None;
+    LinxV5::TileDescriptor Result{
+        *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode};
+    if (Text.contains("B.ASSEMBLE") &&
+        (Result.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+         Result.Layout == LinxV5Op::ArgFormat::CUBE_M32)) {
+      size_t Modifier = Text.find("B.ASSEMBLE");
+      StringRef Fields = Text.drop_front(Modifier + strlen("B.ASSEMBLE"));
+      for (unsigned Field = 0; Field != 4; ++Field)
+        Fields = Fields.split(',').second;
+      Fields = Fields.split('\n').first.trim();
+      unsigned WriterSize = 0;
+      if (Fields.startswith("${")) {
+        auto Value = getInlineAsmOperandImmediate(
+            MI, Text, Fields.data() - Text.data() + Fields.find(':'));
+        if (!Value)
+          return None;
+        WriterSize = *Value;
+      } else if (Fields.getAsInteger(10, WriterSize)) {
+        return None;
+      }
+      if (!WriterSize || WriterSize > Result.SizeCode)
+        return None;
+      unsigned Rows = Result.Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+      uint64_t WriterBytes = uint64_t{Rows} * Result.ValidCol *
+                             getTileDataTypeBits(Result.DataType) / 8;
+      if (Result.ValidRow != Rows ||
+          WriterBytes != (uint64_t{1} << (WriterSize + 6)))
+        return None;
+      Result.ValidCol *= 1u << (Result.SizeCode - WriterSize);
+      Result.PhysicalCol = Result.ValidCol;
+    }
+    if (IsMove) {
+      auto Source = resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
+                                          Left->getReg(), Active);
+      if (!Source || Source->DataType != Result.DataType ||
+          Source->Layout != Result.Layout)
+        return None;
+      if (!Text.contains("B.SUBVIEW") &&
+          (Source->ValidCol != Result.ValidCol ||
+           Source->ValidRow != Result.ValidRow ||
+           Source->SizeCode != Result.SizeCode))
+        return None;
+      Result.PredicateBasisType = Source->PredicateBasisType;
+      return checkedTileDescriptor(Result);
+    }
+    MachineOperand *Right = nullptr;
+    if (!parseAsmOperand(&MI, skipSeparator(After), Right) || !Right ||
+        !Right->isReg())
+      return None;
+    auto Writer = Result;
+    Writer.ValidCol = *ValidCol;
+    if (Text.contains("B.ASSEMBLE")) {
+      unsigned Rows = Result.Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+      uint64_t Bytes = uint64_t{Rows} * Writer.ValidCol *
+                       getTileDataTypeBits(Writer.DataType) / 8;
+      if (Bytes < 128 || !isPowerOf2_64(Bytes))
+        return None;
+      Writer.SizeCode = Log2_64(Bytes) - 6;
+    }
+    auto Descriptor = getLogicalTileDescriptor(
+        MI, Writer, Left->getReg(), Right->getReg(), Active);
+    if (!Descriptor)
+      return None;
+    Descriptor->ValidCol = Result.ValidCol;
+    Descriptor->PhysicalCol = Result.PhysicalCol;
+    Descriptor->SizeCode = Result.SizeCode;
+    return checkedTileDescriptor(*Descriptor);
   }
   return checkedTileDescriptor(LinxV5::TileDescriptor{
       *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
@@ -1445,8 +1562,18 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     default:
       break;
     }
-    return checkedTileDescriptor(LinxV5::TileDescriptor{
-        DataType, Layout, ValidRow, ValidCol, PhysicalCol, SizeCode});
+    LinxV5::TileDescriptor Result{
+        DataType, Layout, ValidRow, ValidCol, PhysicalCol, SizeCode};
+    if (MI.getOpcode() == LinxV5::PseudoTBinary_SizeI ||
+        MI.getOpcode() == LinxV5::PseudoTBinary_GPR_Masked_SizeI) {
+      unsigned Selector = MI.getOperand(10).getImm();
+      if (Selector == LinxV5Op::TileOPTEPL::TAND ||
+          Selector == LinxV5Op::TileOPTEPL::TOR ||
+          Selector == LinxV5Op::TileOPTEPL::TXOR)
+        return getLogicalTileDescriptor(MI, Result, MI.getOperand(8).getReg(),
+                                        MI.getOperand(9).getReg(), Active);
+    }
+    return checkedTileDescriptor(Result);
   }
   default:
     break;

@@ -1,0 +1,37 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
+# CHECK-LABEL: name: logical_copy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 4, 32, 4, 27, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 4, 32, 4, 27, 29
+# CHECK-LABEL: name: assembled_parent_copy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, 8, 32, 8, 27, 29
+--- |
+  define void @logical_copy() { ret void }
+  define void @assembled_parent_copy() { ret void }
+...
+---
+name: logical_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0, 4
+    INLINEASM &"BSTART.TEPL 45, U32\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_n1, 720905, $tile_u1, 13, 1
+    $tile_t1 = PseudoTBinary_SizeI $r0, 32, $r0, 4, 27, 29, 1, $tile_n1, $tile_n1, 6
+    $tile_t2 = COPY $tile_t1
+    INLINEASM &"BSTART.TEPL 45, FP32\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_n2, 720905, $tile_u1, 13, 1
+    INLINEASM &"BSTART.TEPL TOR, U8\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_m1, 720905, $tile_t2, 720905, $tile_n2, 13, 1
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...
+---
+name: assembled_parent_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0, 4
+    INLINEASM &"BSTART.TEPL 45, U32\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_n1, 720905, $tile_u1, 13, 1
+    $tile_n2 = PseudoTBinary_SizeI $r0, 32, $r0, 4, 27, 29, 1, $tile_n1, $tile_n1, 6
+    INLINEASM &"BSTART.TEPL TAND, U8\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $1, mask=1111, last, ->$0<${2:Z}>\0AB.ASSEMBLE ${3:c}, ${4:c}, zero, 0, 1\0A", 9, 720906, def $tile_t1, 720905, $tile_n2, 13, 2, 13, 1, 13, 0
+    INLINEASM &"BSTART.TEPL TAND, U8\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $1, mask=1111, last\0AB.IOT $0, mask=1111\0AB.ASSEMBLE ${2:c}, ${3:c}, zero, 1, 1\0A", 9, 720905, $tile_t1, 720905, $tile_n2, 13, 0, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

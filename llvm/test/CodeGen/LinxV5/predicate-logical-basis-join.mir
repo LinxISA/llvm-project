@@ -1,0 +1,32 @@
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join
+--- |
+  define void @predicate_numeric_join() { ret void }
+...
+---
+name: predicate_numeric_join
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0, 4
+    INLINEASM &"BSTART.TEPL 45, U32\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_n1, 720905, $tile_u1, 13, 1
+    $tile_m1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 27, 29, 1, $r0, $r0, 4
+    SETC_EQ $r0, $r0, implicit-def $carg
+    PseudoBRCondCARG %bb.2, implicit $carg
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.3
+    liveins: $tile_n1
+    $tile_t1 = PseudoTBinary_SizeI $r0, 32, $r0, 4, 27, 29, 1, $tile_n1, $tile_n1, 6
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3
+    liveins: $tile_n1, $tile_m1
+    $tile_t1 = PseudoTBinary_SizeI $r0, 32, $r0, 4, 27, 29, 1, $tile_n1, $tile_m1, 6
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $tile_t1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
