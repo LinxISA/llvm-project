@@ -852,17 +852,14 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
       }
       const LinxV5::TileDescriptor &Descriptor = *DonorDescriptor;
       SourceIdx = Donor->Idx;
-      BuildMI(*MBB, Before, DebugLoc(),
+      auto Copy = BuildMI(*MBB, Before, DebugLoc(),
               TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
                                                   : LinxV5::PseudoTCOPYDesc))
           .addReg(ReserveReg, RegState::Define | RegState::Dead)
           .addImm(Descriptor.SizeCode)
-          .addReg(Donor->RegOp.Reg)
-          .addImm(Descriptor.ValidCol)
-          .addImm(Descriptor.ValidRow)
-          .addImm(Descriptor.PhysicalCol)
-          .addImm(Descriptor.DataType)
-          .addImm(Descriptor.Layout);
+          .addReg(Donor->RegOp.Reg);
+      LinxV5::addTileCopyDimensions(Copy, Descriptor);
+      Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
     } else {
       if (LinxV5::SIMTCGSRegClass.contains(ReserveReg)) {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_ORI_SCAR))
@@ -899,17 +896,14 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
         if (Descriptor.SizeCode != RegSizeCode)
           report_fatal_error(
               "Local tile COPY descriptor SizeCode disagrees with allocator");
-        BuildMI(*MBB, Before, DebugLoc(),
+        auto Copy = BuildMI(*MBB, Before, DebugLoc(),
                 TII->get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
                                                     : LinxV5::PseudoTCOPYDesc))
             .addReg(TR, RegState::Define)
             .addImm(RegSizeCode)
-            .addReg(TR, RegState::Kill)
-            .addImm(Descriptor.ValidCol)
-            .addImm(Descriptor.ValidRow)
-            .addImm(Descriptor.PhysicalCol)
-            .addImm(Descriptor.DataType)
-            .addImm(Descriptor.Layout);
+            .addReg(TR, RegState::Kill);
+        LinxV5::addTileCopyDimensions(Copy, Descriptor);
+        Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
       } else {
         BuildMI(*MBB, Before, DebugLoc(), TII->get(LinxV5::SIMT_MOV))
             .addReg(TR, RegState::Define)
@@ -2043,12 +2037,9 @@ void LinxV5TRegToOffsetOpt::appendQueueFillers(
                                                     : LinxV5::PseudoTCOPYDesc))
             .addReg(ReserveReg, RegState::Define | RegState::Dead)
             .addImm(Descriptor.SizeCode)
-            .addReg(Donor->RegOp.Reg)
-            .addImm(Descriptor.ValidCol)
-            .addImm(Descriptor.ValidRow)
-            .addImm(Descriptor.PhysicalCol)
-            .addImm(Descriptor.DataType)
-            .addImm(Descriptor.Layout);
+            .addReg(Donor->RegOp.Reg);
+    LinxV5::addTileCopyDimensions(Copy, Descriptor);
+    Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
     MachineInstr *CopyMI = Copy.getInstr();
     QueueCopyUseDistances[&CopyMI->getOperand(2)] = Distance;
     QueueDeadPublicationDefs.insert(&CopyMI->getOperand(0));
@@ -4070,7 +4061,8 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
         Descriptor = Incoming;
       }
       if (!Descriptor || Descriptor->PackedPredicate ||
-          Descriptor->PredicateBasisType != 31)
+          Descriptor->PredicateBasisType != 31 || Descriptor->ValidRowReg ||
+          Descriptor->ValidColReg || Descriptor->PhysicalColReg)
         continue;
       BuildMI(MBB, MI, MI.getDebugLoc(),
               TII->get(LinxV5::PseudoTEXPANDS_Row_SizeI), Reg)

@@ -243,12 +243,15 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
             .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
             .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
             .addOperand(MCOperand::createImm(LinxV5Op::ByteID::BYTE0)));
-    for (unsigned Dimension = 0; Dimension != 3; ++Dimension)
+    for (unsigned Dimension = 0; Dimension != 3; ++Dimension) {
+      const MCOperand &Value = TmpInst.getOperand(3 + Dimension);
       Commands.push_back(
           MCInstBuilder(LinxV5::B_DIM)
               .addOperand(MCOperand::createImm(Dimension))
-              .addOperand(MCOperand::createReg(LinxV5::R0))
-              .addOperand(TmpInst.getOperand(3 + Dimension)));
+              .addOperand(Value.isReg() ? Value
+                                       : MCOperand::createReg(LinxV5::R0))
+              .addOperand(Value.isReg() ? MCOperand::createImm(0) : Value));
+    }
     Commands.push_back(
         MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
             .addOperand(TmpInst.getOperand(0))

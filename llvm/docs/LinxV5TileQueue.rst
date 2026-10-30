@@ -27,6 +27,15 @@ It does not reuse a different live reduction or accumulator as that value.
 OPEN assembly parents and predicate carriers are not initialized this way.
 Unresolved or conflicting descriptors are rejected rather than guessed.
 
+Runtime valid dimensions are part of a descriptor, not a reason to replace
+the valid rectangle with its maximum capacity. Descriptor-bearing copies
+can bind a B.DIM source register when its reaching value is still available
+at the copy. Identity GPR copies retain that value identity; an overwritten
+register or conflicting incoming values do not. CUBE physical columns still
+come from the exact capacity and backing width. NORM copies preserve the
+runtime physical-column binding when it defaults to the valid columns.
+The copied payload and definedness remain subject to the same TMOV contract.
+
 The zero fill uses TEXPANDS with an omitted scalar binding. Nonzero scalars
 use B.IOR.RegSrc0. Both object emission and textual assembly preserve the
 physical columns independently of the valid columns.

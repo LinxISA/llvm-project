@@ -1,0 +1,37 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
+# CHECK-LABEL: name: dynamic_window_copy
+# CHECK: $tile_t = PseudoTCOPYDesc 9, killed $tile_tos{{[0-9]+}}, $r2, $r3, 256, 1, 29
+# CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_t{{[0-9]+}}
+# CHECK: PseudoRET
+--- |
+  define void @dynamic_window_copy() { ret void }
+...
+---
+name: dynamic_window_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r2, $r3
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM zero, 256, ->lb2\0AB.IOT mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t1, 2621449, $r2, 2621449, $r3, 13, 9
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    dead $tile_t16 = PseudoTCI_EW_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0
+    INLINEASM &"consume $0", 1, 720905, $tile_t1
+    PseudoRET
+...

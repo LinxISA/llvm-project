@@ -139,15 +139,28 @@ struct TileDescriptor {
   // The initial packed predicate profile retains exactly one physical row.
   bool PackedPredicate = false;
   unsigned PredicateBasisType = 31;
+  Register ValidRowReg;
+  Register ValidColReg;
+  Register PhysicalColReg;
+  const MachineInstr *ValidRowDef = nullptr;
+  const MachineInstr *ValidColDef = nullptr;
+  const MachineInstr *PhysicalColDef = nullptr;
 
   bool operator==(const TileDescriptor &Other) const {
     return DataType == Other.DataType && Layout == Other.Layout &&
            ValidRow == Other.ValidRow && ValidCol == Other.ValidCol &&
            PhysicalCol == Other.PhysicalCol && SizeCode == Other.SizeCode &&
            PackedPredicate == Other.PackedPredicate &&
-           PredicateBasisType == Other.PredicateBasisType;
+           PredicateBasisType == Other.PredicateBasisType &&
+           ValidRowReg == Other.ValidRowReg && ValidColReg == Other.ValidColReg &&
+           PhysicalColReg == Other.PhysicalColReg &&
+           ValidRowDef == Other.ValidRowDef && ValidColDef == Other.ValidColDef &&
+           PhysicalColDef == Other.PhysicalColDef;
   }
 };
+
+void addTileCopyDimensions(MachineInstrBuilder &Copy,
+                          const TileDescriptor &Descriptor);
 
 struct LocalTileABIInfo {
   unsigned ArgumentIndex = 0;

@@ -853,6 +853,121 @@ static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
   return Result;
 }
 
+using DimensionValue = std::pair<Register, const MachineInstr *>;
+using DimensionPosition =
+    std::tuple<MachineBasicBlock *, const MachineInstr *, Register>;
+
+static Optional<DimensionValue> resolveDimensionValue(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
+    SmallVectorImpl<DimensionPosition> &Active, bool *Cycle = nullptr) {
+  if (Cycle)
+    *Cycle = false;
+  DimensionPosition Position{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
+  if (is_contained(Active, Position)) {
+    if (Cycle)
+      *Cycle = true;
+    return None;
+  }
+  Active.push_back(Position);
+  for (MachineInstr &Definition : reverse(make_range(MBB.begin(), Before))) {
+    if (!Definition.modifiesRegister(
+            Reg, MBB.getParent()->getSubtarget().getRegisterInfo()))
+      continue;
+    bool IsCopy = Definition.isCopy() ||
+                  (Definition.getOpcode() == LinxV5::ORI &&
+                   Definition.getOperand(2).getImm() == 0);
+    Optional<DimensionValue> Result;
+    if (IsCopy) {
+      Result = resolveDimensionValue(MBB, Definition.getIterator(),
+                                    Definition.getOperand(1).getReg(), Active,
+                                    Cycle);
+    } else if (!Definition.isCall() && Definition.definesRegister(Reg)) {
+      Result = DimensionValue{Reg, &Definition};
+    }
+    Active.pop_back();
+    return Result;
+  }
+  Optional<DimensionValue> Joined;
+  if (MBB.pred_empty())
+    Joined = DimensionValue{Reg, nullptr};
+  for (MachineBasicBlock *Predecessor : MBB.predecessors()) {
+    bool IncomingCycle = false;
+    auto Incoming = resolveDimensionValue(*Predecessor, Predecessor->end(), Reg,
+                                         Active, &IncomingCycle);
+    if (!Incoming && IncomingCycle)
+      continue;
+    if (!Incoming) {
+      Active.pop_back();
+      return None;
+    }
+    if (Joined && *Joined != *Incoming) {
+      Active.pop_back();
+      return None;
+    }
+    Joined = Incoming;
+  }
+  Active.pop_back();
+  if (!Joined && Cycle)
+    *Cycle = true;
+  return Joined;
+}
+
+static Optional<DimensionValue> resolveDimensionValue(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg) {
+  SmallVector<DimensionPosition, 8> Active;
+  return resolveDimensionValue(MBB, Before, Reg, Active);
+}
+
+static bool getDynamicInlineAsmDimension(
+    MachineInstr &MI, StringRef Text, unsigned Dimension, Register &Reg,
+    const MachineInstr *&Definition) {
+  size_t End = Text.find((Twine("->lb") + Twine(Dimension)).str());
+  if (End == StringRef::npos)
+    return false;
+  size_t Start = Text.take_front(End).rfind("B.DIM");
+  if (Start == StringRef::npos)
+    return false;
+  StringRef Binding = Text.slice(Start + strlen("B.DIM"), End).trim();
+  MachineOperand *Operand = nullptr;
+  const char *After = parseAsmOperand(&MI, Binding.data(), Operand);
+  if (!After || !Operand || !Operand->isReg())
+    return false;
+  unsigned Offset;
+  if (Text.slice(After - Text.data(), End).split(',').second.split(',')
+          .first.trim().getAsInteger(10, Offset) || Offset != 0)
+    return false;
+  auto Value = resolveDimensionValue(*MI.getParent(), MI.getIterator(),
+                                     Operand->getReg());
+  if (!Value)
+    return false;
+  Reg = Value->first;
+  Definition = Value->second;
+  return true;
+}
+
+void LinxV5::addTileCopyDimensions(MachineInstrBuilder &Copy,
+                                  const TileDescriptor &Descriptor) {
+  MachineInstr &Instruction = *Copy;
+  auto AddDimension = [&](unsigned Immediate, Register Reg,
+                          const MachineInstr *Definition) {
+    if (!Reg) {
+      Copy.addImm(Immediate);
+      return;
+    }
+    auto Value = resolveDimensionValue(*Instruction.getParent(),
+                                      Instruction.getIterator(), Reg);
+    if (!Value || *Value != DimensionValue(Reg, Definition))
+      report_fatal_error("Local tile COPY dimension value is no longer available");
+    Copy.addReg(Reg);
+  };
+  AddDimension(Descriptor.ValidCol, Descriptor.ValidColReg,
+               Descriptor.ValidColDef);
+  AddDimension(Descriptor.ValidRow, Descriptor.ValidRowReg,
+               Descriptor.ValidRowDef);
+  AddDimension(Descriptor.PhysicalCol, Descriptor.PhysicalColReg,
+               Descriptor.PhysicalColDef);
+}
+
 static bool hasInlineAsmDimension(StringRef Text, unsigned Dimension) {
   return Text.contains((Twine("->lb") + Twine(Dimension)).str());
 }
@@ -1000,8 +1115,9 @@ static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
 static LinxV5::TileDescriptor
 checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
   unsigned TypeBits = getTileDataTypeBits(Descriptor.DataType);
-  if (!TypeBits || !Descriptor.ValidRow || !Descriptor.ValidCol ||
-      !Descriptor.PhysicalCol ||
+  if (!TypeBits || (!Descriptor.ValidRow && !Descriptor.ValidRowReg) ||
+      (!Descriptor.ValidCol && !Descriptor.ValidColReg) ||
+      (!Descriptor.PhysicalCol && !Descriptor.PhysicalColReg) ||
       Descriptor.SizeCode == 0 || Descriptor.SizeCode > 12)
     report_fatal_error("invalid Local tile descriptor for typed COPY");
 
@@ -1019,10 +1135,16 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
           ", dtype=" + Twine(Descriptor.DataType) +
           ", size=" + Twine(Descriptor.SizeCode));
     Descriptor.PhysicalCol = CapacityBits / (Rows * TypeBits);
+    Descriptor.PhysicalColReg = Register();
+    Descriptor.PhysicalColDef = nullptr;
   }
-  if (Descriptor.PhysicalCol < Descriptor.ValidCol)
+  if (!Descriptor.PhysicalColReg && !Descriptor.ValidColReg &&
+      Descriptor.PhysicalCol < Descriptor.ValidCol)
     report_fatal_error("invalid Local tile descriptor for typed COPY");
   if (Descriptor.PackedPredicate) {
+    if (Descriptor.ValidRowReg || Descriptor.ValidColReg ||
+        Descriptor.PhysicalColReg)
+      report_fatal_error("dynamic packed predicate COPY is unsupported");
     bool SupportedShape =
         (Descriptor.ValidRow == 1 &&
          (Descriptor.PhysicalCol == 128 ||
@@ -1037,6 +1159,8 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
       report_fatal_error("invalid packed NORM predicate COPY descriptor");
     return Descriptor;
   }
+  if (Descriptor.PhysicalColReg)
+    return Descriptor;
   uint64_t RowBits = uint64_t{Descriptor.PhysicalCol} * TypeBits;
   if (!RowBits || CapacityBits % RowBits ||
       CapacityBits / RowBits < Descriptor.ValidRow)
@@ -1105,7 +1229,11 @@ static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
   for (const auto &Source : {*LeftDescriptor, *RightDescriptor})
     if (Source.PackedPredicate || getTileDataTypeBits(Source.DataType) != 8 ||
         Source.Layout != Result.Layout || Source.ValidRow != Result.ValidRow ||
-        Source.ValidCol != Result.ValidCol || Source.SizeCode != Result.SizeCode)
+        Source.ValidCol != Result.ValidCol || Source.SizeCode != Result.SizeCode ||
+        Source.ValidRowReg != Result.ValidRowReg ||
+        Source.ValidColReg != Result.ValidColReg ||
+        Source.ValidRowDef != Result.ValidRowDef ||
+        Source.ValidColDef != Result.ValidColDef)
       return None;
   if (LeftDescriptor->PredicateBasisType != 31 &&
       RightDescriptor->PredicateBasisType != 31)
@@ -1133,6 +1261,25 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   Optional<unsigned> ValidCol = getInlineAsmDimension(MI, Text, 0);
   Optional<unsigned> ValidRow = getInlineAsmDimension(MI, Text, 1);
   Optional<unsigned> PhysicalCol = getInlineAsmDimension(MI, Text, 2);
+  LinxV5::TileDescriptor Dimensions;
+  if (!ValidCol && getDynamicInlineAsmDimension(
+          MI, Text, 0, Dimensions.ValidColReg, Dimensions.ValidColDef))
+    ValidCol = 0;
+  if (!ValidRow && getDynamicInlineAsmDimension(
+          MI, Text, 1, Dimensions.ValidRowReg, Dimensions.ValidRowDef))
+    ValidRow = 0;
+  if (!PhysicalCol && getDynamicInlineAsmDimension(
+          MI, Text, 2, Dimensions.PhysicalColReg, Dimensions.PhysicalColDef))
+    PhysicalCol = 0;
+  auto WithDimensions = [&](LinxV5::TileDescriptor Result) {
+    Result.ValidColReg = Dimensions.ValidColReg;
+    Result.ValidRowReg = Dimensions.ValidRowReg;
+    Result.PhysicalColReg = Dimensions.PhysicalColReg;
+    Result.ValidColDef = Dimensions.ValidColDef;
+    Result.ValidRowDef = Dimensions.ValidRowDef;
+    Result.PhysicalColDef = Dimensions.PhysicalColDef;
+    return Result;
+  };
   bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
   bool IsMX = Text.startswith("BSTART.CUBE TMATMULMX,") ||
               Text.startswith("BSTART.CUBE TMATMULMX.ACC,");
@@ -1176,11 +1323,16 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
         PhysicalCol = ((uint64_t{1} << (*SizeCode + 6)) * 8) / (Rows * Bits);
         HasDerivedPhysicalCol = true;
         if (Text.contains("B.ASSEMBLE")) {
+          if (Dimensions.ValidRowReg || Dimensions.ValidColReg)
+            return None;
           ValidRow = Rows;
           ValidCol = PhysicalCol;
         }
       }
     } else {
+      if (Dimensions.ValidRowReg || Dimensions.ValidColReg ||
+          Dimensions.PhysicalColReg)
+        return None;
       if (!CubeSource || SA.Defs.empty() || SA.Defs.front()->getReg() != Reg)
         return None;
       Layout = SourceDescriptor->Layout;
@@ -1216,15 +1368,19 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     }
   }
   if (!DataType || *DataType == LinxV5Op::DataType::EMPTY_DataType ||
-      !Layout || !ValidCol || !ValidRow || !PhysicalCol || !*ValidCol ||
-      !*ValidRow)
+      !Layout || !ValidCol || !ValidRow || !PhysicalCol ||
+      (!*ValidCol && !Dimensions.ValidColReg) ||
+      (!*ValidRow && !Dimensions.ValidRowReg))
     return None;
 
   // PTO destination-shape defaults resolve an omitted LB2 to ValidCol.  Tile
   // capacity determines the remaining physical rows; it must never invent
   // additional columns.  Public CUBE TCI forms carry LB2 explicitly.
-  if (!HasPhysicalCol && !HasDerivedPhysicalCol)
+  if (!HasPhysicalCol && !HasDerivedPhysicalCol) {
     *PhysicalCol = *ValidCol;
+    Dimensions.PhysicalColReg = Dimensions.ValidColReg;
+    Dimensions.PhysicalColDef = Dimensions.ValidColDef;
+  }
   if (Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text)) {
     const bool Cube = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
                       *Layout == LinxV5Op::ArgFormat::CUBE_M32;
@@ -1234,7 +1390,11 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       *DataType = LinxV5Op::DataType::U32;
     if (*Reduction == 80) {
       *ValidRow = 1;
+      Dimensions.ValidRowReg = Register();
+      Dimensions.ValidRowDef = nullptr;
       if (Cube) {
+        if (Dimensions.ValidColReg)
+          return None;
         unsigned Bits = getTileDataTypeBits(*DataType);
         if (!Bits)
           return None;
@@ -1244,8 +1404,13 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       }
     } else {
       *ValidCol = 1;
-      if (!Cube)
+      Dimensions.ValidColReg = Register();
+      Dimensions.ValidColDef = nullptr;
+      if (!Cube) {
         *PhysicalCol = 1;
+        Dimensions.PhysicalColReg = Register();
+        Dimensions.PhysicalColDef = nullptr;
+      }
     }
   }
   bool CubePredicate =
@@ -1260,7 +1425,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
         LinxV5Op::DataType::U8, *Layout, *ValidRow, *ValidCol, *PhysicalCol,
         *SizeCode};
     Descriptor.PredicateBasisType = *DataType;
-    return checkedTileDescriptor(Descriptor);
+    return checkedTileDescriptor(WithDimensions(Descriptor));
   }
   bool IsLogical = Text.startswith("BSTART.TEPL TAND,") ||
                    Text.startswith("BSTART.TEPL TOR,") ||
@@ -1274,6 +1439,10 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   }
   bool IsMove = Text.startswith("BSTART.TLSU TMOV,");
   if (IsLogical || IsMove) {
+    if (Text.contains("B.SUBVIEW") &&
+        (Dimensions.ValidRowReg || Dimensions.ValidColReg ||
+         Dimensions.PhysicalColReg))
+      return None;
     size_t Binding = Text.find("B.IOT");
     if (Binding == StringRef::npos)
       return None;
@@ -1282,11 +1451,13 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     const char *After = parseAsmOperand(&MI, Sources.data(), Left);
     if (!After || !Left || !Left->isReg())
       return None;
-    LinxV5::TileDescriptor Result{
-        *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode};
+    LinxV5::TileDescriptor Result = WithDimensions(LinxV5::TileDescriptor{
+        *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
     if (Text.contains("B.ASSEMBLE") &&
         (Result.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
          Result.Layout == LinxV5Op::ArgFormat::CUBE_M32)) {
+      if (Result.ValidRowReg || Result.ValidColReg)
+        return None;
       size_t Modifier = Text.find("B.ASSEMBLE");
       StringRef Fields = Text.drop_front(Modifier + strlen("B.ASSEMBLE"));
       for (unsigned Field = 0; Field != 4; ++Field)
@@ -1322,7 +1493,11 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       if (!Text.contains("B.SUBVIEW") &&
           (Source->ValidCol != Result.ValidCol ||
            Source->ValidRow != Result.ValidRow ||
-           Source->SizeCode != Result.SizeCode))
+           Source->SizeCode != Result.SizeCode ||
+           Source->ValidColReg != Result.ValidColReg ||
+           Source->ValidRowReg != Result.ValidRowReg ||
+           Source->ValidColDef != Result.ValidColDef ||
+           Source->ValidRowDef != Result.ValidRowDef))
         return None;
       Result.PredicateBasisType = Source->PredicateBasisType;
       return checkedTileDescriptor(Result);
@@ -1350,8 +1525,8 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     Descriptor->SizeCode = Result.SizeCode;
     return checkedTileDescriptor(*Descriptor);
   }
-  return checkedTileDescriptor(LinxV5::TileDescriptor{
-      *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode});
+  return checkedTileDescriptor(WithDimensions(LinxV5::TileDescriptor{
+      *DataType, *Layout, *ValidRow, *ValidCol, *PhysicalCol, *SizeCode}));
 }
 
 static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
@@ -1377,14 +1552,29 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
 
   if ((MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
-    auto Descriptor = checkedTileDescriptor(
-        LinxV5::TileDescriptor{static_cast<unsigned>(MI.getOperand(6).getImm()),
-                               static_cast<unsigned>(MI.getOperand(7).getImm()),
-                               static_cast<unsigned>(MI.getOperand(4).getImm()),
-                               static_cast<unsigned>(MI.getOperand(3).getImm()),
-                               static_cast<unsigned>(MI.getOperand(5).getImm()),
-                               static_cast<unsigned>(MI.getOperand(1).getImm()),
-                               MI.getOpcode() == LinxV5::PseudoPCOPYDesc});
+    auto Dimension = [&](unsigned Index, Register &DimensionReg,
+                         const MachineInstr *&Definition) -> unsigned {
+      const MachineOperand &Operand = MI.getOperand(Index);
+      if (Operand.isImm())
+        return Operand.getImm();
+      auto Value = resolveDimensionValue(*MI.getParent(), MI.getIterator(),
+                                         Operand.getReg());
+      if (!Value)
+        report_fatal_error("cannot resolve Local tile COPY dimension value");
+      DimensionReg = Value->first;
+      Definition = Value->second;
+      return 0;
+    };
+    LinxV5::TileDescriptor Result;
+    Result.DataType = MI.getOperand(6).getImm();
+    Result.Layout = MI.getOperand(7).getImm();
+    Result.SizeCode = MI.getOperand(1).getImm();
+    Result.PackedPredicate = MI.getOpcode() == LinxV5::PseudoPCOPYDesc;
+    Result.ValidCol = Dimension(3, Result.ValidColReg, Result.ValidColDef);
+    Result.ValidRow = Dimension(4, Result.ValidRowReg, Result.ValidRowDef);
+    Result.PhysicalCol =
+        Dimension(5, Result.PhysicalColReg, Result.PhysicalColDef);
+    auto Descriptor = checkedTileDescriptor(Result);
     if (Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
         Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M32) {
       auto Source = resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
@@ -1804,17 +1994,14 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   } else if (LinxV5::Tile_ABS_CGRegClass.contains(DstReg)) {
     LinxV5::TileDescriptor Descriptor =
         LinxV5::getTileRegDescriptor(MBB, MBBI, SrcReg);
-    BuildMI(MBB, MBBI, DL,
+    auto Copy = BuildMI(MBB, MBBI, DL,
             get(Descriptor.PackedPredicate ? LinxV5::PseudoPCOPYDesc
                                            : LinxV5::PseudoTCOPYDesc),
             DstReg)
         .addImm(Descriptor.SizeCode)
-        .addReg(SrcReg, getKillRegState(KillSrc))
-        .addImm(Descriptor.ValidCol)
-        .addImm(Descriptor.ValidRow)
-        .addImm(Descriptor.PhysicalCol)
-        .addImm(Descriptor.DataType)
-        .addImm(Descriptor.Layout);
+        .addReg(SrcReg, getKillRegState(KillSrc));
+    LinxV5::addTileCopyDimensions(Copy, Descriptor);
+    Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
   } else {
     BuildMI(MBB, MBBI, DL, get(LinxV5::ORI), DstReg)
         .addReg(SrcReg, getKillRegState(KillSrc))

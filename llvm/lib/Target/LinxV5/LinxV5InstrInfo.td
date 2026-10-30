@@ -3495,10 +3495,13 @@ def PseudoTCOPY : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
 // Generic register copies and PHI elimination must not lose the descriptor
 // carried by their producer: an untyped TCOPY defaults every omitted field and
 // is not an identity operation for typed CUBE tiles.
+def TileCopyDimension : Operand<i64>;
+
 let isCodeGenOnly = 1 in
 def PseudoTCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
     (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
-         uimm17:$ValidCol, uimm17:$ValidRow, uimm17:$PhysicalCol,
+         TileCopyDimension:$ValidCol, TileCopyDimension:$ValidRow,
+         TileCopyDimension:$PhysicalCol,
          BstartDataType:$DataType, BArgFormat:$Layout)>;
 
 // Identity TMOV preserving a one-row packed Predicate storage descriptor.

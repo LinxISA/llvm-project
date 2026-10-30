@@ -1,13 +1,15 @@
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
-; RUN:   -enable-all-vector-as-tilereg=true %s -o /dev/null 2>&1 | FileCheck %s
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
+; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
+; RUN:   -enable-all-vector-as-tilereg=true %s -o - | FileCheck %s
+; RUN: llc -mtriple=linx64v5-unknown-linux-musl -O2 \
 ; RUN:   -enable-all-vector-as-tilereg=true \
-; RUN:   -linxv5-enable-generic-element=true %s -o /dev/null 2>&1 | FileCheck %s
-; CHECK: unknown Local tile descriptor at COPY/PHI control-flow join
+; RUN:   -linxv5-enable-generic-element=true %s -o - | FileCheck %s
+; CHECK-LABEL: unknown_copy_phi:
+; CHECK: BSTART.TLSU
+; CHECK: B.DIM
+; CHECK: RET
 
-; Runtime descriptor dimensions cannot be reconstructed from SizeCode.  Until
-; the dynamic descriptor has an SSA carrier of its own, a generic Tile PHI
-; must reject instead of manufacturing static TMOV dimensions.
+; Both incoming descriptors bind the same runtime row value. Preserve that
+; binding rather than manufacturing static TMOV dimensions from SizeCode.
 
 target triple = "linx64v5-unknown-linux-musl"
 

@@ -1,0 +1,29 @@
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s 2>&1 | FileCheck %s
+# CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join
+--- |
+  define void @different_runtime_dimensions() { ret void }
+...
+---
+name: different_runtime_dimensions
+tracksRegLiveness: true
+body: |
+  bb.0:
+    successors: %bb.1, %bb.2
+    liveins: $r2, $r3
+    BEQ $r2, $r0, %bb.1
+    PseudoBR %bb.2
+  bb.1:
+    successors: %bb.3
+    liveins: $r2, $r3
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 256, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 2621449, $r2, 13, 9
+    PseudoBR %bb.3
+  bb.2:
+    successors: %bb.3
+    liveins: $r2, $r3
+    INLINEASM &"BSTART.TEPL 0, FP32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 256, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 2621449, $r3, 13, 9
+    PseudoBR %bb.3
+  bb.3:
+    liveins: $r2, $r3, $tile_t1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
