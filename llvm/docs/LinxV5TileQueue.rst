@@ -13,6 +13,13 @@ descriptor-bearing identities and checks the source generation and its age
 on incoming CFG edges. A queue-alignment filler publishes a real copy of a
 closed value, not a zero-mask no-op.
 
+When a live-out reordering attempt fails, its retry drains only the remaining
+live values. Replaying the old queue's holes can reproduce the same failed
+ordering indefinitely. The final successful sequence still publishes every
+interior and trailing hole required by the successor contract, using real
+descriptor-bearing fillers. This does not enable absolute Local references
+or bypass the descriptor and incoming-edge checks.
+
 An ``IMPLICIT_DEF`` has no architectural queue publication. For a numeric
 loop-carried value with a statically proven descriptor, the backend can refine
 that undefined initial value to a zero-filled Tile of the same descriptor.

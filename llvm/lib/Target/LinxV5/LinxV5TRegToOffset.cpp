@@ -1364,6 +1364,10 @@ void SlotCalc::rollingLiveouts(SmallVector<LinxRegOp> needSyncTo) {
         } else {
           // fail: give-up current rolling by push the rest register.
           while (!CurLiveouts.empty()) {
+            if (IsTileRC && CurLiveouts.front().Reg == LinxV5::NoRegister) {
+              CurLiveouts.erase(CurLiveouts.begin());
+              continue;
+            }
             TRCopyRange &TmpSlot = tail();
             BuildLiveoutAndEraseFrom(TmpSlot, CurLiveouts[0], CurLiveouts);
           }
