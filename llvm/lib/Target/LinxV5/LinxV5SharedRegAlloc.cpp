@@ -22,6 +22,125 @@ using namespace llvm;
 
 namespace {
 
+static bool isSharedRegister(const MachineRegisterInfo &MRI, Register Reg) {
+  if (!Reg)
+    return false;
+  if (Reg.isPhysical())
+    return LinxV5::Shared_ABSRegClass.contains(Reg);
+  return MRI.getRegClass(Reg) == &LinxV5::Shared_ABSRegClass;
+}
+
+static bool isLocalTileRegister(const MachineRegisterInfo &MRI, Register Reg) {
+  if (!Reg)
+    return false;
+  if (Reg.isPhysical())
+    return LinxV5::Tile_ABSRegClass.contains(Reg);
+  return LinxV5::Tile_ABSRegClass.hasSubClassEq(MRI.getRegClass(Reg));
+}
+
+static SmallVector<Register, 2>
+getAssembleLocalSources(const MachineInstr &MI,
+                        const MachineRegisterInfo &MRI) {
+  SmallVector<Register, 2> Sources;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg() || !isLocalTileRegister(MRI, MO.getReg()))
+      continue;
+    if (!llvm::is_contained(Sources, MO.getReg()))
+      Sources.push_back(MO.getReg());
+  }
+  return Sources;
+}
+
+static StringRef getAssembleDescriptor(const MachineInstr &MI) {
+  if (!MI.isInlineAsm() || MI.getNumOperands() <= InlineAsm::MIOp_AsmString)
+    return StringRef();
+  StringRef Asm = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  size_t Begin = Asm.find("B.DATR");
+  if (Begin == StringRef::npos)
+    return StringRef();
+  size_t End = Asm.find('\n', Begin);
+  return Asm.slice(Begin, End == StringRef::npos ? Asm.size() : End);
+}
+
+static bool isAssembleInit(const MachineInstr &MI) {
+  return MI.isInlineAsm() &&
+         StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+             .contains("B.ASSEMBLE") &&
+         llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
+           return MO.isReg() && MO.isDef() && !MO.isImplicit();
+         });
+}
+
+static bool isAssembleContinuation(const MachineInstr &MI) {
+  return MI.isInlineAsm() &&
+         StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+             .contains("B.ASSEMBLE") &&
+         !llvm::any_of(MI.operands(), [](const MachineOperand &MO) {
+           return MO.isReg() && MO.isDef() && !MO.isImplicit();
+         });
+}
+
+static Register getSharedDef(const MachineInstr &MI,
+                             const MachineRegisterInfo &MRI) {
+  for (const MachineOperand &MO : MI.operands())
+    if (MO.isReg() && MO.isDef() && !MO.isImplicit() &&
+        isSharedRegister(MRI, MO.getReg()))
+      return MO.getReg();
+  return LinxV5::NoRegister;
+}
+
+static Register getSharedUse(const MachineInstr &MI,
+                             const MachineRegisterInfo &MRI) {
+  Register Result = LinxV5::NoRegister;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (!MO.isReg() || MO.isDef() || MO.isImplicit() ||
+        !isSharedRegister(MRI, MO.getReg()))
+      continue;
+    if (Result != LinxV5::NoRegister)
+      return LinxV5::NoRegister;
+    Result = MO.getReg();
+  }
+  return Result;
+}
+
+static void collectAssembleSharedIdentity(
+    MachineFunction &MF, DenseMap<Register, Register> &EmptyToInit) {
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  SmallVector<MachineInstr *, 8> Inits;
+  SmallVector<MachineInstr *, 8> Continuations;
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB) {
+      if (isAssembleInit(MI) && getSharedDef(MI, MRI))
+        Inits.push_back(&MI);
+      else if (isAssembleContinuation(MI) && getSharedUse(MI, MRI))
+        Continuations.push_back(&MI);
+    }
+
+  for (MachineInstr *Continuation : Continuations) {
+    Register Use = getSharedUse(*Continuation, MRI);
+    if (!Use)
+      continue;
+    StringRef Descriptor = getAssembleDescriptor(*Continuation);
+    SmallVector<Register, 2> Sources =
+        getAssembleLocalSources(*Continuation, MRI);
+    SmallVector<Register, 2> Matches;
+    for (MachineInstr *Init : Inits) {
+      if (getAssembleDescriptor(*Init) != Descriptor ||
+          getAssembleLocalSources(*Init, MRI) != Sources)
+        continue;
+      Register Def = getSharedDef(*Init, MRI);
+      if (Def && !llvm::is_contained(Matches, Def))
+        Matches.push_back(Def);
+    }
+
+    if (Matches.size() != 1)
+      report_fatal_error(
+          "B.ASSEMBLE Shared continuation has no unique cooperative INIT "
+          "identity");
+    EmptyToInit[Use] = Matches.front();
+  }
+}
+
 class LinxV5SharedHandleLegalize : public MachineFunctionPass {
 public:
   static char ID;
@@ -140,6 +259,9 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
 
   bool Changed = false;
   SmallVector<LiveInterval *, 16> SharedIntervals;
+  DenseMap<Register, Register> EmptyToInit;
+  collectAssembleSharedIdentity(MF, EmptyToInit);
+  DenseMap<Register, Register> EmptySharedRegs;
   for (unsigned Index = 0; Index < MRI.getNumVirtRegs(); ++Index) {
     Register Reg = Register::index2VirtReg(Index);
     if (MRI.reg_nodbg_empty(Reg) ||
@@ -150,7 +272,7 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
     LiveInterval &Interval = LIS.getInterval(Reg);
     Changed = true;
     if (Interval.empty()) {
-      VRM.assignVirt2Phys(Reg, LinxV5::Shared_ABSRegClass.getRegister(0));
+      EmptySharedRegs[Reg] = Reg;
       continue;
     }
     SharedIntervals.push_back(&Interval);
@@ -179,6 +301,18 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
     MCPhysReg PhysReg = LinxV5::Shared_ABSRegClass.getRegister(SharedIndex);
     VRM.assignVirt2Phys(LI->reg(), PhysReg);
     Assigned[SharedIndex].push_back(LI);
+  }
+
+  for (const auto &Entry : EmptySharedRegs) {
+    Register Empty = Entry.first;
+    Register Init = EmptyToInit.lookup(Empty);
+    if (!Init)
+      VRM.assignVirt2Phys(Empty, LinxV5::Shared_ABSRegClass.getRegister(0));
+    else if (VRM.getPhys(Init))
+      VRM.assignVirt2Phys(Empty, VRM.getPhys(Init));
+    else
+      report_fatal_error(
+          "B.ASSEMBLE Shared INIT has no allocated physical identity");
   }
 
   return Changed;
