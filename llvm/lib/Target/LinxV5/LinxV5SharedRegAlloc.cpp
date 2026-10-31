@@ -138,6 +138,7 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
   LiveIntervals &LIS = getAnalysis<LiveIntervals>();
   VirtRegMap &VRM = getAnalysis<VirtRegMap>();
 
+  bool Changed = false;
   SmallVector<LiveInterval *, 16> SharedIntervals;
   for (unsigned Index = 0; Index < MRI.getNumVirtRegs(); ++Index) {
     Register Reg = Register::index2VirtReg(Index);
@@ -146,7 +147,13 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
       continue;
     if (!LIS.hasInterval(Reg))
       report_fatal_error("LinxV5 Shared register has no live interval");
-    SharedIntervals.push_back(&LIS.getInterval(Reg));
+    LiveInterval &Interval = LIS.getInterval(Reg);
+    Changed = true;
+    if (Interval.empty()) {
+      VRM.assignVirt2Phys(Reg, LinxV5::Shared_ABSRegClass.getRegister(0));
+      continue;
+    }
+    SharedIntervals.push_back(&Interval);
   }
 
   llvm::sort(SharedIntervals, [](const LiveInterval *LHS,
@@ -174,7 +181,7 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
     Assigned[SharedIndex].push_back(LI);
   }
 
-  return !SharedIntervals.empty();
+  return Changed;
 }
 
 FunctionPass *llvm::createLinxV5SharedRegAllocPass() {
