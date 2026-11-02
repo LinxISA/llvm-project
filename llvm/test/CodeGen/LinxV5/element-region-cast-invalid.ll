@@ -5,7 +5,7 @@
 
 ; U8-LABEL: define void @bad_u8
 ; U8: freeze i32 255
-; U8: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 5,
+; U8: asm sideeffect "BSTART.TEPL TAND, U32
 ; U8: call void asm sideeffect "", "@2Tr"
 ; U64-LABEL: define void @bad_u64
 ; U64: freeze i32 0

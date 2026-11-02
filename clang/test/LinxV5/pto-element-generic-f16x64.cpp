@@ -54,8 +54,8 @@ extern "C" void f16x64_add(_Float16 *sink, const _Float16 *lhs,
 // Logical flat indices are composed from legal row/column TCI steps.
 // IR: @llvm.linx.experimental.ew.tci.v64i32({{.*}}i64 4294967296)
 // IR: @llvm.linx.experimental.ew.tci.v64i32({{.*}}i64 1)
-// IR: @llvm.linx.experimental.ew.tcmp.gpr.masked.v64f16
-// IR: @llvm.linx.experimental.ew.tsel.gpr.v64f16
+// IR: asm sideeffect "BSTART.TEPL TCMP, FP16
+// IR: @llvm.linx.experimental.ew.tsel.v64f16.v32i32.v64f16.v64f16
 // IR: ret void
 // OBJ-LABEL: <f16x64_add>:
 // OBJ-DAG: BSTART.TEPL TCMP, FP16
@@ -96,9 +96,8 @@ extern "C" void f16x64_if_add_sub(const _Float16 *lhs,
                : : "Tr"(result) : "memory");
 }
 // IR-LABEL: define{{.*}} @f16x64_if_add_sub
-// IR: @llvm.linx.experimental.ew.tneg.gpr.masked.v64f16
+// IR: asm sideeffect "BSTART.TEPL TNEG, FP16
 // IR-NOT: fsub
 // OBJ-LABEL: <f16x64_if_add_sub>:
 // OBJ: BSTART.TEPL TNEG, FP16
-
 

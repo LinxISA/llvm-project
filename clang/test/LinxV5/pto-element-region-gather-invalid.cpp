@@ -36,9 +36,9 @@ void rejected_gather(elements *output_pointer, const elements *index_pointer,
 }
 
 // GATHER-LABEL: define{{.*}}rejected_gather
-// GATHER: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
+// GATHER: asm sideeffect "BSTART.TLSU MGATHER, U32
 // NONZERO: freeze i32 9
-// GATHER: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr
+// GATHER: call <32 x i32> @llvm.linx.experimental.ew.tsel
 // GATHER-NOT: extractelement
 // GATHER-NOT: insertelement
 // GATHER-NOT: call void @llvm.linx.experimental.element.region

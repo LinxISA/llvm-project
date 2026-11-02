@@ -33,17 +33,17 @@ void equivalent_gather(elements *output_pointer,
 // IR-NOT: llvm.linx.experimental.element.view
 // IR-NOT: extractelement
 // IR-NOT: insertelement
-// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
-// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
-// IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
+// IR: asm sideeffect "BSTART.TEPL TCMP, U32
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
+// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
 // IR-NOT: zeroinitializer
 // IR: call void @llvm.linx.blk.tstore.v32i32{{.*}}i64 24,
 
 // OBJ-LABEL: <{{.*}}equivalent_gather
-// OBJ: BSTART.TEPL TCMPS, U32
+// OBJ: BSTART.TEPL TCMP, U32
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: B.DATR CUBE_M32
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 // OBJ: B.DATR CUBE_M32
-// OBJ: BSTART.TLSU TSTORE, U32
+// OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} U32
 // OBJ: B.DATR M322ND

@@ -36,5 +36,5 @@ void bounded_or(const u16 *source) {
 }
 // CHECK-LABEL: define{{.*}}bounded_or
 // CHECK-NOT: call void @llvm.trap
-// CHECK: @llvm.linx.experimental.ew.mgather.gpr.masked
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER, U16
 // TRAP: unsupported opcode or effect in generic IR stage: call llvm.trap

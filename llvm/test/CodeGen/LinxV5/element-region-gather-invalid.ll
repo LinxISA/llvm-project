@@ -15,22 +15,22 @@
 ; RUN: sed 's/; EXTRA/%extra = load i32, ptr %base, align 4/' %t/base.ll > %t/extra.ll
 ; RUN: opt -mtriple=linx64v5 -passes='linx-v5-element-generic-prepare,linx-v5-element-predication,linx-v5-element-tile-legalize,linx-v5-element-region-verify,verify' -verify-each -S %t/extra.ll | FileCheck %s --check-prefix=EXTRA --implicit-check-not='call {{.*}}@llvm.linx.experimental.element.' --implicit-check-not='call {{.*}}@llvm.vp.' --implicit-check-not=extractelement --implicit-check-not=insertelement
 
-; POSITIVE: llvm.linx.experimental.ew.mgather.gpr.masked
+; POSITIVE: asm sideeffect "BSTART.TLSU MGATHER, U32
 ; POSITIVE-NOT: extractelement
 ; POSITIVE-NOT: insertelement
-; FALSE: call i64 @llvm.linx.experimental.ew.tcmps.gpr.v32i32
-; FALSE: xor i64
-; FALSE: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
-; INDEX: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32
-; INDEX: call i64 @llvm.linx.experimental.ew.tcmps.gpr.v32i32
-; INDEX: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
-; VARYING: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
-; SIGNED: call <32 x i64> @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 17, i64 29, {{.*}}i64 32)
-; SIGNED: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64(i64 32, i64 1, i64 25, i64 0, i64 29, i64 16,
-; STRIDE: call <32 x i64> @llvm.linx.experimental.ew.tlea.v32i64.v32i32({{.*}}i64 64)
-; STRIDE: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
-; EXTRA: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
-; EXTRA-NOT: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
+; FALSE: call <32 x i32> @llvm.linx.experimental.ew.tcmp.
+; FALSE: call <32 x i32> @llvm.linx.experimental.ew.tbinary
+; FALSE: asm sideeffect "BSTART.TLSU MGATHER, U32
+; INDEX: asm sideeffect "BSTART.TEPL TADD, U32
+; INDEX: call <32 x i32> @llvm.linx.experimental.ew.tcmp.
+; INDEX: asm sideeffect "BSTART.TLSU MGATHER, U32
+; VARYING: asm sideeffect "BSTART.TLSU MGATHER, U32
+; SIGNED: asm sideeffect "BSTART.TEPL TLEA, S32
+; SIGNED: asm sideeffect "BSTART.TLSU MGATHER, U32
+; STRIDE: asm sideeffect "BSTART.TEPL TLEA, U32{{.*}}i64 64
+; STRIDE: asm sideeffect "BSTART.TLSU MGATHER, U32
+; EXTRA: asm sideeffect "BSTART.TLSU MGATHER, U32
+; EXTRA-NOT: asm sideeffect "BSTART.TLSU MGATHER, U32
 ; EXTRA: ret void
 ; CLOBBER: PTO element region: predication: unordered scatter requires the unordered/source loop contract
 

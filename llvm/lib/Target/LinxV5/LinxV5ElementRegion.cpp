@@ -3422,10 +3422,111 @@ static bool rewriteF32ViewImportBitcasts(Function &F) {
   return !Bridges.empty();
 }
 
-// The first physical profile uses 32 M32 rows and one column. Logical mask SSA
-// remains independent of this choice: it is mapped to low 32 GPR bits here, not
-// in Clang or the CFG predicator. Each new Tile definition is fully initialized
-// using ZERO, so unselected VP poison never violates TSEL source preflight.
+static StringRef elementTileTypeName(uint64_t DType) {
+  switch (DType) {
+  case 1:
+    return "FP32";
+  case 4:
+    return "FP16";
+  case 16:
+    return "S64";
+  case 17:
+    return "S32";
+  case 24:
+    return "U64";
+  case 25:
+    return "U32";
+  case 26:
+    return "U16";
+  case 27:
+    return "U8";
+  default:
+    llvm_unreachable("element Tile datatype");
+  }
+}
+
+static Value *
+emitElementTileOperation(IRBuilder<> &B, StringRef Header,
+                         FixedVectorType *ResultTy, uint64_t DType,
+                         unsigned Count, ArrayRef<Value *> Sources,
+                         Value *Predicate, uint64_t DestinationType = 31,
+                         unsigned Comparison = 0, Value *Base = nullptr) {
+  SmallVector<Value *, 8> Arguments(Sources.begin(), Sources.end());
+  if (Predicate)
+    Arguments.push_back(Predicate);
+  SmallVector<Type *, 8> Types;
+  std::string Constraints = ResultTy ? "=@2Tr" : "";
+  for (Value *Argument : Arguments) {
+    if (!Constraints.empty())
+      Constraints += ",";
+    Constraints += "@2Tr";
+    Types.push_back(Argument->getType());
+  }
+  unsigned FirstSource = ResultTy ? 1 : 0;
+  std::string Assembly;
+  if (Header.startswith("BSTART.M"))
+    Assembly = ("BSTART.TLSU " + Header.drop_front(strlen("BSTART.")) + ", " +
+                elementTileTypeName(DType) + "\n")
+                   .str();
+  else
+    Assembly = (Header + ", " + elementTileTypeName(DType) + "\n").str();
+  Assembly += "B.DATR ";
+  Assembly += Header.endswith("TCVT") || Header.endswith("TCMP") ? "NORM, "
+                                                                 : "CUBE_M32, ";
+  Assembly += DestinationType == 31
+                  ? "DTYPE_NONE"
+                  : elementTileTypeName(DestinationType).str();
+  Assembly += ", Zero, byte0, ";
+  static constexpr const char *Comparisons[] = {"Eq", "Ne", "Lt",
+                                                "Gt", "Le", "Ge"};
+  Assembly += Comparisons[Comparison];
+  Assembly += ResultTy && Predicate ? ", RNONE, nosat, 0, 1\n"
+                                    : ", RNONE, nosat, 0, 0\n";
+  Assembly += "B.DIM zero, " + utostr(Count / 32) + ", ->lb0\n";
+  Assembly += "B.DIM zero, 32, ->lb1\n";
+  if (Header.startswith("BSTART.M"))
+    Assembly += "B.DIM zero, " + utostr(Count / 32) + ", ->lb2\n";
+  unsigned SizeArgument = Arguments.size();
+  if (Base) {
+    Types.push_back(Base->getType());
+    Arguments.push_back(Base);
+    Constraints += Constraints.empty() ? "r" : ",r";
+    ++SizeArgument;
+  }
+  if (ResultTy) {
+    uint64_t Bytes = ResultTy->getPrimitiveSizeInBits().getFixedValue() / 8;
+    unsigned SizeCode = Log2_64(std::max(uint64_t(128), Bytes)) - 6;
+    Types.push_back(B.getInt64Ty());
+    Arguments.push_back(B.getInt64(SizeCode));
+    Constraints += ",i";
+  }
+  unsigned SourceCount = Sources.size() + (Predicate ? 1 : 0);
+  for (unsigned Source = 0; Source < SourceCount; Source += 2) {
+    Assembly += "B.IOT $" + utostr(FirstSource + Source);
+    if (Source + 1 < SourceCount)
+      Assembly += ", $" + utostr(FirstSource + Source + 1);
+    Assembly += ", mask=1111";
+    if (Source + 2 >= SourceCount) {
+      Assembly += ", last";
+      if (ResultTy)
+        Assembly += ", ->$0<${" + utostr(SizeArgument + 1) + ":Z}>";
+    }
+    Assembly += "\n";
+  }
+  if (Base)
+    Assembly += "B.IOR [$" +
+                utostr(FirstSource + Sources.size() + (Predicate ? 1 : 0)) +
+                "], []\n";
+  if (Header.startswith("BSTART.M"))
+    Constraints += ",~{memory}";
+  Type *ReturnTy = ResultTy ? static_cast<Type *>(ResultTy) : B.getVoidTy();
+  auto *Signature = FunctionType::get(ReturnTy, Types, false);
+  auto *Operation = InlineAsm::get(Signature, Assembly, Constraints, true);
+  CallInst *Result =
+      B.CreateCall(Operation, Arguments, ResultTy ? "pto.tile.masked" : "");
+  return Result;
+}
+
 class ElementTileLegalizer {
   Function &F;
   SmallVector<Instruction *, 64> Owned;
@@ -3439,6 +3540,7 @@ class ElementTileLegalizer {
   unsigned DomainCount;
   Optional<ElementProfile> NormProfile;
   DenseMap<Value *, Value *> Data;
+  DenseMap<Value *, Value *> TileMasks;
   DenseMap<Value *, Value *> Masks;
   DenseMap<std::pair<Value *, uint64_t>, Value *> ActiveMasks;
   DenseMap<Value *, uint64_t> PhysicalTypes;
@@ -3447,9 +3549,9 @@ class ElementTileLegalizer {
   bool MixedNativeI64RegionTypes = false;
   bool MixedNativeI32RegionTypes = false;
   DenseMap<std::pair<Value *, uint64_t>, Value *> RetypedIndices;
-  DenseMap<std::pair<Value *, uint64_t>, DenseMap<unsigned, Value *>>
+  DenseMap<std::pair<Value *, Value *>, DenseMap<unsigned, Value *>>
       ByteOffsets;
-  DenseMap<std::pair<Value *, uint64_t>,
+  DenseMap<std::pair<Value *, Value *>,
            DenseMap<uint64_t, DenseMap<Value *, Value *>>>
       AggregateByteOffsets;
   IRBuilder<> B;
@@ -3465,7 +3567,7 @@ class ElementTileLegalizer {
     uint64_t StrideBytes;
     uint64_t FieldOffsetBytes;
   };
-  DenseMap<Value *, Address> Addresses;
+  DenseMap<std::pair<Value *, Value *>, Address> Addresses;
 
   bool fail(Value *V, const Twine &Why) {
     return diagnose(F, dyn_cast<Instruction>(V),
@@ -4593,12 +4695,8 @@ class ElementTileLegalizer {
                   Name);
     };
     auto Binary = [&](unsigned Code, Value *L, Value *R, const Twine &Name) {
-      return call(Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Ty},
-                  {B.getInt64(32), B.getInt64(2), B.getInt64(DType),
-                   B.getInt64(29), B.getInt64(Code), L, R,
-                   B.getInt64(~uint64_t(0)), B.getInt64(0), B.getInt64(0),
-                   B.getInt64(1)},
-                  Name);
+      return tileOperation(Code == 2 ? "BSTART.TEPL TMUL" : "BSTART.TEPL TADD",
+                           Ty, DType, 64, {L, R}, nullptr);
     };
     Value *R = TCI(0, uint64_t(1) << 32, "pto.logical64.row");
     Value *C = TCI(0, 1, "pto.logical64.column");
@@ -4664,13 +4762,9 @@ class ElementTileLegalizer {
         };
         auto Binary = [&](unsigned Code, Value *L, Value *R,
                           const Twine &Name) {
-          return call(
-              Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Ty},
-              {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
-               B.getInt64(DType), B.getInt64(29), B.getInt64(Code), L, R,
-               B.getInt64(~uint64_t(0)), B.getInt64(0), B.getInt64(0),
-               B.getInt64(1)},
-              Name);
+          return tileOperation(
+              Code == 2 ? "BSTART.TEPL TMUL" : "BSTART.TEPL TADD", Ty, DType,
+              Ty->getNumElements(), {L, R}, nullptr);
         };
         Value *Indices = TCI(B.getInt64(0), uint64_t(1) << 32,
                              "pto.affine.unit.indices");
@@ -4683,6 +4777,30 @@ class ElementTileLegalizer {
     return call(Intrinsic::linx_experimental_ew_tci, {Ty},
                 {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
                  B.getInt64(DType), B.getInt64(29), Scalar, B.getInt64(Step)});
+  }
+
+  bool canUseTileMask(Value *Predicate) {
+    if (HasScheduler && isa<PHINode>(Predicate))
+      return true;
+    if (getSplatValue(Predicate) || isa<UndefValue>(Predicate) ||
+        isa<PoisonValue>(Predicate) || isa<ICmpInst>(Predicate))
+      return true;
+    if (auto *Compare = dyn_cast<VPCmpIntrinsic>(Predicate))
+      return canUseTileMask(Compare->getMaskParam());
+    if (isa<Constant>(Predicate))
+      return true;
+    if (auto *Binary = dyn_cast<BinaryOperator>(Predicate))
+      return canUseTileMask(Binary->getOperand(0)) &&
+             canUseTileMask(Binary->getOperand(1));
+    if (auto *Select = dyn_cast<SelectInst>(Predicate))
+      return canUseTileMask(Select->getCondition()) &&
+             canUseTileMask(Select->getTrueValue()) &&
+             canUseTileMask(Select->getFalseValue());
+    if (auto *VP = dyn_cast<VPIntrinsic>(Predicate))
+      return canUseTileMask(VP->getMaskParam()) &&
+             canUseTileMask(VP->getArgOperand(0)) &&
+             canUseTileMask(VP->getArgOperand(1));
+    return false;
   }
 
   Value *mask(Value *V) {
@@ -4757,7 +4875,7 @@ class ElementTileLegalizer {
                             *binaryOpcode(VP->getIntrinsicID())),
                         mask(VP->getArgOperand(0)), mask(VP->getArgOperand(1)),
                         "pto.mask.logic");
-      R = B.CreateAnd(R, activeMask(*VP));
+      R = B.CreateAnd(R, mask(VP->getMaskParam()));
     } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
       Value *L = Cmp->getOperand(0), *RHS = Cmp->getOperand(1);
       auto Pred = Cmp->getPredicate();
@@ -4808,6 +4926,133 @@ class ElementTileLegalizer {
     return Masks[V] = R;
   }
 
+  Value *tileMask(Value *Predicate) {
+    if (Value *Existing = TileMasks.lookup(Predicate))
+      return Existing;
+    unsigned Count =
+        cast<FixedVectorType>(Predicate->getType())->getNumElements();
+    auto *Carrier = FixedVectorType::get(B.getInt32Ty(), 32);
+    auto Compare = [&](Value *Left, Value *Right, uint64_t DType,
+                       unsigned Selector) {
+      return call(Intrinsic::linx_experimental_ew_tcmp,
+                  {Carrier, Left->getType(), Right->getType()},
+                  {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
+                   B.getInt64(29), Left, Right, B.getInt64(Selector)},
+                  "pto.tile.predicate");
+    };
+    auto Logic = [&](unsigned Opcode, Value *Left, Value *Right) {
+      return call(Intrinsic::linx_experimental_ew_tbinary, {Carrier},
+                  {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(27),
+                   B.getInt64(29), B.getInt64(Opcode), Left, Right},
+                  "pto.tile.predicate.logic");
+    };
+    Value *Result;
+    if (HasScheduler && isa<PHINode>(Predicate)) {
+      auto *Numeric = FixedVectorType::get(B.getInt32Ty(), Count);
+      Value *Bits = splat(B.CreateTrunc(Masks.lookup(Predicate), B.getInt32Ty()), Numeric);
+      Value *Rows = call(Intrinsic::linx_experimental_ew_tci, {Numeric},
+                         {B.getInt64(32), B.getInt64(1), B.getInt64(25),
+                          B.getInt64(29), B.getInt64(0), B.getInt64(uint64_t(1) << 32)});
+      Value *Shifted = tileOperation("BSTART.TEPL TSHR", Numeric, 25, Count,
+                                     {Bits, Rows}, nullptr);
+      Value *LowBit = tileOperation("BSTART.TEPL TAND", Numeric, 25, Count,
+                                    {Shifted, splat(B.getInt32(1), Numeric)}, nullptr);
+      Result = Compare(LowBit, splat(B.getInt32(0), Numeric), 25, 1);
+    } else if (auto *Cmp = dyn_cast<ICmpInst>(Predicate)) {
+      unsigned Width = Cmp->getOperand(0)->getType()->getScalarSizeInBits();
+      bool Signed = Cmp->isSigned();
+      uint64_t DType = Width == 64 ? (Signed ? 16 : 24) : (Signed ? 17 : 25);
+      if (Width == 64 && Cmp->isEquality() && NativeI64RegionType != 0)
+        DType = NativeI64RegionType;
+      unsigned Selector;
+      switch (Cmp->getPredicate()) {
+      case ICmpInst::ICMP_EQ: Selector = 0; break;
+      case ICmpInst::ICMP_NE: Selector = 1; break;
+      case ICmpInst::ICMP_SLT: case ICmpInst::ICMP_ULT: Selector = 2; break;
+      case ICmpInst::ICMP_SGT: case ICmpInst::ICMP_UGT: Selector = 3; break;
+      case ICmpInst::ICMP_SLE: case ICmpInst::ICMP_ULE: Selector = 4; break;
+      case ICmpInst::ICMP_SGE: case ICmpInst::ICMP_UGE: Selector = 5; break;
+      default: llvm_unreachable("integer comparison preflight");
+      }
+      Result = Compare(value(Cmp->getOperand(0), DType),
+                       value(Cmp->getOperand(1), DType), DType, Selector);
+    } else if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(Predicate)) {
+      auto Mapping = *floatComparisonMapping(Cmp->getPredicate());
+      Value *Active = activeMask(*Cmp);
+      Result = tileOperation(
+          "BSTART.TEPL TCMP", Carrier,
+          isF16Vector(Cmp->getArgOperand(0)) ? 4 : 1, Count,
+          {value(Cmp->getArgOperand(0)), value(Cmp->getArgOperand(1))}, Active,
+          31, Mapping.Selector);
+      if (Mapping.Invert)
+        Result = Logic(7, Result, Active);
+    } else if (auto *Select = dyn_cast<SelectInst>(Predicate)) {
+      Value *Condition = tileMask(Select->getCondition());
+      auto *All =
+          ConstantVector::getSplat(ElementCount::getFixed(Count), B.getTrue());
+      Value *Inverse = Logic(7, Condition, tileMask(All));
+      Result = Logic(6, Logic(5, Condition, tileMask(Select->getTrueValue())),
+                     Logic(5, Inverse, tileMask(Select->getFalseValue())));
+    } else if (isa<BinaryOperator>(Predicate) || isa<VPIntrinsic>(Predicate)) {
+      auto *Inst = cast<Instruction>(Predicate);
+      unsigned Opcode =
+          isa<BinaryOperator>(Inst)
+              ? Inst->getOpcode()
+              : *binaryOpcode(cast<VPIntrinsic>(Inst)->getIntrinsicID());
+      Result =
+          Logic(Opcode == Instruction::And  ? 5
+                : Opcode == Instruction::Or ? 6
+                                            : 7,
+                tileMask(Inst->getOperand(0)), tileMask(Inst->getOperand(1)));
+      if (auto *VP = dyn_cast<VPIntrinsic>(Inst))
+        Result = Logic(5, Result, activeMask(*VP));
+    } else if (isa<Constant>(Predicate) && !getSplatValue(Predicate) &&
+               !isa<UndefValue>(Predicate) && !isa<PoisonValue>(Predicate)) {
+      auto *ConstantMask = cast<Constant>(Predicate);
+      auto *Numeric = FixedVectorType::get(B.getInt32Ty(), Count);
+      uint32_t Columns[2] = {0, 0};
+      unsigned Cols = Count / 32;
+      for (unsigned Row = 0; Row < 32; ++Row)
+        for (unsigned Col = 0; Col < Cols; ++Col) {
+          auto *Element = dyn_cast_or_null<ConstantInt>(
+              ConstantMask->getAggregateElement(Row * Cols + Col));
+          if (Element && !Element->isZero())
+            Columns[Col] |= uint32_t(1) << Row;
+        }
+      Value *Rows =
+          call(Intrinsic::linx_experimental_ew_tci, {Numeric},
+               {B.getInt64(32), B.getInt64(Cols), B.getInt64(25),
+                B.getInt64(29), B.getInt64(0), B.getInt64(uint64_t(1) << 32)});
+      Value *Bits = splat(B.getInt32(Columns[0]), Numeric);
+      if (Cols == 2 && Columns[0] != Columns[1]) {
+        Value *Column = call(Intrinsic::linx_experimental_ew_tci, {Numeric},
+                             {B.getInt64(32), B.getInt64(2), B.getInt64(25),
+                              B.getInt64(29), B.getInt64(0), B.getInt64(1)});
+        Value *First = Compare(Column, splat(B.getInt32(0), Numeric), 25, 0);
+        Bits =
+            call(Intrinsic::linx_experimental_ew_tsel,
+                 {Numeric, Carrier, Numeric, Numeric},
+                 {B.getInt64(32), B.getInt64(2), B.getInt64(25), B.getInt64(29),
+                  First, Bits, splat(B.getInt32(Columns[1]), Numeric)});
+      }
+      Value *Shifted = tileOperation("BSTART.TEPL TSHR", Numeric, 25, Count,
+                                     {Bits, Rows}, nullptr);
+      Value *LowBit =
+          tileOperation("BSTART.TEPL TAND", Numeric, 25, Count,
+                        {Shifted, splat(B.getInt32(1), Numeric)}, nullptr);
+      Result = Compare(LowBit, splat(B.getInt32(0), Numeric), 25, 1);
+    } else {
+      auto *Numeric = FixedVectorType::get(B.getInt32Ty(), Count);
+      Value *Scalar = getSplatValue(Predicate);
+      Value *Bits = Scalar
+                        ? B.CreateZExt(B.CreateFreeze(Scalar), B.getInt32Ty())
+                        : B.getInt32(0);
+      Result =
+          Compare(splat(Bits, Numeric), splat(B.getInt32(0), Numeric), 25, 1);
+    }
+    return TileMasks[Predicate] = Result;
+  }
+
   Value *activeMask(VPIntrinsic &VP) {
     uint64_t N = cast<ConstantInt>(VP.getVectorLengthParam())->getZExtValue();
     auto Key = std::make_pair(VP.getMaskParam(), N);
@@ -4815,15 +5060,33 @@ class ElementTileLegalizer {
       return Existing;
     unsigned Count =
         cast<FixedVectorType>(VP.getMaskParam()->getType())->getNumElements();
-    uint64_t FullMask = 0;
-    for (unsigned Logical = 0; Logical < N; ++Logical) {
-      unsigned Physical = Count == 64
-                              ? Logical / 2 + 32 * (Logical % 2)
-                              : Logical;
-      FullMask |= uint64_t(1) << Physical;
-    }
-    return ActiveMasks[Key] =
-               B.CreateAnd(mask(VP.getMaskParam()), B.getInt64(FullMask));
+    Value *Predicate = tileMask(VP.getMaskParam());
+    if (N == Count)
+      return ActiveMasks[Key] = Predicate;
+    SmallVector<Constant *, 64> Lanes;
+    for (unsigned Lane = 0; Lane < Count; ++Lane)
+      Lanes.push_back(B.getInt1(Lane < N));
+    return ActiveMasks[Key] = call(
+               Intrinsic::linx_experimental_ew_tbinary, {Predicate->getType()},
+               {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(27),
+                B.getInt64(29), B.getInt64(5), Predicate,
+                tileMask(ConstantVector::get(Lanes))});
+  }
+
+  Value *tileOperation(StringRef Header, FixedVectorType *ResultTy,
+                       uint64_t DType, unsigned Count,
+                       ArrayRef<Value *> Sources, Value *Predicate,
+                       uint64_t DestinationType = 31, unsigned Comparison = 0,
+                       Value *Base = nullptr) {
+    Value *Result =
+        emitElementTileOperation(B, Header, ResultTy, DType, Count, Sources,
+                                 Predicate, DestinationType, Comparison, Base);
+    if (ResultTy)
+      PhysicalTypes[Result] = Header.endswith("TLEA")
+                                  ? (DType == 16 || DType == 17 ? 16 : 24)
+                              : DestinationType == 31 ? DType
+                                                      : DestinationType;
+    return Result;
   }
 
   Value *binary(unsigned Op, Value *L, Value *R, Value *Active,
@@ -4871,19 +5134,19 @@ class ElementTileLegalizer {
         (PreferredType == 16 || PreferredType == 17) &&
         (Code <= 2 || (Code >= 5 && Code <= 8)))
       DType = Wide ? 16 : 17;
-    return call(
-        Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
-        {B.getInt64(32),
-         B.getInt64(cast<FixedVectorType>(L->getType())->getNumElements() / 32),
-         B.getInt64(DType), B.getInt64(29), B.getInt64(Code), L, R, Active,
-         B.getInt64(0), B.getInt64(0), B.getInt64(1)});
+    static constexpr const char *Mnemonics[] = {"TADD", "TSUB", "TMUL", "TDIV",
+                                                "TREM", "TAND", "TOR",  "TXOR",
+                                                "TSHL", "TSHR"};
+    auto *Ty = cast<FixedVectorType>(L->getType());
+    return tileOperation((Twine("BSTART.TEPL ") + Mnemonics[Code]).str(), Ty,
+                         DType, Ty->getNumElements(), {L, R}, Active);
   }
 
   Address address(Value *V, Value *Active, unsigned AccessBits) {
     auto *GEP = cast<GetElementPtrInst>(V);
     auto Aggregate = aggregateAddress(GEP);
     if (!Aggregate) {
-      auto It = Addresses.find(V);
+      auto It = Addresses.find({V, Active});
       if (It != Addresses.end())
         return It->second;
     }
@@ -4940,13 +5203,13 @@ class ElementTileLegalizer {
       }
     }
     unsigned Count = cast<FixedVectorType>(Index->getType())->getNumElements();
-    Type *OffsetTy = FixedVectorType::get(B.getInt64Ty(), Count);
-    Value *Source = indexSource(value(Index, SourceType), SourceType);
+    auto *OffsetTy = FixedVectorType::get(B.getInt64Ty(), Count);
+    Value *Source = indexSource(value(Index, SourceType), SourceType, Active);
     // Identity views and LLVM GEP extensions may refer to the same B32 Tile.
     // Cache the normalized physical SSA source and element width, independent
     // of the GM base. The same index Tile may address mixed-width objects; its
     // 32-bit byte offsets cannot be reused for a later 16-bit access.
-    auto Key = std::make_pair(Source, SourceType);
+    auto Key = std::make_pair(Source, Active);
     unsigned ElementBits = Aggregate ? 8 :
         GEP->getSourceElementType()->getScalarSizeInBits();
     Value *Offset =
@@ -4956,11 +5219,9 @@ class ElementTileLegalizer {
     if (!Offset) {
       Offset = ByteOffsets[Key].lookup(ElementBits);
       if (!Offset) {
-        Offset = call(
-            Intrinsic::linx_experimental_ew_tlea, {OffsetTy, Index->getType()},
-            {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
-             B.getInt64(29), Source, B.getInt64(ElementBits)},
-            "pto.byte.offsets");
+        Offset =
+            tileOperation("BSTART.TEPL TLEA", OffsetTy, SourceType, Count,
+                          {Source}, Active, 31, 0, B.getInt64(ElementBits));
         ByteOffsets[Key][ElementBits] = Offset;
       }
       if (Aggregate) {
@@ -4983,16 +5244,18 @@ class ElementTileLegalizer {
     }
     Address A{B.CreateFreeze(Base), Offset, IndexType};
     if (!Aggregate)
-      Addresses.insert({V, A});
+      Addresses.insert({{V, Active}, A});
     return A;
   }
 
-  Value *indexSource(Value *Tile, uint64_t RequiredType) {
+  Value *indexSource(Value *Tile, uint64_t RequiredType,
+                     Value *Active = nullptr) {
     if (PhysicalTypes.lookup(Tile) == RequiredType)
       return Tile;
     auto Key = std::make_pair(Tile, RequiredType);
-    if (Value *Existing = RetypedIndices.lookup(Key))
-      return Existing;
+    if (!Active)
+      if (Value *Existing = RetypedIndices.lookup(Key))
+        return Existing;
     // TLEA requires source operation/backing type equality, unlike the
     // width-compatible arithmetic inputs. A typed add of zero preserves bits
     // and publishes the required S32/U32 descriptor before extending it.
@@ -5000,15 +5263,12 @@ class ElementTileLegalizer {
             RequiredType == 25) &&
            "only integer element retyping is admitted");
     unsigned Count = cast<FixedVectorType>(Tile->getType())->getNumElements();
-    uint64_t FullMask = Count == 64 ? ~uint64_t(0) : uint64_t(0xffffffff);
     Value *Zero = value(Constant::getNullValue(Tile->getType()));
-    Value *Result = call(
-        Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Tile->getType()},
-        {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(RequiredType),
-         B.getInt64(29), B.getInt64(0), Tile, Zero, B.getInt64(FullMask),
-         B.getInt64(0), B.getInt64(0), B.getInt64(1)},
-        "pto.index.typed");
-    RetypedIndices[Key] = Result;
+    Value *Result = tileOperation("BSTART.TEPL TADD",
+                                  cast<FixedVectorType>(Tile->getType()),
+                                  RequiredType, Count, {Tile, Zero}, Active);
+    if (!Active)
+      RetypedIndices[Key] = Result;
     return Result;
   }
 
@@ -5123,9 +5383,13 @@ class ElementTileLegalizer {
                             : isI64LeafVector(V)
                                 ? (PreferredType == 16 ? 16 : 24)
                                 : (PreferredType == 17 ? 17 : 25);
-      R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
+      assert(canUseTileMask(Select->getCondition()) &&
+             "Tile predicate preflight");
+      Value *Predicate = tileMask(Select->getCondition());
+      R = call(Intrinsic::linx_experimental_ew_tsel,
+               {Ty, Predicate->getType(), Ty, Ty},
                {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SelectType),
-                B.getInt64(29), mask(Select->getCondition()), B.getInt64(0),
+                B.getInt64(29), Predicate,
                 value(Select->getTrueValue(), SelectType),
                 value(Select->getFalseValue(), SelectType)});
     } else if (isIntrinsic(dyn_cast<CallInst>(V),
@@ -5135,15 +5399,11 @@ class ElementTileLegalizer {
                          Intrinsic::linx_experimental_element_atomic_add) &&
              "atomic effect preflight");
       Address A = address(Atomic->getArgOperand(0),
-                          mask(Atomic->getArgOperand(2)), 32);
+                          tileMask(Atomic->getArgOperand(2)), 32);
       Value *Source = indexSource(value(Atomic->getArgOperand(1)), 25);
-      R = call(Intrinsic::linx_experimental_ew_mgather_add_masked,
-               {Ty, A.Offset->getType(), Source->getType()},
-               {B.getInt64(32), B.getInt64(1), B.getInt64(25), B.getInt64(0),
-                B.getInt64(29), A.Base, A.Offset, Source,
-                mask(Atomic->getArgOperand(2)), B.getInt64(0), B.getInt64(0),
-                B.getInt64(1)},
-               "pto.atomic.old.tile");
+      R = tileOperation("BSTART.MGATHER.ADD", Ty, 25, Ty->getNumElements(),
+                        {A.Offset, Source}, tileMask(Atomic->getArgOperand(2)),
+                        31, 0, A.Base);
     } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
       if (Constant *Folded = foldAffineI64VPBinary(*VP)) {
         R = value(Folded, PreferredType);
@@ -5152,10 +5412,8 @@ class ElementTileLegalizer {
         // preserving zero, infinities, NaN class and payload. The VP mask
         // suppresses inactive undefined reads even though TNEG raises no NV.
         uint64_t DType = isF16Vector(VP) ? 4 : 1;
-        R = call(Intrinsic::linx_experimental_ew_tneg_gpr_masked, {Ty},
-                 {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
-                  B.getInt64(DType), B.getInt64(29),
-                  value(VP->getArgOperand(0)), activeMask(*VP)});
+        R = tileOperation("BSTART.TEPL TNEG", Ty, DType, Ty->getNumElements(),
+                          {value(VP->getArgOperand(0))}, activeMask(*VP));
       } else if (VP->getIntrinsicID() == Intrinsic::vp_trunc) {
         Value *Source = value(VP->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
@@ -5166,12 +5424,9 @@ class ElementTileLegalizer {
                 : 25;
         assert((SourceType == 16 || SourceType == 24) &&
                "native narrowing source requires an S64/U64 descriptor");
-        R = call(Intrinsic::linx_experimental_ew_tcvt_gpr_masked,
-                 {Ty, Source->getType()},
-                 {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
-                  B.getInt64(DestinationType), B.getInt64(29), B.getInt64(0),
-                  B.getInt64(0), Source, activeMask(*VP), B.getInt64(0),
-                  B.getInt64(0), B.getInt64(1)});
+        R = tileOperation("BSTART.TEPL TCVT", Ty, SourceType,
+                          Ty->getNumElements(), {Source}, activeMask(*VP),
+                          DestinationType);
         PhysicalTypes[R] = DestinationType;
       } else if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
         Address A = address(VP->getArgOperand(0), activeMask(*VP),
@@ -5183,16 +5438,38 @@ class ElementTileLegalizer {
                              : isI64LeafVector(VP)
                                  ? (PreferredType == 16 ? 16 : 24)
                                  : 25;
-        R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
-                 {Ty, A.Offset->getType()},
-                 {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(ValueType),
-                  B.getInt64(0), B.getInt64(29), B.getInt64(A.IndexType),
-                  A.Base, A.Offset, activeMask(*VP), B.getInt64(0),
-                  B.getInt64(0), B.getInt64(1)});
+        R = tileOperation("BSTART.MGATHER", Ty, ValueType, Count, {A.Offset},
+                          activeMask(*VP), 31, 0, A.Base);
       } else {
-        R = binary(*binaryOpcode(VP->getIntrinsicID()),
-                   value(VP->getArgOperand(0)), value(VP->getArgOperand(1)),
-                   activeMask(*VP), PreferredType);
+        unsigned Opcode = *binaryOpcode(VP->getIntrinsicID());
+        bool TileAddSub =
+            Opcode == Instruction::Add || Opcode == Instruction::Sub ||
+            Opcode == Instruction::FAdd || Opcode == Instruction::FSub;
+        unsigned Count = Ty->getNumElements();
+        if (TileAddSub && !getSplatValue(VP->getMaskParam()) &&
+            cast<ConstantInt>(VP->getVectorLengthParam())->getZExtValue() ==
+                Count &&
+            canUseTileMask(VP->getMaskParam())) {
+          Value *Left = value(VP->getArgOperand(0), PreferredType);
+          Value *Right = value(VP->getArgOperand(1), PreferredType);
+          Value *Predicate = tileMask(VP->getMaskParam());
+          uint64_t DType = Ty->getElementType()->isHalfTy()    ? 4
+                           : Ty->getElementType()->isFloatTy() ? 1
+                           : Ty->getScalarSizeInBits() == 64
+                               ? (PreferredType == 16 ? 16 : 24)
+                               : (PreferredType == 17 ? 17 : 25);
+          R = call(Opcode == Instruction::Add || Opcode == Instruction::FAdd
+                       ? Intrinsic::linx_experimental_ew_tadd_masked
+                       : Intrinsic::linx_experimental_ew_tsub_masked,
+                   {Ty, Ty, Ty, Predicate->getType()},
+                   {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(DType),
+                    B.getInt64(29), Left, Right, Predicate, B.getInt64(0),
+                    B.getInt64(1)});
+        } else {
+          R = binary(Opcode, value(VP->getArgOperand(0)),
+                     value(VP->getArgOperand(1)), activeMask(*VP),
+                     PreferredType);
+        }
       }
     } else {
       llvm_unreachable("value preflight");
@@ -5381,7 +5658,7 @@ public:
         B.SetInsertPoint(Scatter);
         B.SetCurrentDebugLocation(Scatter->getDebugLoc());
         Address A = address(
-            Scatter->getArgOperand(1), mask(Scatter->getArgOperand(2)),
+            Scatter->getArgOperand(1), tileMask(Scatter->getArgOperand(2)),
             Scatter->getArgOperand(0)->getType()->getScalarSizeInBits());
         Value *Source = value(Scatter->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
@@ -5391,12 +5668,9 @@ public:
                "scatter source descriptor must have an admitted type");
         unsigned Count =
             cast<FixedVectorType>(Source->getType())->getNumElements();
-        call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
-             {A.Offset->getType(), Source->getType()},
-             {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
-              B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset, Source,
-              mask(Scatter->getArgOperand(2)), B.getInt64(0), B.getInt64(0),
-              B.getInt64(0)});
+        tileOperation("BSTART.MSCATTER", nullptr, SourceType, Count,
+                      {Source, A.Offset}, tileMask(Scatter->getArgOperand(2)),
+                      31, 0, A.Base);
         continue;
       }
       auto *VP = dyn_cast<VPIntrinsic>(I);
@@ -5418,11 +5692,8 @@ public:
                "scatter source descriptor must have an admitted type");
         unsigned Count =
             cast<FixedVectorType>(Source->getType())->getNumElements();
-        call(Intrinsic::linx_experimental_ew_mscatter_gpr_masked,
-             {A.Offset->getType(), Source->getType()},
-             {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SourceType),
-              B.getInt64(29), B.getInt64(A.IndexType), A.Base, A.Offset, Source,
-              activeMask(*VP), B.getInt64(0), B.getInt64(0), B.getInt64(0)});
+        tileOperation("BSTART.MSCATTER", nullptr, SourceType, Count,
+                      {Source, A.Offset}, activeMask(*VP), 31, 0, A.Base);
       }
     }
     for (CallInst *Publication : Publications) {
@@ -6669,39 +6940,36 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
            Builder.getInt64(29), Builder.getInt64(0),
            Builder.getInt64(1ULL << 32)},
           "pto.gather.lanes");
-      Function *Compare = Intrinsic::getDeclaration(
-          F.getParent(), Intrinsic::linx_experimental_ew_tcmps_gpr,
-          {ValueTy});
+      auto Compare = [&](Value *Left, Value *Right, unsigned Selector) {
+        Value *Scalar = Builder.CreateTrunc(Right, Builder.getInt32Ty());
+        Value *Splat = Builder.CreateCall(
+            TCI, {Builder.getInt64(32), Builder.getInt64(1),
+                  Builder.getInt64(25), Builder.getInt64(29),
+                  Builder.CreateZExt(Scalar, Builder.getInt64Ty()),
+                  Builder.getInt64(0)});
+        return emitElementTileOperation(Builder, "BSTART.TEPL TCMP",
+                                        cast<FixedVectorType>(ValueTy), 25, 32,
+                                        {Left, Splat}, nullptr, 31, Selector);
+      };
       Value *Valid = Plan.GatherValid;
       if (!Valid->getType()->isIntegerTy(64))
         Valid = Builder.CreateZExtOrTrunc(Valid, Builder.getInt64Ty());
-      Value *Mask = Builder.CreateCall(
-          Compare,
-          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-           Builder.getInt64(29), Lanes, Valid, Builder.getInt64(2)},
-          "pto.gather.mask");
-      if (Plan.GatherOuterPredicate)
-        Mask = Builder.CreateSelect(Plan.GatherOuterPredicate, Mask,
-                                    Builder.getInt64(0),
-                                    "pto.gather.active.mask");
-      Function *TLEA = Intrinsic::getDeclaration(
-          F.getParent(), Intrinsic::linx_experimental_ew_tlea,
-          {OffsetTy, ValueTy});
-      Value *Offsets = Builder.CreateCall(
-          TLEA,
-          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-           Builder.getInt64(29), Indices, Builder.getInt64(32)},
-          "pto.gather.byte.offsets");
-      Function *Gather = Intrinsic::getDeclaration(
-          F.getParent(), Intrinsic::linx_experimental_ew_mgather_gpr_masked,
-          {ValueTy, OffsetTy});
-      Result = Builder.CreateCall(
-          Gather,
-          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-           Builder.getInt64(0), Builder.getInt64(29), Builder.getInt64(24),
-           Plan.GatherBase, Offsets, Mask, Builder.getInt64(0),
-           Builder.getInt64(0), Builder.getInt64(1)},
-          "pto.gather.value");
+      Value *Mask = Compare(Lanes, Valid, 2);
+      if (Plan.GatherOuterPredicate) {
+        Value *Enabled =
+            Builder.CreateSelect(Plan.GatherOuterPredicate,
+                                 Builder.getInt64(32), Builder.getInt64(0));
+        Value *Outer = Compare(Lanes, Enabled, 2);
+        Mask = emitElementTileOperation(Builder, "BSTART.TEPL TAND",
+                                        cast<FixedVectorType>(ValueTy), 27, 32,
+                                        {Mask, Outer}, nullptr);
+      }
+      Value *Offsets = emitElementTileOperation(
+          Builder, "BSTART.TEPL TLEA", cast<FixedVectorType>(OffsetTy), 25, 32,
+          {Indices}, Mask, 31, 0, Builder.getInt64(32));
+      Result = emitElementTileOperation(
+          Builder, "BSTART.MGATHER", cast<FixedVectorType>(ValueTy), 25, 32,
+          {Offsets}, Mask, 31, 0, Plan.GatherBase);
     } else if (Plan.IsRelaxedAtomicAdd) {
       IRBuilder<> Builder(Plan.L->getLoopPreheader()->getTerminator());
       Type *ValueTy = FixedVectorType::get(Builder.getInt32Ty(), 32);
@@ -6735,74 +7003,49 @@ static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
            Builder.getInt64(29), Builder.getInt64(0),
            Builder.getInt64(1ULL << 32)},
           "pto.atomic.lanes");
-      Function *Compare = Intrinsic::getDeclaration(
-          F.getParent(), Intrinsic::linx_experimental_ew_tcmps_gpr,
-          {ValueTy});
-      Value *Mask = nullptr;
-      if (Plan.AtomicValid) {
-        Value *Valid = Plan.AtomicValid;
-        if (!Valid->getType()->isIntegerTy(64))
-          Valid = Builder.CreateZExtOrTrunc(Valid, Builder.getInt64Ty());
-        Mask = Builder.CreateCall(
-            Compare,
-            {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-             Builder.getInt64(29), Lanes, Valid, Builder.getInt64(2)},
-            "pto.atomic.tail.mask");
+      auto Compare = [&](Value *Left, Value *Right, unsigned Selector) {
+        Value *Scalar = Builder.CreateTrunc(Right, Builder.getInt32Ty());
+        Value *Splat = Builder.CreateCall(
+            TCI, {Builder.getInt64(32), Builder.getInt64(1),
+                  Builder.getInt64(25), Builder.getInt64(29),
+                  Builder.CreateZExt(Scalar, Builder.getInt64Ty()),
+                  Builder.getInt64(0)});
+        return emitElementTileOperation(Builder, "BSTART.TEPL TCMP",
+                                        cast<FixedVectorType>(ValueTy), 25, 32,
+                                        {Left, Splat}, nullptr, 31, Selector);
+      };
+      Value *Mask = Compare(Lanes, Builder.getInt64(32), 2);
+      auto Intersect = [&](Value *Other) {
+        Mask = emitElementTileOperation(Builder, "BSTART.TEPL TAND",
+                                        cast<FixedVectorType>(ValueTy), 27, 32,
+                                        {Mask, Other}, nullptr);
+      };
+      auto Widen = [&](Value *Scalar) {
+        return Builder.CreateZExtOrTrunc(Scalar, Builder.getInt64Ty());
+      };
+      if (Plan.AtomicValid)
+        Intersect(Compare(Lanes, Widen(Plan.AtomicValid), 2));
+      if (Plan.AtomicLane)
+        Intersect(Compare(Lanes, Widen(Plan.AtomicLane), 0));
+      if (Plan.AtomicKeyView)
+        Intersect(Compare(Expressions.lower(Plan.AtomicKeyView),
+                          Widen(Plan.AtomicSelected), 0));
+      for (Value *Predicate : Plan.AtomicOuterPredicates) {
+        Value *Enabled = Builder.CreateSelect(Predicate, Builder.getInt64(32),
+                                              Builder.getInt64(0));
+        Intersect(Compare(Lanes, Enabled, 2));
       }
-      if (Plan.AtomicLane) {
-        Value *Lane = Plan.AtomicLane;
-        if (!Lane->getType()->isIntegerTy(64))
-          Lane = Builder.CreateZExtOrTrunc(Lane, Builder.getInt64Ty());
-        Value *LaneMask = Builder.CreateCall(
-            Compare,
-            {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-             Builder.getInt64(29), Lanes, Lane, Builder.getInt64(0)},
-            "pto.atomic.lane.mask");
-        Mask = Mask ? Builder.CreateAnd(Mask, LaneMask,
-                                        "pto.atomic.active.mask")
-                    : LaneMask;
-      }
-      if (Plan.AtomicKeyView) {
-        Value *Keys = Expressions.lower(Plan.AtomicKeyView);
-        Value *Selected = Plan.AtomicSelected;
-        if (!Selected->getType()->isIntegerTy(64))
-          Selected =
-              Builder.CreateZExtOrTrunc(Selected, Builder.getInt64Ty());
-        Value *KeyMask = Builder.CreateCall(
-            Compare,
-            {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-             Builder.getInt64(29), Keys, Selected, Builder.getInt64(0)},
-            "pto.atomic.key.mask");
-        Mask = Mask ? Builder.CreateAnd(Mask, KeyMask,
-                                        "pto.atomic.active.mask")
-                    : KeyMask;
-      }
-      for (Value *Predicate : Plan.AtomicOuterPredicates)
-        Mask = Builder.CreateSelect(Predicate, Mask, Builder.getInt64(0),
-                                    "pto.atomic.outer.mask");
-      Function *TLEA = Intrinsic::getDeclaration(
-          F.getParent(), Intrinsic::linx_experimental_ew_tlea,
-          {OffsetTy, ValueTy});
-      Value *Offsets = Builder.CreateCall(
-          TLEA,
-          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-           Builder.getInt64(29), Indices, Builder.getInt64(32)},
-          "pto.atomic.byte.offsets");
+      Value *Offsets = emitElementTileOperation(
+          Builder, "BSTART.TEPL TLEA", cast<FixedVectorType>(OffsetTy), 25, 32,
+          {Indices}, Mask, 31, 0, Builder.getInt64(32));
       Value *Ones = Builder.CreateCall(
           TCI,
           {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
            Builder.getInt64(29), Builder.getInt64(1), Builder.getInt64(0)},
           "pto.atomic.ones");
-      Function *Atomic = Intrinsic::getDeclaration(
-          F.getParent(), Intrinsic::linx_experimental_ew_mgather_add_masked,
-          {ValueTy, OffsetTy, ValueTy});
-      Result = Builder.CreateCall(
-          Atomic,
-          {Builder.getInt64(32), Builder.getInt64(1), Builder.getInt64(25),
-           Builder.getInt64(3), Builder.getInt64(29), Plan.AtomicBase, Offsets,
-           Ones, Mask, Builder.getInt64(0), Builder.getInt64(0),
-           Builder.getInt64(1)},
-          "pto.atomic.old");
+      Result = emitElementTileOperation(
+          Builder, "BSTART.MGATHER.ADD", cast<FixedVectorType>(ValueTy), 25, 32,
+          {Offsets, Ones}, Mask, 31, 0, Plan.AtomicBase);
     } else {
       Result = Expressions.lower(Plan.PublishedElement);
     }

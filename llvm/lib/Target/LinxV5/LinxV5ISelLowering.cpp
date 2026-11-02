@@ -1490,8 +1490,7 @@ SDValue LinxV5TargetLowering::lowerElementwiseTSubMasked(
   getV5ConstantOperand(Op.getOperand(10), "masked TSUB Zero", 1);
   SmallVector<SDValue> Ops;
   Ops.push_back(Op.getOperand(0));
-  // TLSU contract uses LB0=columns and LB1=rows.
-  for (unsigned Index : {3u, 2u}) {
+  for (unsigned Index : {2u, 3u}) {
     if (isa<ConstantSDNode>(Op.getOperand(Index))) {
       Ops.push_back(DAG.getRegister(LinxV5::R0, MVT::i64));
       Ops.push_back(DAG.getTargetConstant(
@@ -1609,7 +1608,12 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
        (Rows == 1 && Cols == 32 && ResultVT == MVT::v32f32));
   const bool IntegerCube = Rows == 32 && Cols == 1 && IntegerProfile &&
                            Layout == 29 && ResultVT == MVT::v32i32;
-  if ((!IntegerCube && !F32Norm) || LHSVT != ResultVT || RHSVT != ResultVT)
+  const bool PredicateCube = Rows == 32 && (Cols == 1 || Cols == 2) &&
+                             DataType == LinxV5Op::DataType::U8 &&
+                             Layout == 29 && ResultVT == MVT::v32i32 &&
+                             Opcode >= 5 && Opcode <= 7;
+  if ((!IntegerCube && !F32Norm && !PredicateCube) || LHSVT != ResultVT ||
+      RHSVT != ResultVT)
     report_fatal_error(
         "element binary requires an exact U32/S32 CUBE_M32 or FP32 NORM "
         "profile");
@@ -2312,8 +2316,7 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
       getV5ConstantOperand(Op.getOperand(4), "TCMP data type", 31), DL,
       MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
-      LinxV5Op::ArgFormat::NORM, DL,
-      MVT::i64));
+      getV5ConstantOperand(Op.getOperand(5), "TCMP layout", 31), DL, MVT::i64));
   // Predicate vectors are packed, but Local allocations still have the
   // architectural 128-byte minimum. Do not widen them to U32 lane storage.
   uint64_t PredicateBytes =
