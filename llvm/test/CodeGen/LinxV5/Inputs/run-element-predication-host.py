@@ -79,14 +79,53 @@ run([args.opt, '-enable-new-pm=0', '-expandvp', '-verify',
      '-expandvp-override-evl-transform=Discard',
      '-expandvp-override-mask-transform=Convert',
      '-S', cpp_portable, '-o', cpp_expanded])
+additional_expanded = []
+additional_evidence = []
+for name, source in (
+        ('nested-ir', here.parent / 'element-predication-nested-loop.ll'),
+        ('nested-cpp', repo / 'clang/test/LinxV5/pto-element-nested-predication.cpp'),
+        ('dynamic-ir', here.parent / 'element-predication-dynamic-loop.ll'),
+        ('dynamic-diamond', here.parent / 'element-predication-dynamic-reconvergence.ll'),
+        ('dynamic-cpp', repo / 'clang/test/LinxV5/pto-element-dynamic-predication.cpp')):
+    nested_input = source
+    if source.suffix == '.cpp':
+        nested_input = out / (name + '-raw.ll')
+        run([target_clang, '--target=linx64v5', '-mlxbc', '-O1', '-Xclang',
+             '-disable-llvm-passes', '-emit-llvm', '-S', source, '-o', nested_input])
+    nested_wide = out / (name + '-predicated.ll')
+    run([args.opt, '-mtriple=linx64v5',
+         '-passes=mem2reg,loop-simplify,loop-rotate,instcombine,lcssa,linx-v5-element-predication,verify',
+         '-verify-each', '-S', nested_input, '-o', nested_wide])
+    text, count = re.subn(pattern, '', nested_wide.read_text(), flags=re.MULTILINE)
+    assert count == (3 if name == 'nested-cpp' else
+                     3 if name == 'dynamic-cpp' else 1), (
+        'unexpected nested region count', name, count)
+    text = re.sub(r'^declare void @llvm\.linx\.experimental\.element\.region\(metadata\).*\n',
+                  '', text, flags=re.MULTILINE)
+    assert '@llvm.linx.' not in text, 'nested test copy contains target intrinsics'
+    text = re.sub(r'^target (triple|datalayout) = .*\n', '', text, flags=re.MULTILINE)
+    text = re.sub(r'"target-features"="[^"]*"', '', text)
+    nested_portable = out / (name + '-portable.ll')
+    nested_portable.write_text(text)
+    nested_expanded = out / (name + '-expanded.ll')
+    run([args.opt, '-enable-new-pm=0', '-expandvp', '-verify',
+         '-expandvp-override-evl-transform=Discard',
+         '-expandvp-override-mask-transform=Convert',
+         '-S', nested_portable, '-o', nested_expanded])
+    additional_expanded.append(nested_expanded)
+    additional_evidence.extend((source, nested_wide, nested_portable,
+                                nested_expanded))
+    if nested_input != source:
+        additional_evidence.append(nested_input)
 exe = out / 'host-check'
-run([args.clang, '-O2', expanded, cpp_expanded,
+run([args.clang, '-O2', expanded, cpp_expanded, *additional_expanded,
      here / 'element-predication-host.c', '-o', exe])
 run([exe])
 manifest = {'stage': 'P2 generic IR host semantics; not PTO codegen/gfrun/gfsim',
             'commands': commands,
             'hashes': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                        for p in (fixture, cpp, wide, portable, expanded, raw,
-                                 cpp_wide, cpp_portable, cpp_expanded, exe)}}
+                                 cpp_wide, cpp_portable, cpp_expanded, exe,
+                                 *additional_evidence)}}
 (out / 'evidence.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print(out / 'evidence.json')
