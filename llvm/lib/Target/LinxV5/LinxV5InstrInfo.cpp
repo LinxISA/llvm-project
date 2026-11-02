@@ -1587,6 +1587,20 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
 
   if (MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
+    // The pseudo retains source layout for typed copies; MC encodes the
+    // TCMP operation view with Layout=0 as required by the ISA.
+    if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI &&
+        MI.getOperand(1).getReg() == LinxV5::R0 &&
+        MI.getOperand(3).getReg() == LinxV5::R0 &&
+        MI.getOperand(6).getImm() == LinxV5Op::ArgFormat::CUBE_M32) {
+      LinxV5::TileDescriptor Result{
+          LinxV5Op::DataType::U8, LinxV5Op::ArgFormat::CUBE_M32,
+          static_cast<unsigned>(MI.getOperand(2).getImm()),
+          static_cast<unsigned>(MI.getOperand(4).getImm()), 4,
+          static_cast<unsigned>(MI.getOperand(7).getImm())};
+      Result.PredicateBasisType = MI.getOperand(5).getImm();
+      return checkedTileDescriptor(Result);
+    }
     if (MI.getOperand(1).getReg() != LinxV5::R0 ||
         MI.getOperand(3).getReg() != LinxV5::R0 ||
         MI.getOperand(6).getImm() != 0)
@@ -1637,6 +1651,18 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
         static_cast<unsigned>(MI.getOperand(2).getImm()),
         static_cast<unsigned>(MI.getOperand(6).getImm()),
         static_cast<unsigned>(MI.getOperand(8).getImm())});
+  }
+
+  if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI) {
+    if (MI.getOperand(1).getReg() != LinxV5::R0 ||
+        MI.getOperand(3).getReg() != LinxV5::R0)
+      return None;
+    unsigned ValidCol = MI.getOperand(2).getImm();
+    return checkedTileDescriptor(LinxV5::TileDescriptor{
+        static_cast<unsigned>(MI.getOperand(5).getImm()),
+        static_cast<unsigned>(MI.getOperand(10).getImm()),
+        static_cast<unsigned>(MI.getOperand(4).getImm()), ValidCol, ValidCol,
+        static_cast<unsigned>(MI.getOperand(7).getImm())});
   }
 
   if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {

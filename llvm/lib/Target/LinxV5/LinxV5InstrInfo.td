@@ -3655,8 +3655,8 @@ def PseudoMGATHER_MASK_SizeI : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
        BstartDataType:$DataType, PadValue:$PadValue,
        TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
-       PRED_TILE_Src_Reg:$MaskTile, GPRList:$List)> {
-  let AsmString = "MGATHER.MASK\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}, ${PadValue}>\t[$List], $OffsetTile, $MaskTile, $DstTile$TileSize";
+       PRED_TILE_Src_Reg:$MaskTile, BArgFormat:$Layout, GPRList:$List)> {
+  let AsmString = "MGATHER.MASK.$Layout\t<LB0: $RegM$immM, LB1: $RegN$immN, ${DataType}, ${PadValue}>\t[$List], $OffsetTile, $MaskTile, $DstTile$TileSize";
 }
 
 def PseudoMGATHER_GPR_Masked_SizeI : PseudoMTClImpl<

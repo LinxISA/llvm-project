@@ -312,7 +312,7 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
   case LinxV5::PseudoMGATHER_MASK_SizeI:
     MCVec.push_back(
         MCInstBuilder(LinxV5::BDATR)
-            .addOperand(MCOperand::createImm(0))
+            .addOperand(Inst.getOperand(10))
             .addOperand(MCOperand::createImm(0))
             .addOperand(MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
             .addOperand(Inst.getOperand(6))
@@ -733,15 +733,12 @@ llvm::SmallVector<MCInst> getBIOTFromInst(MCInst Inst, const MCInstrInfo &MII) {
                         .addOperand(MCOperand::createImm(1)));     // Last
     break;
   case LinxV5::PseudoMGATHER_MASK_SizeI:
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
                         .addOperand(Inst.getOperand(0))
                         .addOperand(MCOperand::createImm(0b1111))
                         .addOperand(Inst.getOperand(7))
-                        .addOperand(MCOperand::createImm(0))
-                        .addOperand(Inst.getOperand(8)));
-    McVec.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_NoDst)
-                        .addOperand(MCOperand::createImm(0b1111))
                         .addOperand(MCOperand::createImm(1))
+                        .addOperand(Inst.getOperand(8))
                         .addOperand(Inst.getOperand(9)));
     break;
   case LinxV5::PseudoMGATHER_ADD_SizeI:

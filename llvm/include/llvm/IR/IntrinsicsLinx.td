@@ -390,6 +390,13 @@ def int_linx_experimental_ew_mgather_masked :
                llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty],
               [IntrHasSideEffects]>;
 
+// PredicateCell operation mask with an explicit numeric layout.
+def int_linx_experimental_ew_mgather_tile_masked :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty],
+              [IntrHasSideEffects]>;
+
 // Ordinary MGATHER with a Predicate-GPR execution mask.  Unlike
 // ew_mgather_masked, this is function 4 (MGATHER), not function 6
 // (MGATHER.MASK): inactive lanes are controlled by B.DATR PredInv/Zero and
