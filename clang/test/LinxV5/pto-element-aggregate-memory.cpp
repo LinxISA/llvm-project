@@ -55,17 +55,17 @@ extern "C" void table_fields(const TableEntry *__restrict table,
 }
 
 // IR-LABEL: define{{.*}} @table_fields(
-// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 25, i64 29, {{.*}}, i64 8)
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 2,
-// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i64.v32i64(i64 32, i64 1, i64 24,
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
+// IR: asm sideeffect "BSTART.TEPL TMUL, U64
+// IR: asm sideeffect "BSTART.TLSU MGATHER, U64
 // IR: getelementptr i8, ptr %table, i64 8
-// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64(i64 32, i64 1, i64 25,
+// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
 // OBJ-LABEL: <table_fields>:
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U64
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U64
 // OBJ-NOT: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 
 extern "C" void signed_entry_index(const TableEntry *__restrict middle,
                                     const s32 *__restrict indices,
@@ -77,8 +77,8 @@ extern "C" void signed_entry_index(const TableEntry *__restrict middle,
 }
 
 // IR-LABEL: define{{.*}} @signed_entry_index(
-// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 17, i64 29, {{.*}}, i64 8)
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 16, i64 29, i64 2,
+// IR: asm sideeffect "BSTART.TEPL TLEA, S32
+// IR: asm sideeffect "BSTART.TEPL TMUL, S64
 // OBJ-LABEL: <signed_entry_index>:
 // OBJ: BSTART.TEPL TLEA, S32
 // OBJ: BSTART.TEPL TMUL, S64
@@ -99,15 +99,15 @@ extern "C" void same_address_masks(const TableEntry *__restrict table,
 }
 
 // IR-LABEL: define{{.*}} @same_address_masks(
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64{{.*}}i64 2,
-// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i64.v32i64
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64{{.*}}i64 2,
-// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i64.v32i64
+// IR: asm sideeffect "BSTART.TEPL TMUL, U64
+// IR: asm sideeffect "BSTART.TLSU MGATHER, U64
+// IR: asm sideeffect "BSTART.TEPL TMUL, U64
+// IR: asm sideeffect "BSTART.TLSU MGATHER, U64
 // OBJ-LABEL: <same_address_masks>:
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U64
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U64
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U64
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U64
 
 extern "C" void nested_field(const NestedPayload *__restrict records,
                               const u32 *__restrict indices,
@@ -119,11 +119,11 @@ extern "C" void nested_field(const NestedPayload *__restrict records,
 }
 
 // IR-LABEL: define{{.*}} @nested_field(
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 2,
+// IR: asm sideeffect "BSTART.TEPL TMUL, U64
 // IR: getelementptr i8, ptr %records, i64 16
 // OBJ-LABEL: <nested_field>:
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U64
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U64
 
 extern "C" void stride12_field(const Stride12 *__restrict records,
                                 const u32 *__restrict indices,
@@ -135,15 +135,15 @@ extern "C" void stride12_field(const Stride12 *__restrict records,
 }
 
 // IR-LABEL: define{{.*}} @stride12_field(
-// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 25, i64 29, {{.*}}, i64 8)
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
 // IR: freeze i64 12
 // IR: @llvm.linx.experimental.ew.tci.v32i64(i64 32, i64 1, i64 24, i64 29,
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 2,
+// IR: asm sideeffect "BSTART.TEPL TMUL, U64
 // IR: getelementptr i8, ptr %records, i64 4
 // OBJ-LABEL: <stride12_field>:
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 
 extern "C" void packed_stride5_field(
     const PackedStride5 *__restrict records, const u32 *__restrict indices,
@@ -155,15 +155,15 @@ extern "C" void packed_stride5_field(
 }
 
 // IR-LABEL: define{{.*}} @packed_stride5_field(
-// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 25, i64 29, {{.*}}, i64 8)
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
 // IR: freeze i64 5
 // IR: @llvm.linx.experimental.ew.tci.v32i64(i64 32, i64 1, i64 24, i64 29,
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 2,
+// IR: asm sideeffect "BSTART.TEPL TMUL, U64
 // IR: getelementptr i8, ptr %records, i64 1
 // OBJ-LABEL: <packed_stride5_field>:
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 
 #if defined(TEST_MULTI_DYNAMIC) || defined(TEST_SAME_INDEX_TWICE)
 struct Rows { s64 values[4]; };

@@ -57,9 +57,9 @@ exit:
 ; IR-LABEL: define void @signed_compare_freeze()
 ; IR: [[LEFT:%.*]] = call <32 x i64> asm sideeffect "", "=@2Tr"()
 ; IR: [[RIGHT:%.*]] = call <32 x i64> asm sideeffect "", "=@2Tr"()
-; IR: call i64 @llvm.linx.experimental.ew.tcmp.gpr.v32i64(i64 32, i64 1, i64 16, i64 29, <32 x i64> [[LEFT]], <32 x i64> [[RIGHT]], i64 0)
-; IR: call i64 @llvm.linx.experimental.ew.tcmp.gpr.v32i64(i64 32, i64 1, i64 16, i64 29, <32 x i64> [[LEFT]], <32 x i64> [[RIGHT]], i64 2)
-; IR: call <32 x i64> @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 16,
+; IR: call <32 x i32> @llvm.linx.experimental.ew.tcmp.v32i32.v32i64.v32i64(i64 32, i64 1, i64 16, i64 29, <32 x i64> [[LEFT]], <32 x i64> [[RIGHT]], i64 0)
+; IR: call <32 x i32> @llvm.linx.experimental.ew.tcmp.v32i32.v32i64.v32i64(i64 32, i64 1, i64 16, i64 29, <32 x i64> [[LEFT]], <32 x i64> [[RIGHT]], i64 2)
+; IR: call <32 x i64> @llvm.linx.experimental.ew.tsel.v32i64.v32i32.v32i64.v32i64(i64 32, i64 1, i64 16,
 ; IR-NOT: freeze <32 x i64>
 ; IR-NOT: <64 x i64>
 ; IR-NOT: llvm.vp.
@@ -104,8 +104,8 @@ exit:
 }
 
 ; IR-LABEL: define void @unsigned_compare()
-; IR: call i64 @llvm.linx.experimental.ew.tcmp.gpr.v32i64(i64 32, i64 1, i64 24,
-; IR: call <32 x i64> @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 24,
+; IR: call <32 x i32> @llvm.linx.experimental.ew.tcmp.v32i32.v32i64.v32i64(i64 32, i64 1, i64 24,
+; IR: call <32 x i64> @llvm.linx.experimental.ew.tsel.v32i64.v32i32.v32i64.v32i64(i64 32, i64 1, i64 24,
 ; IR-NOT: <64 x i64>
 
 define void @signed_empty_import(i32 %choice) {

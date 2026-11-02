@@ -17,8 +17,8 @@ extern "C" void helper_twice(int *__restrict__ hist0, int *__restrict__ hist1,
 }
 
 // CHECK-LABEL: define {{.*}}@helper_twice(
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
 // CHECK-NOT: call void @llvm.linx.experimental.element.region
 
 extern "C" void helper_conditional(int *__restrict__ hist0,
@@ -32,7 +32,7 @@ extern "C" void helper_conditional(int *__restrict__ hist0,
 }
 
 // CHECK-LABEL: define {{.*}}@helper_conditional(
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
 // CHECK-NOT: call void @llvm.linx.experimental.element.region

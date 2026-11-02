@@ -29,8 +29,8 @@ extern "C" void guarded_output(const u32 *__restrict input,
 }
 
 // IR-LABEL: define{{.*}} @guarded_output(
-// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32
-// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
+// IR: asm sideeffect "BSTART.TEPL TADD, U32
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
 // IR-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64
 // IR-NOT: @llvm.vp.{{.*}}v32i64
 
@@ -46,7 +46,7 @@ extern "C" void bounded_join(const u32 *__restrict input,
 }
 
 // IR-LABEL: define{{.*}} @bounded_join(
-// IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
 // IR-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64
 // IR-NOT: @llvm.vp.{{.*}}v32i64
 #endif
@@ -82,9 +82,9 @@ extern "C" void unbounded_join(const u32 *__restrict input,
       output[element] = input[joined];
   }
 }
-// UNBOUNDED: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 24,
-// UNBOUNDED: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24,
-// UNBOUNDED: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64
+// UNBOUNDED: @llvm.linx.experimental.ew.tsel.v32i64.v32i32.v32i64.v32i64(i64 32, i64 1, i64 24,
+// UNBOUNDED: asm sideeffect "BSTART.TEPL TLEA, U64
+// UNBOUNDED: asm sideeffect "BSTART.TLSU MGATHER, U32
 #endif
 
 #ifdef TEST_UNSUPPORTED_USER
@@ -98,10 +98,10 @@ extern "C" void unsupported_user(const u32 *__restrict input,
   }
 }
 // USER-LABEL: define{{.*}} @unsupported_user(
-// USER: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
-// USER: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i64(i64 32, i64 1, i64 24, i64 29, i64 9,
-// USER: @llvm.linx.experimental.ew.tcvt.gpr.masked.v32i32.v32i64(i64 32, i64 1, i64 24, i64 25,
-// USER: @llvm.linx.experimental.ew.mscatter.gpr.masked.v32i64.v32i32
+// USER: asm sideeffect "BSTART.TEPL TLEA, U32
+// USER: asm sideeffect "BSTART.TEPL TSHR, U64
+// USER: asm sideeffect "BSTART.TEPL TCVT, U64
+// USER: asm sideeffect "BSTART.TLSU MSCATTER, U32
 #endif
 
 #ifdef TEST_NEGATIVE_JOIN
@@ -114,10 +114,10 @@ extern "C" void negative_join(const u32 *__restrict input,
       output[element] = input[joined];
   }
 }
-// NEGATIVE: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 16,
-// NEGATIVE: @llvm.linx.experimental.ew.tcmps.gpr.v32i64(i64 32, i64 1, i64 16,
-// NEGATIVE: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24,
-// NEGATIVE: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i32.v32i64
+// NEGATIVE: @llvm.linx.experimental.ew.tsel.v32i64.v32i32.v32i64.v32i64(i64 32, i64 1, i64 16,
+// NEGATIVE: @llvm.linx.experimental.ew.tcmp.v32i32.v32i64.v32i64(i64 32, i64 1, i64 16,
+// NEGATIVE: asm sideeffect "BSTART.TEPL TLEA, U64
+// NEGATIVE: asm sideeffect "BSTART.TLSU MGATHER, U32
 #endif
 
 #ifdef TEST_HIGH_GEP
@@ -128,7 +128,7 @@ extern "C" void high_gep(const u32 *__restrict input,
     output[element] = input[0x80000000UL + element];
 }
 // HIGHGEP-LABEL: define{{.*}} @high_gep(
-// HIGHGEP: @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 25,
+// HIGHGEP: asm sideeffect "BSTART.TEPL TLEA, U32
 #endif
 
 #ifdef TEST_BOUNDARY

@@ -12,7 +12,7 @@ extern "C" void aggregate_base(unsigned row, const int *__restrict__ bins) {
 // CHECK-LABEL: define {{.*}}@aggregate_base(
 // CHECK: pto.aggregate.base = getelementptr [4 x [256 x i32]], ptr @hist, i64 0, i64
 // CHECK: [[BASE:%.*]] = freeze ptr %pto.aggregate.base
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked{{.*}}ptr [[BASE]],
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32{{.*}}ptr [[BASE]],
 
 struct Bucket {
   int padding;
@@ -30,4 +30,4 @@ extern "C" void aggregate_field(Bucket *__restrict__ buckets, long row,
 // CHECK-LABEL: define {{.*}}@aggregate_field(
 // CHECK: pto.aggregate.base = getelementptr %struct.Bucket, ptr {{.*}}, i64 {{.*}}, i32 1
 // CHECK: [[FIELD_BASE:%.*]] = freeze ptr %pto.aggregate.base
-// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked{{.*}}ptr [[FIELD_BASE]],
+// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32{{.*}}ptr [[FIELD_BASE]],

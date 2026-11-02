@@ -49,30 +49,30 @@ void histogram_if(tile32 &old_values, unsigned int *hist,
 
 // IR-LABEL: define{{.*}}histogram_tail
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tci
-// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
-// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
-// IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
+// IR: asm sideeffect "BSTART.TEPL TCMP, U32
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
+// IR: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
 
 // IR-LABEL: define{{.*}}histogram_if
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tci
-// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
-// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
-// IR: and i64
-// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
-// IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
+// IR: asm sideeffect "BSTART.TEPL TCMP, U32
+// IR: asm sideeffect "BSTART.TEPL TCMP, U32
+// IR: asm sideeffect "BSTART.TEPL TAND, U8
+// IR: asm sideeffect "BSTART.TEPL TLEA, U32
+// IR: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
 
 // OBJ-LABEL: <_Z14histogram_tail
 // OBJ: BSTART.TEPL TCI, U32
-// OBJ: BSTART.TEPL TCMPS, U32
+// OBJ: BSTART.TEPL TCMP, U32
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TLSU MGATHER.ADD, U32
-// OBJ: ExecMaskPresent
+// OBJ-NOT: ExecMaskPresent
 
 // OBJ-LABEL: <_Z12histogram_if
 // OBJ: BSTART.TEPL TCI, U32
-// OBJ: BSTART.TEPL TCMPS, U32
-// OBJ: BSTART.TEPL TCMPS, U32
-// OBJ: and
+// OBJ: BSTART.TEPL TCMP, U32
+// OBJ: BSTART.TEPL TCMP, U32
+// OBJ: BSTART.TEPL TAND, U8
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TLSU MGATHER.ADD, U32
-// OBJ: ExecMaskPresent
+// OBJ-NOT: ExecMaskPresent

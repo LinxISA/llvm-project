@@ -175,10 +175,38 @@ objects, for example::
     -mllvm -linxv5-enable-generic-element=true \
     -mllvm -enable-all-vector-as-tilereg=true -c kernel.cpp
 
-The legalizer maps logical masks to low 32 GPR bits.  Arithmetic and gathers
-produce fully defined Tiles using ZERO, and scatter suppresses inactive memory
-effects without setting the destination-only Zero control.  Multiway PHIs and
-selects use fully defined numeric inputs and GPR-predicate TSEL.  Signed divide
+The CUBE element-if legalizer keeps logical conditions in PredicateCell Tiles,
+not packed GPR execution masks. Integer comparisons and the admitted native
+floating comparisons produce Tile predicates. Boolean ``and``/``or``/``xor``
+and ``select`` compose them using U8 TAND/TOR/TXOR, preserving PredicateCell
+identity independently of the comparison's numeric basis type. This applies
+to the admitted logical32 and logical64 profiles, including native i64 and
+FP16 data where those profiles already permit the operation.
+
+The Tile predicate is passed directly to TSEL and appended after the ordinary
+Tile sources of masked arithmetic, numeric AND/OR/XOR and shifts, FP negation,
+truncation, address generation, gathers, scatters and monotonic i32 atomic add.
+Signed remainder retains its truncating divide/multiply/subtract expansion,
+with the same Tile execution mask on every step. Masked producers suppress
+inactive source reads and initialize inactive result elements with ZERO;
+scatters suppress inactive memory effects without a destination-only ZERO
+control. Memory operations retain compiler memory barriers. Address offsets
+are shared only when both the typed index source and active Tile mask agree.
+The older bounded gather/atomic lowering also uses Tile execution masks.
+
+Nonuniform constant conditions and complemented floating comparisons use this
+same carrier. Existing legal partial-EVL floating comparisons intersect their
+source predicate with a Tile lane-prefix mask; inactive signaling NaNs are not
+read to construct predicates, and complemented results remain false outside
+the active mask. This does not admit arbitrary partial EVLs, additional FP
+predicates, new data types or new region shapes. Unsupported cases retain
+explicit diagnostics. NORM-profile support is unchanged.
+
+This is an internal carrier choice, not a source-level layout or grain knob.
+Ordinary scalar arguments, addresses and constants can still use GPRs; there
+is no promise of a completely GPR-free kernel. Existing admitted view shapes
+and the 128-byte minimum Local allocation are unchanged. Multiway PHIs and
+selects continue to use fully defined numeric inputs. Signed divide
 and arithmetic shift select S32 operations; signed remainder expands through
 truncating division, multiply and subtract rather than PTO floor remainder.
 Stores select the exact physical source dtype, including direct S32 results.
@@ -198,11 +226,11 @@ including negative zero and NaN payloads, without numeric identity conversions.
 The six comparisons ``oeq``, ``une``, ``olt``, ``ogt``, ``ole`` and ``oge`` map
 to native EQ, NE, LT, GT, LE and GE. The predicator emits standard
 ``llvm.vp.fcmp`` carrying each source block's execution mask. Tile legalization
-uses native masked TCMP/TCMPS with ZERO inactive results. One B.IOR record carries
-both the result GPR and dense execution-mask sources; even a scalar zero keeps
-its source slot. Textual assembly and object emission share the same native
-command expansion. ``-S`` serializes the native comparison selector, mask
-controls and dense result record rather than publishing a compiler pseudo. Numeric comparison evaluates active elements only, so inactive
+uses native masked TCMP with a PredicateCell result and an appended Tile
+execution mask, with ZERO inactive results. Scalar comparison inputs are
+splatted into numeric Tiles. Textual assembly and object emission share the
+same native command expansion. ``-S`` serializes the native comparison selector, mask
+controls and Tile result record rather than publishing a compiler pseudo. Numeric comparison evaluates active elements only, so inactive
 signaling NaNs cannot raise NV in that emitted native instruction.
 
 This profile accepts ordinary non-fenv optimized C++/LLVM semantics.
@@ -213,9 +241,10 @@ instruction inputs. ``strictfp`` and constrained FP, including FENV requests
 that reach LLVM under Clang's ``-Xclang -fexperimental-strict-floating-point`` option,
 are diagnosed. Without that option the target's existing Clang frontend warns
 that FENV pragmas are ignored; ``-Werror=ignored-pragmas`` makes that diagnostic
-fatal. Fast-math, unsupported comparison predicates, F64, casts, FP32 GM element
-accesses and atomics are diagnosed. FP32 memory transport stays at whole-Tile TLOAD/TSTORE
-boundaries.
+fatal. Fast-math, unsupported comparison predicates, F64, floating casts and
+floating atomics are diagnosed. Already admitted FP32 GM gathers/scatters
+use the same Tile execution-mask path; whole-Tile TLOAD/TSTORE boundaries
+remain available.
 
 Vector GEPs retain one uniform base and an explicit element index.  TLEA scales
 the S32/U32 B32 index to S64/U64 B64 byte offsets exactly once. LLVM GEP

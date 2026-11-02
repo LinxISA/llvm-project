@@ -7,8 +7,8 @@
 ; PRE: getelementptr i32, <32 x ptr> {{.*}}, <32 x i64> %pto.b32.gep
 
 ; BOUNDED-LABEL: define void @branch_local_bounded
-; BOUNDED: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32
-; BOUNDED: @llvm.linx.experimental.ew.tlea.v32i64.v32i32
+; BOUNDED: asm sideeffect "BSTART.TEPL TADD, U32
+; BOUNDED: asm sideeffect "BSTART.TEPL TLEA, U32
 ; BOUNDED-NOT: @llvm.vp.{{.*}}v32i64
 
 ; UNBOUNDED: Tile legalization: i64 VP address arithmetic requires a constant affine result or a fully active, address-only uniform offset with signed-B32 lane offsets
