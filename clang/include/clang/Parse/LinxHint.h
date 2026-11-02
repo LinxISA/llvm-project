@@ -14,6 +14,7 @@ struct LinxHint {
   IdentifierLoc *OptionLoc;
   // Identifier for the hint state argument. If null, then the state is default null
   IdentifierLoc *StateLoc;
+  Expr *Grain = nullptr;
 
   LinxHint()
       : PragmaNameLoc(nullptr), OptionLoc(nullptr), StateLoc(nullptr) {}

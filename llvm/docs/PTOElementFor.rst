@@ -7,6 +7,72 @@ for the loop body.  The pragma does not select a source-expression pattern and
 does not expose a hardware lane, layout, predicate carrier, or temporary Tile
 to the programmer.
 
+Optional batch grain
+--------------------
+
+The optional ``grain`` clause chooses the primary data bytes processed per
+batch, independently of the predicate representation::
+
+  #pragma pto element for grain(256)
+  for (unsigned element = 0; element < 129; ++element) {
+    if (input[element] > 0)
+      output[element] = input[element] + 1;
+  }
+
+The six supported values are ``128``, ``256``, ``512``, ``1024``, ``2048`` and
+``4096`` bytes. An object-like macro expanding to one of these integer literals
+is accepted. Omitting the clause preserves the existing profile selection;
+it is not equivalent to forcing every existing region to 128 bytes.
+
+Grain does not combine adjacent predicates into one decision. Each logical
+element still has its own condition and execution mask. For 32-bit output,
+``grain(256)`` processes up to 64 elements per batch. The example has three
+batches, and only the first element in the last batch is active. The compiler
+uses absolute element indices in every batch and masks all inactive memory
+accesses and effects, including partial batches smaller than 32 elements.
+
+The primary element width is the common width of scalar stores and atomic
+values in the region. Supported widths are 16, 32 and 64 bits. Data, address
+and PredicateCell Tiles derive their capacities separately; grain is not a
+promise that every temporary occupies that number of bytes. In particular,
+physical CUBE backing retains at least 32 cells, so a 128-byte batch of
+64-bit elements has 16 active elements in a 32-cell carrier. Narrow integer
+arithmetic may use wider intermediate Tiles and masked conversions.
+
+This clause currently requires the generic pipeline enabled with
+``-mllvm -linxv5-enable-generic-element=true``.
+The initial explicit-grain implementation requires scalar memory streams,
+a proven zero-based unit-stride trip count of 2 through 4096, and one common
+output element width. It emits successive batches statically, so small grains
+with large trip counts increase code size. Existing typed Tile-carrier
+boundaries, mixed-width outputs and dynamic nested control do not yet accept
+an explicit grain and receive diagnostics rather than silently ignoring it.
+Other element-region type, effect and legality restrictions still apply.
+Omitted-grain support for typed carriers and dynamic control is unchanged.
+A whole loop containing only one iteration may be folded before the required
+region pass and is not yet accepted by the optimized driver pipeline. This
+does not affect a one-element final batch of a longer loop.
+
+Clang records the explicit byte count as
+``llvm.loop.linx.pto.element.grain`` with an ``i32`` value. Predication validates
+this metadata before constructing batches; malformed or duplicate values are
+rejected. The hardware's size and layout legality is unchanged.
+
+The object regression matrix covers all six grains for U16, U32, U64, FP16
+and FP32 streams, conditional arithmetic, integer mask logic, indexed gathers
+and i32 atomic add. An independent generic VP host check is available with::
+
+  ulimit -s 131072
+  python3 llvm/test/CodeGen/LinxV5/Inputs/run-element-grain-host.py \
+    --clang /path/to/target/clang --opt /path/to/target/opt \
+    --host-clang /path/to/host/clang --output /tmp/pto-grain-host
+
+This checks six grains against scalar references and output canaries for
+1, 31, 33, 65 and 129 elements. The single-element case exercises the explicit
+predication pass, not optimized-driver support. Only disposable test IR drops
+the target sentinel. Large scalarized host vectors require an increased stack;
+this is not a target stack requirement or Tile-model execution evidence.
+
 Ordering contract
 -----------------
 
@@ -202,7 +268,8 @@ the active mask. This does not admit arbitrary partial EVLs, additional FP
 predicates, new data types or new region shapes. Unsupported cases retain
 explicit diagnostics. NORM-profile support is unchanged.
 
-This is an internal carrier choice, not a source-level layout or grain knob.
+The Tile predicate representation is an internal carrier choice, independent
+of the optional source-level batch grain described above.
 Ordinary scalar arguments, addresses and constants can still use GPRs; there
 is no promise of a completely GPR-free kernel. Existing admitted view shapes
 and the 128-byte minimum Local allocation are unchanged. Multiway PHIs and

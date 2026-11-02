@@ -1441,7 +1441,7 @@ SDValue LinxV5TargetLowering::lowerTemplateBLKMasked(SDLoc &DL, SDValue Op,
 SDValue LinxV5TargetLowering::lowerElementwiseTAddMasked(
     SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
   getV5ConstantOperand(Op.getOperand(2), "masked TADD rows", 32, false);
-  getV5ConstantOperand(Op.getOperand(3), "masked TADD cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "masked TADD cols", 64, false);
   getV5ConstantOperand(Op.getOperand(4), "masked TADD data type", 31);
   getV5ConstantOperand(Op.getOperand(5), "masked TADD layout", 31);
   getV5ConstantOperand(Op.getOperand(9), "masked TADD PredInv", 1);
@@ -1483,7 +1483,7 @@ SDValue LinxV5TargetLowering::lowerElementwiseTAddMasked(
 SDValue LinxV5TargetLowering::lowerElementwiseTSubMasked(
     SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
   getV5ConstantOperand(Op.getOperand(2), "masked TSUB rows", 32, false);
-  getV5ConstantOperand(Op.getOperand(3), "masked TSUB cols", 32, false);
+  getV5ConstantOperand(Op.getOperand(3), "masked TSUB cols", 64, false);
   getV5ConstantOperand(Op.getOperand(4), "masked TSUB data type", 31);
   getV5ConstantOperand(Op.getOperand(5), "masked TSUB layout", 31);
   getV5ConstantOperand(Op.getOperand(9), "masked TSUB PredInv", 1);
@@ -1588,7 +1588,7 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
   const uint64_t Rows =
       getV5ConstantOperand(Op.getOperand(2), "element binary rows", 32, false);
   const uint64_t Cols =
-      getV5ConstantOperand(Op.getOperand(3), "element binary columns", 32,
+      getV5ConstantOperand(Op.getOperand(3), "element binary columns", 64,
                            false);
   const uint64_t DataType = getV5ConstantOperand(
       Op.getOperand(4), "element binary data type", 31);
@@ -1606,11 +1606,16 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
       DataType == LinxV5Op::DataType::FP32 && Layout == 0 &&
       ((Rows == 16 && Cols == 32 && ResultVT == MVT::v512f32) ||
        (Rows == 1 && Cols == 32 && ResultVT == MVT::v32f32));
-  const bool IntegerCube = Rows == 32 && Cols == 1 && IntegerProfile &&
-                           Layout == 29 && ResultVT == MVT::v32i32;
-  const bool PredicateCube = Rows == 32 && (Cols == 1 || Cols == 2) &&
+  const bool IntegerCube = Rows == 32 && isPowerOf2_64(Cols) && IntegerProfile &&
+                           Layout == 29 && ResultVT.isVector() &&
+                           ResultVT.getVectorNumElements() == 32 * Cols &&
+                           ResultVT.getVectorElementType() == MVT::i32;
+  const bool PredicateCube = Rows == 32 && isPowerOf2_64(Cols) &&
                              DataType == LinxV5Op::DataType::U8 &&
-                             Layout == 29 && ResultVT == MVT::v32i32 &&
+                             Layout == 29 && ResultVT.isVector() &&
+                             ResultVT.getVectorElementType() == MVT::i32 &&
+                             ResultVT.getVectorNumElements() ==
+                                 std::max(uint64_t(32), 8 * Cols) &&
                              Opcode >= 5 && Opcode <= 7;
   if ((!IntegerCube && !F32Norm && !PredicateCube) || LHSVT != ResultVT ||
       RHSVT != ResultVT)
@@ -2551,8 +2556,10 @@ SDValue LinxV5TargetLowering::lowerElementwiseTExpands(SDLoc &DL, SDValue Op,
     report_fatal_error("integer TEXPANDS requires an exact full NORM U32 row");
   if (DType == LinxV5Op::DataType::FP32) {
     bool AdmittedProfile =
-        (Rows == 32 && Cols == 1 && Layout == 29 &&
-         Op.getValueType() == MVT::v32f32) ||
+        (Rows == 32 && Cols <= 64 && isPowerOf2_64(Cols) && Layout == 29 &&
+         Op.getValueType().isFixedLengthVector() &&
+         Op.getValueType().getVectorNumElements() == Rows * Cols &&
+         Op.getValueType().getScalarType() == MVT::f32) ||
         (ExplicitRow && Layout == 0 && Cols == 32 && PhysicalCols == 32 &&
          ((Rows == 1 && Op.getValueType() == MVT::v32f32) ||
           (Rows == 16 && Op.getValueType() == MVT::v512f32)));
