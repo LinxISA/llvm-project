@@ -332,6 +332,24 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       continue;
     }
     if (Expected.Kind == TileMacroCommandKind::IOT) {
+      // A compact B.IOT may carry several adjacent schema roles, such as the
+      // MGATHER.MASK offset, predicate and destination. Merge those expected
+      // roles; the decoder below accepts either one compact record or several
+      // ordinary records.
+      for (unsigned Next = C + 1; Next != Form.NumCommands; ++Next) {
+        const auto &Adjacent =
+            TileMacroCommands[Form.FirstCommand + Next];
+        if (Adjacent.Kind != TileMacroCommandKind::IOT)
+          break;
+        for (unsigned M = 0; M != Adjacent.NumMembers; ++M) {
+          unsigned Member =
+              TileMacroCommandMembers[Adjacent.FirstMember + M].BindingMember;
+          const auto &Desc = TileMacroBindingMembers[Member];
+          if (!Desc.Condition || conditionEnabled(Desc.Condition))
+            Active.push_back(Member);
+        }
+        C = Next;
+      }
       SmallVector<MCRegister, 2> Sources;
       MCRegister Destination = LinxV5::NoRegister;
       unsigned DestinationSize = 0;
@@ -588,8 +606,12 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   bool LayoutDependentRow =
       RowExpression.startswith("Layout=RowMajor?");
   bool RowMajorCapacityImpossible = false;
-  if (RowExpression == "ValidRow" ||
-      (LayoutDependentRow && DirectCubeLayout)) {
+  if (DirectCubeLayout) {
+    // Direct Local CUBE geometry is explicit: LB1 is ValidRow and LB2 is the
+    // physical column count. Capacity-derived Row is only a RowMajor rule.
+    Row = Dim[1];
+    Col = Dim[2].Present ? Dim[2] : Dim[0];
+  } else if (RowExpression == "ValidRow") {
     for (unsigned I = 0; I != Form.NumConfigs; ++I) {
       const auto &Config = TileMacroConfigs[Form.FirstConfig + I];
       if (StringRef(Config.Field) == "ValidRow") {
@@ -637,7 +659,9 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     const auto &Config = TileMacroConfigs[Form.FirstConfig + I];
     StringRef Field = Config.Field;
     if (Config.IsDimension) {
-      DimValue Value = Field == "Row" ? Row : dimForConfig(Config);
+      DimValue Value = Field == "Row" ? Row
+                       : Field == "Col" ? Col
+                                        : dimForConfig(Config);
       bool Print = !Config.Optional;
       if (Field == "Row")
         Print = Row.Present;

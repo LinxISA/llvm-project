@@ -353,7 +353,8 @@ private:
   SDValue lowerElementwiseMGatherGPRMasked(SDLoc &DL, SDValue Op,
                                            SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherMasked(SDLoc &DL, SDValue Op,
-                                         SelectionDAG &DAG) const;
+                                         SelectionDAG &DAG,
+                                         bool ExplicitLayout = false) const;
   SDValue lowerElementwiseMScatterMasked(SDLoc &DL, SDValue Op,
                                          SelectionDAG &DAG) const;
   SDValue lowerElementwiseMScatterGPRMasked(SDLoc &DL, SDValue Op,

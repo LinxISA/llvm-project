@@ -1048,6 +1048,8 @@ case Intrinsic::linx_blk_matmul:
       return lowerIndexedTLSURange(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mgather_gpr_masked:
       return lowerElementwiseMGatherGPRMasked(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mgather_tile_masked:
+      return lowerElementwiseMGatherMasked(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_mgather_masked:
       return lowerElementwiseMGatherMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mgather_add:
@@ -1688,9 +1690,24 @@ SDValue LinxV5TargetLowering::lowerElementwiseTBinary(
       DataType == LinxV5Op::DataType::FP32 && Layout == 0 &&
       ((Rows == 16 && Cols == 32 && ResultVT == MVT::v512f32) ||
        (Rows == 1 && Cols == 32 && ResultVT == MVT::v32f32));
-  const bool IntegerCube = Rows == 32 && Cols == 1 && IntegerProfile &&
-                           Layout == 29 && ResultVT == MVT::v32i32;
-  if ((!IntegerCube && !F32Norm) || LHSVT != ResultVT || RHSVT != ResultVT)
+  const bool WideInteger = DataType == LinxV5Op::DataType::U64 ||
+                           DataType == LinxV5Op::DataType::S64;
+  const bool IntegerCube =
+      Rows == 32 &&
+      (Cols == 1 || Cols == 2 || Cols == 4 || Cols == 8 || Cols == 16) &&
+      (IntegerProfile || WideInteger) && Layout == 29 &&
+      ResultVT.isFixedLengthVector() &&
+      ResultVT.getVectorNumElements() == Rows * Cols &&
+      ResultVT.getScalarType() == (WideInteger ? MVT::i64 : MVT::i32);
+  const bool PredicateCube =
+      Rows == 32 &&
+      (Cols == 1 || Cols == 2 || Cols == 4 || Cols == 8 || Cols == 16) &&
+      Layout == 29 && DataType == LinxV5Op::DataType::U8 &&
+      ResultVT.isFixedLengthVector() && ResultVT.getScalarType() == MVT::i8 &&
+      ResultVT.getVectorNumElements() == std::max<uint64_t>(128, Rows * Cols) &&
+      Opcode >= 5 && Opcode <= 7;
+  if ((!IntegerCube && !PredicateCube && !F32Norm) || LHSVT != ResultVT ||
+      RHSVT != ResultVT)
     report_fatal_error(
         "element binary requires an exact U32/S32 CUBE_M32 or FP32 NORM "
         "profile");
@@ -2029,7 +2046,7 @@ SDValue LinxV5TargetLowering::lowerIndexedTLSURange(
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseMGatherMasked(
-    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG, bool ExplicitLayout) const {
   getV5ConstantOperand(Op.getOperand(2), "masked MGATHER rows", 32, false);
   getV5ConstantOperand(Op.getOperand(3), "masked MGATHER cols", 32, false);
   getV5ConstantOperand(Op.getOperand(4), "masked MGATHER data type", 31);
@@ -2051,9 +2068,44 @@ SDValue LinxV5TargetLowering::lowerElementwiseMGatherMasked(
       MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
       calculateVCallSizeMask(Op.getValueType()), DL, MVT::i64));
-  Ops.push_back(Op.getOperand(6)); // base pointer
-  Ops.push_back(Op.getOperand(7)); // logical element offsets
-  Ops.push_back(Op.getOperand(8)); // predicate tile
+  const unsigned Shift = ExplicitLayout ? 1 : 0;
+  const uint64_t Layout =
+      ExplicitLayout
+          ? getV5ConstantOperand(Op.getOperand(6), "masked MGATHER layout", 31)
+          : 0;
+  if (Layout != 0 && Layout != 29)
+    report_fatal_error("masked MGATHER requires NORM or CUBE_M32 layout");
+  if (ExplicitLayout && Layout == 29) {
+    const uint64_t Rows =
+        cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue();
+    const uint64_t Cols =
+        cast<ConstantSDNode>(Op.getOperand(3))->getZExtValue();
+    const uint64_t DType =
+        cast<ConstantSDNode>(Op.getOperand(4))->getZExtValue();
+    EVT ResultVT = Op.getValueType();
+    EVT IndexVT = Op.getOperand(8).getValueType();
+    const bool Wide =
+        DType == LinxV5Op::DataType::U64 || DType == LinxV5Op::DataType::S64;
+    const bool Narrow =
+        DType == LinxV5Op::DataType::U32 || DType == LinxV5Op::DataType::S32;
+    if (Rows != 32 ||
+        (Cols != 1 && Cols != 2 && Cols != 4 && Cols != 8 && Cols != 16) ||
+        (!Wide && !Narrow) || !ResultVT.isFixedLengthVector() ||
+        ResultVT.getVectorNumElements() != Rows * Cols ||
+        ResultVT.getScalarType() != (Wide ? MVT::i64 : MVT::i32) ||
+        !IndexVT.isFixedLengthVector() || IndexVT.getScalarType() != MVT::i64 ||
+        IndexVT.getVectorNumElements() != Rows * Cols ||
+        !Op.getOperand(9).getValueType().isFixedLengthVector() ||
+        Op.getOperand(9).getValueType().getScalarType() != MVT::i8 ||
+        Op.getOperand(9).getValueType().getVectorNumElements() !=
+            std::max<uint64_t>(128, Rows * Cols))
+      report_fatal_error("M32 tile-masked MGATHER requires matching admitted "
+                         "integer lanes, paired i64 offsets and PredicateCell");
+  }
+  Ops.push_back(Op.getOperand(6 + Shift)); // base pointer
+  Ops.push_back(Op.getOperand(7 + Shift)); // byte offsets
+  Ops.push_back(Op.getOperand(8 + Shift)); // PredicateCell
+  Ops.push_back(DAG.getTargetConstant(Layout, DL, MVT::i64));
   return DAG.getNode(LinxV5ISD::EW_MGATHER_MASKED, DL,
                      DAG.getVTList(Op.getValueType(), MVT::Other), Ops);
 }
@@ -2442,8 +2494,7 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCmp(SDLoc &DL, SDValue Op,
       getV5ConstantOperand(Op.getOperand(4), "TCMP data type", 31), DL,
       MVT::i64));
   Ops.push_back(DAG.getTargetConstant(
-      LinxV5Op::ArgFormat::NORM, DL,
-      MVT::i64));
+      getV5ConstantOperand(Op.getOperand(5), "TCMP layout", 31), DL, MVT::i64));
   // Predicate vectors are packed, but Local allocations still have the
   // architectural 128-byte minimum. Do not widen them to U32 lane storage.
   uint64_t PredicateBytes =

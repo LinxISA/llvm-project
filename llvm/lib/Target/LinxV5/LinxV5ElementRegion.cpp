@@ -39,6 +39,7 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
@@ -60,6 +61,12 @@ using namespace llvm::PatternMatch;
 #define DEBUG_TYPE "linx-v5-element-region"
 
 namespace {
+
+static cl::opt<bool>
+    ForceElementTileMask("linxv5-force-element-tile-mask", cl::Hidden,
+                         cl::init(false),
+                         cl::desc("Materialize admitted CUBE element-region "
+                                  "predicates as PredicateCells"));
 
 constexpr StringLiteral ViewPrefix = "pto.element.view:";
 constexpr StringLiteral U32M32View =
@@ -99,8 +106,15 @@ elementProfile(uint64_t DataType, unsigned Count, unsigned Rows, unsigned Cols,
                uint64_t Bytes, LLVMContext &Context, uint64_t Layout = 29) {
   bool Existing32 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 128 &&
                     (DataType == 25 || DataType == 17 || DataType == 1);
-  bool NativeI64 = Count == 32 && Rows == 32 && Cols == 1 && Bytes == 256 &&
+  bool NativeI64 = (Count == 32 || Count == 64 || Count == 128 ||
+                    Count == 256 || Count == 512) &&
+                   Rows == 32 && Cols == Count / 32 &&
+                   Bytes == uint64_t(Count) * 8 &&
                    (DataType == 24 || DataType == 16);
+  bool WideInteger32 =
+      (Count == 64 || Count == 128 || Count == 256 || Count == 512) &&
+      Rows == 32 && Cols == Count / 32 && Bytes == uint64_t(Count) * 4 &&
+      (DataType == 25 || DataType == 17);
   bool Dense64 = Count == 64 && Rows == 32 && Cols == 2 &&
                  ((Bytes == 128 && (DataType == 4 || DataType == 26)) ||
                   (Bytes == 256 && (DataType == 25 || DataType == 17)));
@@ -113,7 +127,7 @@ elementProfile(uint64_t DataType, unsigned Count, unsigned Rows, unsigned Cols,
                   (Count == 32 && Rows == 1 && Cols == 32)) &&
                  Bytes == uint64_t(Count) * 4;
   bool NormTile = NormU32Row || NormF32;
-  if ((!Existing32 && !NativeI64 && !Dense64 && !NormTile) ||
+  if ((!Existing32 && !NativeI64 && !WideInteger32 && !Dense64 && !NormTile) ||
       (Layout != 29 && !NormTile))
     return None;
   Type *Scalar = DataType == 1    ? Type::getFloatTy(Context)
@@ -136,6 +150,21 @@ static Optional<ElementProfile> elementProfile(uint64_t DataType,
 
 static Optional<ElementProfile> elementViewProfile(StringRef Text,
                                                    LLVMContext &Context) {
+  for (const auto &Type :
+       {std::make_pair("u32", 25u), std::make_pair("s32", 17u),
+        std::make_pair("u64", 24u), std::make_pair("s64", 16u)}) {
+    for (unsigned Columns : {2u, 4u, 8u, 16u}) {
+      std::string Annotation =
+          "pto.element.view:v1;dtype=" + std::string(Type.first) +
+          ";rows=32;cols=" + std::to_string(Columns) + ";layout=cube_m32";
+      if (Text == Annotation) {
+        uint64_t Bytes = uint64_t(32 * Columns) *
+                         (Type.second == 24 || Type.second == 16 ? 8 : 4);
+        return elementProfile(Type.second, 32 * Columns, 32, Columns, Bytes,
+                              Context);
+      }
+    }
+  }
   if (Text == "pto.element.view:v2;dtype=f32;layout=norm;physical_rows=16;"
               "physical_cols=32;valid_rows=16;valid_cols=32")
     return elementProfile(1, 512, 16, 32, 2048, Context, 0);
@@ -1168,16 +1197,21 @@ static bool isElementCarrier(Value *V) {
   auto *Ty = dyn_cast<FixedVectorType>(V->getType());
   if (!Ty)
     return false;
-  if (Ty->getNumElements() == 128 || Ty->getNumElements() == 2048)
+  if (Ty->getNumElements() == 128 || Ty->getNumElements() == 256 ||
+      Ty->getNumElements() == 512)
+    return Ty->getElementType()->isIntegerTy(32) ||
+           Ty->getElementType()->isIntegerTy(64);
+  if (Ty->getNumElements() == 2048)
     return Ty->getElementType()->isIntegerTy(32);
   if (Ty->getNumElements() == 512)
     return Ty->getElementType()->isFloatTy() ||
-           Ty->getElementType()->isIntegerTy(32);
+           Ty->getElementType()->isIntegerTy(32) ||
+           Ty->getElementType()->isIntegerTy(64);
   if (Ty->getNumElements() != 32 && Ty->getNumElements() != 64)
     return false;
   Type *Scalar = Ty->getElementType();
   if (Scalar->isIntegerTy(64))
-    return Ty->getNumElements() == 32;
+    return Ty->getNumElements() == 32 || Ty->getNumElements() == 64;
   return Scalar->isIntegerTy(16) || Scalar->isIntegerTy(32) ||
          Scalar->isHalfTy() || Scalar->isFloatTy();
 }
@@ -2478,6 +2512,11 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         if (isa<SelectInst>(I) && isa<FPMathOperator>(I) &&
             I.getFastMathFlags().any())
           return Fail(&I, "floating select requires no fast-math");
+        if (auto *Select = dyn_cast<SelectInst>(&I))
+          if (Carrier && Select->getCondition()->getType()->isIntegerTy(1) &&
+              IsCarrierOperand(Select->getTrueValue()) &&
+              IsCarrierOperand(Select->getFalseValue()))
+            continue;
         if (!I.getType()->isIntegerTy() && !I.getType()->isPointerTy() &&
             !I.getType()->isFloatTy() && !I.getType()->isHalfTy())
           return Fail(&I, "comparison/select requires scalar operands");
@@ -2572,15 +2611,23 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
       const bool DenseU16Access =
           AccessTy->isIntegerTy(16) && Plan.Count == 64;
       const bool NativeI64Access =
-          AccessTy->isIntegerTy(64) && Plan.Count == 32;
-      if ((!DenseU16Access && !NativeI64Access &&
-           !AccessTy->isIntegerTy(32) && !AccessTy->isFloatTy() &&
-           !AccessTy->isHalfTy()) ||
-          (isa<AtomicRMWInst>(I) && !AccessTy->isIntegerTy(32)))
-        return Fail(&I,
-                    "memory profile requires scalar i64/U16/i32/f16/f32 "
-                    "accesses with i64 using logical32 and U16 using "
-                    "logical64");
+          AccessTy->isIntegerTy(64) &&
+          (Plan.Count == 32 || Plan.Count == 64 || Plan.Count == 128 ||
+           Plan.Count == 256 || Plan.Count == 512);
+      if ((!DenseU16Access && !NativeI64Access && !AccessTy->isIntegerTy(32) &&
+           !AccessTy->isFloatTy() && !AccessTy->isHalfTy()) ||
+          (isa<AtomicRMWInst>(I) && !AccessTy->isIntegerTy(32))) {
+        std::string Detail;
+        raw_string_ostream OS(Detail);
+        AccessTy->print(OS);
+        OS << " in " << Plan.Count << "-element domain: ";
+        I.print(OS);
+        return Fail(&I, Twine("memory profile requires scalar "
+                              "i64/U16/i32/f16/f32 accesses with i64 using "
+                              "admitted logical32/64/128 and U16 using "
+                              "logical64; saw ") +
+                            OS.str());
+      }
       // Reads may be indexed by arbitrary element values; overlapping atomic
       // adds are intentional. Ordinary writes still need injective unit-stride
       // streams. Mixed atomic/non-atomic objects are checked separately below.
@@ -3487,10 +3534,14 @@ class ElementTileLegalizer {
   SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
   DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
   unsigned DomainCount;
+  bool UseTileMask;
   Optional<ElementProfile> NormProfile;
   DenseMap<Value *, Value *> Data;
   DenseMap<Value *, Value *> Masks;
   DenseMap<std::pair<Value *, uint64_t>, Value *> ActiveMasks;
+  Value *TileMaskFalse = nullptr;
+  Value *TileMaskTrue = nullptr;
+  DenseMap<unsigned, Value *> TileMaskPrefixes;
   DenseMap<Value *, uint64_t> PhysicalTypes;
   uint64_t NativeI64RegionType = 0;
   uint64_t NativeI32RegionType = 0;
@@ -3756,13 +3807,19 @@ class ElementTileLegalizer {
 
   static bool isVector(Value *V, unsigned Width) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    return Ty && (Ty->getNumElements() == 32 || Ty->getNumElements() == 64) &&
+    return Ty &&
+           (Ty->getNumElements() == 32 || Ty->getNumElements() == 64 ||
+            Ty->getNumElements() == 128 || Ty->getNumElements() == 256 ||
+            Ty->getNumElements() == 512) &&
            Ty->getElementType()->isIntegerTy(Width);
   }
 
   static bool isI64LeafVector(Value *V) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    return Ty && Ty->getNumElements() == 32 &&
+    return Ty &&
+           (Ty->getNumElements() == 32 || Ty->getNumElements() == 64 ||
+            Ty->getNumElements() == 128 || Ty->getNumElements() == 256 ||
+            Ty->getNumElements() == 512) &&
            Ty->getElementType()->isIntegerTy(64);
   }
 
@@ -3798,24 +3855,30 @@ class ElementTileLegalizer {
     return true;
   }
 
-  static bool constantLogical64Grid(Constant *C, APInt &Initial, APInt &RowStep,
-                                    APInt &ColStep) {
+  static bool constantLogicalM32Grid(Constant *C, APInt &Initial,
+                                     APInt &RowStep, APInt &ColStep) {
     auto *Ty = dyn_cast<FixedVectorType>(C->getType());
-    if (!Ty || Ty->getNumElements() != 64 ||
-        !Ty->getElementType()->isIntegerTy(32))
+    if (!Ty ||
+        (Ty->getNumElements() != 64 && Ty->getNumElements() != 128 &&
+         Ty->getNumElements() != 256 && Ty->getNumElements() != 512) ||
+        (!Ty->getElementType()->isIntegerTy(32) &&
+         !Ty->getElementType()->isIntegerTy(64)))
       return false;
+    const unsigned Count = Ty->getNumElements();
+    const unsigned Columns = Count / 32;
     auto Element = [&](unsigned Index) {
       return dyn_cast_or_null<ConstantInt>(C->getAggregateElement(Index));
     };
-    auto *E0 = Element(0), *E1 = Element(1), *E2 = Element(2);
-    if (!E0 || !E1 || !E2)
+    auto *E0 = Element(0), *E1 = Element(1), *ERow = Element(Columns);
+    if (!E0 || !E1 || !ERow)
       return false;
     Initial = E0->getValue();
     ColStep = E1->getValue() - Initial;
-    RowStep = E2->getValue() - Initial;
-    for (unsigned I = 0; I < 64; ++I) {
+    RowStep = ERow->getValue() - Initial;
+    for (unsigned I = 0; I < Count; ++I) {
       auto *E = Element(I);
-      APInt Expected = Initial + RowStep * (I / 2) + ColStep * (I % 2);
+      APInt Expected =
+          Initial + RowStep * (I / Columns) + ColStep * (I % Columns);
       if (!E || E->getValue() != Expected)
         return false;
     }
@@ -3832,8 +3895,7 @@ class ElementTileLegalizer {
     uint64_t Bytes =
         VT ? F.getParent()->getDataLayout().getTypeStoreSize(VT) : 0;
     auto Profile =
-        Count == 64 ? elementProfile(DType, 64, 32, 2, Bytes, V->getContext())
-                    : elementProfile(DType, V->getContext());
+        elementProfile(DType, Count, 32, Count / 32, Bytes, V->getContext());
     if (!Profile || V->getType() != Profile->VectorTy)
       return fail(V, "typed import does not match its declared scalar type");
     if (auto View = getViewDescriptor(V)) {
@@ -4254,7 +4316,9 @@ class ElementTileLegalizer {
     if (!Validated.insert(V).second)
       return true;
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    if (!Ty || (Ty->getNumElements() != 32 && Ty->getNumElements() != 64))
+    if (!Ty || (Ty->getNumElements() != 32 && Ty->getNumElements() != 64 &&
+                Ty->getNumElements() != 128 && Ty->getNumElements() != 256 &&
+                Ty->getNumElements() != 512))
       return fail(V, "requires an admitted fixed-vector element profile");
     if (auto Descriptor = getViewDescriptor(V)) {
       if (Descriptor->ScalarizedLaneZero)
@@ -4304,14 +4368,24 @@ class ElementTileLegalizer {
     if (auto *C = dyn_cast<Constant>(V)) {
       if (isVector(V, 1)) {
         unsigned Count = cast<FixedVectorType>(V->getType())->getNumElements();
+        bool Previous = false;
+        unsigned Runs = 0;
         for (unsigned I = 0; I < Count; ++I)
-          if (!isa_and_nonnull<ConstantInt>(C->getAggregateElement(I)))
+          if (auto *Element =
+                  dyn_cast_or_null<ConstantInt>(C->getAggregateElement(I))) {
+            bool Active = !Element->isZero();
+            if (UseTileMask && Active && !Previous && ++Runs > 8)
+              return fail(V, "PredicateCell mask constant exceeds eight "
+                             "contiguous active runs");
+            Previous = Active;
+          } else {
             return fail(V, "mask constant contains an unsupported element");
+          }
         return true;
       }
       APInt Initial, Step, RowStep, ColStep;
       if (!constantProgression(C, Initial, Step) &&
-          !constantLogical64Grid(C, Initial, RowStep, ColStep))
+          !constantLogicalM32Grid(C, Initial, RowStep, ColStep))
         return fail(V,
                     "constant Tile requires a scalar splat or affine sequence");
       return true;
@@ -4365,6 +4439,9 @@ class ElementTileLegalizer {
           ((isVector(V, 32) && isF32Vector(Cast->getOperand(0))) ||
            (isF32Vector(V) && isVector(Cast->getOperand(0), 32))))
         return validate(Cast->getOperand(0));
+      if (Cast->getOpcode() == Instruction::ZExt && isVector(V, 32) &&
+          isVector(Cast->getOperand(0), 1))
+        return validate(Cast->getOperand(0));
       if ((Cast->getOpcode() != Instruction::ZExt &&
            Cast->getOpcode() != Instruction::SExt) ||
           !isVector(Cast->getOperand(0), 32) || !isVector(V, 64))
@@ -4388,6 +4465,9 @@ class ElementTileLegalizer {
   }
 
   bool validateAtomic(CallInst &Atomic) {
+    if (UseTileMask)
+      return fail(&Atomic,
+                  "PredicateCell atomic-add legalization is not implemented");
     auto *EVL = dyn_cast<ConstantInt>(Atomic.getArgOperand(3));
     auto Alignment = Atomic.getParamAlign(0);
     auto *ResultTy = dyn_cast<FixedVectorType>(Atomic.getType());
@@ -4413,6 +4493,10 @@ class ElementTileLegalizer {
   }
 
   bool validateUnorderedScatter(CallInst &Scatter) {
+    if (UseTileMask)
+      return fail(
+          &Scatter,
+          "PredicateCell unordered scatter legalization is not implemented");
     auto *EVL = dyn_cast<ConstantInt>(Scatter.getArgOperand(3));
     auto Alignment = Scatter.getParamAlign(1);
     auto *DataTy =
@@ -4517,6 +4601,9 @@ class ElementTileLegalizer {
     if (!validate(VP.getMaskParam()))
       return false;
     if (auto *Cmp = dyn_cast<VPCmpIntrinsic>(&VP)) {
+      if (UseTileMask)
+        return fail(&VP, "PredicateCell floating comparison requires an "
+                         "execution-masked TCMP lowering");
       if (Cmp->getIntrinsicID() != Intrinsic::vp_fcmp ||
           (!isF32Vector(Cmp->getArgOperand(0)) &&
            !isF16Vector(Cmp->getArgOperand(0))) ||
@@ -4529,6 +4616,8 @@ class ElementTileLegalizer {
       return validate(Cmp->getArgOperand(0)) && validate(Cmp->getArgOperand(1));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_fneg) {
+      if (UseTileMask)
+        return fail(&VP, "PredicateCell floating negation is not implemented");
       if ((!isF32Vector(&VP) && !isF16Vector(&VP)) ||
           VP.getType() != VP.getArgOperand(0)->getType())
         return fail(&VP, "floating unary requires f32 Tile data");
@@ -4537,6 +4626,8 @@ class ElementTileLegalizer {
       return validate(VP.getArgOperand(0));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_trunc) {
+      if (UseTileMask)
+        return fail(&VP, "PredicateCell integer narrowing is not implemented");
       if (!isVector(&VP, 32) || !isI64LeafVector(VP.getArgOperand(0)))
         return fail(&VP,
                     "native integer narrowing requires logical32 i64 to i32");
@@ -4554,6 +4645,34 @@ class ElementTileLegalizer {
         return fail(&VP, "floating arithmetic requires admitted Tile data");
       if (FloatArithmetic && VP.getFastMathFlags().any())
         return fail(&VP, "floating arithmetic requires no fast-math");
+      if (UseTileMask) {
+        if (FloatArithmetic)
+          return fail(&VP, "PredicateCell integer profile does not admit "
+                           "floating arithmetic");
+        const bool DirectMasked =
+            *Op == Instruction::Add || *Op == Instruction::Sub;
+        const bool TotalInteger =
+            *Op == Instruction::Mul || *Op == Instruction::And ||
+            *Op == Instruction::Or || *Op == Instruction::Xor;
+        bool SafeShift = false;
+        if (*Op == Instruction::Shl || *Op == Instruction::LShr ||
+            *Op == Instruction::AShr) {
+          auto *Shift =
+              dyn_cast_or_null<ConstantInt>(getSplatValue(VP.getArgOperand(1)));
+          SafeShift = Shift && Shift->getValue().ult(
+                                   VP.getType()->getScalarSizeInBits());
+        }
+        const bool FullyActive =
+            EVL && EVL->equalsInt(Count) && hasFullyActiveMask(VP);
+        const bool FullDomainOnly =
+            *Op == Instruction::SDiv || *Op == Instruction::UDiv ||
+            *Op == Instruction::SRem || *Op == Instruction::URem;
+        if (!DirectMasked && !TotalInteger && !SafeShift &&
+            !(FullDomainOnly && FullyActive))
+          return fail(&VP, "PredicateCell arithmetic requires native masked "
+                           "add/sub, a non-trapping integer operation, a "
+                           "constant in-range shift, or a fully active domain");
+      }
       if (isVector(&VP, 64)) {
         const bool NativeShift =
             isI64LeafVector(&VP) &&
@@ -4601,6 +4720,9 @@ class ElementTileLegalizer {
       return validate(VP.getArgOperand(0));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_scatter) {
+      if (UseTileMask)
+        return fail(&VP,
+                    "PredicateCell VP scatter legalization is not implemented");
       if (!isVector(VP.getArgOperand(0), 16) &&
           !isVector(VP.getArgOperand(0), 32) &&
           !isI64LeafVector(VP.getArgOperand(0)) &&
@@ -4628,32 +4750,39 @@ class ElementTileLegalizer {
     return Result;
   }
 
-  Value *logical64Affine(const APInt &Initial, const APInt &RowStep,
-                         const APInt &ColStep, FixedVectorType *Ty,
-                         uint64_t PreferredType) {
-    assert(Ty->getNumElements() == 64 &&
-           (Ty->getScalarSizeInBits() == 32 ||
-            Ty->getScalarSizeInBits() == 64) &&
-           "logical64 affine synthesis requires v64i32 or v64i64");
+  Value *logicalM32Affine(const APInt &Initial, const APInt &RowStep,
+                          const APInt &ColStep, FixedVectorType *Ty,
+                          uint64_t PreferredType) {
+    assert(
+        (Ty->getNumElements() == 64 || Ty->getNumElements() == 128 ||
+         Ty->getNumElements() == 256 || Ty->getNumElements() == 512) &&
+        (Ty->getScalarSizeInBits() == 32 || Ty->getScalarSizeInBits() == 64) &&
+        "logical M32 affine synthesis requires admitted integer data");
+    const unsigned Columns = Ty->getNumElements() / 32;
     const bool Wide = Ty->getScalarSizeInBits() == 64;
     const uint64_t DType = Wide ? (PreferredType == 16 ? 16 : 24)
                                 : (PreferredType == 17 ? 17 : 25);
     auto TCI = [&](uint64_t Base, uint64_t Step, const Twine &Name) {
       return call(Intrinsic::linx_experimental_ew_tci, {Ty},
-                  {B.getInt64(32), B.getInt64(2), B.getInt64(DType),
+                  {B.getInt64(32), B.getInt64(Columns), B.getInt64(DType),
                    B.getInt64(29), B.getInt64(Base), B.getInt64(Step)},
                   Name);
     };
     auto Binary = [&](unsigned Code, Value *L, Value *R, const Twine &Name) {
+      if (UseTileMask)
+        return call(Intrinsic::linx_experimental_ew_tbinary, {Ty},
+                    {B.getInt64(32), B.getInt64(Columns), B.getInt64(DType),
+                     B.getInt64(29), B.getInt64(Code), L, R},
+                    Name);
       return call(Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Ty},
-                  {B.getInt64(32), B.getInt64(2), B.getInt64(DType),
+                  {B.getInt64(32), B.getInt64(Columns), B.getInt64(DType),
                    B.getInt64(29), B.getInt64(Code), L, R,
                    B.getInt64(~uint64_t(0)), B.getInt64(0), B.getInt64(0),
                    B.getInt64(1)},
                   Name);
     };
-    Value *R = TCI(0, uint64_t(1) << 32, "pto.logical64.row");
-    Value *C = TCI(0, 1, "pto.logical64.column");
+    Value *R = TCI(0, uint64_t(1) << 32, "pto.logical.m32.row");
+    Value *C = TCI(0, 1, "pto.logical.m32.column");
     Value *RowFactor =
         TCI(RowStep.getZExtValue(), 0, "pto.logical64.row.factor");
     Value *ColFactor =
@@ -4688,16 +4817,17 @@ class ElementTileLegalizer {
     const uint64_t DType = Ty->getScalarSizeInBits() == 32
                                ? (PreferredType == 17 ? 17 : 25)
                                : (PreferredType == 16 ? 16 : 24);
-    if (Ty->getNumElements() == 64 &&
-        (Ty->getScalarSizeInBits() == 32 ||
-         Ty->getScalarSizeInBits() == 64) &&
+    if ((Ty->getNumElements() == 64 || Ty->getNumElements() == 128 ||
+         Ty->getNumElements() == 256 || Ty->getNumElements() == 512) &&
+        (Ty->getScalarSizeInBits() == 32 || Ty->getScalarSizeInBits() == 64) &&
         Step != 0) {
       assert(ConstantScalar && "affine constant preflight requires a base");
       unsigned Width = Ty->getScalarSizeInBits();
       APInt Initial(Width, ConstantScalar->getZExtValue());
       APInt LogicalStep(Width, Step >> 32);
-      return logical64Affine(Initial, LogicalStep * 2, LogicalStep, Ty,
-                             PreferredType);
+      const unsigned Columns = Ty->getNumElements() / 32;
+      return logicalM32Affine(Initial, LogicalStep * Columns, LogicalStep, Ty,
+                              PreferredType);
     }
     if (Step != 0) {
       assert(ConstantScalar &&
@@ -4716,6 +4846,12 @@ class ElementTileLegalizer {
         };
         auto Binary = [&](unsigned Code, Value *L, Value *R,
                           const Twine &Name) {
+          if (UseTileMask)
+            return call(Intrinsic::linx_experimental_ew_tbinary, {Ty},
+                        {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+                         B.getInt64(DType), B.getInt64(29), B.getInt64(Code), L,
+                         R},
+                        Name);
           return call(
               Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {Ty},
               {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
@@ -4737,6 +4873,100 @@ class ElementTileLegalizer {
                  B.getInt64(DType), B.getInt64(29), Scalar, B.getInt64(Step)});
   }
 
+  FixedVectorType *tileMaskType() {
+    assert(UseTileMask && DomainCount <= 512 && DomainCount % 32 == 0 &&
+           "PredicateCell profile requires an admitted 32-row domain");
+    return FixedVectorType::get(B.getInt8Ty(), std::max(128U, DomainCount));
+  }
+
+  Value *tileMaskCompare(Value *L, Value *R, uint64_t DType, uint64_t Selector,
+                         const Twine &Name) {
+    assert(L->getType() == R->getType() &&
+           "PredicateCell comparison sources must have one numeric shape");
+    auto *PredicateTy = tileMaskType();
+    return call(Intrinsic::linx_experimental_ew_tcmp,
+                {PredicateTy, L->getType(), R->getType()},
+                {B.getInt64(32), B.getInt64(DomainCount / 32),
+                 B.getInt64(DType), B.getInt64(29), L, R, B.getInt64(Selector)},
+                Name);
+  }
+
+  Value *tileMaskLogic(unsigned Opcode, Value *L, Value *R, const Twine &Name) {
+    assert((Opcode == Instruction::And || Opcode == Instruction::Or ||
+            Opcode == Instruction::Xor) &&
+           L->getType() == tileMaskType() && R->getType() == tileMaskType() &&
+           "PredicateCell logic requires matching predicate carriers");
+    const uint64_t Selector = Opcode == Instruction::And  ? 5
+                              : Opcode == Instruction::Or ? 6
+                                                          : 7;
+    return call(Intrinsic::linx_experimental_ew_tbinary, {tileMaskType()},
+                {B.getInt64(32), B.getInt64(DomainCount / 32), B.getInt64(27),
+                 B.getInt64(29), B.getInt64(Selector), L, R},
+                Name);
+  }
+
+  Value *tileMaskSplat(Value *Scalar, bool Invert = false) {
+    auto *NumericTy = FixedVectorType::get(B.getInt32Ty(), DomainCount);
+    Value *Numeric =
+        splat(B.CreateZExtOrTrunc(B.CreateFreeze(Scalar), B.getInt32Ty()),
+              NumericTy, 0, 25);
+    Value *Zero = splat(B.getInt32(0), NumericTy, 0, 25);
+    return tileMaskCompare(Numeric, Zero, 25, Invert ? 0 : 1,
+                           Invert ? "pto.mask.splat.inverse"
+                                  : "pto.mask.splat");
+  }
+
+  Value *tileMaskConstant(bool Active) {
+    Value *&Cached = Active ? TileMaskTrue : TileMaskFalse;
+    if (!Cached)
+      Cached = tileMaskSplat(B.getInt1(Active));
+    return Cached;
+  }
+
+  Value *tileMaskConstant(Constant *C) {
+    auto *Ty = cast<FixedVectorType>(C->getType());
+    Value *Result = tileMaskConstant(false);
+    unsigned I = 0;
+    while (I < Ty->getNumElements()) {
+      while (I < Ty->getNumElements() &&
+             cast<ConstantInt>(C->getAggregateElement(I))->isZero())
+        ++I;
+      if (I == Ty->getNumElements())
+        break;
+      unsigned Begin = I;
+      while (I < Ty->getNumElements() &&
+             !cast<ConstantInt>(C->getAggregateElement(I))->isZero())
+        ++I;
+      unsigned End = I;
+      Value *Run = tileMaskPrefix(End);
+      if (Begin != 0) {
+        Value *BelowBegin = tileMaskPrefix(Begin);
+        Value *AtOrAboveBegin =
+            tileMaskLogic(Instruction::Xor, BelowBegin, tileMaskConstant(true),
+                          "pto.mask.run.lower.inverse");
+        Run = tileMaskLogic(Instruction::And, Run, AtOrAboveBegin,
+                            "pto.mask.run");
+      }
+      Result = tileMaskLogic(Instruction::Or, Result, Run, "pto.mask.runs");
+    }
+    return Result;
+  }
+
+  Value *tileMaskPrefix(unsigned N) {
+    assert(N <= DomainCount && "active prefix exceeds element domain");
+    if (N == 0)
+      return tileMaskConstant(false);
+    if (N == DomainCount)
+      return tileMaskConstant(true);
+    if (Value *Cached = TileMaskPrefixes.lookup(N))
+      return Cached;
+    auto *NumericTy = FixedVectorType::get(B.getInt32Ty(), DomainCount);
+    Value *Indices = splat(B.getInt32(0), NumericTy, uint64_t(1) << 32, 25);
+    Value *Limit = splat(B.getInt32(N), NumericTy, 0, 25);
+    return TileMaskPrefixes[N] =
+               tileMaskCompare(Indices, Limit, 25, 2, "pto.mask.prefix");
+  }
+
   Value *mask(Value *V) {
     IRBuilderBase::InsertPointGuard Guard(B);
     if (HasScheduler && (isa<Constant>(V) || getSplatValue(V)))
@@ -4747,6 +4977,87 @@ class ElementTileLegalizer {
     Value *R = nullptr;
     auto *MaskTy = cast<FixedVectorType>(V->getType());
     unsigned Count = MaskTy->getNumElements();
+    if (UseTileMask) {
+      if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
+        R = tileMaskConstant(false);
+      } else if (Value *Scalar = getSplatValue(V)) {
+        R = tileMaskSplat(Scalar);
+      } else if (auto *C = dyn_cast<Constant>(V)) {
+        R = tileMaskConstant(C);
+      } else if (auto *Select = dyn_cast<SelectInst>(V)) {
+        Value *Condition = mask(Select->getCondition());
+        Value *NotCondition =
+            tileMaskLogic(Instruction::Xor, Condition, tileMaskConstant(true),
+                          "pto.mask.select.inverse");
+        Value *WhenTrue =
+            tileMaskLogic(Instruction::And, Condition,
+                          mask(Select->getTrueValue()), "pto.mask.select.true");
+        Value *WhenFalse = tileMaskLogic(Instruction::And, NotCondition,
+                                         mask(Select->getFalseValue()),
+                                         "pto.mask.select.false");
+        R = tileMaskLogic(Instruction::Or, WhenTrue, WhenFalse,
+                          "pto.mask.select");
+      } else if (auto *Binary = dyn_cast<BinaryOperator>(V)) {
+        R = tileMaskLogic(Binary->getOpcode(), mask(Binary->getOperand(0)),
+                          mask(Binary->getOperand(1)), "pto.mask.logic");
+      } else if (auto *VP = dyn_cast<VPIntrinsic>(V)) {
+        R = tileMaskLogic(static_cast<Instruction::BinaryOps>(
+                              *binaryOpcode(VP->getIntrinsicID())),
+                          mask(VP->getArgOperand(0)),
+                          mask(VP->getArgOperand(1)), "pto.mask.logic");
+        R = tileMaskLogic(Instruction::And, R, activeMask(*VP),
+                          "pto.mask.active");
+      } else if (auto *Cmp = dyn_cast<ICmpInst>(V)) {
+        Value *L = Cmp->getOperand(0), *RHS = Cmp->getOperand(1);
+        auto Pred = Cmp->getPredicate();
+        if (getSplatValue(L) && !getSplatValue(RHS)) {
+          std::swap(L, RHS);
+          Pred = ICmpInst::getSwappedPredicate(Pred);
+        }
+        const unsigned Width = L->getType()->getScalarSizeInBits();
+        const bool SignedPredicate = ICmpInst::isSigned(Pred);
+        const bool SignNeutral =
+            Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_NE;
+        const uint64_t DType = Width == 32
+                                   ? (SignedPredicate ? 17 : 25)
+                                   : (SignNeutral && NativeI64RegionType != 0
+                                          ? NativeI64RegionType
+                                          : (SignedPredicate ? 16 : 24));
+        uint64_t Selector = 0;
+        switch (Pred) {
+        case ICmpInst::ICMP_EQ:
+          Selector = 0;
+          break;
+        case ICmpInst::ICMP_NE:
+          Selector = 1;
+          break;
+        case ICmpInst::ICMP_SLT:
+        case ICmpInst::ICMP_ULT:
+          Selector = 2;
+          break;
+        case ICmpInst::ICMP_SGT:
+        case ICmpInst::ICMP_UGT:
+          Selector = 3;
+          break;
+        case ICmpInst::ICMP_SLE:
+        case ICmpInst::ICMP_ULE:
+          Selector = 4;
+          break;
+        case ICmpInst::ICMP_SGE:
+        case ICmpInst::ICMP_UGE:
+          Selector = 5;
+          break;
+        default:
+          llvm_unreachable("integer comparison preflight");
+        }
+        R = tileMaskCompare(value(L, DType), value(RHS, DType), DType, Selector,
+                            "pto.mask.compare");
+      } else {
+        llvm_unreachable("PredicateCell mask preflight");
+      }
+      return Masks[V] = R;
+    }
+
     uint64_t FullMask = Count == 64 ? ~uint64_t(0) : (uint64_t(1) << Count) - 1;
     auto PhysicalBit = [&](unsigned Logical) {
       return Count == 64 ? Logical / 2 + 32 * (Logical % 2) : Logical;
@@ -4869,6 +5180,12 @@ class ElementTileLegalizer {
       return Existing;
     unsigned Count =
         cast<FixedVectorType>(VP.getMaskParam()->getType())->getNumElements();
+    if (UseTileMask) {
+      Value *Active = mask(VP.getMaskParam());
+      Value *Prefix = tileMaskPrefix(N);
+      return ActiveMasks[Key] = tileMaskLogic(Instruction::And, Active, Prefix,
+                                              "pto.mask.active.prefix");
+    }
     uint64_t FullMask = 0;
     for (unsigned Logical = 0; Logical < N; ++Logical) {
       unsigned Physical = Count == 64
@@ -4925,6 +5242,33 @@ class ElementTileLegalizer {
         (PreferredType == 16 || PreferredType == 17) &&
         (Code <= 2 || (Code >= 5 && Code <= 8)))
       DType = Wide ? 16 : 17;
+    if (UseTileMask) {
+      auto *Ty = cast<FixedVectorType>(L->getType());
+      const uint64_t Rows = 32;
+      const uint64_t Cols = Ty->getNumElements() / 32;
+      if (Op == Instruction::Add || Op == Instruction::Sub) {
+        Intrinsic::ID ID = Op == Instruction::Add
+                               ? Intrinsic::linx_experimental_ew_tadd_masked
+                               : Intrinsic::linx_experimental_ew_tsub_masked;
+        return call(ID, {Ty, Ty, Ty, Active->getType()},
+                    {B.getInt64(Rows), B.getInt64(Cols), B.getInt64(DType),
+                     B.getInt64(29), L, R, Active, B.getInt64(0),
+                     B.getInt64(1)},
+                    Op == Instruction::Add ? "pto.tile.add.masked"
+                                           : "pto.tile.sub.masked");
+      }
+      Value *Raw = call(Intrinsic::linx_experimental_ew_tbinary, {Ty},
+                        {B.getInt64(Rows), B.getInt64(Cols), B.getInt64(DType),
+                         B.getInt64(29), B.getInt64(Code), L, R},
+                        "pto.tile.binary.full");
+      Value *Zero =
+          splat(Constant::getNullValue(Ty->getElementType()), Ty, 0, DType);
+      return call(Intrinsic::linx_experimental_ew_tsel,
+                  {Ty, Active->getType(), Ty, Ty},
+                  {B.getInt64(Rows), B.getInt64(Cols), B.getInt64(DType),
+                   B.getInt64(29), Active, Raw, Zero},
+                  "pto.tile.binary.masked");
+    }
     return call(
         Intrinsic::linx_experimental_ew_tbinary_gpr_masked, {L->getType()},
         {B.getInt64(32),
@@ -5054,6 +5398,14 @@ class ElementTileLegalizer {
             RequiredType == 25) &&
            "only integer element retyping is admitted");
     unsigned Count = cast<FixedVectorType>(Tile->getType())->getNumElements();
+    if (UseTileMask) {
+      Value *Zero =
+          value(Constant::getNullValue(Tile->getType()), RequiredType);
+      Value *Result = binary(Instruction::Add, Tile, Zero,
+                             tileMaskConstant(true), RequiredType);
+      RetypedIndices[Key] = Result;
+      return Result;
+    }
     uint64_t FullMask = Count == 64 ? ~uint64_t(0) : uint64_t(0xffffffff);
     Value *Zero = value(Constant::getNullValue(Tile->getType()));
     Value *Result = call(
@@ -5142,10 +5494,10 @@ class ElementTileLegalizer {
         R = splat(ConstantInt::get(Ty->getElementType(), Initial), Ty,
                   uint64_t(uint32_t(Step.getSExtValue())) << 32, PreferredType);
       } else {
-        bool OK = constantLogical64Grid(C, Initial, RowStep, ColStep);
-        assert(OK && "logical64 affine-grid preflight");
+        bool OK = constantLogicalM32Grid(C, Initial, RowStep, ColStep);
+        assert(OK && "logical M32 affine-grid preflight");
         (void)OK;
-        R = logical64Affine(Initial, RowStep, ColStep, Ty, PreferredType);
+        R = logicalM32Affine(Initial, RowStep, ColStep, Ty, PreferredType);
       }
     } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
       // Every admitted numeric source has a concrete Tile producer before this
@@ -5163,6 +5515,29 @@ class ElementTileLegalizer {
         PhysicalTypes[R] = PhysicalTypes.lookup(Bits);
         return Data[V] = R;
       }
+      if (Cast->getOpcode() == Instruction::ZExt &&
+          Source->getType()->getScalarType()->isIntegerTy(1) &&
+          Ty->getScalarType()->isIntegerTy(32)) {
+        const uint64_t DestinationType = PreferredType == 17 ? 17 : 25;
+        Value *Condition = mask(Source);
+        Value *One = splat(B.getInt32(1), Ty, 0, DestinationType);
+        Value *Zero = splat(B.getInt32(0), Ty, 0, DestinationType);
+        if (UseTileMask)
+          R = call(Intrinsic::linx_experimental_ew_tsel,
+                   {Ty, Condition->getType(), Ty, Ty},
+                   {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+                    B.getInt64(DestinationType), B.getInt64(29), Condition, One,
+                    Zero},
+                   "pto.tile.mask.zext");
+        else
+          R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
+                   {B.getInt64(32), B.getInt64(Ty->getNumElements() / 32),
+                    B.getInt64(DestinationType), B.getInt64(29), Condition,
+                    B.getInt64(0), One, Zero},
+                   "pto.mask.zext");
+        PhysicalTypes[R] = DestinationType;
+        return Data[V] = R;
+      }
       uint64_t SourceType = Cast->getOpcode() == Instruction::SExt ? 17 : 25;
       unsigned Count = Ty->getNumElements();
       R = call(Intrinsic::linx_experimental_ew_tlea, {Ty, Source->getType()},
@@ -5177,11 +5552,21 @@ class ElementTileLegalizer {
                             : isI64LeafVector(V)
                                 ? (PreferredType == 16 ? 16 : 24)
                                 : (PreferredType == 17 ? 17 : 25);
-      R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
-               {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(SelectType),
-                B.getInt64(29), mask(Select->getCondition()), B.getInt64(0),
-                value(Select->getTrueValue(), SelectType),
-                value(Select->getFalseValue(), SelectType)});
+      Value *Condition = mask(Select->getCondition());
+      Value *WhenTrue = value(Select->getTrueValue(), SelectType);
+      Value *WhenFalse = value(Select->getFalseValue(), SelectType);
+      if (UseTileMask)
+        R = call(Intrinsic::linx_experimental_ew_tsel,
+                 {Ty, Condition->getType(), Ty, Ty},
+                 {B.getInt64(32), B.getInt64(Count / 32),
+                  B.getInt64(SelectType), B.getInt64(29), Condition, WhenTrue,
+                  WhenFalse},
+                 "pto.tile.select");
+      else
+        R = call(Intrinsic::linx_experimental_ew_tsel_gpr, {Ty},
+                 {B.getInt64(32), B.getInt64(Count / 32),
+                  B.getInt64(SelectType), B.getInt64(29), Condition,
+                  B.getInt64(0), WhenTrue, WhenFalse});
     } else if (isIntrinsic(dyn_cast<CallInst>(V),
                            Intrinsic::linx_experimental_element_atomic_add)) {
       auto *Atomic = cast<CallInst>(V);
@@ -5237,12 +5622,21 @@ class ElementTileLegalizer {
                              : isI64LeafVector(VP)
                                  ? (PreferredType == 16 ? 16 : 24)
                                  : 25;
-        R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
-                 {Ty, A.Offset->getType()},
-                 {B.getInt64(32), B.getInt64(Count / 32), B.getInt64(ValueType),
-                  B.getInt64(0), B.getInt64(29), B.getInt64(A.IndexType),
-                  A.Base, A.Offset, activeMask(*VP), B.getInt64(0),
-                  B.getInt64(0), B.getInt64(1)});
+        Value *Active = activeMask(*VP);
+        if (UseTileMask)
+          R = call(Intrinsic::linx_experimental_ew_mgather_tile_masked,
+                   {Ty, A.Offset->getType(), Active->getType()},
+                   {B.getInt64(32), B.getInt64(Count / 32),
+                    B.getInt64(ValueType), B.getInt64(0), B.getInt64(29),
+                    A.Base, A.Offset, Active},
+                   "pto.tile.gather");
+        else
+          R = call(Intrinsic::linx_experimental_ew_mgather_gpr_masked,
+                   {Ty, A.Offset->getType()},
+                   {B.getInt64(32), B.getInt64(Count / 32),
+                    B.getInt64(ValueType), B.getInt64(0), B.getInt64(29),
+                    B.getInt64(A.IndexType), A.Base, A.Offset, Active,
+                    B.getInt64(0), B.getInt64(0), B.getInt64(1)});
       } else {
         R = binary(*binaryOpcode(VP->getIntrinsicID()),
                    value(VP->getArgOperand(0)), value(VP->getArgOperand(1)),
@@ -5260,6 +5654,7 @@ public:
                        unsigned DomainCount)
       : F(F), Owned(Instructions.begin(), Instructions.end()),
         ImportedPhiTypes(ImportedPhiTypes), DomainCount(DomainCount),
+        UseTileMask(ForceElementTileMask || DomainCount > 64),
         B(F.getContext()) {
     for (Instruction *I : Owned) {
       OwnedSet.insert(I);
@@ -8503,8 +8898,8 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     auto *Token = TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
     if (!Count ||
         (Count->getZExtValue() != 32 && Count->getZExtValue() != 64 &&
-         Count->getZExtValue() != 128 && Count->getZExtValue() != 512 &&
-         Count->getZExtValue() != 2048) ||
+         Count->getZExtValue() != 128 && Count->getZExtValue() != 256 &&
+         Count->getZExtValue() != 512 && Count->getZExtValue() != 2048) ||
         !Token || !Tokens.insert(Token).second)
       diagnose(F, Sentinel,
                "Tile legalization: requires a unique admitted predicated domain");
