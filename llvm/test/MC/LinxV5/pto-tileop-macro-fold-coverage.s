@@ -1,6 +1,7 @@
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s -o %t
-# RUN: llvm-objdump -d --no-show-raw-insn %t | llvm-mc -triple=linx64v5 -filetype=obj - | llvm-mc -triple=linx64v5 -filetype=obj - | llvm-objdump -d %t > %t.hex1 && llvm-objdump -d /tmp/does-not-exist-ignore 2>/dev/null; true
+# RUN: llvm-objdump -d --no-show-raw-insn %t | sed -n 's/^[[:space:]]*[[:xdigit:]][[:xdigit:]]*:[[:space:]]*//p' | llvm-mc -triple=linx64v5 -filetype=obj -o %t.roundtrip
+# RUN: llvm-objdump -d --no-show-raw-insn %t.roundtrip | FileCheck %s
 
 # Regression coverage for the TileOp macro folding gaps fixed together with
 # the binder compaction work:
@@ -47,5 +48,38 @@ BSTOP
 
 # The layout B.DATR follows the binders; folding must still happen.
 # CHECK: TCOLEXPANDEXPDIF <Row=32, Col=2, ValidCol=32, BF16, CUBE_M32>, U#3.reuse[base=zero, offset=0, size=5], T#1.reuse, ->T<128B>
+
+# Direct CUBE geometry must come from LB1/LB2, not from RowMajor capacity.
+BSTART.TEPL 2, U64
+B.DATR CUBE_M32.normal, Zero
+C.B.DIMI 4, ->lb0
+C.B.DIMI 32, ->lb1
+C.B.DIMI 4, ->lb2
+B.IOT u#1, t#1, mask=1111, last, ->t<4>
+BSTOP
+
+# CHECK: TMUL <Row=32, Col=4, U64, Zero, CUBE_M32>, U#1, T#1, ->T<1KB>
+
+BSTART.TEPL 8, U8
+B.DATR CUBE_M32.normal, Zero
+C.B.DIMI 4, ->lb0
+C.B.DIMI 32, ->lb1
+C.B.DIMI 4, ->lb2
+B.IOT u#2, u#5, mask=1111, last, ->t<1>
+BSTOP
+
+# CHECK: TXOR <Row=32, Col=4, U8, Zero, CUBE_M32>, U#2, U#5, ->T<128B>
+
+# The code generator compacts offset + PredicateCell + destination into one
+# two-source-destination B.IOT. Macro folding must consume all three schema roles.
+BSTART.TLSU MGATHER.MASK, U64
+B.DATR CUBE_M32.normal, Zero
+C.B.DIMI 4, ->lb0
+C.B.DIMI 32, ->lb1
+B.IOT t#2, t#10, mask=1111, last, ->t<4>
+B.IOR [a0], []
+BSTOP
+
+# CHECK: MGATHER_MASK <Col=4, ValidRow=32, U64, Zero, CUBE_M32>, [base=a0], T#2, T#10, ->T<1KB>
 
 

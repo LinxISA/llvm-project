@@ -567,6 +567,7 @@ static SDNode *selectElementwiseMGatherMasked(SDLoc &DL, SelectionDAG *DAG,
     Ops.push_back(Node->getOperand(Index));
   Ops.push_back(Node->getOperand(9)); // offsets
   Ops.push_back(Node->getOperand(10)); // mask
+  Ops.push_back(Node->getOperand(11)); // numeric layout
   Ops.push_back(Node->getOperand(8)); // base pointer
   Ops.push_back(Node->getOperand(0)); // chain
   return DAG->getMachineNode(Opc, DL, Node->getValueType(0),
