@@ -14,9 +14,9 @@
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5MCTargetDesc.h"
 #include "MCTargetDesc/LinxV5TileMacroCatalog.h"
+#include "MCTargetDesc/LinxV5TileMacroReport.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDecoderOps.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -26,7 +26,6 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Endian.h"
-#include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
 
@@ -1357,22 +1356,31 @@ DecodeStatus LinxV5Disassembler::getInstruction(MCInst &MI, uint64_t &Size,
   if (useLinxV5TileMacroAliases() &&
       tryDecodeTileMacro(MI, Size, Bytes, Address, this, STI, *MCII))
     return MCDisassembler::Success;
-  // A failed fold must not silently turn the default macro view into a
-  // physical instruction listing. Explicit no-tile-macros remains available
-  // for inspecting incomplete or non-canonical bundles.
+  // A failed fold must not silently pass as macro-covered: report the
+  // coverage gap and keep disassembling in physical form, so a single pass
+  // over the image surfaces every uncovered TileOp.  The tool exits
+  // non-zero if any report was issued.  Explicit no-tile-macros remains
+  // available for a plain physical listing without reports.
   MI.clear();
   DecodeStatus Result =
       decodeOneLinxV5Instruction(MI, Size, Bytes, Address, this, STI);
   if (useLinxV5TileMacroAliases() && Result != MCDisassembler::Fail) {
     switch (MI.getOpcode()) {
     case LinxV5::BSTART_TEPL_NoMode:
+      LinxV5::reportUnfoldableTileOp("BSTART.TEPL", Address);
+      break;
     case LinxV5::BSTART_TMA:
+      LinxV5::reportUnfoldableTileOp("BSTART.TLSU", Address);
+      break;
     case LinxV5::BSTART_CUBE:
+      LinxV5::reportUnfoldableTileOp("BSTART.CUBE", Address);
+      break;
     case LinxV5::BSTART_GMOV:
+      LinxV5::reportUnfoldableTileOp("BSTART.GMOV", Address);
+      break;
     case LinxV5::BSTART_TIMG2COL:
-      report_fatal_error(Twine("LinxV5: cannot print ") +
-                         MCII->getName(MI.getOpcode()) + " at 0x" +
-                         utohexstr(Address) + " in macro instruction form");
+      LinxV5::reportUnfoldableTileOp("BSTART.TIMG2COL", Address);
+      break;
     default:
       break;
     }

@@ -165,6 +165,13 @@ using namespace llvm::object;
 using namespace llvm::objdump;
 using namespace llvm::opt;
 
+// Defined by the LinxV5 target (LinxV5TileMacroReport.cpp) when it is part
+// of this build: the number of TileOp bundles that could not print as a
+// complete macro instruction during TileOp macro-view disassembly.  The
+// weak reference keeps non-LinxV5 builds linking; it resolves to null and
+// main() then skips the coverage exit check.
+extern "C" __attribute__((weak)) unsigned LinxV5TileOpCoverageReports();
+
 namespace {
 
 class CommonOptTable : public opt::OptTable {
@@ -3207,6 +3214,19 @@ int main(int argc, char **argv) {
   llvm::for_each(InputFilenames, dumpInput);
 
   warnOnNoMatchForSections();
+
+  // LinxV5 TileOp macro-coverage survey: the default TileOp macro view
+  // reports every TileOp bundle it cannot print as a complete macro while
+  // disassembly continues.  Fail the run if any report was issued.  The
+  // symbol is weak, so builds without the LinxV5 target keep linking and
+  // simply skip the check.
+  if (LinxV5TileOpCoverageReports) {
+    if (unsigned Reports = LinxV5TileOpCoverageReports()) {
+      errs() << "LinxV5 error: " << Reports
+             << " TileOp bundle(s) have no complete macro instruction form\n";
+      return EXIT_FAILURE;
+    }
+  }
 
   return EXIT_SUCCESS;
 }

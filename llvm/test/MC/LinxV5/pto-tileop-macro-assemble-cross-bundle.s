@@ -1,5 +1,6 @@
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s -o %t.o
-# RUN: not --crash llvm-objdump -d --no-show-raw-insn %t.o 2>&1 | FileCheck %s --check-prefix=ERROR
+# RUN: not llvm-objdump -d --no-show-raw-insn %t.o >/dev/null 2>%t.err
+# RUN: FileCheck %s --check-prefix=ERROR < %t.err
 # RUN: llvm-objdump -d --no-show-raw-insn -M no-tile-macros %t.o | FileCheck %s --check-prefix=PHYSICAL
 
 # The second BSTART begins a continuation generation.  The catalog currently
@@ -22,7 +23,7 @@ B.IOT T#1, T#2, mask=1111, last
 B.ASSEMBLE 0, 1, a0, 4, 5
 BSTOP
 
-# ERROR: LLVM ERROR: LinxV5: cannot print BSTART_TEPL_NoMode at 0x12 in macro instruction form
+# ERROR: LinxV5 error: TileOp header 'BSTART.TEPL' at 0x12 has no complete macro instruction form
 # PHYSICAL: BSTART.TEPL{{.*}}TADD, FP32
 # PHYSICAL: B.ASSEMBLE{{.*}}1, 0, a0, 0, 5
 # PHYSICAL-NEXT: BSTART.TEPL{{.*}}TADD, FP32
