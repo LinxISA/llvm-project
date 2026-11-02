@@ -65,6 +65,57 @@ lane count.  The 4096 limit is an implementation bound for this development
 stage, not an ISA limit.
 
 Conditional edges use poison-safe ``select(parent_mask, condition, false)``.
+The complementary edge reuses that masked result as ``parent_mask XOR
+then_mask``, rather than evaluating an unmasked condition.  At a reconvergence
+block that postdominates its immediate dominator, the incoming execution mask
+is restored from that dominator.  Nested diamonds therefore restore their
+enclosing mask without repeatedly OR-reducing their incoming edge masks.
+PHI values still use individual edge masks, and a path that bypasses a block
+prevents this restoration.  These are explicit SSA-mask optimizations; they
+do not emit SIMT execution-state instructions or change Tile publication order.
+Nested loops with a SCEV-proven
+maximum of 1..64 iterations are instead fully flattened before predication,
+preserving their early exits, continue paths and loop-carried values in SSA.
+This includes bounded runtime trip counts and recursively nested loops.
+Expansion is limited to 4096 instructions per loop and 16384 per region;
+larger expansions and unknown bounds use the dynamic profile below when legal.
+These bounds are compiler implementation limits, not ISA limits.  Flattening
+may increase code size.
+It is required legalization rather than optional profitability unrolling, so
+``llvm.loop.unroll.disable`` does not prevent it.  A nested loop carrying its
+own element-region marker is rejected rather than duplicating that contract.
+
+Dynamic nested control currently supports a 32-element domain, scalar i32
+data and i32 loop-carried values.  Pointer construction can use i32-to-i64
+zero extension, but pointer PHIs, native i64/floating recurrences and typed
+carrier publications are not part of this profile.  Unsupported operations
+receive diagnostics rather than falling back to SIMT instructions.
+
+The dynamic profile schedules one acyclic CFG traversal at a time.  Each
+nested backedge has a pending element mask; its values are retained in explicit
+SSA state PHIs.  A new traversal injects only pending elements at their target
+headers, while completed elements remain inactive.  ``continue`` reaches its
+loop latch, ``break`` reaches its own exit, and nested-loop completion restores
+the enclosing flow through ordinary edge masks.  A reduction of all pending
+backedge masks controls the scalar scheduler branch.  No pending element means
+immediate scheduler exit; a temporarily empty inner branch does not terminate
+other live loops.  This does not require a statically known trip bound.
+
+Scheduler state is retained only when a use can cross a scheduling traversal,
+including backedge PHI operands and values used after an inner loop completes.
+Ordinary forward uses and same-traversal PHI edges do not require history
+Tiles.  Reconverged diamonds restore their dominating mask only when every
+incoming path belongs to the same traversal; postdominance alone is not enough
+across an inner loop.  Repeated mask unions and identical predicated blends
+are shared within the region, without speculating inactive computations.
+
+Physical legalization maps mask PHIs to GPR state and i32 data PHIs to explicit
+Tile state, with uniform/initial values materialized in the preheader.  The
+runtime scheduler keeps a fixed instruction traversal, including masked-off
+Tile publications; it does not insert arbitrary per-arm zero-mask skips that
+would change the relative-reference queue topology.  There is no hidden SIMT
+execution-mask register.  General per-arm skipping, other element shapes and
+typed carrier loop publications remain outside this profile.
 Any number of incoming PHI edges are blended by their edge masks.  Integer
 arithmetic, comparisons, selects, integer casts and scalar integer-element GEPs
 are widened.  Loads and stores become masked ``llvm.vp.gather/scatter``; in
@@ -75,7 +126,8 @@ Memory streams must currently have a proven unit-element stride.  Streams with
 a store must either reference disjoint underlying objects or have the same
 address SCEV and access size.  A scalar ``NoAlias`` result for ``a[i]`` versus
 ``a[i+1]`` is insufficient, because these streams overlap across iterations.
-Nested loops, non-induction recurrences, unplanned live-outs, atomics, volatile
+Unsupported dynamic-loop types/shapes, outer non-induction recurrences,
+unplanned live-outs, atomics, volatile
 accesses, unknown calls and unsupported types receive diagnostics in this
 stage.  These restrictions are compiler coverage limits, not new source syntax.
 

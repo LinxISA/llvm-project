@@ -3146,6 +3146,9 @@ bool LinxV5InstrInfo::verifyInstruction(const MachineInstr &MI,
         case LinxV5Op::OPERAND_UIMM3:
           Ok = isUInt<3>(Imm);
           break;
+        case LinxV5Op::OPERAND_UIMM3_64:
+          Ok = Imm >= 1 && Imm <= 8;
+          break;
         case LinxV5Op::OPERAND_UIMM4:
           Ok = isUInt<4>(Imm);
           break;
@@ -3157,6 +3160,9 @@ bool LinxV5InstrInfo::verifyInstruction(const MachineInstr &MI,
           break;
         case LinxV5Op::OPERAND_UIMM6:
           Ok = isUInt<6>(Imm);
+          break;
+        case LinxV5Op::OPERAND_UIMM6_64:
+          Ok = Imm >= 1 && Imm <= 64;
           break;
         case LinxV5Op::OPERAND_UIMM7:
           Ok = isUInt<7>(Imm);

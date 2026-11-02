@@ -12,6 +12,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LazyValueInfo.h"
@@ -48,6 +49,7 @@
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/Mem2Reg.h"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
 
 #include <limits>
 
@@ -176,6 +178,7 @@ constexpr StringLiteral IntraElementOrderMD =
     "llvm.loop.linx.pto.element.intra_element_order";
 constexpr StringLiteral PredicatedOwnerMD = "linx.pto.element.vp.owner";
 constexpr StringLiteral PredicatedDomainMD = "linx.pto.element.vp.domain";
+constexpr StringLiteral PredicatedSchedulerMD = "linx.pto.element.vp.scheduler";
 constexpr StringLiteral ScalarizedLaneZeroMD =
     "linx.pto.element.scalarized_lane_zero";
 
@@ -955,6 +958,7 @@ struct PredicatedRegion {
   SmallPtrSet<CallInst *, 4> ProvenDeadTraps;
   SmallPtrSet<StoreInst *, 1> UnorderedScatters;
   SmallPtrSet<Value *, 32> PositiveB32Values;
+  bool Dynamic = false;
 };
 
 // IndVarSimplify may widen source B32 control/address expressions to i64.
@@ -1294,11 +1298,12 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
   if (F.hasFnAttribute(Attribute::StrictFP))
     return Fail(L.getHeader()->getTerminator(),
                 "strictfp/fenv requires constrained floating-point lowering");
-  if (!L.isInnermost() || !L.getLoopPreheader() || !L.getLoopLatch() ||
+  Plan.Dynamic = !L.isInnermost();
+  if (!L.getLoopPreheader() || !L.getLoopLatch() ||
       !L.getExitBlock() || L.getExitingBlock() != L.getLoopLatch() ||
       L.getExitBlock()->getSinglePredecessor() != L.getLoopLatch())
     return Fail(L.getHeader()->getTerminator(),
-                "requires an innermost single-latch loop without early exits");
+                "requires a single-latch element loop without outer early exits");
   auto *Sentinel = findRegionSentinel(F, getElementRegionToken(L));
   if (!Sentinel || !DT.dominates(Sentinel, L.getHeader()))
     return Fail(L.getHeader()->getTerminator(),
@@ -1316,6 +1321,37 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     return Fail(L.getHeader()->getTerminator(),
                 "requires a proven 1..4096 trip count and zero-based unit induction");
   Plan.CarrierCount = Plan.Count;
+  if (Plan.Dynamic) {
+    if (Plan.Count != 32 ||
+        std::distance(L.getHeader()->phis().begin(),
+                      L.getHeader()->phis().end()) != 1)
+      return Fail(L.getHeader()->getTerminator(),
+                  "dynamic nested control requires logical32 and only the "
+                  "outer induction PHI");
+    for (BasicBlock *BB : L.blocks())
+      for (Instruction &I : *BB) {
+        if (&I == Plan.Induction || I.isTerminator() ||
+            isa<DbgInfoIntrinsic>(I))
+          continue;
+        bool IndexExtension =
+            isa<ZExtInst>(I) && I.getType()->isIntegerTy(64) &&
+            I.getOperand(0)->getType()->isIntegerTy(32) &&
+            llvm::all_of(I.users(), [](User *Use) {
+              return isa<GetElementPtrInst>(Use);
+            });
+        if (I.getType()->isVectorTy() ||
+            (!I.getType()->isVoidTy() && !I.getType()->isPointerTy() &&
+             !I.getType()->isIntegerTy(1) && !I.getType()->isIntegerTy(32) &&
+             !IndexExtension) ||
+            (isa<PHINode>(I) && !I.getType()->isIntegerTy(32)))
+          return Fail(&I, "dynamic nested control requires scalar i32 data "
+                          "and i32 loop-carried values");
+        if (auto *Call = dyn_cast<CallBase>(&I))
+          if (!isa<DbgInfoIntrinsic>(Call))
+            return Fail(&I, "dynamic nested control does not support calls "
+                            "or nested element contracts");
+      }
+  }
   Optional<ElementProfile> Norm;
   for (BasicBlock *BB : L.blocks())
     for (Instruction &I : *BB)
@@ -1361,7 +1397,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     unsigned Count = 0;
     for (BasicBlock *Pred : predecessors(BB))
       if (L.contains(Pred) &&
-          !(Pred == L.getLoopLatch() && BB == L.getHeader()))
+          !DT.dominates(BB, Pred))
         ++Count;
     Pending[BB] = Count;
   }
@@ -1370,7 +1406,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     BasicBlock *BB = Plan.Order[I];
     for (BasicBlock *Succ : successors(BB)) {
       if (!L.contains(Succ) ||
-          (BB == L.getLoopLatch() && Succ == L.getHeader()))
+          DT.dominates(Succ, BB))
         continue;
       if (--Pending[Succ] == 0)
         Plan.Order.push_back(Succ);
@@ -2639,7 +2675,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         return Fail(Memory[J], "memory streams may overlap across elements");
     }
   }
-  planPositiveB32Representation(F, SE, DT, LVI, Plan);
+  if (!Plan.Dynamic)
+    planPositiveB32Representation(F, SE, DT, LVI, Plan);
   return true;
 }
 
@@ -2657,22 +2694,59 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   Value *True = Constant::getAllOnesValue(MaskTy);
   Value *EVL = B.getInt32(Plan.Count);
   DenseMap<Value *, Value *> Values;
+  DenseMap<Value *, PHINode *> SchedulerValues;
+  DenseMap<std::pair<BasicBlock *, unsigned>, PHINode *> SchedulerMasks;
+  SmallVector<PHINode *, 32> SchedulerPhis;
+  BasicBlock *Preheader = L.getLoopPreheader();
+  BasicBlock *Exit = L.getExitBlock();
+  Instruction *FirstGenerated = nullptr;
   DenseMap<Value *, Value *> PositiveB32Values;
   SmallPtrSet<Instruction *, 8> ScalarNarrowImports;
   SimplifyQuery SQ(F.getParent()->getDataLayout());
+  DenseMap<std::pair<Value *, Value *>, Value *> MaskUnions;
+  DenseMap<std::pair<Value *, std::pair<Value *, Value *>>, Value *> Blends;
   auto UnionMask = [&](Value *Left, Value *Right, const Twine &Name) {
     if (Value *Simple = simplifyOrInst(Left, Right, SQ))
       return Simple;
-    return B.CreateOr(Left, Right, Name);
+    if (Value *Existing = MaskUnions.lookup({Left, Right}))
+      return Existing;
+    if (Value *Existing = MaskUnions.lookup({Right, Left}))
+      return Existing;
+    return MaskUnions[{Left, Right}] = B.CreateOr(Left, Right, Name);
   };
   auto Blend = [&](Value *Mask, Value *Yes, Value *No, const Twine &Name) {
     if (Value *Simple = simplifySelectInst(Mask, Yes, No, SQ))
       return Simple;
-    return B.CreateSelect(Mask, Yes, No, Name);
+    auto Key = std::make_pair(Mask, std::make_pair(Yes, No));
+    if (Value *Existing = Blends.lookup(Key))
+      return Existing;
+    return Blends[Key] = B.CreateSelect(Mask, Yes, No, Name);
   };
   // Successor index is part of identity: a conditional can have two edges to
   // the same destination, and neither edge may be silently dropped.
   DenseMap<std::pair<BasicBlock *, unsigned>, Value *> Edges;
+  DenseMap<BasicBlock *, Value *> BlockMasks;
+  PostDominatorTree PDT(F);
+  DenseMap<std::pair<BasicBlock *, BasicBlock *>, bool> TraversalCache;
+  auto SameTraversal = [&](BasicBlock *From, BasicBlock *To) {
+    auto Key = std::make_pair(From, To);
+    auto Cached = TraversalCache.find(Key);
+    if (Cached != TraversalCache.end())
+      return Cached->second;
+    SmallVector<BasicBlock *, 16> Worklist{To};
+    SmallPtrSet<BasicBlock *, 16> Visited;
+    while (!Worklist.empty()) {
+      BasicBlock *Current = Worklist.pop_back_val();
+      if (Current == From || !Visited.insert(Current).second)
+        continue;
+      for (BasicBlock *Pred : predecessors(Current)) {
+        if (!L.contains(Pred) || DT.dominates(Current, Pred))
+          return TraversalCache[Key] = false;
+        Worklist.push_back(Pred);
+      }
+    }
+    return TraversalCache[Key] = true;
+  };
   SmallVector<Constant *, 32> Indices;
   Type *InductionTy = Plan.PositiveB32Values.contains(Plan.Induction)
                           ? B.getInt32Ty()
@@ -2778,7 +2852,9 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     auto *Term = Pred->getTerminator();
     for (unsigned J = 0; J < Term->getNumSuccessors(); ++J)
       if (Term->getSuccessor(J) == Dest) {
-        Value *Edge = Edges.lookup({Pred, J});
+        Value *Edge = DT.dominates(Dest, Pred) && Plan.Dynamic
+                          ? SchedulerMasks.lookup({Pred, J})
+                          : Edges.lookup({Pred, J});
         assert(Edge && "all predecessor edges must already be built");
         Mask = UnionMask(Mask, Edge, "pto.edge.union");
       }
@@ -2794,11 +2870,69 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     return B.Insert(GetElementPtrInst::Create(B.getInt32Ty(), Wide, {Zero}),
                     "pto.uniform.address");
   };
+  if (Plan.Dynamic) {
+    auto NewPhi = [&](Type *Ty, const Twine &Name) {
+      auto *Phi = B.Insert(PHINode::Create(Ty, 2), Name);
+      SchedulerPhis.push_back(Phi);
+      if (!FirstGenerated)
+        FirstGenerated = Phi;
+      return Phi;
+    };
+    for (BasicBlock *BB : Plan.Order) {
+      auto *Term = BB->getTerminator();
+      for (unsigned Index = 0; Index < Term->getNumSuccessors(); ++Index) {
+        BasicBlock *Succ = Term->getSuccessor(Index);
+        if (L.contains(Succ) && DT.dominates(Succ, BB) &&
+            Succ != L.getHeader())
+          SchedulerMasks[{BB, Index}] = NewPhi(MaskTy, "pto.loop.pending");
+      }
+      for (Instruction &I : *BB)
+        if (&I != Plan.Induction && !I.isTerminator() &&
+            (I.getType()->isIntegerTy(1) || I.getType()->isIntegerTy(32)) &&
+            llvm::any_of(I.uses(), [&](Use &Operand) {
+              auto *UseInst = dyn_cast<Instruction>(Operand.getUser());
+              if (!UseInst || UseInst == Plan.Induction)
+                return false;
+              BasicBlock *UseBlock = UseInst->getParent();
+              if (auto *Phi = dyn_cast<PHINode>(UseInst)) {
+                BasicBlock *Incoming =
+                    Phi->getIncomingBlock(Operand.getOperandNo());
+                if (DT.dominates(UseBlock, Incoming))
+                  return true;
+                UseBlock = Incoming;
+              }
+              return !SameTraversal(BB, UseBlock);
+            })) {
+          auto *Phi = NewPhi(WideType(&I), "pto.loop.value");
+          SchedulerValues[&I] = Phi;
+          Values[&I] = Phi;
+        }
+    }
+  }
+  PHINode *EntryMask = nullptr;
+  if (Plan.Dynamic) {
+    EntryMask = B.Insert(PHINode::Create(MaskTy, 2), "pto.loop.entry");
+    SchedulerPhis.push_back(EntryMask);
+  }
   for (BasicBlock *BB : Plan.Order) {
-    Value *Mask = BB == L.getHeader() ? True : False;
-    if (BB != L.getHeader())
-      for (BasicBlock *Pred : predecessors(BB))
-        Mask = UnionMask(Mask, EdgeFrom(Pred, BB), "pto.block.mask");
+    Value *Mask = BB == L.getHeader()
+                      ? (Plan.Dynamic ? static_cast<Value *>(EntryMask) : True)
+                      : nullptr;
+    if (BB != L.getHeader()) {
+      auto *Node = DT.getNode(BB);
+      BasicBlock *Dominator = Node && Node->getIDom()
+                                  ? Node->getIDom()->getBlock()
+                                  : nullptr;
+      if (Dominator && PDT.dominates(BB, Dominator) &&
+          (!Plan.Dynamic || SameTraversal(Dominator, BB)))
+        Mask = BlockMasks.lookup(Dominator);
+      if (!Mask) {
+        Mask = False;
+        for (BasicBlock *Pred : predecessors(BB))
+          Mask = UnionMask(Mask, EdgeFrom(Pred, BB), "pto.block.mask");
+      }
+    }
+    BlockMasks[BB] = Mask;
     for (Instruction &I : *BB) {
       if (&I == Plan.Induction ||
           Plan.Accumulators.count(dyn_cast<PHINode>(&I)) || I.isTerminator() ||
@@ -2826,7 +2960,13 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Result = PoisonValue::get(WideTy);
         for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
           Result = Blend(EdgeFrom(Phi->getIncomingBlock(J), BB),
-                         PositiveB32Result
+                         Plan.Dynamic &&
+                                 DT.dominates(BB, Phi->getIncomingBlock(J))
+                             ? (SchedulerValues.count(Phi->getIncomingValue(J))
+                                    ? static_cast<Value *>(SchedulerValues.lookup(
+                                          Phi->getIncomingValue(J)))
+                                    : Widen(Phi->getIncomingValue(J)))
+                             : PositiveB32Result
                              ? WidenPositiveB32(Phi->getIncomingValue(J))
                              : Widen(Phi->getIncomingValue(J)),
                          Result, "pto.phi");
@@ -3022,6 +3162,9 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         llvm_unreachable("preflight must reject unsupported instructions");
       }
       if (Result) {
+        if (Plan.Dynamic && SchedulerValues.count(&I))
+          Result = Blend(Mask, Result, SchedulerValues.lookup(&I),
+                         "pto.loop.retain");
         if (PositiveB32Result)
           PositiveB32Values[&I] = Result;
         else
@@ -3034,12 +3177,17 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     for (unsigned J = 0; J < Branch->getNumSuccessors(); ++J) {
       Value *Edge = Mask;
       if (Branch->isConditional()) {
-        Value *Condition = Widen(Branch->getCondition());
-        if (J)
-          Condition = B.CreateNot(Condition, "pto.edge.not");
-        // As in LoopVectorize::createEdgeMask, and(false, poison) is poison;
-        // select suppresses a condition that was never evaluated by this element.
-        Edge = Blend(Mask, Condition, False, "pto.edge.mask");
+        if (J) {
+          Value *ThenMask = Edges.lookup({BB, 0});
+          Edge = simplifyXorInst(Mask, ThenMask, SQ);
+          if (!Edge)
+            Edge = match(Mask, m_AllOnes())
+                       ? B.CreateNot(ThenMask, "pto.edge.else")
+                       : B.CreateXor(Mask, ThenMask, "pto.edge.else");
+        } else {
+          Value *Condition = Widen(Branch->getCondition());
+          Edge = Blend(Mask, Condition, False, "pto.edge.mask");
+        }
       }
       Edges[{BB, J}] = Edge;
     }
@@ -3075,7 +3223,41 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
       PredicatedDomainMD,
       MDNode::get(F.getContext(),
                   ConstantAsMetadata::get(B.getInt32(Plan.CarrierCount))));
+  Value *Pending = False;
+  if (Plan.Dynamic) {
+    for (const auto &Entry : SchedulerMasks) {
+      Value *Backedge = Edges.lookup(Entry.first);
+      Entry.second->addIncoming(False, Preheader);
+      Entry.second->addIncoming(Backedge, Preheader);
+      Pending = UnionMask(Pending, Backedge, "pto.loop.live");
+    }
+    for (const auto &Entry : SchedulerValues) {
+      Entry.second->addIncoming(Constant::getNullValue(Entry.second->getType()),
+                                Preheader);
+      Entry.second->addIncoming(Values.lookup(Entry.first), Preheader);
+    }
+    EntryMask->addIncoming(True, Preheader);
+    EntryMask->addIncoming(False, Preheader);
+    for (Instruction *I = FirstGenerated; I != Preheader->getTerminator();
+         I = I->getNextNode())
+      I->setMetadata(PredicatedOwnerMD, Token);
+  }
   deleteDeadLoop(&L, &DT, &SE, &LI);
+  if (Plan.Dynamic) {
+    BasicBlock *Scheduler =
+        Preheader->splitBasicBlock(FirstGenerated, "pto.loop.scheduler");
+    for (PHINode *Phi : SchedulerPhis)
+      Phi->setIncomingBlock(1, Scheduler);
+    IRBuilder<> LoopBuilder(Scheduler->getTerminator());
+    Value *Any = LoopBuilder.CreateIntrinsic(Intrinsic::vector_reduce_or,
+                                             {MaskTy}, {Pending}, nullptr,
+                                             "pto.loop.any");
+    cast<Instruction>(Any)->setMetadata(PredicatedOwnerMD, Token);
+    Scheduler->getTerminator()->eraseFromParent();
+    auto *Branch = BranchInst::Create(Scheduler, Exit, Any, Scheduler);
+    Branch->setMetadata(PredicatedSchedulerMD, Token);
+    findRegionSentinel(F, Token)->setMetadata(PredicatedSchedulerMD, Token);
+  }
 }
 
 // Tile values cross the region boundary through whole-carrier register inputs.
@@ -3250,6 +3432,8 @@ class ElementTileLegalizer {
   SmallPtrSet<Instruction *, 32> OwnedSet;
   SmallPtrSet<Value *, 32> Validated;
   SmallVector<CallInst *, 8> Publications;
+  bool HasScheduler = false;
+  BasicBlock *SchedulerPreheader = nullptr;
   SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
   DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
   unsigned DomainCount;
@@ -4052,6 +4236,14 @@ class ElementTileLegalizer {
       return isVector(V, 1) || isVector(V, 32) || isVector(V, 64) ||
              isF32Vector(V) || isF16Vector(V) ||
              fail(V, "unsupported undefined element type");
+    if (auto *Phi = dyn_cast<PHINode>(V)) {
+      if (!HasScheduler || (!isVector(V, 1) && !isVector(V, 32)))
+        return fail(V, "scheduler PHI requires an i1 mask or i32 Tile");
+      for (Value *Incoming : Phi->incoming_values())
+        if (!validate(Incoming))
+          return false;
+      return true;
+    }
     if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
       if (!isVector(Freeze, 32) && !isI64LeafVector(Freeze) &&
           !isF32Vector(Freeze) && !isF16Vector(Freeze))
@@ -4494,6 +4686,9 @@ class ElementTileLegalizer {
   }
 
   Value *mask(Value *V) {
+    IRBuilderBase::InsertPointGuard Guard(B);
+    if (HasScheduler && (isa<Constant>(V) || getSplatValue(V)))
+      B.SetInsertPoint(SchedulerPreheader->getTerminator());
     auto It = Masks.find(V);
     if (It != Masks.end())
       return It->second;
@@ -4848,6 +5043,9 @@ class ElementTileLegalizer {
   }
 
   Value *value(Value *V, uint64_t PreferredType = 0) {
+    IRBuilderBase::InsertPointGuard Guard(B);
+    if (HasScheduler && (isa<Constant>(V) || getSplatValue(V)))
+      B.SetInsertPoint(SchedulerPreheader->getTerminator());
     if (NormProfile)
       return valueNorm(V);
     auto It = Data.find(V);
@@ -5011,15 +5209,45 @@ public:
         B(F.getContext()) {
     for (Instruction *I : Owned) {
       OwnedSet.insert(I);
+      HasScheduler |= I->getParent()->getTerminator()->getMetadata(
+                          PredicatedSchedulerMD) != nullptr;
       if (auto View = getViewDescriptor(I))
         if (View->Profile.Layout == 0)
           NormProfile = View->Profile;
     }
+    if (HasScheduler)
+      for (BasicBlock *Pred : predecessors(Owned.front()->getParent()))
+        if (Pred != Owned.front()->getParent())
+          SchedulerPreheader = Pred;
   }
 
   bool preflight() {
     if (Owned.empty())
       return fail(nullptr, "empty predicated region");
+    if (HasScheduler && (DomainCount != 32 || !SchedulerPreheader))
+      return fail(nullptr, "malformed logical32 scheduler control flow");
+    if (HasScheduler) {
+      BasicBlock *Block = Owned.front()->getParent();
+      auto *Branch = dyn_cast<BranchInst>(Block->getTerminator());
+      if (!Branch || !Branch->isConditional() ||
+          Branch->getSuccessor(0) != Block ||
+          Branch->getSuccessor(1) == Block || pred_size(Block) != 2)
+        return fail(Branch, "scheduler requires one preheader and one backedge");
+      for (Instruction *I : Owned) {
+        if (auto *Phi = dyn_cast<PHINode>(I))
+          if (Phi->getNumIncomingValues() != 2 ||
+              Phi->getIncomingBlock(0) != SchedulerPreheader ||
+              Phi->getIncomingBlock(1) != Block || !validate(Phi))
+            return fail(Phi, "malformed scheduler state PHI");
+        if (auto *Reduction = dyn_cast<IntrinsicInst>(I))
+          if (Reduction->getIntrinsicID() == Intrinsic::vector_reduce_or)
+            if (!validate(Reduction->getArgOperand(0)) ||
+                !Reduction->hasOneUse() ||
+                Branch->getCondition() != Reduction)
+              return fail(Reduction,
+                          "scheduler reduction must control its backedge");
+      }
+    }
     for (Instruction *I : Owned) {
       if (isa<FPMathOperator>(I) && I->getFastMathFlags().any())
         return fail(I, "floating instructions require no fast-math");
@@ -5032,7 +5260,9 @@ public:
           return true;
         for (User *U : V->users()) {
           auto *UserI = dyn_cast<Instruction>(U);
-          if (UserI && OwnedSet.contains(UserI))
+          if (UserI && (OwnedSet.contains(UserI) ||
+                        (HasScheduler && isa<BranchInst>(UserI) &&
+                         UserI->getMetadata(PredicatedSchedulerMD))))
             continue;
           External = true;
           if (isa_and_nonnull<ReturnInst>(UserI) &&
@@ -5097,6 +5327,19 @@ public:
   }
 
   void emit() {
+    for (Instruction *I : Owned)
+      if (auto *Phi = dyn_cast<PHINode>(I)) {
+        Type *Ty = isVector(Phi, 1) ? Type::getInt64Ty(F.getContext())
+                                    : Phi->getType();
+        auto *Replacement = PHINode::Create(Ty, Phi->getNumIncomingValues(),
+                                             "pto.scheduler.phi", Phi);
+        if (isVector(Phi, 1))
+          Masks[Phi] = Replacement;
+        else {
+          Data[Phi] = Replacement;
+          PhysicalTypes[Replacement] = 25;
+        }
+      }
     NativeI64RegionType = 0;
     NativeI32RegionType = 0;
     MixedNativeI64RegionTypes = false;
@@ -5190,6 +5433,30 @@ public:
         auto *I = dyn_cast<Instruction>(U.getUser());
         return !I || !OwnedSet.contains(I);
       });
+    }
+    if (HasScheduler) {
+      for (Instruction *I : Owned)
+        if (auto *Reduction = dyn_cast<IntrinsicInst>(I))
+          if (Reduction->getIntrinsicID() == Intrinsic::vector_reduce_or) {
+            B.SetInsertPoint(Reduction);
+            Reduction->replaceAllUsesWith(B.CreateICmpNE(
+                mask(Reduction->getArgOperand(0)), B.getInt64(0),
+                "pto.scheduler.any"));
+          }
+      for (Instruction *I : Owned)
+        if (auto *Phi = dyn_cast<PHINode>(I)) {
+          auto *Replacement = cast<PHINode>(isVector(Phi, 1)
+                                                ? Masks.lookup(Phi)
+                                                : Data.lookup(Phi));
+          for (unsigned Index = 0; Index < Phi->getNumIncomingValues(); ++Index) {
+            BasicBlock *Pred = Phi->getIncomingBlock(Index);
+            B.SetInsertPoint(Pred->getTerminator());
+            Value *Incoming = isVector(Phi, 1)
+                                  ? mask(Phi->getIncomingValue(Index))
+                                  : value(Phi->getIncomingValue(Index), 25);
+            Replacement->addIncoming(Incoming, Pred);
+          }
+        }
     }
     for (Instruction *I : Owned)
       I->dropAllReferences();
@@ -8045,6 +8312,41 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
     }
     auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
     auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+    if (!Selected->isInnermost()) {
+      Loop *Nested = Selected->getSubLoops().front();
+      while (!Nested->isInnermost())
+        Nested = Nested->getSubLoops().front();
+      if (getElementRegionToken(*Nested)) {
+        diagnose(F, Nested->getHeader()->getTerminator(),
+                 "predication: nested marked element regions are not supported");
+        break;
+      }
+      unsigned MaxTripCount = SE.getSmallConstantMaxTripCount(Nested);
+      uint64_t InstructionCount = 0;
+      for (BasicBlock *BB : Nested->blocks())
+        InstructionCount += BB->size();
+      uint64_t RegionInstructionCount = 0;
+      for (BasicBlock *BB : Selected->blocks())
+        RegionInstructionCount += BB->size();
+      if (MaxTripCount && MaxTripCount <= 64 &&
+          InstructionCount * MaxTripCount <= 4096 &&
+          RegionInstructionCount + InstructionCount * (MaxTripCount - 1) <=
+              16384) {
+        auto &AC = AM.getResult<AssumptionAnalysis>(F);
+        auto &TTI = AM.getResult<TargetIRAnalysis>(F);
+        LoopUnrollResult Result = UnrollLoop(
+            Nested, {MaxTripCount, true, false, false, false, true}, &LI, &SE,
+            &DT, &AC, &TTI, nullptr, true);
+        if (Result != LoopUnrollResult::FullyUnrolled) {
+          diagnose(F, Selected->getHeader()->getTerminator(),
+                   "predication: bounded nested loop could not be flattened");
+          break;
+        }
+        AM.invalidate(F, PreservedAnalyses::none());
+        Changed = true;
+        continue;
+      }
+    }
     auto &LVI = AM.getResult<LazyValueAnalysis>(F);
     PredicatedRegion Plan;
     if (!planPredication(F, *Selected, SE, DT, LVI, AM.getResult<AAManager>(F),
