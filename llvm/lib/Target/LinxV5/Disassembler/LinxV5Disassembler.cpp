@@ -1141,6 +1141,30 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       }
       if (Members.empty())
         continue;
+      if (Expected.Kind == TileMacroCommandKind::IOT) {
+        // CodeGen may compact adjacent source/source/destination schema roles
+        // into one B.IOT. Validate the complete adjacent role set against that
+        // record instead of requiring one physical B.IOT per catalog command.
+        for (unsigned Next = C + 1; Next != Form.NumCommands; ++Next) {
+          const auto &Adjacent =
+              TileMacroCommands[Form.FirstCommand + Next];
+          if (Adjacent.Kind != TileMacroCommandKind::IOT)
+            break;
+          for (unsigned M = 0; M != Adjacent.NumMembers; ++M) {
+            unsigned Member =
+                TileMacroCommandMembers[Adjacent.FirstMember + M].BindingMember;
+            const auto &Desc = TileMacroBindingMembers[Member];
+            bool Enabled =
+                !Desc.Condition || conditionEnabled(Desc.Condition, FPATR);
+            if (!Enabled)
+              continue;
+            Members.push_back(Member);
+            HasRequired |= !Desc.Optional && !Desc.Default;
+            HasRequired |= Desc.Condition != nullptr;
+          }
+          C = Next;
+        }
+      }
       Pos = findCommand(Expected.Kind);
       if (Expected.Kind == TileMacroCommandKind::IOT) {
         if (Pos >= Body.size()) {

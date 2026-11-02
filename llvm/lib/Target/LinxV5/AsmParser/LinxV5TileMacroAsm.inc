@@ -421,16 +421,24 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       break;
     case TileMacroBindingKind::PredicateTileSource:
     case TileMacroBindingKind::PredicateTileDestination:
-      Matched = Prefix == 'U' && matchTileRegisterNameHelper(Reg, Name);
+      Matched = (Prefix == 'T' || Prefix == 'U' || Prefix == 'M' ||
+                 Prefix == 'N') &&
+                matchTileRegisterNameHelper(Reg, Name);
       if (Binding.Kind == TileMacroBindingKind::PredicateTileDestination)
-        Matched = Matched && Reg == LinxV5::Tile_U;
+        Matched = Matched &&
+                  (Reg == LinxV5::Tile_T || Reg == LinxV5::Tile_U ||
+                   Reg == LinxV5::Tile_M || Reg == LinxV5::Tile_N);
       Value.Reg = Reg;
       break;
     case TileMacroBindingKind::PredicateCellSource:
     case TileMacroBindingKind::PredicateCellDestination:
-      Matched = Prefix == 'M' && matchTileRegisterNameHelper(Reg, Name);
+      Matched = (Prefix == 'T' || Prefix == 'U' || Prefix == 'M' ||
+                 Prefix == 'N') &&
+                matchTileRegisterNameHelper(Reg, Name);
       if (Binding.Kind == TileMacroBindingKind::PredicateCellDestination)
-        Matched = Matched && Reg == LinxV5::Tile_M;
+        Matched = Matched &&
+                  (Reg == LinxV5::Tile_T || Reg == LinxV5::Tile_U ||
+                   Reg == LinxV5::Tile_M || Reg == LinxV5::Tile_N);
       Value.Reg = Reg;
       break;
     case TileMacroBindingKind::SharedSource:
