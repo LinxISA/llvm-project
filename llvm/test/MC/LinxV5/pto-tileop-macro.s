@@ -1,4 +1,10 @@
-# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
+# RUN: split-file %s %t
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %t/valid.s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %t/invalid.s -o %t/invalid.o
+# RUN: not --crash llvm-objdump -d --no-show-raw-insn %t/invalid.o 2>&1 | FileCheck %s --check-prefix=ERROR
+# RUN: llvm-objdump -d --no-show-raw-insn -M no-tile-macros %t/invalid.o | FileCheck %s --check-prefix=PHYSICAL
+
+#--- valid.s
 
 # Canonical source expands to the physical bundle and objdump folds the exact
 # bundle back to one line. Default ValidRow/ValidCol, PadValue and AllPE are
@@ -31,7 +37,9 @@ TADD <Row=32, Col=1, FP32>, U#2, M#1, ->N<128B>
 
 # CHECK: TADD{{ +}}<Row=32, Col=1, FP32>, U#2, M#1, ->N<128B>
 
-# An incomplete/non-canonical bundle remains physical assembly.
+#--- invalid.s
+# An incomplete bundle must report an error in the default macro view.
+# ERROR: LLVM ERROR: LinxV5: cannot print BSTART_TEPL_NoMode at 0x0 in macro instruction form
 BSTART.TEPL TADD, FP32
 C.B.DIMI 64, ->lb0
 C.B.DIMI 8, ->lb1
@@ -39,8 +47,8 @@ C.B.DIMI 64, ->lb2
 B.IOT T#1, T#2, mask=1111, ->T<2KB>
 addi zero, 0, ->zero
 
-# CHECK: BSTART.TEPL	TADD, FP32
-# CHECK-NEXT: C.B.DIMI	64, 	->lb0
-# CHECK-NEXT: C.B.DIMI	8, 	->lb1
-# CHECK-NEXT: C.B.DIMI	64, 	->lb2
-# CHECK-NEXT: B.IOT	t#1, t#2, mask=1111, 	->t<2KB>
+# PHYSICAL: BSTART.TEPL	TADD, FP32
+# PHYSICAL-NEXT: C.B.DIMI	64, 	->lb0
+# PHYSICAL-NEXT: C.B.DIMI	8, 	->lb1
+# PHYSICAL-NEXT: C.B.DIMI	64, 	->lb2
+# PHYSICAL-NEXT: B.IOT	t#1, t#2, mask=1111, 	->t<2KB>

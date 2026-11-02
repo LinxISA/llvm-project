@@ -1,44 +1,42 @@
-void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
+bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
                                              const MCSubtargetInfo &STI,
                                              raw_ostream &O) {
-  if (MI->getNumOperands() < 3) {
-    O << "<malformed TileOp macro>";
-    return;
-  }
+  if (MI->getNumOperands() < 3 ||
+      llvm::any_of(*MI, [](const MCOperand &Op) { return !Op.isImm(); }))
+    return false;
   unsigned FormIndex = MI->getOperand(0).getImm();
-  if (FormIndex >= TileMacroFormCount) {
-    O << "<unknown TileOp macro>";
-    return;
-  }
+  if (FormIndex >= TileMacroFormCount)
+    return false;
   const TileMacroFormDesc &Form = TileMacroForms[FormIndex];
   unsigned HeaderType = MI->getOperand(1).getImm();
   unsigned NumCommands = MI->getOperand(2).getImm();
   unsigned OperandIndex = 3;
   SmallVector<MCInst, 24> Commands;
   for (unsigned I = 0; I != NumCommands; ++I) {
-    if (OperandIndex + 2 > MI->getNumOperands()) {
-      O << "<malformed TileOp macro>";
-      return;
-    }
+    if (OperandIndex + 2 > MI->getNumOperands())
+      return false;
     MCInst Command;
     Command.setOpcode(MI->getOperand(OperandIndex++).getImm());
     unsigned NumOperands = MI->getOperand(OperandIndex++).getImm();
+    if (Command.getOpcode() >= MII.getNumOpcodes() ||
+        NumOperands != MII.get(Command.getOpcode()).getNumOperands())
+      return false;
     for (unsigned J = 0; J != NumOperands; ++J) {
-      if (OperandIndex + 2 > MI->getNumOperands()) {
-        O << "<malformed TileOp macro>";
-        return;
-      }
+      if (OperandIndex + 2 > MI->getNumOperands())
+        return false;
       unsigned Kind = MI->getOperand(OperandIndex++).getImm();
       int64_t Value = MI->getOperand(OperandIndex++).getImm();
+      if (Kind > 1 || (Kind == 1 && (Value <= 0 || Value >= MRI.getNumRegs())))
+        return false;
+      if ((MII.get(Command.getOpcode()).OpInfo[J].RegClass >= 0) != (Kind == 1))
+        return false;
       Command.addOperand(Kind == 0 ? MCOperand::createImm(Value)
                                    : MCOperand::createReg(Value));
     }
     Commands.push_back(Command);
   }
-  if (OperandIndex != MI->getNumOperands()) {
-    O << "<malformed TileOp macro>";
-    return;
-  }
+  if (OperandIndex != MI->getNumOperands())
+    return false;
 
   const MCInst *DATR = nullptr;
   const MCInst *FPATR = nullptr;
@@ -72,6 +70,9 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   SmallVector<bool, 32> Consumed(BodyEnd, false);
   for (unsigned I = 0; I != OperandStart; ++I)
     Consumed[I] = true;
+  for (unsigned I = OperandStart; I != BodyEnd; ++I)
+    if (&Commands[I] == DATR || &Commands[I] == FPATR)
+      Consumed[I] = true;
   auto commandMatchesKind = [&](unsigned Position,
                                 TileMacroCommandKind Kind) {
     if (Position >= BodyEnd || Consumed[Position])
@@ -290,18 +291,24 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   for (unsigned C = 0; C != Form.NumCommands; ++C) {
     const auto &Expected = TileMacroCommands[Form.FirstCommand + C];
     SmallVector<unsigned, 8> Active;
+    bool HasRequired = false;
     for (unsigned M = 0; M != Expected.NumMembers; ++M) {
       unsigned Member =
           TileMacroCommandMembers[Expected.FirstMember + M].BindingMember;
       const auto &Desc = TileMacroBindingMembers[Member];
-      if (!Desc.Condition || conditionEnabled(Desc.Condition))
+      if (!Desc.Condition || conditionEnabled(Desc.Condition)) {
         Active.push_back(Member);
+        HasRequired |= (!Desc.Optional && !Desc.Default) || Desc.Condition;
+      }
     }
     if (Active.empty())
       continue;
     Pos = findCommand(Expected.Kind);
-    if (Pos >= BodyEnd)
+    if (Pos >= BodyEnd) {
+      if (HasRequired)
+        return false;
       continue;
+    }
     if (Expected.Kind == TileMacroCommandKind::IOT) {
       SmallVector<MCRegister, 2> Sources;
       MCRegister Destination = LinxV5::NoRegister;
@@ -351,10 +358,13 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           SeenDestination = true;
         }
         if (!captureRangeModifiers(RangeSources, RangeDestination, Pos))
-          return;
+          return false;
         markConsumed(CommandStart, Pos);
       } while (SeenSources < RequiredSources ||
                (RequiredDestination && !SeenDestination));
+      if (SeenSources < RequiredSources ||
+          (RequiredDestination && !SeenDestination))
+        return false;
     } else if (Expected.Kind == TileMacroCommandKind::IOS) {
       for (unsigned Member : Active) {
         if (Pos >= BodyEnd || Commands[Pos].getOpcode() != LinxV5::B_IOS)
@@ -369,7 +379,7 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         if ((Destination && (Members[Member].SizeCode == 0 ||
                              Members[Member].SizeCode > 12)) ||
             (!Destination && Members[Member].SizeCode != 0))
-          return;
+          return false;
         recordMask(Commands[Pos].getOperand(1).getImm());
         unsigned CommandStart = Pos;
         ++Pos;
@@ -381,7 +391,7 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         else
           RangeSources.push_back(Member);
         if (!captureRangeModifiers(RangeSources, RangeDestination, Pos))
-          return;
+          return false;
         markConsumed(CommandStart, Pos);
       }
     } else {
@@ -415,7 +425,15 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         ++Pos;
       markConsumed(CommandStart, Pos);
     }
+    for (unsigned Member : Active) {
+      const auto &Desc = TileMacroBindingMembers[Member];
+      if (!Members[Member].Present &&
+          ((!Desc.Optional && !Desc.Default) || Desc.Condition))
+        return false;
+    }
   }
+  if (llvm::any_of(Consumed, [](bool Value) { return !Value; }))
+    return false;
 
   struct DimValue {
     bool Present = false;
@@ -844,4 +862,5 @@ void LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       O << "]";
     }
   }
+  return true;
 }

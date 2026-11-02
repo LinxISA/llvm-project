@@ -1,4 +1,4 @@
-# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --disassembler-options=no-tile-macros --no-show-raw-insn - | FileCheck %s
 # PTO-ISA #291: for direct Local tile operations, B.DATR Layout 29 selects
 # CUBE_M32 and Layout 31 selects CUBE_M16. Unlike the transport selectors
 # (21..26, direction-restricted), these name the operand layout and are

@@ -1,4 +1,4 @@
-# RUN: llvm-mc -triple=linx64v5 --assemble -filetype=obj < %s | llvm-objdump -d - | FileCheck %s
+# RUN: llvm-mc -triple=linx64v5 --assemble -filetype=obj < %s | llvm-objdump -d --disassembler-options=no-tile-macros - | FileCheck %s
 # PTO-ISA #236: inside a BSTART.CUBE Matrix bundle (TMATMUL*/TGEMV*
 # functions), B.DATR PadValueOrByteId[1:0] is the CCTRL union. The
 # disassembler must label it CCTRL.* there and keep the PadValue names in

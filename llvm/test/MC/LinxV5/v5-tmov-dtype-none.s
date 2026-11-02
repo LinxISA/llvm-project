@@ -1,4 +1,4 @@
-# RUN: llvm-mc -triple=linx64v5 --assemble -filetype=obj < %s | llvm-objdump -d - | FileCheck %s
+# RUN: llvm-mc -triple=linx64v5 --assemble -filetype=obj < %s | llvm-objdump -d --disassembler-options=no-tile-macros - | FileCheck %s
 
 # Issue #64 (llvm-project): compiler-inserted tile window copies lower through
 # the TCOPY macro. The emitted carrier is the minimal BSTART.TMOV form: code 31

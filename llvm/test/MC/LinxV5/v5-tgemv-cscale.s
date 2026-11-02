@@ -1,5 +1,5 @@
 // RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s
-// RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d - | FileCheck %s --check-prefix=DIS
+// RUN: llvm-mc -triple=linx64v5 -filetype=obj %s | llvm-objdump -d --disassembler-options=no-tile-macros - | FileCheck %s --check-prefix=DIS
 
 // TGEMV permits the neutral CScaleEn value.
 BSTART.CUBE TGEMV, FP32

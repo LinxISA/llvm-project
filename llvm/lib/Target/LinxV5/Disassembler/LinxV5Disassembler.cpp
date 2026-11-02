@@ -16,6 +16,7 @@
 #include "MCTargetDesc/LinxV5TileMacroCatalog.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDecoderOps.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -25,6 +26,7 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
 
@@ -1049,6 +1051,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
 
     auto consumeRangeModifiers = [&](ArrayRef<unsigned> SourceMembers,
                                      int DestinationMember,
+                                     unsigned DestinationSize,
                                      unsigned &Position) {
       bool SourceSeen[2] = {false, false};
       bool DestinationSeen = false;
@@ -1094,12 +1097,6 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           unsigned RegSrc = Modifier.getOperand(2).getReg();
           unsigned WriterSize = Modifier.getOperand(4).getImm();
           unsigned PhaseFlag = Last ? 8 : 4;
-          unsigned DestinationSize =
-              Body[Position - 1].getOpcode() == LinxV5::B_IOT_NoSrc_Dst ||
-                      Body[Position - 1].getOpcode() == LinxV5::B_IOT_OneSrc_Dst ||
-                      Body[Position - 1].getOpcode() == LinxV5::B_IOT_TwoSrc_Dst
-                  ? Body[Position - 1].getOperand(2).getImm()
-                  : 0;
           if (Init > 1 || Last > 1 || RegSrc < LinxV5::R0 ||
               RegSrc > LinxV5::R23 || WriterSize > 12 ||
               (DestinationMember >= 0 &&
@@ -1198,7 +1195,10 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           IOTPositions.push_back(Pos++);
           if (!consumeRangeModifiers(
                   RangeSources,
-                  Actual.Destination ? DestinationMember : -1, Pos))
+                  Actual.Destination ? DestinationMember : -1,
+                  Actual.Destination ? Body[CommandStart].getOperand(2).getImm()
+                                     : 0,
+                  Pos))
             return false;
           markConsumed(CommandStart, Pos);
           SeenSources += Actual.Sources;
@@ -1235,7 +1235,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           else
             RangeSources.push_back(Member);
           unsigned CommandStart = Pos - 1;
-          if (!consumeRangeModifiers(RangeSources, RangeDestination, Pos))
+          if (!consumeRangeModifiers(RangeSources, RangeDestination, SizeCode,
+                                     Pos))
             return false;
           markConsumed(CommandStart, Pos);
         }
@@ -1356,5 +1357,25 @@ DecodeStatus LinxV5Disassembler::getInstruction(MCInst &MI, uint64_t &Size,
   if (useLinxV5TileMacroAliases() &&
       tryDecodeTileMacro(MI, Size, Bytes, Address, this, STI, *MCII))
     return MCDisassembler::Success;
-  return decodeOneLinxV5Instruction(MI, Size, Bytes, Address, this, STI);
+  // A failed fold must not silently turn the default macro view into a
+  // physical instruction listing. Explicit no-tile-macros remains available
+  // for inspecting incomplete or non-canonical bundles.
+  MI.clear();
+  DecodeStatus Result =
+      decodeOneLinxV5Instruction(MI, Size, Bytes, Address, this, STI);
+  if (useLinxV5TileMacroAliases() && Result != MCDisassembler::Fail) {
+    switch (MI.getOpcode()) {
+    case LinxV5::BSTART_TEPL_NoMode:
+    case LinxV5::BSTART_TMA:
+    case LinxV5::BSTART_CUBE:
+    case LinxV5::BSTART_GMOV:
+    case LinxV5::BSTART_TIMG2COL:
+      report_fatal_error(Twine("LinxV5: cannot print ") +
+                         MCII->getName(MI.getOpcode()) + " at 0x" +
+                         utohexstr(Address) + " in macro instruction form");
+    default:
+      break;
+    }
+  }
+  return Result;
 }

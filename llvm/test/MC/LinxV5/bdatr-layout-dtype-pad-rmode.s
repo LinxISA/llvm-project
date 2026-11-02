@@ -1,6 +1,6 @@
 # RUN: llvm-mc -triple=linx64v5 -show-encoding %s | FileCheck %s
 # RUN: llvm-mc -triple=linx64v5 -filetype=obj %s -o - \
-# RUN:   | llvm-objdump -d --no-show-raw-insn - | FileCheck --check-prefix=DIS %s
+# RUN:   | llvm-objdump -d --disassembler-options=no-tile-macros --no-show-raw-insn - | FileCheck --check-prefix=DIS %s
 # Issue #100: TCVT's datr_contract allows Layout next to DataType and RMode
 # (asl/tile/elementwise-tile-tile/format-conversion/TCVT.asl:
 # allowed_nonzero_fields), and a CUBE_M16/M32 source must keep its layout

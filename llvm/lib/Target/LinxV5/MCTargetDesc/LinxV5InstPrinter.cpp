@@ -16,10 +16,12 @@
 #include "LinxV5MCExpr.h"
 #include "LinxV5TileMacroCatalog.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
@@ -91,8 +93,12 @@ void LinxV5InstPrinter::printInst(const MCInst *MI, uint64_t Address,
     // A folded macro represents a complete bundle, so it cannot leave CUBE
     // header state active for the next physical instruction.
     InCUBEHeader = false;
-    O << '\t';
-    printTileMacroDisasm(MI, STI, O);
+    // Commit output only after the entire macro has been validated.
+    SmallString<256> Macro;
+    raw_svector_ostream MacroOS(Macro);
+    if (!printTileMacroDisasm(MI, STI, MacroOS))
+      report_fatal_error("LinxV5: failed to print TileOp in macro instruction form");
+    O << '\t' << Macro;
     printAnnotation(O, Annot);
     return;
   }
