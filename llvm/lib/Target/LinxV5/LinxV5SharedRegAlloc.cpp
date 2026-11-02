@@ -104,7 +104,8 @@ static Register getSharedUse(const MachineInstr &MI,
 }
 
 static void collectAssembleSharedIdentity(
-    MachineFunction &MF, DenseMap<Register, Register> &EmptyToInit) {
+    MachineFunction &MF, LiveIntervals &LIS,
+    DenseMap<Register, Register> &EmptyToInit) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   SmallVector<MachineInstr *, 8> Inits;
   SmallVector<MachineInstr *, 8> Continuations;
@@ -119,6 +120,12 @@ static void collectAssembleSharedIdentity(
   for (MachineInstr *Continuation : Continuations) {
     Register Use = getSharedUse(*Continuation, MRI);
     if (!Use)
+      continue;
+    // A defined Shared handle already carries its INIT identity through its
+    // live interval. Local writer operands may differ between fragments (or
+    // be reloaded across an asm memory clobber), so they cannot identify that
+    // handle. Only empty cooperative handles need the fallback below.
+    if (LIS.hasInterval(Use) && !LIS.getInterval(Use).empty())
       continue;
     StringRef Descriptor = getAssembleDescriptor(*Continuation);
     SmallVector<Register, 2> Sources =
@@ -260,7 +267,7 @@ bool LinxV5SharedRegAlloc::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   SmallVector<LiveInterval *, 16> SharedIntervals;
   DenseMap<Register, Register> EmptyToInit;
-  collectAssembleSharedIdentity(MF, EmptyToInit);
+  collectAssembleSharedIdentity(MF, LIS, EmptyToInit);
   DenseMap<Register, Register> EmptySharedRegs;
   for (unsigned Index = 0; Index < MRI.getNumVirtRegs(); ++Index) {
     Register Reg = Register::index2VirtReg(Index);

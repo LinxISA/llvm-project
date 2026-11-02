@@ -32,3 +32,20 @@ exit:
    call void asm sideeffect "BSTART.TMOV DTYPE_NONE\0AB.IOS ${0:S}, mask=0001\0AB.IOT $1, mask=0001, last", "@2Sr,@2Tr"(i64 %hold, <1024 x i32> %local)
    ret void
  }
+
+; A defined Shared SSA handle is authoritative even when INIT and LAST use
+; different Local writers. The unrelated live publication occupies S0.
+; CHECK-LABEL: <defined_shared_id_different_writers>:
+; CHECK: B.IOS mask=0001, ->S0<4KB>
+; CHECK: B.IOS mask=1111, ->S1<16KB>
+; CHECK: B.IOS S1, mask=1111
+; CHECK: B.IOS S0, mask=0001
+define void @defined_shared_id_different_writers() {
+  %first = call <1024 x i32> asm sideeffect "BSTART.TEPL TEXPANDS, e4m3\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>", "=@2Tr,i"(i64 6)
+  %last = call <1024 x i32> asm sideeffect "BSTART.TEPL TEXPANDS, e4m3\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>", "=@2Tr,i"(i64 6)
+  %hold = call i64 asm sideeffect "BSTART.TMOV DTYPE_NONE\0AB.IOS mask=0001, ->${0:S}<4KB>\0AB.IOT $1, mask=0001, last", "=@2Sr,@2Tr"(<1024 x i32> %first)
+  %parent = call i64 asm sideeffect "BSTART.TMOV DTYPE_NONE\0AB.DATR M322ND, DTYPE_NONE, Zero\0AB.IOS mask=1111, ->${0:S}<16KB>\0AB.ASSEMBLE ${3:c}, ${4:c}, $2, 0, ${5:c}\0AB.IOT $1, mask=1111, last", "=@2Sr,@2Tr,r,i,i,i,~{memory}"(<1024 x i32> %first, i64 0, i64 1, i64 0, i64 6)
+  call void asm sideeffect "BSTART.TMOV DTYPE_NONE\0AB.DATR M322ND, DTYPE_NONE, Zero\0AB.IOS ${0:S}, mask=1111\0AB.ASSEMBLE ${3:c}, ${4:c}, $2, 32, ${5:c}\0AB.IOT $1, mask=1111, last", "@2Sr,@2Tr,r,i,i,i,~{memory}"(i64 %parent, <1024 x i32> %last, i64 0, i64 0, i64 1, i64 6)
+  call void asm sideeffect "BSTART.TMOV DTYPE_NONE\0AB.IOS ${0:S}, mask=0001\0AB.IOT $1, mask=0001, last", "@2Sr,@2Tr"(i64 %hold, <1024 x i32> %first)
+  ret void
+}
