@@ -963,6 +963,9 @@ struct PredicatedRegion {
   PHINode *Induction = nullptr;
   unsigned Count = 0;        // Valid logical iterations.
   unsigned CarrierCount = 0; // Physical SSA vector lanes.
+  unsigned Grain = 0;
+  unsigned BatchOffset = 0;
+  unsigned BatchWidth = 0;
   SmallVector<BasicBlock *, 16> Order;
   DenseMap<PHINode *, ViewDescriptor> Accumulators;
   DenseMap<Value *, ViewDescriptor> Publications;
@@ -1333,6 +1336,54 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
     return Fail(L.getHeader()->getTerminator(),
                 "requires a proven 1..4096 trip count and zero-based unit induction");
   Plan.CarrierCount = Plan.Count;
+  if (MDNode *LoopID = L.getLoopID())
+    for (const MDOperand &Operand : drop_begin(LoopID->operands())) {
+      auto *Property = dyn_cast_or_null<MDNode>(Operand);
+      if (!Property || Property->getNumOperands() == 0)
+        continue;
+      auto *Name = dyn_cast<MDString>(Property->getOperand(0));
+      if (!Name || Name->getString() != "llvm.loop.linx.pto.element.grain")
+        continue;
+      auto *Bytes = Property->getNumOperands() == 2
+                        ? mdconst::dyn_extract<ConstantInt>(Property->getOperand(1))
+                        : nullptr;
+      if (!Bytes || !Bytes->getType()->isIntegerTy(32) ||
+          Bytes->getValue().ugt(4096) ||
+          Bytes->getZExtValue() < 128 ||
+          !isPowerOf2_64(Bytes->getZExtValue()) || Plan.Grain)
+        return Fail(L.getHeader()->getTerminator(),
+                    "invalid element grain metadata");
+      Plan.Grain = Bytes->getZExtValue();
+    }
+  if (Plan.Grain) {
+    unsigned ElementBytes = 0;
+    for (BasicBlock *Block : L.blocks())
+      for (Instruction &Inst : *Block) {
+        if (getViewDescriptor(&Inst) || Inst.getType()->isVectorTy())
+          return Fail(&Inst, "explicit grain currently requires scalar memory "
+                             "streams, not typed carrier boundaries");
+        auto *Store = dyn_cast<StoreInst>(&Inst);
+        Type *DataTy = Store ? Store->getValueOperand()->getType() : nullptr;
+        if (!DataTy)
+          if (auto *Atomic = dyn_cast<AtomicRMWInst>(&Inst))
+            DataTy = Atomic->getValOperand()->getType();
+        if (!DataTy)
+          continue;
+        unsigned Bytes = F.getParent()->getDataLayout().getTypeStoreSize(DataTy);
+        if (ElementBytes && ElementBytes != Bytes)
+          return Fail(&Inst, "explicit grain requires one output element width");
+        ElementBytes = Bytes;
+      }
+    if (!ElementBytes ||
+        (ElementBytes != 2 && ElementBytes != 4 && ElementBytes != 8))
+      return Fail(L.getHeader()->getTerminator(),
+                  "explicit grain requires 16-, 32- or 64-bit output elements");
+    if (Plan.Dynamic)
+      return Fail(L.getHeader()->getTerminator(),
+                  "explicit grain with dynamic nested control is not supported");
+    Plan.BatchWidth = Plan.Grain / ElementBytes;
+    Plan.CarrierCount = std::max(32u, Plan.BatchWidth);
+  }
   if (Plan.Dynamic) {
     if (Plan.Count != 32 ||
         std::distance(L.getHeader()->phis().begin(),
@@ -2558,9 +2609,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                             Opcode);
       }
       const bool DenseU16Access =
-          AccessTy->isIntegerTy(16) && Plan.Count == 64;
+          AccessTy->isIntegerTy(16) && (Plan.Count == 64 || Plan.Grain);
       const bool NativeI64Access =
-          AccessTy->isIntegerTy(64) && Plan.Count == 32;
+          AccessTy->isIntegerTy(64) && (Plan.Count == 32 || Plan.Grain);
       if ((!DenseU16Access && !NativeI64Access &&
            !AccessTy->isIntegerTy(32) && !AccessTy->isFloatTy() &&
            !AccessTy->isHalfTy()) ||
@@ -2694,9 +2745,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
   return true;
 }
 
-static void emitPredication(Function &F, const PredicatedRegion &Plan,
-                            LoopInfo &LI, ScalarEvolution &SE,
-                            DominatorTree &DT) {
+static void emitPredicationBatch(Function &F, const PredicatedRegion &Plan,
+                                 LoopInfo &LI, ScalarEvolution &SE,
+                                 DominatorTree &DT) {
   Loop &L = *Plan.L;
   Instruction *OldLast = L.getLoopPreheader()->getTerminator()->getPrevNode();
   MDNode *Token = getElementRegionToken(L);
@@ -2705,8 +2756,12 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   IRBuilder<> B(L.getLoopPreheader()->getTerminator());
   auto *MaskTy = FixedVectorType::get(B.getInt1Ty(), Plan.CarrierCount);
   Value *False = Constant::getNullValue(MaskTy);
-  Value *True = Constant::getAllOnesValue(MaskTy);
-  Value *EVL = B.getInt32(Plan.Count);
+  SmallVector<Constant *, 32> ActiveLanes;
+  for (unsigned Lane = 0; Lane < Plan.CarrierCount; ++Lane)
+    ActiveLanes.push_back(B.getInt1(Lane < Plan.Count));
+  Value *True = Plan.Grain ? static_cast<Value *>(ConstantVector::get(ActiveLanes))
+                          : Constant::getAllOnesValue(MaskTy);
+  Value *EVL = B.getInt32(Plan.Grain ? Plan.CarrierCount : Plan.Count);
   DenseMap<Value *, Value *> Values;
   DenseMap<Value *, PHINode *> SchedulerValues;
   DenseMap<std::pair<BasicBlock *, unsigned>, PHINode *> SchedulerMasks;
@@ -2780,7 +2835,7 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
                           ? B.getInt32Ty()
                           : Plan.Induction->getType();
   for (unsigned I = 0; I < Plan.CarrierCount; ++I)
-    Indices.push_back(ConstantInt::get(InductionTy, I));
+    Indices.push_back(ConstantInt::get(InductionTy, I + Plan.BatchOffset));
   if (Plan.PositiveB32Values.contains(Plan.Induction))
     PositiveB32Values[Plan.Induction] = ConstantVector::get(Indices);
   else
@@ -3160,6 +3215,10 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Call->addParamAttr(0, Attribute::getWithAlignment(F.getContext(),
                                                         Load->getAlign()));
         Result = Call;
+        if (Plan.Grain && Load->getType()->isIntegerTy(16))
+          Result = EmitVP(Intrinsic::vp_zext,
+                          FixedVectorType::get(B.getInt32Ty(), Plan.CarrierCount),
+                          {Result, Mask, EVL});
       } else if (auto *Atomic = dyn_cast<AtomicRMWInst>(&I)) {
         Value *Pointers = WidenAddress(Atomic->getPointerOperand());
         Function *Callee = Intrinsic::getDeclaration(
@@ -3173,6 +3232,10 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Result = Call;
       } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
         Value *Data = Widen(Store->getValueOperand());
+        if (Plan.Grain && Store->getValueOperand()->getType()->isIntegerTy(16))
+          Data = EmitVP(Intrinsic::vp_trunc,
+                        FixedVectorType::get(B.getInt16Ty(), Plan.CarrierCount),
+                        {Data, Mask, EVL});
         Value *Address = WidenAddress(Store->getPointerOperand());
         CallInst *Call = nullptr;
         if (Plan.UnorderedScatters.contains(Store)) {
@@ -3257,6 +3320,11 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
        I != L.getLoopPreheader()->getTerminator(); I = I->getNextNode())
     if (!ScalarNarrowImports.contains(I))
       I->setMetadata(PredicatedOwnerMD, Token);
+  if (Plan.Grain)
+    for (Instruction *Inst = OldLast ? OldLast->getNextNode()
+                                    : &L.getLoopPreheader()->front();
+         Inst != L.getLoopPreheader()->getTerminator(); Inst = Inst->getNextNode())
+      Inst->setMetadata("linx.pto.element.grain", MDNode::get(F.getContext(), {}));
   findRegionSentinel(F, Token)->setMetadata(
       PredicatedDomainMD,
       MDNode::get(F.getContext(),
@@ -3280,7 +3348,8 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
          I = I->getNextNode())
       I->setMetadata(PredicatedOwnerMD, Token);
   }
-  deleteDeadLoop(&L, &DT, &SE, &LI);
+  if (!Plan.Grain)
+    deleteDeadLoop(&L, &DT, &SE, &LI);
   if (Plan.Dynamic) {
     BasicBlock *Scheduler =
         Preheader->splitBasicBlock(FirstGenerated, "pto.loop.scheduler");
@@ -3296,6 +3365,44 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
     Branch->setMetadata(PredicatedSchedulerMD, Token);
     findRegionSentinel(F, Token)->setMetadata(PredicatedSchedulerMD, Token);
   }
+}
+
+static void emitPredication(Function &F, const PredicatedRegion &Plan,
+                             LoopInfo &LI, ScalarEvolution &SE,
+                             DominatorTree &DT) {
+  if (!Plan.Grain) {
+    emitPredicationBatch(F, Plan, LI, SE, DT);
+    return;
+  }
+  Loop &L = *Plan.L;
+  MDNode *OriginalToken = getElementRegionToken(L);
+  CallInst *OriginalSentinel = findRegionSentinel(F, OriginalToken);
+  for (unsigned Offset = 0; Offset < Plan.Count; Offset += Plan.BatchWidth) {
+    PredicatedRegion Batch = Plan;
+    Batch.BatchOffset = Offset;
+    Batch.Count = std::min(Plan.BatchWidth, Plan.Count - Offset);
+    MDNode *Token = MDNode::getDistinct(F.getContext(), {});
+    SmallVector<Metadata *, 8> Properties{nullptr};
+    for (const MDOperand &Operand : drop_begin(L.getLoopID()->operands())) {
+      auto *Property = dyn_cast<MDNode>(Operand);
+      auto *Name = Property && Property->getNumOperands()
+                       ? dyn_cast<MDString>(Property->getOperand(0))
+                       : nullptr;
+      if (Name && Name->getString() == RegionLoopMD)
+        Properties.push_back(MDNode::get(F.getContext(), {Name, Token}));
+      else
+        Properties.push_back(Operand);
+    }
+    MDNode *LoopID = MDNode::getDistinct(F.getContext(), Properties);
+    LoopID->replaceOperandWith(0, LoopID);
+    L.setLoopID(LoopID);
+    IRBuilder<> Builder(L.getLoopPreheader()->getTerminator());
+    Builder.CreateCall(OriginalSentinel->getCalledFunction(),
+                       MetadataAsValue::get(F.getContext(), Token));
+    emitPredicationBatch(F, Batch, LI, SE, DT);
+  }
+  OriginalSentinel->eraseFromParent();
+  deleteDeadLoop(&L, &DT, &SE, &LI);
 }
 
 // Tile values cross the region boundary through whole-carrier register inputs.
@@ -3572,6 +3679,7 @@ class ElementTileLegalizer {
   SmallPtrSet<Value *, 32> Validated;
   SmallVector<CallInst *, 8> Publications;
   bool HasScheduler = false;
+  bool ExplicitGrain = false;
   BasicBlock *SchedulerPreheader = nullptr;
   SmallPtrSet<PHINode *, 16> MaterializedImportPhis;
   DenseMap<PHINode *, uint64_t> &ImportedPhiTypes;
@@ -3846,25 +3954,29 @@ class ElementTileLegalizer {
 
   static bool isVector(Value *V, unsigned Width) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    return Ty && (Ty->getNumElements() == 32 || Ty->getNumElements() == 64) &&
+    return Ty && Ty->getNumElements() >= 32 && Ty->getNumElements() <= 2048 &&
+           isPowerOf2_32(Ty->getNumElements()) &&
            Ty->getElementType()->isIntegerTy(Width);
   }
 
   static bool isI64LeafVector(Value *V) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    return Ty && Ty->getNumElements() == 32 &&
+    return Ty && Ty->getNumElements() >= 32 && Ty->getNumElements() <= 2048 &&
+           isPowerOf2_32(Ty->getNumElements()) &&
            Ty->getElementType()->isIntegerTy(64);
   }
 
   static bool isF32Vector(Value *V) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    return Ty && (Ty->getNumElements() == 32 || Ty->getNumElements() == 64) &&
+    return Ty && Ty->getNumElements() >= 32 && Ty->getNumElements() <= 2048 &&
+           isPowerOf2_32(Ty->getNumElements()) &&
            Ty->getElementType()->isFloatTy();
   }
 
   static bool isF16Vector(Value *V) {
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    return Ty && Ty->getNumElements() == 64 && Ty->getElementType()->isHalfTy();
+    return Ty && Ty->getNumElements() >= 32 && Ty->getNumElements() <= 2048 &&
+           isPowerOf2_32(Ty->getNumElements()) && Ty->getElementType()->isHalfTy();
   }
 
   static bool constantProgression(Constant *C, APInt &Initial, APInt &Step) {
@@ -3891,21 +4003,22 @@ class ElementTileLegalizer {
   static bool constantLogical64Grid(Constant *C, APInt &Initial, APInt &RowStep,
                                     APInt &ColStep) {
     auto *Ty = dyn_cast<FixedVectorType>(C->getType());
-    if (!Ty || Ty->getNumElements() != 64 ||
+    if (!Ty || Ty->getNumElements() < 64 ||
         !Ty->getElementType()->isIntegerTy(32))
       return false;
     auto Element = [&](unsigned Index) {
       return dyn_cast_or_null<ConstantInt>(C->getAggregateElement(Index));
     };
-    auto *E0 = Element(0), *E1 = Element(1), *E2 = Element(2);
+    unsigned Cols = Ty->getNumElements() / 32;
+    auto *E0 = Element(0), *E1 = Element(1), *E2 = Element(Cols);
     if (!E0 || !E1 || !E2)
       return false;
     Initial = E0->getValue();
     ColStep = E1->getValue() - Initial;
     RowStep = E2->getValue() - Initial;
-    for (unsigned I = 0; I < 64; ++I) {
+    for (unsigned I = 0; I < Ty->getNumElements(); ++I) {
       auto *E = Element(I);
-      APInt Expected = Initial + RowStep * (I / 2) + ColStep * (I % 2);
+      APInt Expected = Initial + RowStep * (I / Cols) + ColStep * (I % Cols);
       if (!E || E->getValue() != Expected)
         return false;
     }
@@ -3921,9 +4034,8 @@ class ElementTileLegalizer {
     unsigned Count = VT ? VT->getNumElements() : 0;
     uint64_t Bytes =
         VT ? F.getParent()->getDataLayout().getTypeStoreSize(VT) : 0;
-    auto Profile =
-        Count == 64 ? elementProfile(DType, 64, 32, 2, Bytes, V->getContext())
-                    : elementProfile(DType, V->getContext());
+    auto Profile = elementProfile(DType, Count, 32, Count / 32, Bytes,
+                                  V->getContext());
     if (!Profile || V->getType() != Profile->VectorTy)
       return fail(V, "typed import does not match its declared scalar type");
     if (auto View = getViewDescriptor(V)) {
@@ -4344,7 +4456,8 @@ class ElementTileLegalizer {
     if (!Validated.insert(V).second)
       return true;
     auto *Ty = dyn_cast<FixedVectorType>(V->getType());
-    if (!Ty || (Ty->getNumElements() != 32 && Ty->getNumElements() != 64))
+    if (!Ty || Ty->getNumElements() < 32 || Ty->getNumElements() > 2048 ||
+        !isPowerOf2_32(Ty->getNumElements()))
       return fail(V, "requires an admitted fixed-vector element profile");
     if (auto Descriptor = getViewDescriptor(V)) {
       if (Descriptor->ScalarizedLaneZero)
@@ -4485,18 +4598,23 @@ class ElementTileLegalizer {
         dyn_cast<FixedVectorType>(Atomic.getArgOperand(1)->getType());
     auto *MaskTy =
         dyn_cast<FixedVectorType>(Atomic.getArgOperand(2)->getType());
-    if (DomainCount != 32 || !ResultTy || ResultTy->getNumElements() != 32 ||
+    if ((!ExplicitGrain && DomainCount != 32) ||
+        !ResultTy || ResultTy->getNumElements() != DomainCount ||
         !ResultTy->getElementType()->isIntegerTy(32) || !ValueTy ||
-        ValueTy->getNumElements() != 32 ||
+        ValueTy->getNumElements() != DomainCount ||
         !ValueTy->getElementType()->isIntegerTy(32) || !MaskTy ||
-        MaskTy->getNumElements() != 32 ||
+        MaskTy->getNumElements() != DomainCount ||
         !MaskTy->getElementType()->isIntegerTy(1) || !EVL ||
-        !EVL->equalsInt(32) ||
+        !EVL->equalsInt(DomainCount) ||
         !Alignment || *Alignment < Align(4) ||
         !isa<GetElementPtrInst>(Atomic.getArgOperand(0)))
-      return fail(&Atomic, "atomic add requires an owning 32-element domain, "
-                           "v32i32 values, explicit GEP, aligned memory, "
-                           "v32i1 mask and EVL=32");
+      return fail(&Atomic, ExplicitGrain
+                               ? "atomic add requires matching domain-sized "
+                                 "i32 values, explicit GEP, aligned memory, "
+                                 "i1 mask and full-domain EVL"
+                               : "atomic add requires an owning 32-element "
+                                 "domain, v32i32 values, explicit GEP, aligned "
+                                 "memory, v32i1 mask and EVL=32");
     return validate(Atomic.getArgOperand(0)) &&
            validate(Atomic.getArgOperand(1)) &&
            validate(Atomic.getArgOperand(2));
@@ -4514,12 +4632,15 @@ class ElementTileLegalizer {
         TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
     unsigned Count = DataTy ? DataTy->getNumElements() : 0;
     Type *ElementTy = DataTy ? DataTy->getElementType() : nullptr;
-    bool ValidData =
-        (Count == 32 &&
-         (ElementTy->isIntegerTy(32) || ElementTy->isFloatTy())) ||
-        (Count == 64 &&
-         (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy() ||
-          ElementTy->isIntegerTy(32)));
+    bool ValidData = Count >= 32 && Count <= 2048 && isPowerOf2_32(Count) &&
+                     (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy() ||
+                      ElementTy->isIntegerTy(32) || ElementTy->isFloatTy());
+    if (!ExplicitGrain)
+      ValidData =
+          (Count == 32 &&
+           (ElementTy->isIntegerTy(32) || ElementTy->isFloatTy())) ||
+          (Count == 64 && (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy() ||
+                           ElementTy->isIntegerTy(32)));
     Align RequiredAlignment =
         ElementTy && (ElementTy->isIntegerTy(16) || ElementTy->isHalfTy())
             ? Align(2)
@@ -4627,11 +4748,15 @@ class ElementTileLegalizer {
       return validate(VP.getArgOperand(0));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_trunc) {
-      if (!isVector(&VP, 32) || !isI64LeafVector(VP.getArgOperand(0)))
+      if ((!isVector(&VP, 32) || !isI64LeafVector(VP.getArgOperand(0))) &&
+          (!isVector(&VP, 16) || !isVector(VP.getArgOperand(0), 32)))
         return fail(&VP,
                     "native integer narrowing requires logical32 i64 to i32");
       return validate(VP.getArgOperand(0));
     }
+    if (VP.getIntrinsicID() == Intrinsic::vp_zext && isVector(&VP, 32) &&
+        isVector(VP.getArgOperand(0), 16))
+      return validate(VP.getArgOperand(0));
     if (auto Op = binaryOpcode(VP.getIntrinsicID())) {
       bool MaskLogic = isVector(&VP, 1) &&
                        (*Op == Instruction::And || *Op == Instruction::Or ||
@@ -4660,7 +4785,8 @@ class ElementTileLegalizer {
           return validate(VP.getArgOperand(0)) &&
                  validate(VP.getArgOperand(1));
         const bool NativePublishedArithmetic =
-            isI64LeafVector(&VP) && hasExclusiveTypedTileUses(&VP) &&
+            isI64LeafVector(&VP) &&
+            (ExplicitGrain || hasExclusiveTypedTileUses(&VP)) &&
             (*Op == Instruction::Add || *Op == Instruction::Sub ||
              *Op == Instruction::Mul || *Op == Instruction::And ||
              *Op == Instruction::Or || *Op == Instruction::Xor ||
@@ -4721,22 +4847,24 @@ class ElementTileLegalizer {
   Value *logical64Affine(const APInt &Initial, const APInt &RowStep,
                          const APInt &ColStep, FixedVectorType *Ty,
                          uint64_t PreferredType) {
-    assert(Ty->getNumElements() == 64 &&
+    assert(Ty->getNumElements() >= 64 &&
            (Ty->getScalarSizeInBits() == 32 ||
             Ty->getScalarSizeInBits() == 64) &&
            "logical64 affine synthesis requires v64i32 or v64i64");
     const bool Wide = Ty->getScalarSizeInBits() == 64;
+    unsigned Count = Ty->getNumElements();
+    unsigned Columns = Count / 32;
     const uint64_t DType = Wide ? (PreferredType == 16 ? 16 : 24)
                                 : (PreferredType == 17 ? 17 : 25);
     auto TCI = [&](uint64_t Base, uint64_t Step, const Twine &Name) {
       return call(Intrinsic::linx_experimental_ew_tci, {Ty},
-                  {B.getInt64(32), B.getInt64(2), B.getInt64(DType),
+                  {B.getInt64(32), B.getInt64(Columns), B.getInt64(DType),
                    B.getInt64(29), B.getInt64(Base), B.getInt64(Step)},
                   Name);
     };
     auto Binary = [&](unsigned Code, Value *L, Value *R, const Twine &Name) {
       return tileOperation(Code == 2 ? "BSTART.TEPL TMUL" : "BSTART.TEPL TADD",
-                           Ty, DType, 64, {L, R}, nullptr);
+                           Ty, DType, Count, {L, R}, nullptr);
     };
     Value *R = TCI(0, uint64_t(1) << 32, "pto.logical64.row");
     Value *C = TCI(0, 1, "pto.logical64.column");
@@ -4774,7 +4902,7 @@ class ElementTileLegalizer {
     const uint64_t DType = Ty->getScalarSizeInBits() == 32
                                ? (PreferredType == 17 ? 17 : 25)
                                : (PreferredType == 16 ? 16 : 24);
-    if (Ty->getNumElements() == 64 &&
+    if (Ty->getNumElements() >= 64 &&
         (Ty->getScalarSizeInBits() == 32 ||
          Ty->getScalarSizeInBits() == 64) &&
         Step != 0) {
@@ -4782,7 +4910,7 @@ class ElementTileLegalizer {
       unsigned Width = Ty->getScalarSizeInBits();
       APInt Initial(Width, ConstantScalar->getZExtValue());
       APInt LogicalStep(Width, Step >> 32);
-      return logical64Affine(Initial, LogicalStep * 2, LogicalStep, Ty,
+      return logical64Affine(Initial, LogicalStep * (Ty->getNumElements() / 32), LogicalStep, Ty,
                              PreferredType);
     }
     if (Step != 0) {
@@ -4973,7 +5101,7 @@ class ElementTileLegalizer {
       return Existing;
     unsigned Count =
         cast<FixedVectorType>(Predicate->getType())->getNumElements();
-    auto *Carrier = FixedVectorType::get(B.getInt32Ty(), 32);
+    auto *Carrier = FixedVectorType::get(B.getInt32Ty(), std::max(32u, Count / 4));
     auto Compare = [&](Value *Left, Value *Right, uint64_t DType,
                        unsigned Selector) {
       return call(Intrinsic::linx_experimental_ew_tcmp,
@@ -5052,8 +5180,8 @@ class ElementTileLegalizer {
                !isa<UndefValue>(Predicate) && !isa<PoisonValue>(Predicate)) {
       auto *ConstantMask = cast<Constant>(Predicate);
       auto *Numeric = FixedVectorType::get(B.getInt32Ty(), Count);
-      uint32_t Columns[2] = {0, 0};
       unsigned Cols = Count / 32;
+      SmallVector<uint32_t, 64> Columns(Cols, 0);
       for (unsigned Row = 0; Row < 32; ++Row)
         for (unsigned Col = 0; Col < Cols; ++Col) {
           auto *Element = dyn_cast_or_null<ConstantInt>(
@@ -5071,11 +5199,25 @@ class ElementTileLegalizer {
                              {B.getInt64(32), B.getInt64(2), B.getInt64(25),
                               B.getInt64(29), B.getInt64(0), B.getInt64(1)});
         Value *First = Compare(Column, splat(B.getInt32(0), Numeric), 25, 0);
-        Bits =
-            call(Intrinsic::linx_experimental_ew_tsel,
-                 {Numeric, Carrier, Numeric, Numeric},
-                 {B.getInt64(32), B.getInt64(2), B.getInt64(25), B.getInt64(29),
-                  First, Bits, splat(B.getInt32(Columns[1]), Numeric)});
+        Bits = call(Intrinsic::linx_experimental_ew_tsel,
+                    {Numeric, Carrier, Numeric, Numeric},
+                    {B.getInt64(32), B.getInt64(2), B.getInt64(25),
+                     B.getInt64(29), First, Bits,
+                     splat(B.getInt32(Columns[1]), Numeric)});
+      } else if (Cols > 2) {
+        Value *Column = call(Intrinsic::linx_experimental_ew_tci, {Numeric},
+                             {B.getInt64(32), B.getInt64(Cols), B.getInt64(25),
+                              B.getInt64(29), B.getInt64(0), B.getInt64(1)});
+        for (unsigned Col = 1; Col < Cols; ++Col) {
+          if (Columns[Col] == Columns[0])
+            continue;
+          Value *First = Compare(Column, splat(B.getInt32(Col), Numeric), 25, 0);
+          Bits = call(Intrinsic::linx_experimental_ew_tsel,
+                      {Numeric, Carrier, Numeric, Numeric},
+                      {B.getInt64(32), B.getInt64(Cols), B.getInt64(25),
+                       B.getInt64(29), First,
+                       splat(B.getInt32(Columns[Col]), Numeric), Bits});
+        }
       }
       Value *Shifted = tileOperation("BSTART.TEPL TSHR", Numeric, 25, Count,
                                      {Bits, Rows}, nullptr);
@@ -5224,7 +5366,7 @@ class ElementTileLegalizer {
     if (isVector(Index, 64)) {
       auto *IndexTy = cast<FixedVectorType>(Index->getType());
       unsigned IndexCount = IndexTy->getNumElements();
-      if (IndexCount == 32 || IndexCount == 64) {
+      if (IndexCount >= 32 && IndexCount <= 2048 && isPowerOf2_32(IndexCount)) {
         if (auto *C = dyn_cast<Constant>(Index)) {
           SmallVector<Constant *, 64> Narrow;
           for (unsigned I = 0; I < IndexCount; ++I) {
@@ -5456,16 +5598,20 @@ class ElementTileLegalizer {
         uint64_t DType = isF16Vector(VP) ? 4 : 1;
         R = tileOperation("BSTART.TEPL TNEG", Ty, DType, Ty->getNumElements(),
                           {value(VP->getArgOperand(0))}, activeMask(*VP));
-      } else if (VP->getIntrinsicID() == Intrinsic::vp_trunc) {
+      } else if (VP->getIntrinsicID() == Intrinsic::vp_trunc ||
+                 VP->getIntrinsicID() == Intrinsic::vp_zext) {
         Value *Source = value(VP->getArgOperand(0));
         uint64_t SourceType = PhysicalTypes.lookup(Source);
         uint64_t DestinationType =
-            PreferredType == 17 ||
-                    (PreferredType == 0 && NativeI32RegionType == 17)
-                ? 17
-                : 25;
-        assert((SourceType == 16 || SourceType == 24) &&
-               "native narrowing source requires an S64/U64 descriptor");
+            isVector(VP, 16)
+                ? 26
+                : PreferredType == 17 ||
+                          (PreferredType == 0 && NativeI32RegionType == 17)
+                      ? 17
+                      : 25;
+        assert((SourceType == 16 || SourceType == 24 || SourceType == 25 ||
+                SourceType == 17 || SourceType == 26) &&
+               "native integer conversion requires a typed descriptor");
         R = tileOperation("BSTART.TEPL TCVT", Ty, SourceType,
                           Ty->getNumElements(), {Source}, activeMask(*VP),
                           DestinationType);
@@ -5527,6 +5673,7 @@ public:
         ImportedPhiTypes(ImportedPhiTypes), DomainCount(DomainCount),
         B(F.getContext()) {
     for (Instruction *I : Owned) {
+      ExplicitGrain |= I->getMetadata("linx.pto.element.grain") != nullptr;
       OwnedSet.insert(I);
       HasScheduler |= I->getParent()->getTerminator()->getMetadata(
                           PredicatedSchedulerMD) != nullptr;
@@ -8685,9 +8832,8 @@ LinxV5ElementTileLegalizationPass::run(Function &F, FunctionAnalysisManager &) {
     auto *TokenArg = dyn_cast<MetadataAsValue>(Sentinel->getArgOperand(0));
     auto *Token = TokenArg ? dyn_cast<MDNode>(TokenArg->getMetadata()) : nullptr;
     if (!Count ||
-        (Count->getZExtValue() != 32 && Count->getZExtValue() != 64 &&
-         Count->getZExtValue() != 128 && Count->getZExtValue() != 512 &&
-         Count->getZExtValue() != 2048) ||
+        (Count->getZExtValue() < 32 || Count->getZExtValue() > 2048 ||
+         !isPowerOf2_64(Count->getZExtValue())) ||
         !Token || !Tokens.insert(Token).second)
       diagnose(F, Sentinel,
                "Tile legalization: requires a unique admitted predicated domain");
