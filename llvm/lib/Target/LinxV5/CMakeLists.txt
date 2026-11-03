@@ -19,6 +19,7 @@ add_public_tablegen_target(LinxV5CommonTableGen)
 add_llvm_target(LinxV5CodeGen
   LinxV5MachineScheduler.cpp
   LinxV5AsmPrinter.cpp
+  LinxV5InlineAsmTileLifetime.cpp
   LinxV5ExpandPseudoInsts.cpp
   LinxV5FrameLowering.cpp
   LinxV5InstrInfo.cpp

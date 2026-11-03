@@ -38,6 +38,8 @@ bool LowerLinxV5MachineOperandToMCOperand(const MachineOperand &MO,
                                           const AsmPrinter &AP);
 
 FunctionPass *createLinxV5ISelDag(LinxV5TargetMachine &TM);
+FunctionPass *createLinxV5InlineAsmTileLifetimePass();
+void initializeLinxV5InlineAsmTileLifetimePass(PassRegistry &);
 
 FunctionPass *createLinxV5AnnotateControlFlowPass();
 void initializeLinxV5AnnotateControlFlowPass(PassRegistry &);
