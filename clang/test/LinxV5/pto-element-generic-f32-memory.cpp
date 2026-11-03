@@ -17,9 +17,9 @@ extern "C" void gather(const float *__restrict input,
 // IR-NOT: @llvm.vp.
 // IR: ret void
 // OBJ-LABEL: <gather>:
-// OBJ: BSTART.TLSU MGATHER, FP32
+// OBJ: BSTART.MGATHER FP32
 // OBJ: ExecMaskPresent
-// OBJ: BSTART.TLSU MSCATTER, FP32
+// OBJ: BSTART.MSCATTER FP32
 
 extern "C" void masked_affine_scatter(const float *__restrict input,
                                        float *__restrict output, u32 valid) {
@@ -39,7 +39,7 @@ extern "C" void masked_affine_scatter(const float *__restrict input,
 // OBJ: ExecMaskPresent
 // OBJ: BSTART.TEPL TADD, U32
 // OBJ: ExecMaskPresent
-// OBJ: BSTART.TLSU MSCATTER, FP32
+// OBJ: BSTART.MSCATTER FP32
 // OBJ: ExecMaskPresent
 
 extern "C" void scatter(const float *__restrict input,
@@ -57,11 +57,11 @@ extern "C" void scatter(const float *__restrict input,
 // IR-NOT: @llvm.linx.experimental.element.scatter
 // IR: ret void
 // OBJ-LABEL: <scatter>:
-// OBJ: BSTART.TLSU MGATHER, FP32
-// OBJ: BSTART.TLSU MGATHER, U32
+// OBJ: BSTART.MGATHER FP32
+// OBJ: BSTART.MGATHER U32
 // OBJ: BSTART.TEPL TADD, S32
 // OBJ: BSTART.TEPL TLEA, S32
-// OBJ: BSTART.TLSU MSCATTER, FP32
+// OBJ: BSTART.MSCATTER FP32
 // OBJ: ExecMaskPresent
 
 extern "C" void ordered_key(const float *__restrict input,
@@ -83,9 +83,9 @@ extern "C" void ordered_key(const float *__restrict input,
 // IR-NOT: @llvm.vp.
 // IR: ret void
 // OBJ-LABEL: <ordered_key>:
-// OBJ: BSTART.TLSU MGATHER, FP32
+// OBJ: BSTART.MGATHER FP32
 // OBJ: BSTART.TEPL TCMPS, FP32
-// OBJ: BSTART.TLSU MSCATTER, U32
+// OBJ: BSTART.MSCATTER U32
 
 // This copy-like body must not disappear into memcpy before required lowering.
 extern "C" void raw_bits(const float *__restrict input, u32 *__restrict output) {
@@ -99,8 +99,8 @@ extern "C" void raw_bits(const float *__restrict input, u32 *__restrict output) 
 // IR-NOT: @llvm.memcpy
 // IR: ret void
 // OBJ-LABEL: <raw_bits>:
-// OBJ: BSTART.TLSU MGATHER, U32
-// OBJ: BSTART.TLSU MSCATTER, U32
+// OBJ: BSTART.MGATHER U32
+// OBJ: BSTART.MSCATTER U32
 
 using elements = float tile_size(32);
 __attribute__((annotate("pto.element.view:v1;dtype=f32;rows=32;cols=1;layout=cube_m32"), always_inline))
@@ -124,8 +124,8 @@ extern "C" void wide_iv(const float *__restrict input, float *__restrict output,
 // IR: call void asm sideeffect "BSTART.TLSU TSTORE, FP32
 // IR: ret void
 // OBJ-LABEL: <wide_iv>:
-// OBJ: BSTART.TLSU MGATHER, FP32
-// OBJ: BSTART.TLSU TSTORE, FP32
+// OBJ: BSTART.MGATHER FP32
+// OBJ: BSTART.TSTORE FP32
 
 extern "C" void affine_stride512(const float *__restrict input,
                                   float *__restrict output) {
@@ -142,8 +142,8 @@ extern "C" void affine_stride512(const float *__restrict input,
 // OBJ: BSTART.TEPL TCI, U32
 // OBJ: BSTART.TEPL TSHL, U32
 // OBJ: BSTART.TEPL TLEA, U32
-// OBJ: BSTART.TLSU MGATHER, FP32
-// OBJ: BSTART.TLSU MSCATTER, FP32
+// OBJ: BSTART.MGATHER FP32
+// OBJ: BSTART.MSCATTER FP32
 
 extern "C" void runtime_i64_base(const float *__restrict input,
                                   float *__restrict output,
@@ -160,4 +160,4 @@ extern "C" void runtime_i64_base(const float *__restrict input,
 // OBJ-LABEL: <runtime_i64_base>:
 // OBJ: BSTART.TEPL TLEA, S32
 // OBJ-NOT: BSTART.TEPL TADD, U64
-// OBJ: BSTART.TLSU MGATHER, FP32
+// OBJ: BSTART.MGATHER FP32

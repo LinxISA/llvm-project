@@ -14,7 +14,7 @@ define void @gather(ptr %out, ptr %base, ptr %index.ptr, i64 %mask) {
 
 ; CHECK-LABEL: <gather>:
 ; CHECK: BSTART.TEPL TLEA, U32
-; CHECK: BSTART.TLSU MGATHER, U32
+; CHECK: BSTART.MGATHER U32
 ; CHECK-NOT: MGATHER.ADD
 ; CHECK: B.DATR CUBE_M32
 ; CHECK: B.IOT {{.*}} ->t<128B>

@@ -8,17 +8,17 @@
 #
 # CHECK-LABEL: name: tgemv_raw_acc
 # CHECK: $r5 = ADDI $r0, 1
-# CHECK: $tile_m2 = PseudoTCOPYDesc 5, $tile_m1, 16, 1, 16, 1, 31
+# CHECK: $tile_m2 = PseudoTCOPYDesc 5, $tile_m1, 16, 1, 32, 1, 31
 # CHECK-LABEL: name: tmatmul_runtime_m
-# CHECK: $tile_m2 = PseudoTMOV_SizeI $r0, 16, $r5, 0, $r0, 16, 1, 5, $tile_m1, 31
+# CHECK: $tile_m2 = PseudoTMOV_SizeI $r0, 16, $r5, 0, $r0, 32, 1, 5, $tile_m1, 31
 # CHECK-LABEL: name: tmatmul_omitted_bdatr
-# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 16, $r5, 0, $r0, 16, 4, 5, $tile_t1, 31
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 16, $r5, 0, $r0, 64, 4, 5, $tile_t1, 31
 # CHECK-LABEL: name: tmatmul_small_n_fp16
-# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 1, 4, 5, $tile_t1, 31
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 64, 4, 5, $tile_t1, 31
 # CHECK-LABEL: name: tmatmul_small_n_bf16
-# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 1, 5, 5, $tile_t1, 31
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 64, 5, 5, $tile_t1, 31
 # CHECK-LABEL: name: tmatmul_small_n_fp32
-# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 1, 1, 5, $tile_t1, 31
+# CHECK: $tile_t2 = PseudoTMOV_SizeI $r0, 1, $r5, 0, $r0, 32, 1, 5, $tile_t1, 31
 --- |
   define void @tgemv_raw_acc() { ret void }
   define void @tmatmul_runtime_m() { ret void }

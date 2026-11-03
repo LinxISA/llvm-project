@@ -23,7 +23,7 @@ define void @histogram_atomic(ptr %out.ptr, ptr %indices.ptr,
 ; IR:    [[PTO_TILE_MASKED4:%.*]] = call <32 x i32> asm sideeffect "BSTART.TEPL TAND, U8\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 0\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", "=@2Tr,@2Tr,@2Tr,i"(<32 x i32> [[PTO_TILE_MASKED2]], <32 x i32> [[PTO_TILE_MASKED3]], i64 1)
 ; IR:    [[PTO_TILE_MASKED5:%.*]] = call <32 x i64> asm sideeffect "BSTART.TEPL TLEA, U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$3], []\0A", "=@2Tr,@2Tr,@2Tr,r,i"(<32 x i32> [[PTO_ELEMENT_CARRIER:%.*]], <32 x i32> [[PTO_TILE_MASKED4]], i64 32, i64 2)
 ; IR:    [[PTO_ATOMIC_ONES:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 1, i64 0)
-; IR:    [[PTO_TILE_MASKED6:%.*]] = call <32 x i32> asm sideeffect "BSTART.TLSU MGATHER.ADD, U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111\0AB.IOT $3, mask=1111, last, ->$0<${5:Z}>\0AB.IOR [$4], []\0A", "=@2Tr,@2Tr,@2Tr,@2Tr,r,i,~{memory}"(<32 x i64> [[PTO_TILE_MASKED5]], <32 x i32> [[PTO_ATOMIC_ONES]], <32 x i32> [[PTO_TILE_MASKED4]], ptr [[HISTOGRAM:%.*]], i64 1)
+; IR:    [[PTO_TILE_MASKED6:%.*]] = call <32 x i32> asm sideeffect "BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111\0AB.IOT $3, mask=1111, last, ->$0<${5:Z}>\0AB.IOR [$4], []\0A", "=@2Tr,@2Tr,@2Tr,@2Tr,r,i,~{memory}"(<32 x i64> [[PTO_TILE_MASKED5]], <32 x i32> [[PTO_ATOMIC_ONES]], <32 x i32> [[PTO_TILE_MASKED4]], ptr [[HISTOGRAM:%.*]], i64 1)
 ; IR:    ret void
 ;
   ptr %histogram, i32 %valid, i1 %outer) {
@@ -75,7 +75,7 @@ define void @selected_atomic(ptr %out.ptr, ptr %indices.ptr,
 ; IR:    [[PTO_TILE_MASKED5:%.*]] = call <32 x i32> asm sideeffect "BSTART.TEPL TAND, U8\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 0\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", "=@2Tr,@2Tr,@2Tr,i"(<32 x i32> [[PTO_TILE_MASKED2]], <32 x i32> [[PTO_TILE_MASKED4]], i64 1)
 ; IR:    [[PTO_TILE_MASKED6:%.*]] = call <32 x i64> asm sideeffect "BSTART.TEPL TLEA, U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$3], []\0A", "=@2Tr,@2Tr,@2Tr,r,i"(<32 x i32> [[PTO_ELEMENT_CARRIER:%.*]], <32 x i32> [[PTO_TILE_MASKED5]], i64 32, i64 2)
 ; IR:    [[PTO_ATOMIC_ONES:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 1, i64 0)
-; IR:    [[PTO_TILE_MASKED7:%.*]] = call <32 x i32> asm sideeffect "BSTART.TLSU MGATHER.ADD, U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111\0AB.IOT $3, mask=1111, last, ->$0<${5:Z}>\0AB.IOR [$4], []\0A", "=@2Tr,@2Tr,@2Tr,@2Tr,r,i,~{memory}"(<32 x i64> [[PTO_TILE_MASKED6]], <32 x i32> [[PTO_ATOMIC_ONES]], <32 x i32> [[PTO_TILE_MASKED5]], ptr [[HISTOGRAM:%.*]], i64 1)
+; IR:    [[PTO_TILE_MASKED7:%.*]] = call <32 x i32> asm sideeffect "BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111\0AB.IOT $3, mask=1111, last, ->$0<${5:Z}>\0AB.IOR [$4], []\0A", "=@2Tr,@2Tr,@2Tr,@2Tr,r,i,~{memory}"(<32 x i64> [[PTO_TILE_MASKED6]], <32 x i32> [[PTO_ATOMIC_ONES]], <32 x i32> [[PTO_TILE_MASKED5]], ptr [[HISTOGRAM:%.*]], i64 1)
 ; IR:    ret void
 ;
   ptr %keys.ptr, ptr %histogram,
@@ -134,7 +134,7 @@ define void @scalarized_lane_zero_atomic(ptr %out.ptr, ptr %indices.ptr,
 ; IR:    [[PTO_TILE_MASKED4:%.*]] = call <32 x i32> asm sideeffect "BSTART.TEPL TAND, U8\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 0\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", "=@2Tr,@2Tr,@2Tr,i"(<32 x i32> [[PTO_TILE_MASKED2]], <32 x i32> [[PTO_TILE_MASKED3]], i64 1)
 ; IR:    [[PTO_TILE_MASKED5:%.*]] = call <32 x i64> asm sideeffect "BSTART.TEPL TLEA, U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $2, mask=1111, last, ->$0<${4:Z}>\0AB.IOR [$3], []\0A", "=@2Tr,@2Tr,@2Tr,r,i"(<32 x i32> [[PTO_ELEMENT_CARRIER:%.*]], <32 x i32> [[PTO_TILE_MASKED4]], i64 32, i64 2)
 ; IR:    [[PTO_ATOMIC_ONES:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32(i64 32, i64 1, i64 25, i64 29, i64 1, i64 0)
-; IR:    [[PTO_TILE_MASKED6:%.*]] = call <32 x i32> asm sideeffect "BSTART.TLSU MGATHER.ADD, U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111\0AB.IOT $3, mask=1111, last, ->$0<${5:Z}>\0AB.IOR [$4], []\0A", "=@2Tr,@2Tr,@2Tr,@2Tr,r,i,~{memory}"(<32 x i64> [[PTO_TILE_MASKED5]], <32 x i32> [[PTO_ATOMIC_ONES]], <32 x i32> [[PTO_TILE_MASKED4]], ptr [[HISTOGRAM:%.*]], i64 1)
+; IR:    [[PTO_TILE_MASKED6:%.*]] = call <32 x i32> asm sideeffect "BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32\0AB.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 0, 1\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111\0AB.IOT $3, mask=1111, last, ->$0<${5:Z}>\0AB.IOR [$4], []\0A", "=@2Tr,@2Tr,@2Tr,@2Tr,r,i,~{memory}"(<32 x i64> [[PTO_TILE_MASKED5]], <32 x i32> [[PTO_ATOMIC_ONES]], <32 x i32> [[PTO_TILE_MASKED4]], ptr [[HISTOGRAM:%.*]], i64 1)
 ; IR:    ret void
 ;
   ptr %histogram, i1 %part.active) {
@@ -186,7 +186,7 @@ exit:
 ; OBJ: BSTART.TEPL TCI, U32
 ; OBJ: BSTART.TEPL TCMP, U32
 ; OBJ: BSTART.TEPL TLEA, U32
-; OBJ: BSTART.TLSU MGATHER.ADD, U32
+; OBJ: BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
 ; OBJ: B.DATR CUBE_M32
 ; OBJ-NOT: ExecMaskPresent
 ; OBJ-LABEL: <selected_atomic>:
@@ -195,13 +195,13 @@ exit:
 ; OBJ: BSTART.TEPL TCMP, U32
 ; OBJ: BSTART.TEPL TAND, U8
 ; OBJ: BSTART.TEPL TLEA, U32
-; OBJ: BSTART.TLSU MGATHER.ADD, U32
+; OBJ: BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
 ; OBJ: B.DATR CUBE_M32
 ; OBJ-NOT: ExecMaskPresent
 ; OBJ-LABEL: <scalarized_lane_zero_atomic>:
 ; OBJ: BSTART.TEPL TCMP, U32
 ; OBJ: BSTART.TEPL TLEA, U32
-; OBJ: BSTART.TLSU MGATHER.ADD, U32
+; OBJ: BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
 ; OBJ-NOT: ExecMaskPresent
 
 !0 = distinct !{}

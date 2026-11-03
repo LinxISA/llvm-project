@@ -14,11 +14,11 @@ TSTORE.M322ND <LB0: 1, LB1: 1, LB2: 1, FP32>, T#1, [a1]
 TSTORE.M162ND <LB0: 1, LB1: 1, LB2: 1, FP32>, T#1, [a1]
 TSTORE.N82ND  <LB0: 1, LB1: 1, LB2: 1, FP32>, T#1, [a1]
 
-# ENC: BSTART.TLSU{{.*}}TLOAD, FP32
+# ENC: BSTART.{{(TLSU )?}}TLOAD{{,?}} FP32
 # ENC: B.DATR{{.*}}ND2M32.normal, Zero
 # ENC: B.DATR{{.*}}ND2M16.normal, Zero
 # ENC: B.DATR{{.*}}ND2N8.normal, Zero
-# ENC: BSTART.TLSU{{.*}}TSTORE, FP32
+# ENC: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 # ENC: B.DATR{{.*}}M322ND.normal, Null
 # ENC: B.DATR{{.*}}M162ND.normal, Null
 # ENC: B.DATR{{.*}}N82ND.normal, Null
@@ -38,11 +38,11 @@ B.DATR ND2M32.normal, Zero
 BSTART.TLSU TSTORE, FP32
 B.DATR M322ND.normal, Null
 
-# ENC: BSTART.TLSU{{.*}}TLOAD, FP32
+# ENC: BSTART.{{(TLSU )?}}TLOAD{{,?}} FP32
 # ENC: B.DATR{{.*}}ND2M32.normal, Zero
-# ENC: BSTART.TLSU{{.*}}TSTORE, FP32
+# ENC: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 # ENC: B.DATR{{.*}}M322ND.normal, Null
-# DIS: BSTART.TLSU{{.*}}TLOAD, FP32
+# DIS: BSTART.{{(TLSU )?}}TLOAD{{,?}} FP32
 # DIS: B.DATR{{.*}}ND2M32.normal, Zero
-# DIS: BSTART.TLSU{{.*}}TSTORE, FP32
+# DIS: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 # DIS: B.DATR{{.*}}M322ND.normal, Null

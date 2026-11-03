@@ -1607,8 +1607,24 @@ DecodeStatus LinxV5Disassembler::getInstruction(MCInst &MI, uint64_t &Size,
     case LinxV5::BSTART_TIMG2COL:
       LinxV5::reportUnfoldableTileOp("BSTART.TIMG2COL", Address);
       break;
-    default:
+    default: {
+      StringRef OpcodeName = MCII->getName(MI.getOpcode());
+      if (!OpcodeName.consume_front("BSTART_"))
+        break;
+      for (unsigned Index = 0; Index != TileMacroOperationCount; ++Index) {
+        const TileMacroOperationDesc &Candidate = TileMacroOperations[Index];
+        if ((Candidate.HeaderKind == TileMacroHeaderKind::TLSU ||
+             Candidate.HeaderKind == TileMacroHeaderKind::CUBE) &&
+            equalIgnoringUnderscores(OpcodeName, Candidate.Mnemonic)) {
+          LinxV5::reportUnfoldableTileOp(
+              Candidate.HeaderKind == TileMacroHeaderKind::TLSU
+                  ? "BSTART.TLSU" : "BSTART.CUBE",
+              Address);
+          break;
+        }
+      }
       break;
+    }
     }
   }
   return Result;

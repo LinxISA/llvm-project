@@ -40,9 +40,9 @@ B.DATR M322ND, DTYPE_NONE, Zero
 # CHECK: a3f01023{{.*}}B.DATR{{.*}}NORM.canon, Zero, GE
 # CHECK: c3f01023{{.*}}B.DATR{{.*}}NORM.canon, Zero, 6
 # CHECK: e3f01023{{.*}}B.DATR{{.*}}NORM.canon, Zero, 7
-# CHECK: BSTART.TLSU TMOV,{{.*}}e6m2
+# CHECK: BSTART.TMOV{{.*}}e6m2
 # CHECK: B.DATR{{.*}}M322ND.normal, Zero
-# CHECK: BSTART.TLSU TMOV,{{.*}}FP32
+# CHECK: BSTART.TMOV{{.*}}FP32
 # CHECK: B.DATR{{.*}}M162ND.normal, Zero
 # CHECK: c3f05023{{.*}}B.DATR{{.*}}NORM.canon, DTYPE_NONE, Zero, byte0, 6, RNONE, nosat, 1, 0
 # CHECK: e3f03023{{.*}}B.DATR{{.*}}NORM.canon, DTYPE_NONE, Zero, byte0, 7, RNONE, nosat, 0, 1

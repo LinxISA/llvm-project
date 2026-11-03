@@ -25,8 +25,8 @@ extern "C" void norm_cross_call(unsigned *source, unsigned *destination) {
 }
 
 // CHECK-NOT: S64
-// CHECK: BSTART.TSTORE U32
-// CHECK: BSTART.TLOAD U32
+// CHECK: BSTART.{{(TLSU )?}}TSTORE{{,?}} U32
+// CHECK: BSTART.{{(TLSU )?}}TLOAD{{,?}} U32
 // CHECK: C.B.DIMI 1, ->lb0
 // CHECK: C.B.DIMI 32, ->lb1
 // CHECK: C.B.DIMI 1, ->lb2

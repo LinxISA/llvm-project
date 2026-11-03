@@ -15,7 +15,7 @@
 
 ;; The invariant stays referenced through its inherited window offset.
 ; CHECK-LABEL: _Z6kernelPDF16_PKDF16_S_l:
-; CHECK: B.IOT {{t#[0-9]+, }}n#1, mask=1111, last, ->t<32KB>
+; CHECK: B.IOT {{t#[0-9]+}}.reuse, n#1.reuse, mask=1111, last, ->t<32KB>
 ;; No keep-alive TMOV / TCOPY anywhere in the loop.
 ; CHECK-NOT: TMOV
 ; CHECK-NOT: TCOPY

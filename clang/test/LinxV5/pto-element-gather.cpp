@@ -33,7 +33,7 @@ void gather(element_part &out_part, element_part &index_part,
 
 // IR-LABEL: define{{.*}}gather
 // IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
+// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 // IR-NOT: extractelement
 
 // OBJ-LABEL: <{{.*}}gather
@@ -63,7 +63,7 @@ void gather_tail(element_part &out_part, element_part &index_part,
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tci
 // IR: asm sideeffect "BSTART.TEPL TCMP, U32
 // IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
+// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 // IR-NOT: getelementptr
 
 // OBJ-LABEL: <{{.*}}gather_tail

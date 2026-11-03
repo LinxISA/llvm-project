@@ -68,6 +68,7 @@ def extend_model(model):
     add_emitted_forms(model)
     add_address_forms(model)
     add_execution_mask_forms(model)
+    add_tile_execution_mask_forms(model)
     for op in model["operations"]:
         if op["name"] in {"TGEMV", "TGEMV_MX"}:
             for base in list(op["forms"]):
@@ -446,6 +447,45 @@ def add_execution_mask_forms(model):
             )
             command[2].append([index, 0])
             op["forms"].append(f)
+
+
+def add_tile_execution_mask_forms(model):
+    for op in model["operations"]:
+        if op["name"] not in {"TADD", "TSUB", "TMUL", "TNEG", "TCMP", "TCMPS",
+                              "TAND", "TOR", "TXOR"}:
+            continue
+        for base in list(op["forms"]):
+            if base.get("encoding") or len(base["commands"]) != 1:
+                continue
+            command = base["commands"][0]
+            if command[0] != "IOT":
+                continue
+            sources = [pair for pair in command[2]
+                       if base["bindings"][pair[0]][2] == "LocalSource"]
+            destinations = [pair for pair in command[2]
+                            if base["bindings"][pair[0]][2] == "LocalDestination"]
+            if not sources or len(sources) > 2 or len(destinations) != 1:
+                continue
+            if len(sources) + len(destinations) != len(command[2]):
+                continue
+            masked = deepcopy(base)
+            masked["id"] += "-tile-exec-mask"
+            masked["encoding"] = "E" + str(len(op["forms"]))
+            fields = {item[0] for item in masked["configs"]}
+            for field in ("PredInv", "ZeroMask"):
+                if field not in fields:
+                    masked["configs"].append(config(field, "DATR", field, "0"))
+            mask = len(masked["bindings"])
+            masked["bindings"].append(
+                ["ExecMask", "ExecMask", "LocalSource",
+                 [["Role0", None, None, False, 1]]])
+            destination = destinations[0]
+            masked["bindings"][destination[0]][3][destination[1]][0] = "Role1"
+            masked["commands"] = [
+                ["IOT", 0, sources],
+                ["IOT", 1, [[mask, 0], destination]],
+            ]
+            op["forms"].append(masked)
 
 
 def render(model):

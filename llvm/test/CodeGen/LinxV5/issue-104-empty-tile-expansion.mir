@@ -25,6 +25,6 @@ body:             |
     ; The 10-byte bundle ends at the terminating `last` B.IOT (no BSTOP),
     ; byte-identical to the control ELF of issue #104:
     ;   81 11 01 d8 7c 00 13 ee 08 00
-    ; CHECK: BSTART.TLSU TLOAD, U8
+    ; CHECK: BSTART.TLOAD U8
     ; CHECK-NEXT: C.B.DIMI 1, ->lb0
     ; CHECK-NEXT: B.IOT mask=0000, last, ->t<128B>

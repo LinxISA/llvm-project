@@ -1,6 +1,6 @@
 # RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
 # CHECK-LABEL: name: local_u_rolling_holes
-# CHECK: $tile_u = PseudoTCOPYDesc 3, $tile_uos{{[0-9]+}}, 4, 32, 4, 25, 29
+# CHECK: $tile_u = PseudoTCOPYDesc 3, $tile_uos{{[0-9]+(_ru)?}}, 4, 32, 4, 25, 29
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_u{{[0-9]+}}
 # CHECK: PseudoRET
 --- |

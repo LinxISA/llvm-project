@@ -51,9 +51,9 @@ exit:
 ; TILE-NOT: llvm.linx.experimental.element.
 ; TILE: ret void
 ; OBJ-LABEL: <frozen_divrem>:
-; OBJ: BSTART.TLSU MGATHER, U32
+; OBJ: BSTART.MGATHER U32
 ; OBJ: BSTART.TEPL TDIV, U32
-; OBJ: BSTART.TLSU MSCATTER, U32
+; OBJ: BSTART.MSCATTER U32
 
 !0 = distinct !{}
 !1 = distinct !{!1, !2}

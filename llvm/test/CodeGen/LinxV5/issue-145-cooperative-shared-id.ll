@@ -8,8 +8,8 @@ target triple = "linx64v5"
 ; CHECK-LABEL: <cooperative_shared_id>:
 ; CHECK: B.IOS mask=0001, ->S0<4KB>
 ; CHECK: B.IOS mask=1111, ->S1<16KB>
-; CHECK: B.IOS S1, mask=1111
-; CHECK: B.IOS S1, mask=1111
+; CHECK: B.IOS S1{{(.reuse)?}}, mask=1111
+; CHECK: B.IOS S1{{(.reuse)?}}, mask=1111
 define void @cooperative_shared_id(i64 %thread) {
 entry:
    %local = call <1024 x i32> asm sideeffect "BSTART.TEPL TEXPANDS, e4m3\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>", "=@2Tr,i"(i64 6)
@@ -38,8 +38,8 @@ exit:
 ; CHECK-LABEL: <defined_shared_id_different_writers>:
 ; CHECK: B.IOS mask=0001, ->S0<4KB>
 ; CHECK: B.IOS mask=1111, ->S1<16KB>
-; CHECK: B.IOS S1, mask=1111
-; CHECK: B.IOS S0, mask=0001
+; CHECK: B.IOS S1{{(.reuse)?}}, mask=1111
+; CHECK: B.IOS S0{{(.reuse)?}}, mask=0001
 define void @defined_shared_id_different_writers() {
   %first = call <1024 x i32> asm sideeffect "BSTART.TEPL TEXPANDS, e4m3\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>", "=@2Tr,i"(i64 6)
   %last = call <1024 x i32> asm sideeffect "BSTART.TEPL TEXPANDS, e4m3\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>", "=@2Tr,i"(i64 6)

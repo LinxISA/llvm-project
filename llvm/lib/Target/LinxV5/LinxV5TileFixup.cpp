@@ -428,6 +428,18 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
       }
     }
   };
+  bool IsLinear = !MF.empty();
+  MachineBasicBlock *Previous = nullptr;
+  for (MachineBasicBlock &MBB : MF) {
+    if ((!Previous && !MBB.pred_empty()) ||
+        (Previous && (MBB.pred_size() != 1 ||
+                      *MBB.pred_begin() != Previous ||
+                      Previous->succ_size() != 1 ||
+                      *Previous->succ_begin() != &MBB)))
+      IsLinear = false;
+    Previous = &MBB;
+  }
+  IsLinear &= Previous && Previous->succ_empty();
   DenseSet<Register> DescriptorRegs;
   for (MachineBasicBlock &MBB : MF)
     for (MachineInstr &MI : MBB)
@@ -505,40 +517,41 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
     }
     return S;
   };
-  DenseMap<MachineBasicBlock *, DescriptorState> DescriptorOut;
-  bool DescriptorProgress = true;
-  while (DescriptorProgress) {
-    DescriptorProgress = false;
-    for (MachineBasicBlock &MBB : MF) {
-      DescriptorState Joined;
-      for (MachineBasicBlock *Pred : MBB.predecessors()) {
-        const DescriptorState &Incoming = DescriptorOut[Pred];
-        for (Register Reg : DescriptorRegs)
-          Merge(Joined.Registers[Reg], Incoming.Registers.lookup(Reg));
-        for (int FI : SpillFIs)
-          Merge(Joined.Slots[FI], Incoming.Slots.lookup(FI));
-      }
-      if (MBB.pred_empty()) {
-        for (Register Reg : DescriptorRegs)
-          SetAbsent(Joined.Registers[Reg]);
-        for (int FI : SpillFIs)
-          SetAbsent(Joined.Slots[FI]);
-      }
-      DescriptorState NewOut = TransferDescriptors(MBB, std::move(Joined));
-      DescriptorState &OldOut = DescriptorOut[&MBB];
-      for (Register Reg : DescriptorRegs)
-        DescriptorProgress |=
-            !Same(OldOut.Registers.lookup(Reg), NewOut.Registers.lookup(Reg));
-      for (int FI : SpillFIs)
-        DescriptorProgress |=
-            !Same(OldOut.Slots.lookup(FI), NewOut.Slots.lookup(FI));
-      OldOut = std::move(NewOut);
-    }
-  }
-
   bool Progress = true;
   while (Progress) {
     Progress = false;
+    SpillDescriptors.clear();
+    DenseMap<MachineBasicBlock *, DescriptorState> DescriptorOut;
+    bool DescriptorProgress = true;
+    while (DescriptorProgress) {
+      DescriptorProgress = false;
+      for (MachineBasicBlock &MBB : MF) {
+        DescriptorState Joined;
+        for (MachineBasicBlock *Pred : MBB.predecessors()) {
+          const DescriptorState &Incoming = DescriptorOut[Pred];
+          for (Register Reg : DescriptorRegs)
+            Merge(Joined.Registers[Reg], Incoming.Registers.lookup(Reg));
+          for (int FI : SpillFIs)
+            Merge(Joined.Slots[FI], Incoming.Slots.lookup(FI));
+        }
+        if (MBB.pred_empty()) {
+          for (Register Reg : DescriptorRegs)
+            SetAbsent(Joined.Registers[Reg]);
+          for (int FI : SpillFIs)
+            SetAbsent(Joined.Slots[FI]);
+        }
+        DescriptorState NewOut = TransferDescriptors(MBB, std::move(Joined));
+        DescriptorState &OldOut = DescriptorOut[&MBB];
+        for (Register Reg : DescriptorRegs)
+          DescriptorProgress |=
+              !Same(OldOut.Registers.lookup(Reg), NewOut.Registers.lookup(Reg));
+        for (int FI : SpillFIs)
+          DescriptorProgress |=
+              !Same(OldOut.Slots.lookup(FI), NewOut.Slots.lookup(FI));
+        OldOut = std::move(NewOut);
+      }
+    }
+
     DenseMap<int, State> LinearSpills;
 
     for (MachineBasicBlock &MBB : MF) {

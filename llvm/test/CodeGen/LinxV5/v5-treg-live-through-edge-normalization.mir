@@ -49,11 +49,11 @@
 # EQUAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # CONST-CLOBBER-LABEL: name: runtime_constant_clobber
 # CONST-CLOBBER: $r17 = ORI $r0, 7
-# CONST-CLOBBER: $tile_u = PseudoTCOPYDesc 1, $tile_uos3_ru, 32, 1, 32, 25, 29
+# CONST-CLOBBER: $tile_u = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
 # CONST-CLOBBER-NOT: PseudoTMOV_SizeI $r17
 # CONST-CLOBBER: INLINEASM {{.*}} $tile_uos2, {{.*}} $tile_uos1
 # RUNTIME-REGMASK: Local tile synchronization conflict use has no unique reaching native distance
-# RUNTIME-REDEFINED: Local tile CFG predecessors expose incompatible descriptors for one physical value
+# RUNTIME-REDEFINED: conflicting Local tile descriptors at COPY/PHI control-flow join
 # UNUSED-LABEL: name: unused_livein
 # UNUSED: bb.3:
 # UNUSED: $tile_u = PseudoTCI_EW_SizeI
@@ -63,29 +63,33 @@
 # CRITICAL: $tile_u = PseudoTCI_EW_SizeI
 # CRITICAL-NEXT: dead $tile_u = PseudoTCI_EW_SizeI
 # CRITICAL: SETC_EQI $r2, 0, implicit-def $carg
-# CRITICAL-NEXT: PseudoBRCondCARG %bb.[[SPLIT:[0-9]+]], implicit $carg
+# CRITICAL-NEXT: PseudoBRCondCARG %bb.[[HEADER:[0-9]+]], implicit $carg
 # CRITICAL-NEXT: PseudoBR %bb.[[OTHER:[0-9]+]]
-# CRITICAL: bb.[[SPLIT]]:
-# CRITICAL-NEXT: successors: %bb.[[HEADER:[0-9]+]]
-# CRITICAL: liveins: $r2, $tile_u3
-# CRITICAL: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # CRITICAL: bb.[[HEADER]]:
-# CRITICAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
+# CRITICAL-NEXT: successors: %bb.[[BACKEDGE:[0-9]+]]{{.*}}%bb.[[EXIT:[0-9]+]]
+# CRITICAL: liveins: $r2, $tile_u3
+# CRITICAL: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
+# CRITICAL: bb.[[BACKEDGE]]:
+# CRITICAL-NEXT: successors: %bb.[[HEADER]]
+# CRITICAL: $tile_u = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
+# CRITICAL-NEXT: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos1_ru, 1, 32, 1, 25, 29
+# CRITICAL-NEXT: PseudoBR %bb.[[HEADER]]
 # CRITICAL: bb.[[OTHER]]:
 # CRITICAL: PseudoRET
 # UNIFORM-LABEL: name: uniform_age_loop
 # UNIFORM: bb.16:
 # UNIFORM: $tile_u = PseudoTCI_EW_SizeI
 # UNIFORM-NEXT: dead $tile_u = PseudoTCI_EW_SizeI
-# UNIFORM-NEXT: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
 # UNIFORM-NEXT: PseudoBR
-# UNIFORM: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
+# UNIFORM: dead $tile_t = PseudoTCOPYDesc 1, $tile_uos2_ru, 1, 32, 1, 25, 29
+# UNIFORM: $tile_u = PseudoTCOPYDesc 1, $tile_uos3_ru, 1, 32, 1, 25, 29
+# UNIFORM-NEXT: dead $tile_u = PseudoTCOPYDesc 1, $tile_uos1_ru, 1, 32, 1, 25, 29
+# UNIFORM-NEXT: PseudoBR
 # UNIFORM-NOT: PseudoEmptyTile
 # RUNTIME-LABEL: name: live_through_runtime
 # RUNTIME: INLINEASM {{.*}} def $tile_u
-# RUNTIME: INLINEASM {{.*}} def $tile_u, {{.*}} $tile_uos1, {{.*}} $tile_uos1
-# RUNTIME: INLINEASM {{.*}} def $tile_t, {{.*}} $tile_uos1
-# MISMATCH: Local tile CFG predecessors expose incompatible descriptors for one physical value
+# RUNTIME: INLINEASM {{.*}}B.IOT $4, $4,{{.*}} def $tile_t, {{.*}} $tile_uos1
+# MISMATCH: conflicting Local tile descriptors at COPY/PHI control-flow join
 # BAD: Local tile synchronization conflict use has no unique reaching native distance
 # OPEN: B.ASSEMBLE continuation requires one exact OPEN parent epoch at a uniform relative distance
 
@@ -1166,9 +1170,9 @@ body: |
   bb.18:
     successors: %bb.19, %bb.20
     liveins: $r2
-    $r17 = ADDI $r0, 32
-    $r18 = ADDI $r0, 1
-    $r19 = ADDI $r0, 32
+    $r17 = ADDI $r0, 1
+    $r18 = ADDI $r0, 32
+    $r19 = ADDI $r0, 1
     INLINEASM &"BSTART.TEPL 102, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_u3, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 1
     BEQ $r2, $r0, %bb.19
     PseudoBR %bb.20
@@ -1194,7 +1198,7 @@ body: |
     PseudoBR %bb.23
   bb.23:
     liveins: $tile_u3, $tile_u4
-    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 1, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_u3, 720905, $tile_u4, 13, 1
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 1, ->lb2\0AB.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\0A", 9, 720906, def $tile_t4, 720905, $tile_u3, 720905, $tile_u4, 13, 1
     PseudoRET
 ...
 
@@ -1676,7 +1680,7 @@ body: |
   bb.18:
     successors: %bb.19
     liveins: $r2, $r17, $r18, $r19
-    INLINEASM &"BSTART.TEPL 102, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_u3, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 1
+    INLINEASM &"BSTART.TEPL 102, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_u3, 2293769, $r17, 2293769, $r18, 2293769, $r19, 13, 5
     PseudoBR %bb.19
   bb.19:
     successors: %bb.20, %bb.21
@@ -1687,11 +1691,11 @@ body: |
     successors: %bb.19
     liveins: $r17, $r18, $r19, $tile_u3
     $r17 = ADDI $r0, 16
-    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT $4, $5, mask=1111, last, ->$0<${6:Z}>\0A", 9, 720906, def $tile_u3, 2293769, $r17, 2293769, $r18, 2293769, $r19, 720905, $tile_u3, 720905, $tile_u3, 13, 1
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT $4, $5, mask=1111, last, ->$0<${6:Z}>\0A", 9, 720906, def $tile_u3, 2293769, $r17, 2293769, $r18, 2293769, $r19, 720905, $tile_u3, 720905, $tile_u3, 13, 5
     PseudoBR %bb.19
   bb.21:
     liveins: $r17, $r18, $r19, $tile_u3
-    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT $4, $4, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t4, 2293769, $r17, 2293769, $r18, 2293769, $r19, 720905, $tile_u3, 13, 1
+    INLINEASM &"BSTART.TEPL 0, U32\0AB.DATR CUBE_M32, Null\0AB.DIM $1, 0, ->lb0\0AB.DIM $2, 0, ->lb1\0AB.DIM $3, 0, ->lb2\0AB.IOT $4, $4, mask=1111, last, ->$0<${5:Z}>\0A", 9, 720906, def $tile_t4, 2293769, $r17, 2293769, $r18, 2293769, $r19, 720905, $tile_u3, 13, 5
     PseudoRET
 ...
 

@@ -31,7 +31,7 @@ define void @gpr_predication(ptr %out, ptr %base, ptr %lhs.ptr, ptr %rhs.ptr) {
 ; CHECK: BSTART.TEPL TSEL, U32
 ; CHECK: B.IOR [{{[a-z0-9]+}}], []
 ; CHECK-NOT: ExecMaskPresent
-; CHECK: BSTART.TLSU MSCATTER, U32
+; CHECK: BSTART.MSCATTER U32
 ; CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
 ; CHECK-NOT: MSCATTER.MASK
 ; CHECK: ExecMaskPresent
@@ -48,7 +48,7 @@ define void @signed_scatter(ptr %base, ptr %offset.ptr, ptr %value.ptr,
 }
 
 ; CHECK-LABEL: <signed_scatter>:
-; CHECK: BSTART.TLSU MSCATTER, S32
+; CHECK: BSTART.MSCATTER S32
 ; CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
 ; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111, last
 ; CHECK: ExecMaskPresent

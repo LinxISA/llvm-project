@@ -1,18 +1,18 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
-; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+; RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t | FileCheck %s
 ;
 ; Provisional PR #352 carrier binding. The logical mask has already been
 ; packed into two Predicate-GPR words; this path binds those words through
 ; B.IOR before the CUBE TileOp and carries PredInv/Zero in B.DATR.
 
 ; CHECK-LABEL: <elementwise_masked_cube_matmul>:
-; CHECK: BSTART.CUBE TMATMUL
+; CHECK: BSTART.TMATMUL
 ; CHECK: B.DATR
 ; CHECK: B.FPATR
 ; CHECK: B.IOT
 ; CHECK: B.IOR [a2,a3,zero], ExecMaskPresent
 ; CHECK-LABEL: <elementwise_masked_cube_m32_controls>:
-; CHECK: BSTART.CUBE TMATMUL
+; CHECK: BSTART.TMATMUL
 ; CHECK: B.DATR
 ; CHECK: B.FPATR
 ; CHECK: B.IOT

@@ -1,5 +1,5 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
-; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+; RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t | FileCheck %s
 
 target triple = "linx64v5"
 

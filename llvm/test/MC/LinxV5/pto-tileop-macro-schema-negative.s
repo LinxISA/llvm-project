@@ -28,4 +28,4 @@ B.DATR FP32, byte1, CCTRL.RawAccumulatorInternalAccHint, RNONE, nosat
 B.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 B.IOT M#1, mask=1111
 B.IOT T#1, U#1, mask=1111, last, ->N<128B>
-# PHYS: BSTART.CUBE TMATMUL.ACC
+# PHYS: BSTART.{{(CUBE )?}}TMATMUL.ACC{{,?}}
