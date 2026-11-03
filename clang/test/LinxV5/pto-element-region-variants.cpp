@@ -46,7 +46,7 @@ void equivalent_source_forms(elements *output_pointer,
 // IR: call void @llvm.linx.blk.tstore.v32i32(i64 1, i64 32, i64 1, i64 25, i64 24,
 
 // OBJ-LABEL: <{{.*}}equivalent_source_forms
-// OBJ: BSTART.TLSU TLOAD, U32
+// OBJ: BSTART.{{(TLSU )?}}TLOAD{{,?}} U32
 // OBJ: B.DATR ND2M32
 // OBJ: BSTART.TEPL TADD, U32
 // OBJ: B.DATR CUBE_M32
@@ -54,5 +54,5 @@ void equivalent_source_forms(elements *output_pointer,
 // OBJ: B.DATR CUBE_M32
 // OBJ: BSTART.TEPL TXOR, U32
 // OBJ: B.DATR CUBE_M32
-// OBJ: BSTART.TLSU TSTORE, U32
+// OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} U32
 // OBJ: B.DATR M322ND

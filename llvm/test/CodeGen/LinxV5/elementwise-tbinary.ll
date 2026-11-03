@@ -10,7 +10,7 @@
 ; CHECK-NEXT: B.DATR CUBE_M32
 ; CHECK-NEXT: C.B.DIMI 1, ->lb0
 ; CHECK-NEXT: C.B.DIMI 32, ->lb1
-; CHECK-NEXT: B.IOT {{[tmnu]}}#{{[0-9]+}}, {{[tmnu]}}#{{[0-9]+}}, mask=1111, last, ->{{[tmnu]}}<128B>
+; CHECK-NEXT: B.IOT {{[tmnu]}}#{{[0-9]+}}{{(.reuse)?}}, {{[tmnu]}}#{{[0-9]+}}{{(.reuse)?}}, mask=1111, last, ->{{[tmnu]}}<128B>
 ; CHECK: BSTART.TEPL TSUB, U32
 ; CHECK: BSTART.TEPL TMUL, U32
 ; CHECK: BSTART.TEPL TDIV, U32

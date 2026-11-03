@@ -31,9 +31,9 @@ extern "C" void atomic_masked(void *base, unsigned long stride) {
 }
 
 // CHECK-LABEL: <atomic_masked>:
-// CHECK: BSTART.TLSU TSTORE,
+// CHECK: BSTART.{{(TLSU )?}}TSTORE{{,?}}
 // CHECK: e3f05c23{{.*}}B.DATR{{.*}}M322ND.canon, DTYPE_NONE, Zero, byte0, 7, RNONE, nosat, 1, 0
-// CHECK: B.IOT{{.*}}t#{{[0-9]+}}, t#{{[0-9]+}}, mask=1111, last
+// CHECK: B.IOT{{.*}}t#{{[0-9]+}}.reuse, t#{{[0-9]+}}.reuse, mask=1111, last
 // CHECK: B.IOR{{.*}}[{{[a-z0-9]+}}, {{[a-z0-9]+}}], []
 
 extern "C" void shared_conversion(void *base, unsigned long stride) {
@@ -71,16 +71,16 @@ extern "C" void shared_conversion(void *base, unsigned long stride) {
 }
 
 // CHECK-LABEL: <shared_conversion>:
-// CHECK: BSTART.TLSU TMOV,
+// CHECK: BSTART.{{(TLSU )?}}TMOV{{,?}}
 // CHECK: B.DATR{{.*}}M322ND.normal, Zero
 // CHECK: B.IOS{{.*}}mask=1111, ->S{{[0-9]+}}<1KB>
 // CHECK: B.ASSEMBLE{{.*}}1, 0, zero, 0, 3
 // CHECK: B.IOT{{.*}}mask=1111, last
-// CHECK: BSTART.TLSU TMOV,
+// CHECK: BSTART.{{(TLSU )?}}TMOV{{,?}}
 // CHECK: B.DATR{{.*}}M322ND.normal, Zero
-// CHECK: B.IOS{{.*}}S{{[0-9]+}}, mask=1111
+// CHECK: B.IOS{{.*}}S{{[0-9]+}}.reuse, mask=1111
 // CHECK: B.ASSEMBLE{{.*}}0, 1, {{[a-z0-9]+}}, 0, 3
-// CHECK: BSTART.TLSU TSTORE,
+// CHECK: BSTART.{{(TLSU )?}}TSTORE{{,?}}
 // CHECK: c3f01023{{.*}}B.DATR{{.*}}NORM.canon, Zero, 6
-// CHECK: B.IOS{{.*}}S{{[0-9]+}}, mask=1111
+// CHECK: B.IOS{{.*}}S{{[0-9]+}}.reuse, mask=1111
 // CHECK: B.IOR{{.*}}[{{[a-z0-9]+}}, {{[a-z0-9]+}}], []

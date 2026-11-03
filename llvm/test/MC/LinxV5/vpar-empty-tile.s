@@ -8,7 +8,7 @@
 # supplies GM base zero), one required C.B.DIMI LB0=ValidCol=1, and the same
 # no-source destination B.IOT with a legal SizeCode (issue #101).
 
-# CHECK: BSTART.TLSU TLOAD, U8
+# CHECK: BSTART.TLOAD U8
 # CHECK-NEXT: C.B.DIMI 1, ->lb0
 # CHECK-NEXT: B.IOT mask=1111, last, ->t<128B>
 # CHECK-NEXT: BSTOP
@@ -17,7 +17,7 @@ C.B.DIMI 1, ->lb0
 B.IOT mask=1111, last, ->t<128B>
 BSTOP
 
-# CHECK: BSTART.TLSU TLOAD, U8
+# CHECK: BSTART.TLOAD U8
 # CHECK-NEXT: C.B.DIMI 1, ->lb0
 # CHECK-NEXT: B.IOT mask=1111, last, ->u<128B>
 # CHECK-NEXT: BSTOP

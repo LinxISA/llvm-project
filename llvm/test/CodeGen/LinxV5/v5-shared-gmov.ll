@@ -1,5 +1,5 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
-; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+; RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t | FileCheck %s
 
 target triple = "linx64v5"
 
@@ -15,10 +15,10 @@ define void @gmov(ptr %in, ptr %out, i64 %peer) {
 }
 
 ; CHECK-LABEL: <insert_broadcast>:
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<512B>
 ; CHECK-NEXT: B.IOT {{.*}}mask=1111, last
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S0, mask=1111
 define void @insert_broadcast(ptr %in, ptr %out) {
   %src = call <128 x float> @llvm.linx.blk.tload.v128f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in, i64 0)
@@ -29,10 +29,10 @@ define void @insert_broadcast(ptr %in, ptr %out) {
 }
 
 ; CHECK-LABEL: <publish_extract>:
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS mask=1100, ->S0<1KB>
 ; CHECK-NEXT: B.IOT {{.*}}mask=1100, last
-; CHECK: BSTART.TLSU TMOV, FP32
+; CHECK: BSTART.TMOV FP32
 ; CHECK-NEXT: B.IOS S0, mask=1000
 define void @publish_extract(ptr %in, ptr %out) {
   %src = call <256 x float> @llvm.linx.blk.tload.v256f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in, i64 0)

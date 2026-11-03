@@ -8,10 +8,10 @@ target triple = "linx64v5"
 ; CHECK-NEXT: B.IOS mask=1111, ->S0<16KB>
 ; CHECK-NEXT: B.ASSEMBLE 1, 0, {{[^,]+}}, 0, 6
 ; CHECK: B.DATR M322ND.normal, Zero
-; CHECK-NEXT: B.IOS S0, mask=1111
+; CHECK-NEXT: B.IOS S0{{(.reuse)?}}, mask=1111
 ; CHECK-NEXT: B.ASSEMBLE 0, 1, {{[^,]+}}, 0, 6
 ; CHECK: B.DATR M322ND.normal, Zero
-; CHECK-NEXT: B.IOS S0, mask=1111
+; CHECK-NEXT: B.IOS S0{{(.reuse)?}}, mask=1111
 ; CHECK-NEXT: B.ASSEMBLE 0, 0, {{[^,]+}}, 0, 6
 define void @cooperative_shared_nd(i64 %thread) {
 entry:

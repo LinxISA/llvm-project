@@ -18,7 +18,7 @@ TMATMUL <M=16, N=16, K=16, FP32>, T#1, S0.reuse, ->T<512B>
 # CHECK: TADD{{ +}}<Row=32, Col=1, FP32>, T#1.reuse, U#1, ->T<128B>
 # CHECK: TADD{{ +}}<Row=32, Col=1, FP32>, T#1, U#1.reuse, ->T<128B>
 # CHECK: TADD{{ +}}<Row=32, Col=1, FP32>, T#1.reuse, U#1.reuse, ->T<128B>
-# CHECK: TSTORE{{ +}}<FP32>, T#1.reuse, [base=a0, stride=a1]
+# CHECK: TSTORE{{ +}}<Col=1, ValidRow=1, ValidCol=1, FP32>, T#1.reuse, [base=a0, stride=a1]
 # CHECK: MSCATTER_ADD{{ +}}<Col=8, ValidRow=32, FP32>, [base=a0], T#1.reuse, U#1
 # CHECK: MSCATTER_ADD{{ +}}<Col=8, ValidRow=32, FP32>, [base=a0], T#1, U#1.reuse
 # CHECK: MSCATTER_ADD{{ +}}<Col=8, ValidRow=32, FP32>, [base=a0], T#1.reuse, U#1.reuse

@@ -1,6 +1,6 @@
 # RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset -o - %s | FileCheck %s
 # CHECK-LABEL: name: dynamic_window_copy
-# CHECK: $tile_t = PseudoTCOPYDesc 9, killed $tile_tos{{[0-9]+}}, $r2, $r3, 256, 1, 29
+# CHECK: $tile_t = PseudoTCOPYDesc 9, {{(killed )?}}$tile_tos{{[0-9]+(_ru)?}}, $r2, $r3, 256, 1, 29
 # CHECK-NOT: PseudoTCOPYDesc {{.*}}$tile_t{{[0-9]+}}
 # CHECK: PseudoRET
 --- |

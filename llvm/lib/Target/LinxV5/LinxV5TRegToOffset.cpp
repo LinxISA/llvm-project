@@ -899,7 +899,7 @@ static void buildTileDescriptorCopy(
           "cannot prove runtime Tile descriptor registers reach COPY "
           "without a clobber");
     MachineInstrBuilder Copy =
-        auto Copy = BuildMI(MBB, Before, DebugLoc(), TII.get(LinxV5::PseudoTMOV_SizeI))
+        BuildMI(MBB, Before, DebugLoc(), TII.get(LinxV5::PseudoTMOV_SizeI))
             .addReg(Dst, DstFlags);
     for (unsigned I = 0; I != 3; ++I)
       Copy.addReg(Descriptor.DimensionRegs[I] == Register()
@@ -1041,12 +1041,16 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
         HeadIdx - *SourceIdx < 1 || HeadIdx - *SourceIdx > TRNumber)
       report_fatal_error(
           "compiler-inserted Local tile copy lacks one exact source slot");
+    unsigned SourceOperand =
+        BuiltCopy.getOpcode() == LinxV5::PseudoTMOV_SizeI ? 9 : 2;
     if ((BuiltCopy.getOpcode() != LinxV5::PseudoTCOPYDesc &&
-         BuiltCopy.getOpcode() != LinxV5::PseudoPCOPYDesc) ||
-        BuiltCopy.getNumOperands() <= 2 || !BuiltCopy.getOperand(2).isReg())
+         BuiltCopy.getOpcode() != LinxV5::PseudoPCOPYDesc &&
+         BuiltCopy.getOpcode() != LinxV5::PseudoTMOV_SizeI) ||
+        BuiltCopy.getNumOperands() <= SourceOperand ||
+        !BuiltCopy.getOperand(SourceOperand).isReg())
       report_fatal_error(
           "compiler-inserted Local tile copy has no trackable source operand");
-    (*QueueCopyUseDistances)[&BuiltCopy.getOperand(2)] =
+    (*QueueCopyUseDistances)[&BuiltCopy.getOperand(SourceOperand)] =
         HeadIdx - *SourceIdx;
     if (IsDeadPublication)
       QueueDeadPublicationDefs->insert(&BuiltCopy.getOperand(0));
@@ -2059,6 +2063,33 @@ LinxV5TRegToOffsetOpt::getLiveoutLimits(MachineBasicBlock &MBB,
   return Res;
 }
 
+static bool incomingTileValueHasReachableUse(
+    MachineBasicBlock &MBB, Register Reg, const TargetRegisterInfo *TRI) {
+  SmallPtrSet<MachineBasicBlock *, 8> Visited;
+  std::function<bool(MachineBasicBlock *)> Visit =
+      [&](MachineBasicBlock *Block) {
+        if (!Visited.insert(Block).second)
+          return false;
+        for (MachineInstr &MI : *Block) {
+          if (MI.isDebugInstr() || MI.isKill())
+            continue;
+          // A tied/two-address operand consumes the incoming value before
+          // the same instruction replaces it.
+          for (const MachineOperand &MO : MI.operands())
+            if (MO.isReg() && MO.isUse() && !MO.isImplicit() &&
+                MO.getReg() == Reg)
+              return true;
+          if (MI.definesRegister(Reg, TRI) ||
+              llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
+                return MO.isRegMask() && MO.clobbersPhysReg(Reg);
+              }))
+            return false;
+        }
+        return llvm::any_of(Block->successors(), Visit);
+      };
+  return Visit(&MBB);
+}
+
 SmallVector<QueueContractEntry, 8>
 LinxV5TRegToOffsetOpt::buildEntryContract(
     MachineBasicBlock &MBB, const TargetRegisterClass *RC,
@@ -2072,35 +2103,10 @@ LinxV5TRegToOffsetOpt::buildEntryContract(
       return Contract;
     llvm::append_range(Required, RequiredMBB->second.find(RC)->second);
   } else {
-    auto IncomingValueHasReachableUse = [&](Register Reg) {
-      SmallPtrSet<MachineBasicBlock *, 8> Visited;
-      std::function<bool(MachineBasicBlock *)> Visit =
-          [&](MachineBasicBlock *Block) {
-            if (!Visited.insert(Block).second)
-              return false;
-            for (MachineInstr &MI : *Block) {
-              if (MI.isDebugInstr() || MI.isKill())
-                continue;
-              // A tied/two-address operand consumes the incoming value before
-              // the same instruction replaces it.
-              for (const MachineOperand &MO : MI.operands())
-                if (MO.isReg() && MO.isUse() && !MO.isImplicit() &&
-                    MO.getReg() == Reg)
-                  return true;
-              if (MI.definesRegister(Reg, TRI) ||
-                  llvm::any_of(MI.operands(), [&](const MachineOperand &MO) {
-                    return MO.isRegMask() && MO.clobbersPhysReg(Reg);
-                  }))
-                return false;
-            }
-            return llvm::any_of(Block->successors(), Visit);
-          };
-      return Visit(&MBB);
-    };
     for (const auto &LiveIn : MBB.liveins())
       if (RC->contains(LiveIn.PhysReg) &&
           !hasAnyReachingExplicitUndef(MBB, LiveIn.PhysReg) &&
-          IncomingValueHasReachableUse(LiveIn.PhysReg))
+          incomingTileValueHasReachableUse(MBB, LiveIn.PhysReg, TRI))
         Required.push_back(LiveIn.PhysReg);
   }
   for (Register Reg : Required) {
@@ -2457,7 +2463,14 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
               Succ, RC, GlobalSlotsInfo[Pred][RC].LiveOuts));
         if (Contracts.empty() || Contracts.front().empty())
           continue;
-        if (!EnableGenericElement) {
+        bool HasRuntimeContract = llvm::any_of(
+            Contracts, [](ArrayRef<QueueContractEntry> Contract) {
+              return llvm::any_of(Contract, [](const QueueContractEntry &Entry) {
+                return Entry.Value.Descriptor &&
+                       Entry.Value.Descriptor->HasRuntimeDimensions;
+              });
+            });
+        if (!EnableGenericElement && HasRuntimeContract) {
           if (!SyncConflictRCs.count(RC))
             continue;
           bool HasOpenParent = llvm::any_of(
@@ -4639,13 +4652,26 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   prepareLocalTileABIBoundaries(MF, *TII, *TRI);
 
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm())
+        continue;
+      LinxV5::SingleAsm Asm = LinxV5::parseSingleAsm(&MI);
+      for (unsigned Index = 0; Index < Asm.Defs.size(); ++Index)
+        if (LinxV5::Tile_ABSRegClass.contains(Asm.Defs[Index]->getReg()) &&
+            Asm.Sizes[Index] == 0)
+          report_fatal_error(
+              "cannot snapshot exact Local tile queue identity before "
+              "offset rewrite: unresolved inline asm Tile size");
+    }
+
   for (MachineBasicBlock &MBB : MF) {
     for (auto Position = MBB.begin(); Position != MBB.end();) {
       MachineInstr &MI = *Position++;
       if (!MI.isImplicitDef())
         continue;
       Register Reg = MI.getOperand(0).getReg();
-      if (!LinxV5::Tile_ABSRegClass.contains(Reg) ||
+      if (!MBB.pred_empty() || !LinxV5::Tile_ABSRegClass.contains(Reg) ||
           OpenAssembleParentRegisters.count(Reg))
         continue;
       Optional<LinxV5::TileDescriptor> Descriptor;
@@ -4777,6 +4803,73 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
   // ParentRef distance proofs remain exact and are recomputed after Phase 1.
   solveAssembleParentDataflow(MF);
 
+  for (MachineBasicBlock &UseBlock : MF) {
+    for (MachineInstr &Use : UseBlock) {
+      if (canSkipMI(Use))
+        continue;
+      for (const MachineOperand &Operand : Use.operands()) {
+        if (!Operand.isReg() || !Operand.isUse() || Operand.isImplicit() ||
+            !LinxV5::Tile_ABSRegClass.contains(Operand.getReg()))
+          continue;
+        Register Reg = Operand.getReg();
+        if ((AssembleParentUseDistances.count(&Use) &&
+             AssembleParentUseDistances[&Use].count(Reg)) ||
+            (AssembleOrdinaryUseDistances.count(&Use) &&
+             AssembleOrdinaryUseDistances[&Use].count(Reg)))
+          continue;
+        const TargetRegisterClass *Bank = nullptr;
+        for (const TargetRegisterClass *Candidate :
+             {&LinxV5::Tile_TRRegClass, &LinxV5::Tile_URRegClass,
+              &LinxV5::Tile_MRRegClass, &LinxV5::Tile_NRRegClass})
+          if (Candidate->contains(Reg))
+            Bank = Candidate;
+        if (!Bank)
+          continue;
+        SmallVector<std::pair<MachineBasicBlock *,
+                              MachineBasicBlock::iterator>, 8> Pending;
+        Pending.emplace_back(&UseBlock, MachineBasicBlock::iterator(&Use));
+        SmallPtrSet<MachineBasicBlock *, 8> Visited;
+        while (!Pending.empty()) {
+          auto Position = Pending.pop_back_val();
+          MachineBasicBlock *Block = Position.first;
+          auto Before = Position.second;
+          if (!Visited.insert(Block).second)
+            continue;
+          bool Found = false;
+          for (MachineInstr &Producer :
+               reverse(make_range(Block->begin(), Before))) {
+            bool Clobbered = llvm::any_of(
+                Producer.operands(), [&](const MachineOperand &Mask) {
+                  return Mask.isRegMask() && Mask.clobbersPhysReg(Reg);
+                });
+            if (Clobbered ||
+                (Producer.definesRegister(Reg, TRI) &&
+                 Producer.getOpcode() != LinxV5::PseudoLocalTileABISeed &&
+                 ((Producer.isImplicitDef() && Block != &MF.front()) ||
+                  (!Producer.isImplicitDef() && !Producer.isInlineAsm() &&
+                   getTSlotOccupation(Producer, Bank) != 1 &&
+                   llvm::count_if(Producer.operands(),
+                                  [&](const MachineOperand &Definition) {
+                                    return Definition.isReg() &&
+                                           Definition.isDef() &&
+                                           !Definition.isImplicit() &&
+                                           Bank->contains(Definition.getReg());
+                                  }) == 1))))
+              report_fatal_error(
+                  "Local tile synchronization conflict use has no unique "
+                  "reaching native distance");
+            if (Producer.definesRegister(Reg, TRI)) {
+              Found = true;
+              break;
+            }
+          }
+          if (!Found)
+            for (MachineBasicBlock *Predecessor : Block->predecessors())
+              Pending.emplace_back(Predecessor, Predecessor->end());
+        }
+      }
+    }
+  }
   // PHI elimination may coalesce all incoming Tile values to one physical
   // register without inserting a COPY in the join block. Audit those direct
   // predecessor definitions before queue rewriting: otherwise each arm can
@@ -4787,7 +4880,8 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
       continue;
     for (const auto &LiveIn : MBB.liveins()) {
       Register Reg = LiveIn.PhysReg;
-      if (!LinxV5::Tile_ABSRegClass.contains(Reg))
+      if (!LinxV5::Tile_ABSRegClass.contains(Reg) ||
+          !incomingTileValueHasReachableUse(MBB, Reg, TRI))
         continue;
       bool EveryPredecessorDefines = llvm::all_of(
           MBB.predecessors(), [&](const MachineBasicBlock *Pred) {
@@ -5413,7 +5507,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             continue;
           }
           TRegIndexState::iterator Reaching = TRegIdx.end();
-          if (isTileReg(RC)) {
+          if (EnableGenericElement && isTileReg(RC)) {
             auto Identity = RewriteTRIdentities.find(&MO);
             if (Identity == RewriteTRIdentities.end())
               report_fatal_error(
@@ -5427,7 +5521,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             Reaching = findLatestRegister(TRegIdx, MO.getReg());
           }
           if (Reaching == TRegIdx.end()) {
-            if (isTileReg(RC))
+            if (EnableGenericElement && isTileReg(RC))
               report_fatal_error(
                   "Local tile use lacks one certified canonical source");
             // After coalescer, some tile vregs may be used without a prior
@@ -5470,7 +5564,7 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
         continue;
       }
       LinxRegOp Identity(Def->getReg(), LinxV5::SIMT_REG_SIZE_D);
-      if (isTileReg(RC)) {
+      if (EnableGenericElement && isTileReg(RC)) {
         auto TileIdentity = RewriteTRIdentities.find(Def);
         if (TileIdentity == RewriteTRIdentities.end())
           report_fatal_error(

@@ -1,6 +1,6 @@
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false %s -o - | FileCheck %s
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -filetype=obj %s -o %t
-; RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+; RUN: llvm-objdump --disassembler-options=no-tile-macros -d --no-show-raw-insn %t | FileCheck %s
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -linxv5-enable-inline-asm-tile-lifetime=false %s -o - | FileCheck %s --check-prefix=OFF
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -enable-all-vector-as-tilereg=true -linxv5-enable-clock-hand-opt=false -linxv5-enable-generic-element=true %s -o - | FileCheck %s --check-prefix=OFF
 

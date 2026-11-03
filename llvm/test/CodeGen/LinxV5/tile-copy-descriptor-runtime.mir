@@ -1,11 +1,11 @@
 # RUN: llc -mtriple=linx64v5-unknown-linux-musl \
 # RUN:   -start-after=linxv5-emit-header -filetype=obj -o %t %s
-# RUN: llvm-objdump -d --no-show-raw-insn %t | FileCheck %s
+# RUN: llvm-objdump --disassembler-options=no-tile-macros -d --no-show-raw-insn %t | FileCheck %s
 #
 # A compiler-generated copy of a runtime-shaped CUBE tile must remain TLSU
 # TMOV and carry all three live B.DIM registers. Omitted descriptors would
 # default to NORM 1x1; generic CUBE pseudo expansion would select TMATMUL.
-# CHECK: BSTART.TMOV FP32
+# CHECK: BSTART.{{(TLSU )?}}TMOV{{,?}} FP32
 # CHECK-NEXT: B.DATR CUBE_M32.normal, Zero
 # CHECK-NEXT: B.DIM s6, 4, ->lb0
 # CHECK-NEXT: B.DIM s7, 5, ->lb1

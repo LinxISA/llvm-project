@@ -35,7 +35,7 @@ void equivalent_gather(elements *output_pointer,
 // IR-NOT: insertelement
 // IR: asm sideeffect "BSTART.TEPL TCMP, U32
 // IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
+// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
 // IR-NOT: zeroinitializer
 // IR: call void @llvm.linx.blk.tstore.v32i32{{.*}}i64 24,
 

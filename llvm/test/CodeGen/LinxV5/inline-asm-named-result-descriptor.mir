@@ -1,0 +1,31 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
+
+# CHECK-LABEL: name: named_convert
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, 2, 32, 2, 25, 29
+# CHECK-LABEL: name: named_predicate
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 2, 32, 4, 27, 29
+
+--- |
+  define void @named_convert() { ret void }
+  define void @named_predicate() { ret void }
+...
+---
+name: named_convert
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 2, 26, 29, 1, $r0, $r0, 2
+    INLINEASM &"BSTART.TEPL TCVT, U16\0AB.DATR NORM, U32, Zero\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: named_predicate
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 2, 1, 29, 2, $r0, $r0, 2
+    INLINEASM &"BSTART.TEPL TCMP, FP32\0AB.DATR NORM, DTYPE_NONE, Zero\0AB.DIM zero, 2, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT $1, $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

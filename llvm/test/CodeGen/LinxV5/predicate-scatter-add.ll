@@ -14,12 +14,12 @@ define void @predicate_atomic(ptr %base, ptr %vp, ptr %ip, ptr %mp) {
 }
 
 ; CHECK-LABEL: <predicate_atomic>:
-; CHECK: BSTART.TLSU MSCATTER.ADD, U32
+; CHECK: BSTART.MSCATTER.ADD U32
 ; CHECK: B.DATR CUBE_M32.normal, Zero
 ; CHECK: B.IOT {{.*}}, {{.*}}, mask=1111
 ; CHECK-NEXT: {{.*}}B.IOT {{.*}}, mask=1111, last
 ; CHECK-NEXT: {{.*}}B.IOR {{.*}}, ExecMaskPresent
-; CHECK: BSTART.TLSU MSCATTER.ADD, U32
+; CHECK: BSTART.MSCATTER.ADD U32
 ; CHECK: B.DATR CUBE_M32, DTYPE_NONE, Zero, byte0, Eq, RNONE, nosat, 1, 0
 ; CHECK: B.IOR {{.*}}, ExecMaskPresent
 

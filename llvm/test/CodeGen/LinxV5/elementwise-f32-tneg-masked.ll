@@ -24,14 +24,14 @@ define void @negative_zero_full() {
 ; ASM: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; ASM-NEXT: B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; ASM-NOT: B.IOR
-; ASM: BSTART.TLSU TSTORE, FP32
+; ASM: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 ; OBJ-LABEL: <negative_zero_full>:
 ; OBJ: BSTART.TEPL TNEG, FP32
 ; OBJ-NEXT: {{.*}}B.DATR CUBE_M32, DTYPE_NONE, Null, byte0, Eq, RNONE, nosat, 0, 1
 ; OBJ: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; OBJ-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; OBJ-NOT: B.IOR
-; OBJ: BSTART.TLSU TSTORE, FP32
+; OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 
 define void @positive_zero_empty() {
   %input = call <32 x float> asm sideeffect "BSTART.TEPL TEXPANDS, FP32\0AB.DATR CUBE_M32, DTYPE_NONE, Null\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i"(i64 0, i64 1)
@@ -45,14 +45,14 @@ define void @positive_zero_empty() {
 ; ASM: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; ASM-NEXT: B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; ASM-NOT: B.IOR
-; ASM: BSTART.TLSU TSTORE, FP32
+; ASM: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 ; OBJ-LABEL: <positive_zero_empty>:
 ; OBJ: BSTART.TEPL TNEG, FP32
 ; OBJ-NEXT: {{.*}}B.DATR CUBE_M32, DTYPE_NONE, Null, byte0, Eq, RNONE, nosat, 0, 1
 ; OBJ: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; OBJ-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; OBJ-NOT: B.IOR
-; OBJ: BSTART.TLSU TSTORE, FP32
+; OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 
 define void @qnan_sparse() {
   %input = call <32 x float> asm sideeffect "BSTART.TEPL TEXPANDS, FP32\0AB.DATR CUBE_M32, DTYPE_NONE, Null\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i"(i64 2143363909, i64 1)
@@ -66,14 +66,14 @@ define void @qnan_sparse() {
 ; ASM: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; ASM-NEXT: B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; ASM-NOT: B.IOR
-; ASM: BSTART.TLSU TSTORE, FP32
+; ASM: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 ; OBJ-LABEL: <qnan_sparse>:
 ; OBJ: BSTART.TEPL TNEG, FP32
 ; OBJ-NEXT: {{.*}}B.DATR CUBE_M32, DTYPE_NONE, Null, byte0, Eq, RNONE, nosat, 0, 1
 ; OBJ: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; OBJ-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; OBJ-NOT: B.IOR
-; OBJ: BSTART.TLSU TSTORE, FP32
+; OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 
 define void @snan_sparse() {
   %input = call <32 x float> asm sideeffect "BSTART.TEPL TEXPANDS, FP32\0AB.DATR CUBE_M32, DTYPE_NONE, Null\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i"(i64 2139169605, i64 1)
@@ -87,14 +87,14 @@ define void @snan_sparse() {
 ; ASM: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; ASM-NEXT: B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; ASM-NOT: B.IOR
-; ASM: BSTART.TLSU TSTORE, FP32
+; ASM: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 ; OBJ-LABEL: <snan_sparse>:
 ; OBJ: BSTART.TEPL TNEG, FP32
 ; OBJ-NEXT: {{.*}}B.DATR CUBE_M32, DTYPE_NONE, Null, byte0, Eq, RNONE, nosat, 0, 1
 ; OBJ: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; OBJ-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; OBJ-NOT: B.IOR
-; OBJ: BSTART.TLSU TSTORE, FP32
+; OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 
 define void @positive_infinity_full() {
   %input = call <32 x float> asm sideeffect "BSTART.TEPL TEXPANDS, FP32\0AB.DATR CUBE_M32, DTYPE_NONE, Null\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i"(i64 2139095040, i64 1)
@@ -108,14 +108,14 @@ define void @positive_infinity_full() {
 ; ASM: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; ASM-NEXT: B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; ASM-NOT: B.IOR
-; ASM: BSTART.TLSU TSTORE, FP32
+; ASM: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 ; OBJ-LABEL: <positive_infinity_full>:
 ; OBJ: BSTART.TEPL TNEG, FP32
 ; OBJ-NEXT: {{.*}}B.DATR CUBE_M32, DTYPE_NONE, Null, byte0, Eq, RNONE, nosat, 0, 1
 ; OBJ: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; OBJ-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; OBJ-NOT: B.IOR
-; OBJ: BSTART.TLSU TSTORE, FP32
+; OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 
 define void @negative_infinity_sparse() {
   %input = call <32 x float> asm sideeffect "BSTART.TEPL TEXPANDS, FP32\0AB.DATR CUBE_M32, DTYPE_NONE, Null\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", "=@2Tr,r,i"(i64 4286578688, i64 1)
@@ -129,11 +129,11 @@ define void @negative_infinity_sparse() {
 ; ASM: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; ASM-NEXT: B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; ASM-NOT: B.IOR
-; ASM: BSTART.TLSU TSTORE, FP32
+; ASM: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
 ; OBJ-LABEL: <negative_infinity_sparse>:
 ; OBJ: BSTART.TEPL TNEG, FP32
 ; OBJ-NEXT: {{.*}}B.DATR CUBE_M32, DTYPE_NONE, Null, byte0, Eq, RNONE, nosat, 0, 1
 ; OBJ: B.IOT {{.*}}, mask=1111, last, {{.*}}->{{[tmnu]}}<128B>
 ; OBJ-NEXT: {{.*}}B.IOR [{{[a-z0-9]+}},zero,zero], ExecMaskPresent
 ; OBJ-NOT: B.IOR
-; OBJ: BSTART.TLSU TSTORE, FP32
+; OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32

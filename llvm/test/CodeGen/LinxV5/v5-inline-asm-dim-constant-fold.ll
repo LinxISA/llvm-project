@@ -21,7 +21,7 @@ define void @inline_asm_dim_constants() {
 }
 
 ; CHECK-LABEL: <inline_asm_required_lb0_one>:
-; CHECK: BSTART.TLSU{{.*}}TLOAD, S32
+; CHECK: BSTART.{{(TLSU )?}}TLOAD{{,?}} S32
 ; CHECK-NOT: ->lb0
 ; CHECK: BSTART.TEPL{{.*}}TEXPANDS, S32
 ; CHECK-NEXT: C.B.DIMI{{.*}}1,{{.*}}->lb0

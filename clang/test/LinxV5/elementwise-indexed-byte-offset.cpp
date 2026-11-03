@@ -1,5 +1,5 @@
-// RUN: %clang++ --target=linx64v5 -mlxbc -O0 -emit-llvm -S -o - %s | FileCheck %s --check-prefix=IR
-// RUN: %clang++ --target=linx64v5 -mlxbc -O2 -c %s -o %t
+// RUN: %clang++ --target=linx64v5 -mlxbc -mllvm -linxv5-enable-generic-element=true -O0 -emit-llvm -S -o - %s | FileCheck %s --check-prefix=IR
+// RUN: %clang++ --target=linx64v5 -mlxbc -mllvm -linxv5-enable-generic-element=true -O2 -c %s -o %t
 // RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t | FileCheck %s --check-prefix=OBJ
 
 using u32tile = unsigned int tile_size(32);
@@ -21,5 +21,5 @@ void atomic_add_old(u32tile &old_values, unsigned int *hist,
 
 // OBJ-COUNT-1: BSTART.TEPL TLEA, U32
 // OBJ: B.IOT {{.*}} ->t<256B>
-// OBJ: BSTART.TLSU MGATHER.ADD, U32
+// OBJ: BSTART.MGATHER.ADD U32
 // OBJ-NOT: BSTART.TEPL TLEA

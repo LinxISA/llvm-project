@@ -45,7 +45,7 @@ define void @masked_add_sub_select(ptr %ap, ptr %bp, ptr %out, i64 %active) {
 ; CHECK: ExecMaskPresent
 ; CHECK: BSTART.TEPL TSEL, FP32
 ; CHECK-NOT: ExecMaskPresent
-; CHECK: BSTART.TLSU TSTORE, FP32
+; CHECK: BSTART.TSTORE FP32
 
 declare i64 @llvm.linx.experimental.ew.tcmp.gpr.masked.v32f32(i64, i64, i64, i64, <32 x float>, <32 x float>, i64, i64)
 declare i64 @llvm.linx.experimental.ew.tcmps.gpr.masked.v32f32(i64, i64, i64, i64, <32 x float>, i64, i64, i64)

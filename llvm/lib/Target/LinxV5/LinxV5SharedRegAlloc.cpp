@@ -236,8 +236,10 @@ bool LinxV5SharedHandleLegalize::runOnMachineFunction(MachineFunction &MF) {
       if (MI.isImplicitDef())
         continue;
       unsigned OperandIndex = &Operand - &MI.getOperand(0);
-      if (MI.getRegClassConstraint(OperandIndex, TII, TRI) !=
-          &LinxV5::Shared_ABSRegClass)
+      const TargetRegisterClass *Constraint =
+          MI.getRegClassConstraint(OperandIndex, TII, TRI);
+      if (Constraint != &LinxV5::Shared_ABSRegClass &&
+          !(Operand.isUse() && Constraint == &LinxV5::Shared_SRCRegClass))
         report_fatal_error(
             "LinxV5 Shared handle requires Shared-only COPY/PHI aliases and "
             "B.IOS operands; integer operations, memory bridges and calls "

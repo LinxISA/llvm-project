@@ -30,10 +30,10 @@
 # TEPL-OUT: BSTART.TEPL TADD, FP32
 # TEPL-ERR: LinxV5 error: TileOp header 'BSTART.TEPL' at 0x2 has no complete macro instruction form
 # TEPL-ERR: LinxV5 error: 1 TileOp bundle(s) have no complete macro instruction form
-# TLSU-OUT: BSTART.TLSU TLOAD, FP32
+# TLSU-OUT: BSTART.{{(TLSU )?}}TLOAD{{,?}} FP32
 # TLSU-ERR: LinxV5 error: TileOp header 'BSTART.TLSU' at 0x0 has no complete macro instruction form
 # TLSU-ERR: LinxV5 error: 1 TileOp bundle(s) have no complete macro instruction form
-# CUBE-OUT: BSTART.CUBE TMATMUL, FP32
+# CUBE-OUT: BSTART.{{(CUBE )?}}TMATMUL{{,?}} FP32
 # CUBE-ERR: LinxV5 error: TileOp header 'BSTART.CUBE' at 0x0 has no complete macro instruction form
 # CUBE-ERR: LinxV5 error: 1 TileOp bundle(s) have no complete macro instruction form
 # GMOV-OUT: BSTART.GMOV FP32

@@ -22,13 +22,13 @@ extern "C" void partial_cvt(Tile &input) {
 }
 
 // CHECK-LABEL: <partial_cvt>:
-// CHECK: BSTART.TLSU TSTORE,{{.*}}S32
+// CHECK: BSTART.TSTORE{{.*}}S32
 // CHECK: B.DATR{{.*}}M322ND
 // CHECK: C.B.DIMI{{.*}}2,{{.*}}->lb0
 // CHECK: C.B.DIMI{{.*}}16,{{.*}}->lb1
 // CHECK-NOT: C.B.DIMI{{.*}}{{[2-9]}},{{.*}}->lb2
 // CHECK: B.IOR{{.*}}[{{[a-z0-9]+}}, {{[a-z0-9]+}}], []
-// CHECK: BSTART.TLSU TLOAD,{{.*}}S32
+// CHECK: BSTART.TLOAD{{.*}}S32
 // CHECK: B.DATR{{.*}}ND2M32
 // CHECK: C.B.DIMI{{.*}}2,{{.*}}->lb0
 // CHECK: C.B.DIMI{{.*}}16,{{.*}}->lb1

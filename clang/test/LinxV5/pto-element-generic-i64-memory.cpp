@@ -103,10 +103,10 @@ extern "C" void u64_masked_indexed(const u64 *__restrict input,
 // IR-NOT: @llvm.vp.
 // IR-NOT: <64 x i64>
 // OBJ-LABEL: <u64_masked_indexed>:
-// OBJ: BSTART.TLSU MGATHER, U32
-// OBJ: BSTART.TLSU MGATHER, U64
+// OBJ: BSTART.MGATHER U32
+// OBJ: BSTART.MGATHER U64
 // OBJ: BSTART.TEPL TSEL, U64
-// OBJ: BSTART.TLSU TSTORE, U64
+// OBJ: BSTART.TSTORE U64
 
 extern "C" void s64_signed_min(const s64 *__restrict left,
                                const s64 *__restrict right, s64 *output,
@@ -128,10 +128,10 @@ extern "C" void s64_signed_min(const s64 *__restrict left,
 // IR: @llvm.linx.experimental.ew.tsel.gpr.v32i64(i64 32, i64 1, i64 16,
 // IR-NOT: <64 x i64>
 // OBJ-LABEL: <s64_signed_min>:
-// OBJ: BSTART.TLSU MGATHER, S64
+// OBJ: BSTART.MGATHER S64
 // OBJ: BSTART.TEPL TCMP, S64
 // OBJ: BSTART.TEPL TSEL, S64
-// OBJ: BSTART.TLSU TSTORE, S64
+// OBJ: BSTART.TSTORE S64
 
 extern "C" void u64_unsigned_min(const u64 *__restrict left,
                                  const u64 *__restrict right, u64 *output) {
@@ -173,8 +173,8 @@ extern "C" void s64_tail_store(const s64 *__restrict input,
 // IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i64.v32i64(i64 32, i64 1, i64 16,
 // IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v32i64.v32i64(i64 32, i64 1, i64 16,
 // OBJ-LABEL: <s64_tail_store>:
-// OBJ: BSTART.TLSU MGATHER, S64
-// OBJ: BSTART.TLSU MSCATTER, S64
+// OBJ: BSTART.MGATHER S64
+// OBJ: BSTART.MSCATTER S64
 
 extern "C" void u64_tail_store(const u64 *__restrict input,
                                u64 *__restrict output, u32 valid) {
@@ -194,8 +194,8 @@ extern "C" void u64_tail_store(const u64 *__restrict input,
 // IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i64.v32i64(i64 32, i64 1, i64 24,
 // IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v32i64.v32i64(i64 32, i64 1, i64 24,
 // OBJ-LABEL: <u64_tail_store>:
-// OBJ: BSTART.TLSU MGATHER, U64
-// OBJ: BSTART.TLSU MSCATTER, U64
+// OBJ: BSTART.MGATHER U64
+// OBJ: BSTART.MSCATTER U64
 
 extern "C" void u32_byte_offsets(const u32 *__restrict input, u64 *output) {
   u64_elements result;
@@ -212,7 +212,7 @@ extern "C" void u32_byte_offsets(const u32 *__restrict input, u64 *output) {
 // OBJ-LABEL: <u32_byte_offsets>:
 // OBJ: BSTART.TEPL TLEA, U32
 // OBJ: BSTART.TEPL TMUL, U64
-// OBJ: BSTART.TLSU TSTORE, U64
+// OBJ: BSTART.TSTORE U64
 
 extern "C" void s32_byte_offsets(const s32 *__restrict input, s64 *output) {
   s64_elements result;
@@ -229,7 +229,7 @@ extern "C" void s32_byte_offsets(const s32 *__restrict input, s64 *output) {
 // OBJ-LABEL: <s32_byte_offsets>:
 // OBJ: BSTART.TEPL TLEA, S32
 // OBJ: BSTART.TEPL TMUL, S64
-// OBJ: BSTART.TLSU TSTORE, S64
+// OBJ: BSTART.TSTORE S64
 
 extern "C" void s64_indexed_address(const s64 *__restrict indices,
                                     const s64 *__restrict input, u32 valid) {
@@ -247,10 +247,10 @@ extern "C" void s64_indexed_address(const s64 *__restrict indices,
 // IR: @llvm.linx.experimental.ew.tlea.v32i64.v32i64(i64 32, i64 1, i64 24, i64 29, <32 x i64>
 // IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v32i64.v32i64(i64 32, i64 1, i64 16,
 // OBJ-LABEL: <s64_indexed_address>:
-// OBJ: BSTART.TLSU MGATHER, S64
+// OBJ: BSTART.MGATHER S64
 // OBJ: BSTART.TEPL TADD, U64
 // OBJ: BSTART.TEPL TLEA, U64
-// OBJ: BSTART.TLSU MGATHER, S64
+// OBJ: BSTART.MGATHER S64
 
 extern "C" void s64_equal_choose(const s64 *__restrict left,
                                  const s64 *__restrict right, s64 *output) {
@@ -271,7 +271,7 @@ extern "C" void s64_equal_choose(const s64 *__restrict left,
 // OBJ-LABEL: <s64_equal_choose>:
 // OBJ: BSTART.TEPL TCMP, S64
 // OBJ: BSTART.TEPL TSEL, S64
-// OBJ: BSTART.TLSU TSTORE, S64
+// OBJ: BSTART.TSTORE S64
 
 extern "C" void u64_native_arithmetic(const u64 *left,
                                        const u64 *right,
@@ -297,7 +297,7 @@ extern "C" void u64_native_arithmetic(const u64 *left,
 // OBJ: BSTART.TEPL TMUL, U64
 // OBJ: BSTART.TEPL TAND, U64
 // OBJ: BSTART.TEPL TSHL, U64
-// OBJ: BSTART.TLSU TSTORE, U64
+// OBJ: BSTART.TSTORE U64
 
 extern "C" void s64_native_arithmetic(const s64 *left,
                                        const s64 *right,
@@ -320,7 +320,7 @@ extern "C" void s64_native_arithmetic(const s64 *left,
 // OBJ: BSTART.TEPL TSUB, S64
 // OBJ: BSTART.TEPL TSHR, S64
 // OBJ: BSTART.TEPL TXOR, S64
-// OBJ: BSTART.TLSU TSTORE, S64
+// OBJ: BSTART.TSTORE S64
 
 extern "C" void s64_to_s32(const s64 *__restrict input,
                             s32 *__restrict output, u32 valid) {
@@ -347,7 +347,7 @@ extern "C" void s64_to_s32(const s64 *__restrict input,
 // OBJ-LABEL: <s64_to_s32>:
 // OBJ: BSTART.TEPL TCVT, S64
 // OBJ: B.DATR NORM, S32
-// OBJ: BSTART.TLSU TSTORE, S32
+// OBJ: BSTART.TSTORE S32
 
 extern "C" void s64_to_u32(const s64 *__restrict input,
                             u32 *__restrict output, u32 valid) {
@@ -374,7 +374,7 @@ extern "C" void s64_to_u32(const s64 *__restrict input,
 // OBJ-LABEL: <s64_to_u32>:
 // OBJ: BSTART.TEPL TCVT, S64
 // OBJ: B.DATR NORM, U32
-// OBJ: BSTART.TLSU TSTORE, U32
+// OBJ: BSTART.TSTORE U32
 
 extern "C" void u64_to_s32(const u64 *__restrict input,
                             s32 *__restrict output, u32 valid) {
@@ -401,7 +401,7 @@ extern "C" void u64_to_s32(const u64 *__restrict input,
 // OBJ-LABEL: <u64_to_s32>:
 // OBJ: BSTART.TEPL TCVT, U64
 // OBJ: B.DATR NORM, S32
-// OBJ: BSTART.TLSU TSTORE, S32
+// OBJ: BSTART.TSTORE S32
 
 extern "C" void u64_to_u32(const u64 *__restrict input,
                             u32 *__restrict output, u32 valid) {
@@ -428,7 +428,7 @@ extern "C" void u64_to_u32(const u64 *__restrict input,
 // OBJ-LABEL: <u64_to_u32>:
 // OBJ: BSTART.TEPL TCVT, U64
 // OBJ: B.DATR NORM, U32
-// OBJ: BSTART.TLSU TSTORE, U32
+// OBJ: BSTART.TSTORE U32
 
 extern "C" void u64_upper_half_to_u32(const u64 *__restrict input,
                                        u32 *__restrict output, u32 valid) {

@@ -59,4 +59,3 @@ join:
   call void asm sideeffect "BSTART.TLSU TSTORE, ${1:D}\0AB.DATR M162ND.normal, Null\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 8, ->lb1\0AB.IOT $0, mask=1111, last\0A", "@2Tr,i,~{memory}"(<64 x half> %tile, i32 4)
   ret void
 }
-

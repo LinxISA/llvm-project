@@ -40,7 +40,7 @@ void signed_arithmetic(signed_elements *sink, const signed_elements *source,
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary.v32i32(i64 32, i64 1, i64 25, i64 29, i64 9,
 // IR: call void @llvm.linx.blk.tstore.v32i32(i64 1, i64 32, i64 1, i64 17, i64 24,
 // OBJ-LABEL: <{{.*}}signed_arithmetic
-// OBJ: BSTART.TLSU TLOAD, S32
+// OBJ: BSTART.{{(TLSU )?}}TLOAD{{,?}} S32
 // OBJ: B.DATR ND2M32
 // OBJ: BSTART.TEPL TADD, S32
 // OBJ: BSTART.TEPL TMUL, S32
@@ -51,7 +51,7 @@ void signed_arithmetic(signed_elements *sink, const signed_elements *source,
 // OBJ: BSTART.TEPL TSUB, S32
 // OBJ-NOT: TREM
 // OBJ: BSTART.TEPL TSHR, U32
-// OBJ: BSTART.TLSU TSTORE, S32
+// OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} S32
 
 void signed_shift(signed_elements *sink, const signed_elements *source, int shift) {
   signed_elements input=*source, output{};

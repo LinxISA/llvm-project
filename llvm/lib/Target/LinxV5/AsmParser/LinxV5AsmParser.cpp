@@ -4520,8 +4520,15 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
       !LinxV5II::isBlockModifier(MII.get(Inst.getOpcode()).TSFlags)) {
     unsigned Direction = 0;
     switch (Inst.getOpcode()) {
+    case LinxV5::BSTART_TLOAD:
     case LinxV5::BSTART_TIMG2COL:
       Direction = 1;
+      break;
+    case LinxV5::BSTART_TSTORE:
+      Direction = 2;
+      break;
+    case LinxV5::BSTART_TMOV:
+      Direction = 3;
       break;
     case LinxV5::BSTART_TMA:
       switch (Inst.getOperand(1).getImm()) {
