@@ -25,22 +25,22 @@ TEXPANDS <Row=16, Col=8, U8, CUBE_M16>, a2, ->T<2KB>
 # CHECK-SAME: a2
 # CHECK-SAME: ->T<2KB>
 
-TMATMUL <M=2, N=3, K=4, FP32, FP16, RNE, sat, PreMode=2, PostMode=2, RowMax, GroupMax, RowMaxInit, PE0_1>, T#1, T#2, T#3, T#1, T#2, ->T<128B>, ->U<128B>, ->M<128B>
+TMATMUL <M=2, N=3, K=4, FP32, FP16, RNE, sat, PreMode=2, PostMode=3, RowMax, GroupMax, RowMaxInit, PE0_1>, T#1, T#2, T#3, T#1, T#2, ->T<128B>, ->U<128B>, ->M<128B>
 # CHECK: TMATMUL{{ +}}<
 # CHECK-SAME: M=2
 # CHECK-SAME: N=3
 # CHECK-SAME: K=4
 # CHECK-SAME: PreMode=2
-# CHECK-SAME: PostMode=2
+# CHECK-SAME: PostMode=3
 # CHECK-SAME: RowMax
 # CHECK-SAME: GroupMax
 # CHECK-SAME: RowMaxInit
 # CHECK-SAME: PE0_1
 
-TMATMUL <M=2, N=3, K=4, FP32, FP16, RNE, sat, PreMode=1, PostMode=1>, T#1, T#2, a0, a1, ->T<128B>
+TMATMUL <M=2, N=3, K=4, FP32, FP16, RNE, sat, PreMode=3, PostMode=2>, T#1, T#2, a0, a1, ->T<128B>
 # CHECK: TMATMUL{{ +}}<
-# CHECK-SAME: PreMode=1
-# CHECK-SAME: PostMode=1
+# CHECK-SAME: PreMode=3
+# CHECK-SAME: PostMode=2
 # CHECK-SAME: a0
 # CHECK-SAME: a1
 

@@ -46,8 +46,8 @@ B.IOR [a7], []
 addi zero, 0, ->zero
 
 # CHECK-NOT: BSTART
-# CHECK: TMATMUL{{ +}}<M=a5, N=128, K=128, FP32, TransposeB>, N#1, S0, ->M<16KB>
-# CHECK: TMATMUL_ACC{{ +}}<M=s2, N=128, K=128, FP32, TransposeB>, U#1, M#1, S0, ->N<16KB>
+# CHECK: TMATMUL{{ +}}<Encoding={{E[0-9]+}}, M=a5, N=128, K=128, FP32, TransposeB, CCTRL=None>, N#1, S0, ->M<16KB>
+# CHECK: TMATMUL_ACC{{ +}}<M=s2, N=128, K=128, FP32, TransposeB, CCTRL=None>, U#1, M#1, S0, ->N<16KB>
 # CHECK: TSTORE{{ +}}<Row=32, ValidCol=128, FP32, M322ND>, T#1, [base=a0, stride=a4]
 # CHECK: TEXPANDS{{ +}}<Row=32, Col=1, FP32>, a7, ->T<128B>
 

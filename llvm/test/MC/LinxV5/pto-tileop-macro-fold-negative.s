@@ -47,8 +47,8 @@ B.IOT T#1, mask=1111, last, ->T<128B>
 C.BSTART.STD
 
 #--- cube.s
-# Matrix CCTRL has no lossless macro field. The default view reports the
-# header and keeps printing the physical listing; the tool exits non-zero.
+# InternalAccHint requires an ACC operation. An illegal hint remains physical
+# even though all four CCTRL values now have a lossless macro field.
 # CUBE-ERR: LinxV5 error: TileOp header 'BSTART.CUBE' at 0x0 has no complete macro instruction form
 # CUBE-OUT: BSTART.CUBE TMATMUL
 # CUBE-OUT: B.FPATR PreQuantMode=

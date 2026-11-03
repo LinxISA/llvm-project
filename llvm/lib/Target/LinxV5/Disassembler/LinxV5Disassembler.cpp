@@ -665,6 +665,11 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     HeaderKind = TileMacroHeaderKind::TLSU;
     DataType = Header.getOperand(0).getImm();
     Selector = Header.getOperand(1).getImm();
+  } else if (Header.getOpcode() == LinxV5::BSTART_TIMG2COL &&
+             Header.getNumOperands() == 1) {
+    HeaderKind = TileMacroHeaderKind::TLSU;
+    DataType = Header.getOperand(0).getImm();
+    Selector = 28;
   } else if (Header.getOpcode() == LinxV5::BSTART_CUBE &&
              Header.getNumOperands() == 2) {
     HeaderKind = TileMacroHeaderKind::CUBE;
@@ -697,6 +702,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     NextBSTART,
     EndOfSection,
     NextNonModifier,
+    NextStandaloneModifier,
     DecodeFailure,
     Limit,
   };
@@ -715,6 +721,13 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       break;
     }
     uint64_t TSFlags = MII.get(Command.getOpcode()).TSFlags;
+    // TRACE is a standalone annotation, not part of the TileOp expansion.
+    // Leave its bytes for the next getInstruction call.
+    if (Command.getOpcode() == LinxV5::B_HINT_TRACE_BEGIN ||
+        Command.getOpcode() == LinxV5::B_HINT_TRACE_END) {
+      Boundary = TileMacroBoundary::NextStandaloneModifier;
+      break;
+    }
     if (Command.getOpcode() == LinxV5::BSTOP ||
         Command.getOpcode() == LinxV5::BSTOP_C) {
       Commands.push_back(Command);
@@ -848,14 +861,13 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     if (Condition == "RowMax&&RowMaxInit")
       return FPATR->getOperand(3).getImm() && FPATR->getOperand(5).getImm();
     if (Condition == "PreMode=vector")
-      return FPATR->getOperand(0).getImm() &&
-             FPATR->getOperand(0).getImm() != 1;
+      return LinxV5Op::tileMacroPreQuantVector(FPATR->getOperand(0).getImm());
     if (Condition == "PreMode=scalar")
-      return FPATR->getOperand(0).getImm() == 1;
+      return LinxV5Op::tileMacroPreQuantScalar(FPATR->getOperand(0).getImm());
     if (Condition == "PostMode=vector")
-      return FPATR->getOperand(1).getImm() == 2;
+      return FPATR->getOperand(1).getImm() == 3;
     if (Condition == "PostMode=scalar")
-      return FPATR->getOperand(1).getImm() == 1;
+      return FPATR->getOperand(1).getImm() == 2;
     if (Condition == "RowMax")
       return FPATR->getOperand(3).getImm() != 0;
     if (Condition == "GroupMax")
@@ -888,7 +900,13 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     // position consumed below.
     unsigned DATRIndex = UINT_MAX, FPATRIndex = UINT_MAX;
     for (unsigned I = 0; I != Body.size(); ++I) {
-      if (Body[I].getOpcode() == LinxV5::BDATR && DATRIndex == UINT_MAX) {
+      if (((Body[I].getOpcode() == LinxV5::BDATR ||
+            Body[I].getOpcode() == LinxV5::BDATR_EXEC_MASK) && DATR) ||
+          (Body[I].getOpcode() == LinxV5::B_FPATR && FPATR))
+        return false;
+      if ((Body[I].getOpcode() == LinxV5::BDATR ||
+           Body[I].getOpcode() == LinxV5::BDATR_EXEC_MASK) &&
+          DATRIndex == UINT_MAX) {
         DATR = &Body[I];
         DATRIndex = I;
       }
@@ -899,6 +917,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     }
     while (Pos < Body.size() &&
            (Body[Pos].getOpcode() == LinxV5::BDATR ||
+            Body[Pos].getOpcode() == LinxV5::BDATR_EXEC_MASK ||
             Body[Pos].getOpcode() == LinxV5::B_FPATR))
       ++Pos;
 
@@ -924,7 +943,9 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
         (FPATR && !AllowsFPATR) || (!FPATR && RequiresFPATR))
       return false;
     if (DATR) {
-      if (DATR->getNumOperands() != 8)
+      bool ExecutionMask = hasTarget(Form, TileMacroTargetKind::DATR,
+                                     TileMacroTargetSlot::PredInv, -1);
+      if (DATR->getNumOperands() != (ExecutionMask ? 10u : 8u))
         return false;
       unsigned Layout = DATR->getOperand(0).getImm();
       unsigned Canon = DATR->getOperand(1).getImm();
@@ -934,6 +955,9 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       unsigned Round = DATR->getOperand(5).getImm();
       unsigned Sat = DATR->getOperand(6).getImm();
       unsigned Byte = DATR->getOperand(7).getImm();
+      if (Operation->HeaderKind == TileMacroHeaderKind::CUBE && (Pad & 2) &&
+          !StringRef(Operation->Mnemonic).endswith("_ACC"))
+        return false;
       if (!hasTarget(Form, TileMacroTargetKind::DATR,
                      TileMacroTargetSlot::Layout, -1) &&
           Layout != 0)
@@ -981,7 +1005,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           targetConfig(Form, TileMacroTargetKind::DATR,
                        TileMacroTargetSlot::PadValueOrByteId);
       if (PadConfig && StringRef(PadConfig->Field) == "CCTRL" &&
-          Pad != 2)
+          PadConfig->Constraint &&
+          StringRef(PadConfig->Constraint) == "InternalAccHint" && Pad != 2)
         return false;
       if (!PadConfig) {
         unsigned DefaultPad = Operation->HeaderKind == TileMacroHeaderKind::CUBE
@@ -992,6 +1017,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       }
       if (PadConfig && StringRef(PadConfig->Field) == "PadValue" && Byte != 0)
         return false;
+      if (PadConfig && StringRef(PadConfig->Field) == "CCTRL" && Byte != 0)
+        return false;
       if (PadConfig && StringRef(PadConfig->Field) == "PadValueOrByteId" &&
           Pad != LinxV5Op::PadValue::Null && Byte != 0)
         return false;
@@ -999,11 +1026,13 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     }
 
     bool SeenDim[3] = {false, false, false};
-    int LastDim = -1;
-    while (Pos < Body.size() && (Body[Pos].getOpcode() == LinxV5::B_DIM ||
-                                 Body[Pos].getOpcode() == LinxV5::C_B_DIMI)) {
-      unsigned Slot = Body[Pos].getOperand(0).getImm();
-      if (Slot >= 3 || SeenDim[Slot] || int(Slot) <= LastDim)
+    SmallVector<unsigned, 3> DimPositions;
+    for (unsigned I = 0; I != Body.size(); ++I) {
+      if (Body[I].getOpcode() != LinxV5::B_DIM &&
+          Body[I].getOpcode() != LinxV5::C_B_DIMI)
+        continue;
+      unsigned Slot = Body[I].getOperand(0).getImm();
+      if (Slot >= 3 || SeenDim[Slot])
         return false;
       TileMacroTargetSlot TargetSlot = Slot == 0   ? TileMacroTargetSlot::LB0
                                        : Slot == 1 ? TileMacroTargetSlot::LB1
@@ -1011,8 +1040,28 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       if (!hasTarget(Form, TileMacroTargetKind::DIM, TargetSlot, -1))
         return false;
       SeenDim[Slot] = true;
-      LastDim = Slot;
-      ++Pos;
+      DimPositions.push_back(I);
+    }
+    for (unsigned I = 0; I != Form.NumConfigs; ++I) {
+      const auto &Config = TileMacroConfigs[Form.FirstConfig + I];
+      if (!Config.Constraint || !Config.IsDimension)
+        continue;
+      const auto *Target = targetConfig(Form, TileMacroTargetKind::DIM,
+                                       TileMacroTargetSlot::LB0);
+      if (StringRef(Config.Field) != "M" || !Target)
+        continue;
+      bool Unit = true;
+      for (unsigned P : DimPositions) {
+        const auto &D = Body[P];
+        if (D.getOperand(0).getImm() == 0)
+          Unit = D.getOpcode() == LinxV5::C_B_DIMI
+                     ? D.getOperand(1).getImm() == 1
+                     : D.getOperand(1).getReg() == LinxV5::R0 &&
+                           D.getOperand(2).getImm() == 1;
+      }
+      if ((StringRef(Config.Constraint) == "1" && !Unit) ||
+          (StringRef(Config.Constraint) == "NonUnitM" && Unit))
+        return false;
     }
     // A missing B.DIM command denotes the architectural per-block default of
     // 1. It can therefore satisfy a form whose source-level dimension is
@@ -1020,6 +1069,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
 
     const unsigned OperandStart = Pos;
     SmallVector<bool, 32> Consumed(Body.size(), false);
+    for (unsigned I : DimPositions)
+      Consumed[I] = true;
     for (unsigned I = 0; I != OperandStart; ++I)
       Consumed[I] = true;
     if (DATRIndex != UINT_MAX && DATRIndex >= OperandStart)
@@ -1034,6 +1085,9 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
         return Body[Position].getOpcode() == LinxV5::B_IOS;
       if (Kind == TileMacroCommandKind::IOR)
         return Body[Position].getOpcode() == LinxV5::B_IO;
+      if (Kind == TileMacroCommandKind::ExecMask)
+        return Body[Position].getOpcode() == LinxV5::B_IOR_EXEC_MASK ||
+               Body[Position].getOpcode() == LinxV5::B_IOR_EXEC_MASK_DST;
       IOTShape Shape;
       return decodeIOTShape(Body[Position], Shape);
     };
@@ -1158,7 +1212,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
             RequiredDestination |= !TileMacroBindingMembers[Member].Optional;
           } else {
             ++MaxSources;
-            RequiredSources += !TileMacroBindingMembers[Member].Optional;
+            RequiredSources += !TileMacroBindingMembers[Member].Optional ||
+                               TileMacroBindingMembers[Member].Condition;
           }
         }
         SmallVector<unsigned, 2> SourceMembers;
@@ -1181,6 +1236,13 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
               SeenSources + Actual.Sources > MaxSources ||
               (Actual.Destination &&
                (!AllowsDestination || SeenDestination)))
+            return false;
+          // An emitted encoding names an exact physical grouping. In
+          // particular, a packed parent binder must not also match its
+          // split variant merely because their source counts add up.
+          if ((Form.Encoding || StringRef(Operation->Mnemonic) == "TMATMUL") &&
+              (Actual.Sources != MaxSources ||
+               Actual.Destination != AllowsDestination))
             return false;
           if (!SawMask) {
             SawMask = true;
@@ -1240,8 +1302,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           markConsumed(CommandStart, Pos);
         }
       } else {
-        bool Present =
-            Pos < Body.size() && Body[Pos].getOpcode() == LinxV5::B_IO;
+        bool Present = commandMatchesKind(Pos, Expected.Kind);
         if (!Present) {
           if (HasRequired)
             return false;
@@ -1261,8 +1322,13 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           Required[Slot] |= Desc.Condition != nullptr;
         }
         for (unsigned Slot = 0; Slot != 4; ++Slot) {
-          bool Nonzero = Body[Pos].getOperand(Slot).getReg() != LinxV5::R0;
-          if ((Nonzero && !Allowed[Slot]) || (!Nonzero && Required[Slot]))
+          bool SourceOnly = Body[Pos].getOpcode() == LinxV5::B_IOR_EXEC_MASK;
+          bool Nonzero = !(SourceOnly && Slot == 0) &&
+              Body[Pos].getOperand(SourceOnly ? Slot - 1 : Slot).getReg() !=
+                  LinxV5::R0;
+          // A present IOR may explicitly bind the architectural zero GPR.
+          // Missing required operands are rejected when the record is absent.
+          if (Nonzero && !Allowed[Slot])
             return false;
         }
         unsigned CommandStart = Pos++;
@@ -1271,8 +1337,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
             return !Required[4] && Pos == Body.size();
           if (Body[Pos].getOperand(0).getReg() != LinxV5::R0 ||
               Body[Pos].getOperand(2).getReg() != LinxV5::R0 ||
-              Body[Pos].getOperand(3).getReg() != LinxV5::R0 ||
-              (Body[Pos].getOperand(1).getReg() == LinxV5::R0 && Required[4]))
+              Body[Pos].getOperand(3).getReg() != LinxV5::R0)
             return false;
           ++Pos;
         }
@@ -1303,6 +1368,18 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     };
     for (unsigned I = 0; I != Form.NumConfigs; ++I) {
       const auto &Config = TileMacroConfigs[Form.FirstConfig + I];
+      if (Config.Constraint && StringRef(Config.Constraint) == "VectorParameter" &&
+          (!FPATR || !LinxV5Op::tileMacroPreQuantVector(
+                         FPATR->getOperand(0).getImm())))
+        return false;
+      if (Config.Constraint && StringRef(Config.Field) == "PostMode" &&
+          StringRef(Config.Constraint) == "3" &&
+          (!FPATR || FPATR->getOperand(1).getImm() != 3))
+        return false;
+      if (Config.Constraint && StringRef(Config.Field) == "CScale" &&
+          StringRef(Config.Constraint) == "1" &&
+          (!FPATR || !FPATR->getOperand(9).getImm()))
+        return false;
       if (Config.Constraint && StringRef(Config.Constraint) == "AllPE" &&
           SawMask && CommonMask != 0xf)
         return false;
@@ -1318,8 +1395,9 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     unsigned CandidateIndex = Operation->FirstForm + I;
     if (NonCanonicalBoundary || !matchesForm(TileMacroForms[CandidateIndex]))
       continue;
-    if (MatchedForm)
+    if (MatchedForm) {
       return false;
+    }
     MatchedForm = &TileMacroForms[CandidateIndex];
     FormIndex = CandidateIndex;
   }

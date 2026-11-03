@@ -45,23 +45,24 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   // B.DATR/B.FPATR may follow the binders (e.g. the row-expand layout
   // selector); take the first of each anywhere in the command stream.
   for (const MCInst &Command : Commands) {
-    if (Command.getOpcode() == LinxV5::BDATR && !DATR)
+    if ((Command.getOpcode() == LinxV5::BDATR ||
+         Command.getOpcode() == LinxV5::BDATR_EXEC_MASK) && !DATR)
       DATR = &Command;
     if (Command.getOpcode() == LinxV5::B_FPATR && !FPATR)
       FPATR = &Command;
+    if (Command.getOpcode() == LinxV5::B_DIM ||
+        Command.getOpcode() == LinxV5::C_B_DIMI) {
+      unsigned Slot = Command.getOperand(0).getImm();
+      if (Slot >= 3 || Dims[Slot])
+        return false;
+      Dims[Slot] = &Command;
+    }
   }
   while (Pos < Commands.size() &&
          (Commands[Pos].getOpcode() == LinxV5::BDATR ||
+          Commands[Pos].getOpcode() == LinxV5::BDATR_EXEC_MASK ||
           Commands[Pos].getOpcode() == LinxV5::B_FPATR))
     ++Pos;
-  while (Pos < Commands.size() &&
-         (Commands[Pos].getOpcode() == LinxV5::B_DIM ||
-          Commands[Pos].getOpcode() == LinxV5::C_B_DIMI)) {
-    unsigned Slot = Commands[Pos].getOperand(0).getImm();
-    if (Slot < 3)
-      Dims[Slot] = &Commands[Pos];
-    ++Pos;
-  }
   unsigned BodyEnd = Commands.size();
   if (BodyEnd && (Commands[BodyEnd - 1].getOpcode() == LinxV5::BSTOP ||
                   Commands[BodyEnd - 1].getOpcode() == LinxV5::BSTOP_C))
@@ -71,7 +72,9 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   for (unsigned I = 0; I != OperandStart; ++I)
     Consumed[I] = true;
   for (unsigned I = OperandStart; I != BodyEnd; ++I)
-    if (&Commands[I] == DATR || &Commands[I] == FPATR)
+    if (&Commands[I] == DATR || &Commands[I] == FPATR ||
+        Commands[I].getOpcode() == LinxV5::B_DIM ||
+        Commands[I].getOpcode() == LinxV5::C_B_DIMI)
       Consumed[I] = true;
   auto commandMatchesKind = [&](unsigned Position,
                                 TileMacroCommandKind Kind) {
@@ -82,6 +85,9 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       return Opcode == LinxV5::B_IOS;
     if (Kind == TileMacroCommandKind::IOR)
       return Opcode == LinxV5::B_IO;
+    if (Kind == TileMacroCommandKind::ExecMask)
+      return Opcode == LinxV5::B_IOR_EXEC_MASK ||
+             Opcode == LinxV5::B_IOR_EXEC_MASK_DST;
     switch (Opcode) {
     case LinxV5::B_IOT_NoSrc_Dst:
     case LinxV5::B_IOT_OneSrc_Dst:
@@ -156,14 +162,13 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     if (Condition == "RowMax&&RowMaxInit")
       return FPATR->getOperand(3).getImm() && FPATR->getOperand(5).getImm();
     if (Condition == "PreMode=vector")
-      return FPATR->getOperand(0).getImm() &&
-             FPATR->getOperand(0).getImm() != 1;
+      return LinxV5Op::tileMacroPreQuantVector(FPATR->getOperand(0).getImm());
     if (Condition == "PreMode=scalar")
-      return FPATR->getOperand(0).getImm() == 1;
+      return LinxV5Op::tileMacroPreQuantScalar(FPATR->getOperand(0).getImm());
     if (Condition == "PostMode=vector")
-      return FPATR->getOperand(1).getImm() == 2;
+      return FPATR->getOperand(1).getImm() == 3;
     if (Condition == "PostMode=scalar")
-      return FPATR->getOperand(1).getImm() == 1;
+      return FPATR->getOperand(1).getImm() == 2;
     if (Condition == "RowMax")
       return FPATR->getOperand(3).getImm() != 0;
     if (Condition == "GroupMax")
@@ -324,7 +329,8 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           RequiredDestination |= !TileMacroBindingMembers[Member].Optional;
         } else {
           SourceMembers.push_back(Member);
-          RequiredSources += !TileMacroBindingMembers[Member].Optional;
+          RequiredSources += !TileMacroBindingMembers[Member].Optional ||
+                             TileMacroBindingMembers[Member].Condition;
         }
       }
       unsigned SeenSources = 0;
@@ -395,7 +401,7 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         markConsumed(CommandStart, Pos);
       }
     } else {
-      if (Pos >= BodyEnd || Commands[Pos].getOpcode() != LinxV5::B_IO)
+      if (!commandMatchesKind(Pos, Expected.Kind))
         continue;
       unsigned CommandStart = Pos;
       const MCInst &First = Commands[Pos++];
@@ -407,11 +413,17 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
                         : Desc.Slot == TileMacroMemberSlot::RegSrc2 ? 3
                                                                     : 4;
         MCRegister Reg = LinxV5::R0;
-        if (Slot < 4)
-          Reg = First.getOperand(Slot).getReg();
+        bool SourceOnly = First.getOpcode() == LinxV5::B_IOR_EXEC_MASK;
+        if (Slot < 4 && !(SourceOnly && Slot == 0))
+          Reg = First.getOperand(SourceOnly ? Slot - 1 : Slot).getReg();
         else if (Pos < BodyEnd && Commands[Pos].getOpcode() == LinxV5::B_IO)
           Reg = Commands[Pos].getOperand(1).getReg();
-        if (Reg != LinxV5::R0) {
+        bool ExplicitZero = StringRef(Form.Spelling) == "TCI" ||
+            (llvm::all_of(First, [](const MCOperand &Op) {
+          return Op.isReg() && Op.getReg() == LinxV5::R0;
+        }) && Member == Active.front());
+        if (Reg != LinxV5::R0 || !Desc.Optional || Desc.Condition ||
+            ExplicitZero) {
           Members[Member].Present = true;
           Members[Member].Reg = Reg;
         }
@@ -445,6 +457,7 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
   auto readDim = [&](unsigned Slot) {
     DimValue Value;
     if (!Dims[Slot]) {
+      Value.Present = true;
       Value.Absolute = true;
       return Value;
     }
@@ -596,6 +609,10 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       O << ", ";
     FirstConfig = false;
   };
+  if (Form.Encoding) {
+    separator();
+    O << "Encoding=" << Form.Encoding;
+  }
   for (unsigned I = 0; I != Form.NumConfigs; ++I) {
     const auto &Config = TileMacroConfigs[Form.FirstConfig + I];
     StringRef Field = Config.Field;
@@ -679,9 +696,9 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       Print |= DATR->getOperand(0).getImm() != 0;
       break;
     case TileMacroTargetSlot::DataType:
-      Print |=
-          DATR->getOperand(2).getImm() != HeaderType &&
-          DATR->getOperand(2).getImm() != LinxV5Op::DataType::EMPTY_DataType;
+      Print |= DATR->getOperand(2).getImm() != LinxV5Op::DataType::EMPTY_DataType &&
+               (DATR->getOperand(2).getImm() != HeaderType ||
+                Field == "DstDataType");
       break;
     case TileMacroTargetSlot::PadValueOrByteId:
       if (Field == "CCTRL")
@@ -702,6 +719,10 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     case TileMacroTargetSlot::Canonicalize:
       Print |= DATR->getOperand(1).getImm() != LinxV5Op::Canon::NORMAL_CANON;
       break;
+    case TileMacroTargetSlot::PredInv:
+    case TileMacroTargetSlot::ZeroMask:
+      Print = true;
+      break;
     default:
       break;
     }
@@ -709,6 +730,11 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       continue;
     separator();
     switch (Target->Slot) {
+    case TileMacroTargetSlot::PredInv:
+    case TileMacroTargetSlot::ZeroMask:
+      O << Field << "=" << DATR->getOperand(
+          Target->Slot == TileMacroTargetSlot::PredInv ? 8 : 9).getImm();
+      break;
     case TileMacroTargetSlot::Layout:
       printBArgFormat(DATR, 0, STI, O);
       break;
@@ -717,7 +743,10 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       break;
     case TileMacroTargetSlot::PadValueOrByteId:
       if (Field == "CCTRL") {
-        O << "InternalAccHint";
+        static const char *Names[] = {"None", "RawAccumulator",
+                                     "InternalAccHint",
+                                     "RawAccumulatorInternalAccHint"};
+        O << "CCTRL=" << Names[DATR->getOperand(3).getImm() & 3];
       } else if (Field == "PadValueOrByteId" && DATR->getOperand(7).getImm() != 0)
         printByteID(DATR, 7, STI, O);
       else
@@ -780,87 +809,95 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       O << "]";
       continue;
     }
-    const BoundValue &Value = Members[Binding.FirstMember];
-    if (!Value.Present)
-      continue;
-    O << ", ";
-    switch (Binding.Kind) {
-    case TileMacroBindingKind::LocalSource:
-      printTile(Value.Reg, false, 0);
-      break;
-    case TileMacroBindingKind::LocalParentSource:
-      break;
-    case TileMacroBindingKind::LocalDestination:
-      printTile(Value.Reg, true, Value.SizeCode);
-      break;
-    case TileMacroBindingKind::PredicateTileSource:
-      printTile(Value.Reg, false, 0);
-      break;
-    case TileMacroBindingKind::PredicateTileDestination:
-      printTile(Value.Reg, true, Value.SizeCode);
-      break;
-    case TileMacroBindingKind::PredicateCellSource:
-      printTile(Value.Reg, false, 0);
-      break;
-    case TileMacroBindingKind::PredicateCellDestination:
-      printTile(Value.Reg, true, Value.SizeCode);
-      break;
-    case TileMacroBindingKind::SharedSource:
-      O << "S" << Value.SharedID;
-      break;
-    case TileMacroBindingKind::SharedDestination:
-      O << "->S" << Value.SharedID;
-      printSize(Value.SizeCode);
-      break;
-    case TileMacroBindingKind::GPRSource: {
-      StringRef Label = getTileMacroGPRLabel(Binding);
-      if (!Label.empty())
-        O << Label << "=";
-      O << getRegisterName(Value.Reg);
-      break;
-    }
-    case TileMacroBindingKind::GPRDestination: {
-      O << "->";
-      StringRef Label = getTileMacroGPRLabel(Binding);
-      if (!Label.empty())
-        O << Label << "=";
-      O << getRegisterName(Value.Reg);
-      break;
-    }
-    case TileMacroBindingKind::GPRListSource:
-      break;
-    }
-    if (Value.Subview.Present) {
-      O << "[base=" << getRegisterName(Value.Subview.Base)
-        << ", offset=" << Value.Subview.Offset;
-      // Multi-cell views (PTO-ISA ADR-0098 SubviewSizeCode 2..12) cannot be
-      // spelled by the historical single-cell annotation; make the size
-      // explicit so the macro round-trips.
-      if (Value.Subview.SizeCode != 1)
-        O << ", size=" << Value.Subview.SizeCode;
-      O << "]";
-    }
-    if (Value.Assemble.Present) {
-      if (Binding.Kind == TileMacroBindingKind::LocalParentSource)
-        O << "[parent=" << getRegisterName(Value.Reg) << ", base=";
-      else
-        O << "[base=";
-      O << getRegisterName(Value.Assemble.Base)
-        << ", offset=" << Value.Assemble.Offset;
-      // Keep the historical spelling for the ordinary INIT_LAST writer, but
-      // make non-trivial generation phases explicit so INIT/MIDDLE/LAST
-      // cannot be mistaken for a plain destination range.
-      if (Value.Assemble.WriterSize != 1 ||
-          Value.Assemble.Init != 1 || Value.Assemble.Last != 1) {
-        O << ", assemble=";
-        if (Value.Assemble.Init)
-          O << (Value.Assemble.Last ? "init_last" : "init");
-        else
-          O << (Value.Assemble.Last ? "last" : "middle");
-        O << ", writer=" << Value.Assemble.WriterSize;
+    bool Group = Binding.NumMembers > 1;
+    if (Group)
+      O << ", [";
+    for (unsigned M = 0; M != Binding.NumMembers; ++M) {
+      const BoundValue &Value = Members[Binding.FirstMember + M];
+      if (!Value.Present)
+        continue;
+      if (!Group || M)
+        O << ", ";
+      switch (Binding.Kind) {
+      case TileMacroBindingKind::LocalSource:
+        printTile(Value.Reg, false, 0);
+        break;
+      case TileMacroBindingKind::LocalParentSource:
+        break;
+      case TileMacroBindingKind::LocalDestination:
+        printTile(Value.Reg, true, Value.SizeCode);
+        break;
+      case TileMacroBindingKind::PredicateTileSource:
+        printTile(Value.Reg, false, 0);
+        break;
+      case TileMacroBindingKind::PredicateTileDestination:
+        printTile(Value.Reg, true, Value.SizeCode);
+        break;
+      case TileMacroBindingKind::PredicateCellSource:
+        printTile(Value.Reg, false, 0);
+        break;
+      case TileMacroBindingKind::PredicateCellDestination:
+        printTile(Value.Reg, true, Value.SizeCode);
+        break;
+      case TileMacroBindingKind::SharedSource:
+        O << "S" << Value.SharedID;
+        break;
+      case TileMacroBindingKind::SharedDestination:
+        O << "->S" << Value.SharedID;
+        printSize(Value.SizeCode);
+        break;
+      case TileMacroBindingKind::GPRSource: {
+        StringRef Label = getTileMacroGPRLabel(Binding);
+        if (!Label.empty())
+          O << Label << "=";
+        O << getRegisterName(Value.Reg);
+        break;
       }
-      O << "]";
+      case TileMacroBindingKind::GPRDestination: {
+        O << "->";
+        StringRef Label = getTileMacroGPRLabel(Binding);
+        if (!Label.empty())
+          O << Label << "=";
+        O << getRegisterName(Value.Reg);
+        break;
+      }
+      case TileMacroBindingKind::GPRListSource:
+        break;
+      }
+      if (Value.Subview.Present) {
+        O << "[base=" << getRegisterName(Value.Subview.Base)
+          << ", offset=" << Value.Subview.Offset;
+        // Multi-cell views (PTO-ISA ADR-0098 SubviewSizeCode 2..12) cannot be
+        // spelled by the historical single-cell annotation; make the size
+        // explicit so the macro round-trips.
+        if (Value.Subview.SizeCode != 1)
+          O << ", size=" << Value.Subview.SizeCode;
+        O << "]";
+      }
+      if (Value.Assemble.Present) {
+        if (Binding.Kind == TileMacroBindingKind::LocalParentSource)
+          O << "[parent=" << getRegisterName(Value.Reg) << ", base=";
+        else
+          O << "[base=";
+        O << getRegisterName(Value.Assemble.Base)
+          << ", offset=" << Value.Assemble.Offset;
+        // Keep the historical spelling for the ordinary INIT_LAST writer, but
+        // make non-trivial generation phases explicit so INIT/MIDDLE/LAST
+        // cannot be mistaken for a plain destination range.
+        if (Value.Assemble.WriterSize != 1 ||
+            Value.Assemble.Init != 1 || Value.Assemble.Last != 1) {
+          O << ", assemble=";
+          if (Value.Assemble.Init)
+            O << (Value.Assemble.Last ? "init_last" : "init");
+          else
+            O << (Value.Assemble.Last ? "last" : "middle");
+          O << ", writer=" << Value.Assemble.WriterSize;
+        }
+        O << "]";
+      }
     }
+    if (Group)
+      O << "]";
   }
   return true;
 }

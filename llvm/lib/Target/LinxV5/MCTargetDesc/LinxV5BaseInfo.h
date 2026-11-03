@@ -254,6 +254,24 @@ struct TileCallEntry {
 } // namespace LinxV5TileCall
 
 namespace LinxV5Op {
+// PTO FPATR numeric modes are not the old abstract none/scalar/vector
+// values. F322F16 (1) and F322BF16 (16) require no parameter binder.
+inline bool tileMacroPreQuantScalar(unsigned Mode) {
+  switch (Mode) {
+  case 3: case 5: case 13: case 17: case 19: case 24:
+  case 25: case 26: case 27: case 32: case 34: case 35:
+    return true;
+  default: return false;
+  }
+}
+inline bool tileMacroPreQuantVector(unsigned Mode) {
+  switch (Mode) {
+  case 2: case 4: case 12: case 18: case 20: case 23:
+  case 28: case 33: case 36: case 37: case 38: case 39:
+    return true;
+  default: return false;
+  }
+}
 
 enum SrcRType {
   NONE,

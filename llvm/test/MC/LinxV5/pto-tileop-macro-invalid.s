@@ -21,5 +21,8 @@ TADD <Row=8, Col=64, FP32>, T#1[subview=(base=a0, offset=0)], T#2, ->T<2KB>
 TADD <Row=8, Col=64, FP32>, T#1[base=a0, offset=0, size=<128B>], T#2, ->T<2KB>
 TEXPANDS <Row=16, Col=8, ValidRow=8, U8, CUBE_M16>, a2, ->T<2KB>
 TADD <Row=8, Col=64, FP32>, T#1, T#2, ->T#1<2KB>
+TADD <Encoding=E999, Row=8, Col=64, FP32>, T#1, T#2, ->T<2KB>
+TADD <Encoding=E1, Row=32, Col=1, FP32, PredInv=2, ZeroMask=1>, T#1, T#2, ->T<128B>, a0
+TMATMUL <FP32, CCTRL=InternalAccHint>, T#1, T#2, ->T<128B>
 
-# CHECK-COUNT-21: error: {{(unknown operand|TileOp operands/configuration do not match any exact PTO 0.58.7 form)}}
+# CHECK-COUNT-24: error: {{(unknown operand|TileOp operands/configuration do not match any exact PTO 0.58.7 form)}}

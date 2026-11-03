@@ -232,6 +232,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       Value.Imm = PadValue::Null;
     else if (Default == "InternalAccHint")
       Value.Imm = 2;
+    else if (Default == "None")
+      Value.Imm = 0;
     else if (Default == "DTYPE_NONE")
       Value.Imm = DataType::EMPTY_DataType;
     else
@@ -245,6 +247,17 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     StringRef Field = Desc.Field;
     StringRef Name = Tokens[Pos].Text;
     unsigned ParsedValue = 32;
+    if (Field == "PredInv" || Field == "ZeroMask") {
+      if (!Name.equals_insensitive(Field) || !tokenIs(Pos + 1, "=") ||
+          Pos + 2 >= Tokens.size() ||
+          Tokens[Pos + 2].Kind != AsmToken::Integer ||
+          Tokens[Pos + 2].Integer < 0 || Tokens[Pos + 2].Integer > 1)
+        return false;
+      Value.Imm = Tokens[Pos + 2].Integer;
+      Value.HasValue = Value.Explicit = true;
+      Pos += 3;
+      return true;
+    }
     if (Field == "DataType" || Field == "SrcDataType" ||
         Field == "DstDataType" || Field == "ValueDataType" ||
         Field == "AType" || Field == "BType")
@@ -265,7 +278,17 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       if (ParsedValue == 32)
         ParsedValue = parseByteName(Name);
     } else if (Field == "CCTRL") {
-      ParsedValue = Name.equals_insensitive("InternalAccHint") ? 2 : 32;
+      if (Name.equals_insensitive("CCTRL") && tokenIs(Pos + 1, "=") &&
+          Pos + 2 < Tokens.size()) {
+        Pos += 2;
+        Name = Tokens[Pos].Text;
+      }
+      ParsedValue = StringSwitch<unsigned>(Name.lower())
+                        .Case("none", 0)
+                        .Case("rawaccumulator", 1)
+                        .Case("internalacchint", 2)
+                        .Case("rawaccumulatorinternalacchint", 3)
+                        .Default(32);
     } else if (Field == "CMode")
       ParsedValue = parseCmpName(Name);
     else if (Field == "RMode")
@@ -341,13 +364,13 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     if (Condition == "RowMax&&RowMaxInit")
       return configImm(P, "RowMax", 0) && configImm(P, "RowMaxInit", 0);
     if (Condition == "PreMode=vector")
-      return configImm(P, "PreMode", 0) > 1;
+      return LinxV5Op::tileMacroPreQuantVector(configImm(P, "PreMode", 0));
     if (Condition == "PreMode=scalar")
-      return configImm(P, "PreMode", 0) == 1;
+      return LinxV5Op::tileMacroPreQuantScalar(configImm(P, "PreMode", 0));
     if (Condition == "PostMode=vector")
-      return configImm(P, "PostMode", 0) == 2;
+      return configImm(P, "PostMode", 0) == 3;
     if (Condition == "PostMode=scalar")
-      return configImm(P, "PostMode", 0) == 1;
+      return configImm(P, "PostMode", 0) == 2;
     if (Condition == "RowMax")
       return configImm(P, "RowMax", 0) != 0;
     if (Condition == "GroupMax")
@@ -421,9 +444,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       break;
     case TileMacroBindingKind::PredicateTileSource:
     case TileMacroBindingKind::PredicateTileDestination:
-      Matched = Prefix == 'U' && matchTileRegisterNameHelper(Reg, Name);
+      Matched = (Prefix == 'U' || Prefix == 'T' || Prefix == 'N') &&
+                matchTileRegisterNameHelper(Reg, Name);
       if (Binding.Kind == TileMacroBindingKind::PredicateTileDestination)
-        Matched = Matched && Reg == LinxV5::Tile_U;
+        Matched = Matched && (Reg == LinxV5::Tile_U || Reg == LinxV5::Tile_T ||
+                              Reg == LinxV5::Tile_N);
       Value.Reg = Reg;
       break;
     case TileMacroBindingKind::PredicateCellSource:
@@ -441,7 +466,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     case TileMacroBindingKind::GPRSource:
     case TileMacroBindingKind::GPRDestination:
       Matched = Prefix != 'T' && Prefix != 'U' && Prefix != 'M' &&
-                Prefix != 'S' && matchRegisterNameHelper(Reg, Name);
+                matchRegisterNameHelper(Reg, Name);
       Value.Reg = Reg;
       break;
     case TileMacroBindingKind::GPRListSource:
@@ -581,6 +606,15 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     if (!tokenIs(Pos, "<"))
       return false;
     ++Pos;
+    if (tokenIs(Pos, "Encoding")) {
+      if (!tokenIs(Pos + 1, "=") || Pos + 2 >= Tokens.size() ||
+          !Form.Encoding || !tokenIs(Pos + 2, Form.Encoding))
+        return false;
+      Pos += 3;
+      if (tokenIs(Pos, ","))
+        ++Pos;
+    } else if (Form.Encoding)
+      return false;
     for (unsigned I = 0; I != Form.NumConfigs; ++I) {
       const auto &Desc = TileMacroConfigs[Form.FirstConfig + I];
       ConfigValue &Value = P.Configs[I];
@@ -620,10 +654,23 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
           Value.HasValue && Value.Imm != 0xf)
         return false;
       if (Desc.Constraint && Desc.IsDimension) {
+        if (StringRef(Desc.Constraint) == "NonUnitM" &&
+            (!Value.HasValue || (Value.Dim.Reg == LinxV5::R0 &&
+                                  Value.Dim.Imm == 1)))
+          return false;
         int64_t Required = 0;
         if (!StringRef(Desc.Constraint).getAsInteger(10, Required) &&
             (!Value.HasValue || Value.Dim.Reg != LinxV5::R0 ||
              Value.Dim.Imm != Required))
+          return false;
+      }
+      if (Desc.Constraint && !Desc.IsDimension) {
+        if (StringRef(Desc.Constraint) == "VectorParameter" &&
+            (!Value.HasValue || !LinxV5Op::tileMacroPreQuantVector(Value.Imm)))
+          return false;
+        unsigned Required = 0;
+        if (!StringRef(Desc.Constraint).getAsInteger(10, Required) &&
+            (!Value.HasValue || Value.Imm != Required))
           return false;
       }
     }
@@ -706,7 +753,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                     ? 0
                     : std::toupper(static_cast<unsigned char>(GPRName.front()));
             if (Prefix == 'T' || Prefix == 'U' || Prefix == 'M' ||
-                Prefix == 'S' || !matchRegisterNameHelper(Reg, GPRName))
+                !matchRegisterNameHelper(Reg, GPRName))
               return false;
             Seen[MemberIndex] = true;
             BoundValue &Bound = P.Members[Binding.FirstMember + MemberIndex];
@@ -742,7 +789,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                   ? 0
                   : std::toupper(static_cast<unsigned char>(GPRName.front()));
           if (Prefix == 'T' || Prefix == 'U' || Prefix == 'M' ||
-              Prefix == 'S' || !matchRegisterNameHelper(Reg, GPRName))
+              !matchRegisterNameHelper(Reg, GPRName))
             return false;
           Bound.Present = true;
           Bound.Reg = Reg;
@@ -750,6 +797,25 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
         }
         if (tokenIs(Pos, ","))
           ++Pos;
+        if (!tokenIs(Pos, "]"))
+          return false;
+        ++Pos;
+        continue;
+      }
+      if (Binding.NumMembers > 1 && tokenIs(Pos, "[")) {
+        ++Pos;
+        for (unsigned M = 0; M != Binding.NumMembers; ++M) {
+          if (M) {
+            if (!tokenIs(Pos, ","))
+              return false;
+            ++Pos;
+          }
+          BoundValue Value;
+          if (!matchSimpleOperand(Binding, Pos, Value) ||
+              !parseRangeModifier(Binding, Pos, Value))
+            return false;
+          P.Members[Binding.FirstMember + M] = Value;
+        }
         if (!tokenIs(Pos, "]"))
           return false;
         ++Pos;
@@ -785,6 +851,10 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       return false;
     if (P.HeaderType == DataType::EMPTY_DataType &&
         Parsed->Operation->HeaderKind != TileMacroHeaderKind::TLSU)
+      return false;
+    if (Parsed->Operation->HeaderKind == TileMacroHeaderKind::CUBE &&
+        (configImm(P, "CCTRL", 0) & 2) &&
+        !StringRef(Parsed->Operation->Mnemonic).endswith("_ACC"))
       return false;
 
     ConfigValue *Row = findConfig(P, "Row");
@@ -1052,8 +1122,10 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     if (!BType->HasValue)
       DstType = P.HeaderType;
 
-  if (HasDATR)
-    emitToStreamer(Out, MCInstBuilder(LinxV5::BDATR)
+  bool ExecutionMask = findConfig(P, "PredInv") != nullptr;
+  if (HasDATR) {
+    MCInstBuilder Builder(ExecutionMask ? LinxV5::BDATR_EXEC_MASK : LinxV5::BDATR);
+    Builder
                             .addImm(Layout)
                             .addImm(CanonMode)
                             .addImm(DstType)
@@ -1061,7 +1133,12 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                             .addImm(CompareMode)
                             .addImm(RoundMode)
                             .addImm(Saturate)
-                            .addImm(Byte));
+                            .addImm(Byte);
+    if (ExecutionMask)
+      Builder.addImm(configImm(P, "PredInv", 0))
+          .addImm(configImm(P, "ZeroMask", 0));
+    emitToStreamer(Out, Builder);
+  }
   if (HasFPATR) {
     MCInstBuilder Builder(LinxV5::B_FPATR);
     for (unsigned Value : FPAttrValues)
@@ -1208,11 +1285,14 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
           Sources[Slot] = P.Members[Member].Reg;
         }
       }
-      emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
-                              .addReg(Dst)
-                              .addReg(Sources[0])
-                              .addReg(Sources[1])
-                              .addReg(Sources[2]));
+      MCInstBuilder Builder(Command.Kind == TileMacroCommandKind::ExecMask
+                                ? (Dst == LinxV5::R0 ? LinxV5::B_IOR_EXEC_MASK
+                                                    : LinxV5::B_IOR_EXEC_MASK_DST)
+                                : LinxV5::B_IO);
+      if (Command.Kind != TileMacroCommandKind::ExecMask || Dst != LinxV5::R0)
+        Builder.addReg(Dst);
+      Builder.addReg(Sources[0]).addReg(Sources[1]).addReg(Sources[2]);
+      emitToStreamer(Out, Builder);
       if (Sources[3] != LinxV5::R0)
         emitToStreamer(Out, MCInstBuilder(LinxV5::B_IO)
                                 .addReg(LinxV5::R0)

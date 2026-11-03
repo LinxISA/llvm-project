@@ -896,13 +896,13 @@ enum class TileMacroBindingKind : uint8_t {{
   GPRSource, GPRListSource, GPRDestination, PredicateTileSource,
   PredicateTileDestination, PredicateCellSource, PredicateCellDestination
 }};
-enum class TileMacroCommandKind : uint8_t {{ IOT, IOS, IOR }};
+enum class TileMacroCommandKind : uint8_t {{ IOT, IOS, IOR, ExecMask }};
 enum class TileMacroMemberSlot : uint8_t {{
   Role0, Role1, Role2, RegDst, RegSrc0, RegSrc1, RegSrc2, RegSrc3
 }};
 enum class TileMacroTargetKind : uint8_t {{ Header, DATR, FPATR, DIM, IOT, IOS }};
 enum class TileMacroTargetSlot : uint8_t {{
-  DataType, Layout, Canonicalize, PadValueOrByteId, CMode, RMode, Sat,
+  DataType, Layout, Canonicalize, PadValueOrByteId, CMode, RMode, Sat, PredInv, ZeroMask,
   PreQuantMode, ReluMode, GroupNCode, RowMaxEn, GroupMaxEn, RowMaxInit,
   MaxAbsEn, TransA, TransB, CScaleEn, LB0, LB1, LB2, PEMask
 }};
@@ -927,6 +927,7 @@ struct TileMacroFormDesc {{
   uint8_t NumBindings;
   uint16_t FirstCommand;
   uint8_t NumCommands;
+  const char *Encoding = nullptr;
 }};
 struct TileMacroConfigDesc {{
   const char *Field;
@@ -1007,11 +1008,18 @@ static_assert(sizeof(TileMacroForms) / sizeof(TileMacroForms[0]) == TileMacroFor
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--catalog", type=Path, required=True)
+    parser.add_argument("--catalog", type=Path,
+                        help="external PTO source; defaults to the versioned LLVM model")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    generated = generate(args.catalog)
+    if args.catalog:
+        generated = generate(args.catalog)
+    else:
+        from tile_macro_model import load_model, extend_model, render
+        model = load_model()
+        extend_model(model)
+        generated = render(model)
     if args.check:
         current = args.output.read_text() if args.output.exists() else ""
         if current != generated:
