@@ -17,7 +17,7 @@ target triple = "linx64v5"
 ; ASM: B.IOS S0.reuse, mask=1111
 ; ASM: B.IOS S0, mask=1111
 ; MIR: INLINEASM &"B.IOS mask=1111, ->${0:S}<128B>", {{.*}}regdef:Shared_ABS{{.*}}, def renamable $shared_s0
-; MIR: INLINEASM &"B.IOS ${0:S}, mask=1111", {{.*}}reguse:Shared_ABS{{.*}}, renamable $shared_s0
+; MIR: INLINEASM &"B.IOS ${0:P}, mask=1111", {{.*}}reguse:Shared_ABS{{.*}}, renamable $shared_s0
 ; MIR: INLINEASM &"B.IOS ${0:K}, mask=1111", {{.*}}reguse:Shared_ABS{{.*}}, killed renamable $shared_s0
 ; OBJ-LABEL: <shared_inline_asm_modifier>:
 ; OBJ: B.IOS mask=1111, ->S0<128B>
@@ -36,7 +36,7 @@ define void @shared_inline_asm_modifier() {
 ; ASM: B.IOS mask=1111, ->S0<128B>
 ; ASM: B.IOS S0.reuse, mask=1111
 ; ASM: B.IOS S0.reuse, mask=1111
-; MIR: INLINEASM &"B.IOS ${0:S}, mask=1111\0AB.IOS ${0:S}, mask=1111", {{.*}}reguse:Shared_ABS{{.*}}, killed renamable $shared_s0
+; MIR: INLINEASM &"B.IOS ${0:P}, mask=1111\0AB.IOS ${0:P}, mask=1111", {{.*}}reguse:Shared_ABS{{.*}}, killed renamable $shared_s0
 ; OBJ-LABEL: <shared_repeated_placeholder>:
 ; OBJ: B.IOS mask=1111, ->S0<128B>
 ; OBJ: B.IOS S0.reuse, mask=1111

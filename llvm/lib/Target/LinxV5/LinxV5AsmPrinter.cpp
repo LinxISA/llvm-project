@@ -346,6 +346,23 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                                        const char *ExtraCode, raw_ostream &OS) {
   const MachineOperand &MO = MI->getOperand(OpNo);
 
+  if (ExtraCode && ExtraCode[1] == 0 &&
+      (ExtraCode[0] == 'P' || ExtraCode[0] == 'Q')) {
+    if (!MO.isReg() ||
+        (!LinxV5::Shared_ABSRegClass.contains(MO.getReg()) &&
+         !LinxV5::TILE_SRCRegClass.contains(MO.getReg())))
+      return true;
+    StringRef Name = LinxV5InstPrinter::getRegisterName(
+        MO.getReg(), LinxV5::Shared_ABSRegClass.contains(MO.getReg())
+                         ? LinxV5::ABIRegAltName
+                         : 0);
+    bool AllocatorRetain = Name.consume_back(".reuse");
+    OS << Name;
+    if (ExtraCode[0] == 'P' || AllocatorRetain)
+      OS << ".reuse";
+    return false;
+  }
+
   // Handle LinxV5-specific Shared modifiers before the generic printer:
   //   %S: ordinary operand (definitions bare, inputs conservatively .reuse)
   //   %K: one exact final-use source occurrence (bare)
