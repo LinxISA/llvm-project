@@ -1,0 +1,16 @@
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# CHECK: cannot prove a complete Local tile descriptor for COPY/PHI
+--- |
+  define void @unknown_logical_source() { ret void }
+...
+---
+name: unknown_logical_source
+tracksRegLiveness: true
+body: |
+  bb.0:
+    INLINEASM &"unknown_tile_writer $0", 9, 720906, def $tile_n1
+    $tile_m1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 27, 29, 1, $r0, $r0, 4
+    $tile_t1 = PseudoTBinary_SizeI $r0, 32, $r0, 4, 27, 29, 1, $tile_m1, $tile_n1, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

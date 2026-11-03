@@ -1,0 +1,14 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 4, 32, 4, 27, 0
+--- |
+  define void @default_datr() { ret void }
+...
+---
+name: default_datr
+tracksRegLiveness: true
+body: |
+  bb.0:
+    INLINEASM &"BSTART.TEPL TEXPANDS, U8\0AB.DATR Zero\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.IOT mask=1111, last, ->$0<${1:Z}>\0A", 9, 720906, def $tile_t1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

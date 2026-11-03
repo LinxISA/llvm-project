@@ -1019,6 +1019,41 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
   if (!Text.contains("B.DATR"))
     return LinxV5Op::ArgFormat::NORM;
 
+  bool DefaultLayout = true;
+  SmallVector<StringRef, 8> AttributeLines;
+  Text.split(AttributeLines, '\n');
+  for (StringRef Line : AttributeLines) {
+    Line = Line.trim();
+    if (!Line.consume_front("B.DATR"))
+      continue;
+    SmallVector<StringRef, 4> Fields;
+    Line.trim().split(Fields, ',');
+    StringRef Pad = Fields.front().trim();
+    if (Pad != "Zero" && Pad != "Max" && Pad != "Min" && Pad != "Null") {
+      DefaultLayout = false;
+      break;
+    }
+    if (Fields.size() != 1 && Fields.size() != 2 && Fields.size() != 4) {
+      DefaultLayout = false;
+      break;
+    }
+    if (Fields.size() >= 2) {
+      StringRef Mode = Fields[1].trim();
+      if (Mode != "EQ" && Mode != "NE" && Mode != "LT" && Mode != "LE" &&
+          Mode != "GT" && Mode != "GE") {
+        DefaultLayout = false;
+        break;
+      }
+    }
+    if (Fields.size() == 4 &&
+        (Fields[2].trim() != "RNONE" || Fields[3].trim() != "sat")) {
+      DefaultLayout = false;
+      break;
+    }
+  }
+  if (DefaultLayout)
+    return LinxV5Op::ArgFormat::NORM;
+
   // Identity conversions may spell only dtype and rounding in B.DATR.
   // Every possible attribute line then has the architectural default NORM
   // layout. Require exact two-field spellings and the same resolved dtype as
@@ -1212,17 +1247,35 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
 
 static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
     MachineInstr &MI, LinxV5::TileDescriptor Result, Register Left,
-    Register Right, SmallVectorImpl<DescriptorPosition> &Active) {
+    Register Right, SmallVectorImpl<DescriptorPosition> &Active,
+    bool *Absent) {
   if (Result.DataType != LinxV5Op::DataType::U8 ||
       (Result.Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
        Result.Layout != LinxV5Op::ArgFormat::CUBE_M32))
     return checkedTileDescriptor(Result);
+  bool LeftAbsent = false;
+  bool RightAbsent = false;
   auto LeftDescriptor = resolveTileDescriptor(
-      *MI.getParent(), MI.getIterator(), Left, Active);
+      *MI.getParent(), MI.getIterator(), Left, Active, &LeftAbsent);
   auto RightDescriptor = resolveTileDescriptor(
-      *MI.getParent(), MI.getIterator(), Right, Active);
-  if (!LeftDescriptor || !RightDescriptor)
+      *MI.getParent(), MI.getIterator(), Right, Active, &RightAbsent);
+  if (!LeftDescriptor || !RightDescriptor) {
+    const auto &Known = LeftDescriptor ? LeftDescriptor : RightDescriptor;
+    if (Known && (LeftDescriptor ? RightAbsent : LeftAbsent) &&
+        Known->PredicateBasisType == 31 && !Known->PackedPredicate &&
+        getTileDataTypeBits(Known->DataType) == 8 &&
+        Known->Layout == Result.Layout && Known->ValidRow == Result.ValidRow &&
+        Known->ValidCol == Result.ValidCol && Known->SizeCode == Result.SizeCode &&
+        Known->ValidRowReg == Result.ValidRowReg &&
+        Known->ValidColReg == Result.ValidColReg &&
+        Known->ValidRowDef == Result.ValidRowDef &&
+        Known->ValidColDef == Result.ValidColDef)
+      return checkedTileDescriptor(Result);
+    if (Absent && (LeftDescriptor || LeftAbsent) &&
+        (RightDescriptor || RightAbsent))
+      *Absent = true;
     return None;
+  }
   if (LeftDescriptor->PredicateBasisType == 31 &&
       RightDescriptor->PredicateBasisType == 31)
     return checkedTileDescriptor(Result);
@@ -1243,7 +1296,7 @@ static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
 
 static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     MachineInstr &MI, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active) {
+    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1517,7 +1570,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       Writer.SizeCode = Log2_64(Bytes) - 6;
     }
     auto Descriptor = getLogicalTileDescriptor(
-        MI, Writer, Left->getReg(), Right->getReg(), Active);
+        MI, Writer, Left->getReg(), Right->getReg(), Active, Absent);
     if (!Descriptor)
       return None;
     Descriptor->ValidCol = Result.ValidCol;
@@ -1531,7 +1584,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
 
 static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     MachineInstr &MI, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active) {
+    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent) {
   if (MI.getOpcode() == LinxV5::PseudoV5GMOV)
     return resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
                                  MI.getOperand(5).getReg(), Active);
@@ -1578,9 +1631,11 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     if (Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
         Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M32) {
       auto Source = resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
-                                          MI.getOperand(2).getReg(), Active);
-      if (Source)
-        Descriptor.PredicateBasisType = Source->PredicateBasisType;
+                                          MI.getOperand(2).getReg(), Active,
+                                          Absent);
+      if (!Source)
+        return None;
+      Descriptor.PredicateBasisType = Source->PredicateBasisType;
     }
     return Descriptor;
   }
@@ -1761,7 +1816,8 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
           Selector == LinxV5Op::TileOPTEPL::TOR ||
           Selector == LinxV5Op::TileOPTEPL::TXOR)
         return getLogicalTileDescriptor(MI, Result, MI.getOperand(8).getReg(),
-                                        MI.getOperand(9).getReg(), Active);
+                                        MI.getOperand(9).getReg(), Active,
+                                        Absent);
     }
     return checkedTileDescriptor(Result);
   }
@@ -1769,7 +1825,7 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     break;
   }
   if (MI.isInlineAsm())
-    return getInlineAsmTileDescriptor(MI, Reg, Active);
+    return getInlineAsmTileDescriptor(MI, Reg, Active, Absent);
   return None;
 }
 
@@ -1797,7 +1853,7 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
       Result = resolveTileDescriptor(MBB, MI.getIterator(),
                                      MI.getOperand(1).getReg(), Active, Absent);
     else
-      Result = getDefinedTileDescriptor(MI, Reg, Active);
+      Result = getDefinedTileDescriptor(MI, Reg, Active, Absent);
     Active.pop_back();
     return Result;
   }
