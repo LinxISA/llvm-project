@@ -633,6 +633,73 @@ static CallInst *findRegionSentinel(Function &F, MDNode *Token) {
   return nullptr;
 }
 
+static bool specializeRegionInstances(Function &F, LoopInfo &LI,
+                                      DominatorTree &DT) {
+  DenseMap<MDNode *, SmallVector<CallInst *, 2>> Sentinels;
+  for (Instruction &Inst : instructions(F)) {
+    auto *Call = dyn_cast<CallInst>(&Inst);
+    if (!isIntrinsic(Call, Intrinsic::linx_experimental_element_region) ||
+        Call->arg_size() != 1)
+      continue;
+    auto *Argument = dyn_cast<MetadataAsValue>(Call->getArgOperand(0));
+    auto *Token =
+        Argument ? dyn_cast<MDNode>(Argument->getMetadata()) : nullptr;
+    if (Token)
+      Sentinels[Token].push_back(Call);
+  }
+  DenseMap<Loop *, CallInst *> Bindings;
+  DenseMap<MDNode *, unsigned> LoopCounts;
+  for (Loop *RegionLoop : LI.getLoopsInPreorder())
+    if (MDNode *Token = getElementRegionToken(*RegionLoop))
+      ++LoopCounts[Token];
+  for (Loop *RegionLoop : LI.getLoopsInPreorder()) {
+    MDNode *Token = getElementRegionToken(*RegionLoop);
+    auto Found = Sentinels.find(Token);
+    if (Found == Sentinels.end() ||
+        (Found->second.size() < 2 && LoopCounts.lookup(Token) < 2))
+      continue;
+    CallInst *Selected = nullptr;
+    for (CallInst *Candidate : Found->second)
+      if (DT.dominates(Candidate, RegionLoop->getHeader()) &&
+          (!Selected || DT.dominates(Selected, Candidate)))
+        Selected = Candidate;
+    if (!Selected || !RegionLoop->getLoopPreheader())
+      diagnose(F, RegionLoop->getHeader()->getTerminator(),
+               "predication: requires a dominating mandatory region sentinel");
+    Bindings[RegionLoop] = Selected;
+  }
+  SmallPtrSet<CallInst *, 4> Replaced;
+  for (auto &Binding : Bindings) {
+    Loop *RegionLoop = Binding.first;
+    CallInst *Sentinel = Binding.second;
+    if (Sentinel->getMetadata(PredicatedDomainMD))
+      diagnose(F, Sentinel,
+               "cannot specialize an already predicated region instance");
+    MDNode *Token = MDNode::getDistinct(F.getContext(), {});
+    auto *Instance = cast<CallInst>(Sentinel->clone());
+    Instance->setArgOperand(0, MetadataAsValue::get(F.getContext(), Token));
+    Instance->insertBefore(RegionLoop->getLoopPreheader()->getTerminator());
+    Replaced.insert(Sentinel);
+    SmallVector<Metadata *, 8> Properties{nullptr};
+    for (const MDOperand &Operand :
+         drop_begin(RegionLoop->getLoopID()->operands())) {
+      auto *Property = dyn_cast_or_null<MDNode>(Operand.get());
+      auto *Name = Property && Property->getNumOperands()
+                       ? dyn_cast_or_null<MDString>(Property->getOperand(0))
+                       : nullptr;
+      Properties.push_back(Name && Name->getString() == RegionLoopMD
+                               ? MDNode::get(F.getContext(), {Name, Token})
+                               : Operand.get());
+    }
+    MDNode *LoopID = MDNode::getDistinct(F.getContext(), Properties);
+    LoopID->replaceOperandWith(0, LoopID);
+    RegionLoop->setLoopID(LoopID);
+  }
+  for (CallInst *Sentinel : Replaced)
+    Sentinel->eraseFromParent();
+  return !Bindings.empty();
+}
+
 static bool isMergedUnitSuccessor(Value *V, PHINode *IV, Loop &L,
                                   SmallPtrSetImpl<Value *> &Active) {
   if (!Active.insert(V).second)
@@ -6232,6 +6299,7 @@ public:
 static bool lowerRegions(Function &F, LoopInfo &LI, ScalarEvolution &SE,
                          DominatorTree &DT, PostDominatorTree &PDT,
                          AAResults &AA, MemorySSA &MSSA) {
+  specializeRegionInstances(F, LI, DT);
   SmallVector<Loop *, 8> Loops;
   std::function<void(Loop *)> Collect = [&](Loop *L) {
     for (Loop *Sub : *L)
@@ -7644,6 +7712,8 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool Changed = rewriteF32ViewImportBitcasts(F);
   if (Changed)
     AM.invalidate(F, PreservedAnalyses::none());
+  Changed |= specializeRegionInstances(F, AM.getResult<LoopAnalysis>(F),
+                                       AM.getResult<DominatorTreeAnalysis>(F));
   for (;;) {
     auto &LI = AM.getResult<LoopAnalysis>(F);
     Loop *Selected = nullptr;

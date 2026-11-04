@@ -238,8 +238,14 @@ represents those integer bits in i32 vectors, explicitly normalizes arithmetic
 and truncation modulo the original width, and sign-extends signed operations
 and casts before widening. This does not admit sub-i32 GM memory accesses.
 
-The predicator attaches the original region token and domain to the IR it
-emits.  The legalizer preflights all token-owned regions before mutation,
+Before predication, duplicated region tokens from inlining are specialized
+per loop instance. Each loop is associated with its nearest dominating
+matching sentinel and receives a private sentinel in its preheader. This also
+handles matching sentinels merged by CFG simplification. Sequential and
+divergent calls to the same helper do not share ownership. Missing or
+non-dominating sentinels remain errors.
+The predicator attaches the instance token and domain to the IR it emits.
+The legalizer preflights all token-owned regions before mutation,
 preserves memory-root order, and consumes each sentinel only after removing
 the complete owned VP/vector-pointer graph.  Missing ownership, escaping
 values, unsupported domains, partial EVL, effects or types receive diagnostics.
