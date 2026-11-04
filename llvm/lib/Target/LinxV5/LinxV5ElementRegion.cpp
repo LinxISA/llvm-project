@@ -2261,7 +2261,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         continue;
       }
       if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
-        if (!Freeze->getType()->isIntegerTy(32) &&
+        if (!Freeze->getType()->isIntegerTy(1) &&
+            !Freeze->getType()->isIntegerTy(32) &&
             !Freeze->getType()->isIntegerTy(64) &&
             !Freeze->getType()->isFloatTy() && !Freeze->getType()->isHalfTy())
           return Fail(&I, "freeze requires admitted scalar numeric data");
@@ -2419,7 +2420,8 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                     "field suffixes");
       bool UniformBase = L.isLoopInvariant(Pointer) ||
                          (GEP && GEP->getNumIndices() == 1 &&
-                          (GEP->getSourceElementType()->isIntegerTy(64) ||
+                          (GEP->getSourceElementType()->isIntegerTy(8) ||
+                           GEP->getSourceElementType()->isIntegerTy(64) ||
                            GEP->getSourceElementType()->isIntegerTy(16) ||
                            GEP->getSourceElementType()->isIntegerTy(32) ||
                            GEP->getSourceElementType()->isFloatTy() ||
@@ -2493,15 +2495,38 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
   DenseMap<Value *, Value *> PositiveB32Values;
   SmallPtrSet<Instruction *, 8> ScalarNarrowImports;
   SimplifyQuery SQ(F.getParent()->getDataLayout());
+  DenseMap<std::pair<Value *, Value *>, Value *> MaskUnions;
+  DenseMap<std::pair<Value *, std::pair<Value *, Value *>>, Value *> Blends;
   auto UnionMask = [&](Value *Left, Value *Right, const Twine &Name) {
     if (Value *Simple = simplifyOrInst(Left, Right, SQ))
       return Simple;
-    return B.CreateOr(Left, Right, Name);
+    if (Value *Existing = MaskUnions.lookup({Right, Left}))
+      return Existing;
+    if (Value *Existing = MaskUnions.lookup({Left, Right}))
+      return Existing;
+    return MaskUnions[{Left, Right}] = B.CreateOr(Left, Right, Name);
   };
   auto Blend = [&](Value *Mask, Value *Yes, Value *No, const Twine &Name) {
+    while (auto *Nested = dyn_cast<SelectInst>(Yes)) {
+      Value *Condition = Nested->getCondition();
+      if (Condition->getType() != Mask->getType())
+        break;
+      if (Nested->getFalseValue() == No) {
+        Yes = Nested->getTrueValue();
+      } else if (Nested->getTrueValue() == No) {
+        Yes = Nested->getFalseValue();
+        Condition = B.CreateNot(Condition, "pto.blend.not");
+      } else {
+        break;
+      }
+      Mask = B.CreateSelect(Mask, Condition, False, "pto.blend.mask");
+    }
     if (Value *Simple = simplifySelectInst(Mask, Yes, No, SQ))
       return Simple;
-    return B.CreateSelect(Mask, Yes, No, Name);
+    auto Key = std::make_pair(Mask, std::make_pair(Yes, No));
+    if (Value *Existing = Blends.lookup(Key))
+      return Existing;
+    return Blends[Key] = B.CreateSelect(Mask, Yes, No, Name);
   };
   // Successor index is part of identity: a conditional can have two edges to
   // the same destination, and neither edge may be silently dropped.
@@ -2656,13 +2681,23 @@ static void emitPredication(Function &F, const PredicatedRegion &Plan,
         Result = Blend(Mask, Widen(Insert->getOperand(1)),
                        Widen(Insert->getOperand(0)), "pto.carrier.update");
       } else if (auto *Phi = dyn_cast<PHINode>(&I)) {
-        Result = PoisonValue::get(WideTy);
-        for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J)
-          Result = Blend(EdgeFrom(Phi->getIncomingBlock(J), BB),
-                         PositiveB32Result
-                             ? WidenPositiveB32(Phi->getIncomingValue(J))
-                             : Widen(Phi->getIncomingValue(J)),
-                         Result, "pto.phi");
+        SmallVector<std::pair<Value *, Value *>, 4> Incoming;
+        DenseMap<Value *, unsigned> Positions;
+        for (unsigned J = 0; J < Phi->getNumIncomingValues(); ++J) {
+          Value *Data = PositiveB32Result
+                            ? WidenPositiveB32(Phi->getIncomingValue(J))
+                            : Widen(Phi->getIncomingValue(J));
+          Value *Edge = EdgeFrom(Phi->getIncomingBlock(J), BB);
+          auto Position = Positions.try_emplace(Data, Incoming.size());
+          if (Position.second)
+            Incoming.emplace_back(Data, Edge);
+          else
+            Incoming[Position.first->second].second = UnionMask(
+                Incoming[Position.first->second].second, Edge, "pto.phi.mask");
+        }
+        Result = Incoming.front().first;
+        for (auto &Entry : drop_begin(Incoming))
+          Result = Blend(Entry.second, Entry.first, Result, "pto.phi");
       } else if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
         Result = B.CreateFreeze(Widen(Freeze->getOperand(0)), "pto.freeze");
       } else if (auto *Unary = dyn_cast<UnaryOperator>(&I)) {
@@ -3886,7 +3921,8 @@ class ElementTileLegalizer {
              isF32Vector(V) || isF16Vector(V) ||
              fail(V, "unsupported undefined element type");
     if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
-      if (!isVector(Freeze, 32) && !isI64LeafVector(Freeze) &&
+      if (!isVector(Freeze, 1) && !isVector(Freeze, 32) &&
+          !isI64LeafVector(Freeze) &&
           !isF32Vector(Freeze) && !isF16Vector(Freeze))
         return fail(V, "freeze requires admitted Tile data");
       return validate(Freeze->getOperand(0));
@@ -3913,7 +3949,8 @@ class ElementTileLegalizer {
       if (!Base || !Base->getType()->isPointerTy() ||
           Base->getType()->getPointerAddressSpace() != 0 ||
           GEP->getNumIndices() != 1 ||
-          (!GEP->getSourceElementType()->isIntegerTy(64) &&
+          (!GEP->getSourceElementType()->isIntegerTy(8) &&
+           !GEP->getSourceElementType()->isIntegerTy(64) &&
            !GEP->getSourceElementType()->isIntegerTy(32) &&
            !GEP->getSourceElementType()->isIntegerTy(16) &&
            !GEP->getSourceElementType()->isFloatTy() &&
@@ -4339,6 +4376,8 @@ class ElementTileLegalizer {
     };
     if (isa<UndefValue>(V) || isa<PoisonValue>(V)) {
       R = B.getInt64(0);
+    } else if (auto *Freeze = dyn_cast<FreezeInst>(V)) {
+      R = mask(Freeze->getOperand(0));
     } else if (Value *Scalar = getSplatValue(V)) {
       R = B.CreateSelect(B.CreateFreeze(Scalar), B.getInt64(FullMask),
                          B.getInt64(0), "pto.mask.splat");
