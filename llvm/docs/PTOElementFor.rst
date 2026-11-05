@@ -260,6 +260,22 @@ control. Memory operations retain compiler memory barriers. Address offsets
 are shared only when both the typed index source and active Tile mask agree.
 The older bounded gather/atomic lowering also uses Tile execution masks.
 
+On the ``0.59`` branch, these effects use Tile predicates by default; the
+experimental PR #146 option ``-linxv5-force-element-tile-mask`` is neither
+required nor available. An aligned monotonic i32 atomic add returns the old
+value for each active element, which may be stored or used as a scatter
+index. Inactive elements perform neither the atomic access nor the scatter
+store. Separate regions may scatter keys, offsets and indices using slots
+loaded from memory. Independent atomic-addressed streams in one region are
+also supported when the existing counter and memory-disjointness proofs hold.
+This does not admit arbitrary overlapping output streams.
+
+``issue-153-predicate-effects.cpp`` checks the atomic old-value dataflow,
+appended Tile predicates and memory barriers, three separate scatter regions,
+and O2/O3 object generation. A 256-element explicit-grain case checks the
+wider domain without changing the omitted-grain defaults. These are compile
+regressions, not simulator or runtime validation.
+
 Nonuniform constant conditions and complemented floating comparisons use this
 same carrier. Existing legal partial-EVL floating comparisons intersect their
 source predicate with a Tile lane-prefix mask; inactive signaling NaNs are not
