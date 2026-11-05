@@ -39,7 +39,9 @@ define float @s32tof32(float %a, i32 %b) {
 ; CHECK-LABEL: s16tof16:
 ; DAG:      C.BSTART.FP RET
 ; DAG-DAG:  scvtf.sh2fh a1, ->t
-; DAG-NEXT: fadd.fh a0, t#1, ->a0
+; DAG-NEXT: fcvt.fh2fd t#1, ->t
+; DAG-NEXT: fadd.fd t#3, t#1, ->t
+; DAG-NEXT: fcvt.fd2fh t#1, ->a0
 ; DAG-DAG:  c.setc.tgt ra
 ; DAG-NEXT: C.BSTART.FP
 define half @s16tof16(half %a, i16 %b) {
@@ -63,7 +65,9 @@ define float @u16tof32(float %a, i16 %b) {
 ; CHECK-LABEL: s32tof16:
 ; DAG:      C.BSTART.FP RET
 ; DAG-DAG:  scvtf.sw2fh a1, ->t
-; DAG-NEXT: fadd.fh a0, t#1, ->a0
+; DAG-NEXT: fcvt.fh2fd t#1, ->t
+; DAG-NEXT: fadd.fd t#3, t#1, ->t
+; DAG-NEXT: fcvt.fd2fh t#1, ->a0
 ; DAG-DAG:  c.setc.tgt ra
 ; DAG-NEXT: C.BSTART.FP
 define half @s32tof16(half %a, i32 %b) {

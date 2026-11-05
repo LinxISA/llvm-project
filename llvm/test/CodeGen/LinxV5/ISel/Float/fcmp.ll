@@ -12,7 +12,9 @@ define i1 @foeq.fd(double %a, double %b) {
 }
 
 ; CHECK-LABEL: fueq.fh:
-; DAG:      fne.fh a0, a1, ->t
+; DAG:      fcvt.fh2fs a0, ->t
+; DAG:      fcvt.fh2fs a1, ->t
+; DAG:      fne.fs t#2, t#1, ->t
 ; DAG-NEXT: xori t#1, 1, ->a0
 ; VBX: __gnu_h2f_ieee
 define i1 @fueq.fh(half %a, half %b) {

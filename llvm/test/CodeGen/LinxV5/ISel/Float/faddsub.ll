@@ -15,7 +15,10 @@ define float @fadd_fs(float %a, float %b) {
 }
 
 ; CHECK-LABEL: fadd_fh:
-; DAG: fadd.fh a0, a1, ->a0
+; DAG: fcvt.fh2fd a0, ->t
+; DAG: fcvt.fh2fd a1, ->t
+; DAG: fadd.fd t#2, t#1, ->t
+; DAG: fcvt.fd2fh t#1, ->a0
 define half @fadd_fh(half %a, half %b) {
   %add = fadd half %a, %b
   ret half %add
@@ -36,7 +39,10 @@ define float @fsub_fs(float %a, float %b) {
 }
 
 ; CHECK-LABEL: fsub_fh:
-; DAG: fsub.fh a0, a1, ->a0
+; DAG: fcvt.fh2fd a0, ->t
+; DAG: fcvt.fh2fd a1, ->t
+; DAG: fsub.fd t#2, t#1, ->t
+; DAG: fcvt.fd2fh t#1, ->a0
 define half @fsub_fh(half %a, half %b) {
   %sub = fsub half %a, %b
   ret half %sub

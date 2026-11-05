@@ -1077,7 +1077,214 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
   SDLoc DL(Node);
   EVT VT = Node->getValueType(0);
 
+  // Select scalar atomic nodes explicitly: the memory VT, rather than the
+  // promoted register VT, owns the access width. Preserve the original MMO so
+  // scheduling and later passes retain volatility, aliasing and atomic order.
+  auto Fence = [&](SDValue Chain) {
+    auto Mask = CurDAG->getTargetConstant(3, DL, MVT::i64);
+    return SDValue(CurDAG->getMachineNode(LinxV5::FENCE_D, DL, MVT::Other,
+                                        {Mask, Mask, Chain}), 0);
+  };
+  if (!Subtarget->isSIMT() && !Subtarget->enableLegacyISel() &&
+      isa<AtomicSDNode>(Node)) {
+    auto *AN = cast<AtomicSDNode>(Node);
+    unsigned Bits = AN->getMemoryVT().getSizeInBits();
+    unsigned W = Bits == 8 ? 0 : Bits == 16 ? 1 : Bits == 32 ? 2 : 3;
+    assert((Bits == 8 || Bits == 16 || Bits == 32 || Bits == 64) &&
+           "Unsupported scalar atomic width");
+    AtomicOrdering Order = AN->getMergedOrdering();
+    unsigned O = (isAcquireOrStronger(Order) ? 2 : 0) |
+                 (isReleaseOrStronger(Order) ? 1 : 0);
+    bool SeqCst = Order == AtomicOrdering::SequentiallyConsistent;
+    SDValue Chain = AN->getChain();
+    // PTO-RC is multi-copy atomic. Full data fences around SC accesses
+    // supply Store->Load preserved-order edges; aqrl alone is not an SC order.
+    if (SeqCst)
+      Chain = Fence(Chain);
+    SDValue Addr = AN->getBasePtr();
+    SDValue Value;
+    if (Opcode != ISD::ATOMIC_LOAD)
+      Value = Node->getOperand(2);
+    unsigned Opc = 0, StoreOpc = 0;
+#define ATOMIC_ORDERS(NAME) \
+    {LinxV5::NAME, LinxV5::NAME##_RL, LinxV5::NAME##_AQ, LinxV5::NAME##_AQRL}
+    static const unsigned CAS[4][4] = {
+        ATOMIC_ORDERS(CASB), ATOMIC_ORDERS(CASH),
+        ATOMIC_ORDERS(CASW), ATOMIC_ORDERS(CASD)};
+    static const unsigned Swap[4][4] = {
+        ATOMIC_ORDERS(SWAPB), ATOMIC_ORDERS(SWAPH),
+        ATOMIC_ORDERS(SWAPW), ATOMIC_ORDERS(SWAPD)};
+#define SELECT_RMW(NAME) \
+    do { \
+      static const unsigned Ops[2][4] = {ATOMIC_ORDERS(LW_##NAME), \
+                                          ATOMIC_ORDERS(LD_##NAME)}; \
+      static const unsigned Stores[2][2] = { \
+          {LinxV5::SW_##NAME, LinxV5::SW_##NAME##_RL}, \
+          {LinxV5::SD_##NAME, LinxV5::SD_##NAME##_RL}}; \
+      Opc = Ops[W - 2][O]; \
+      StoreOpc = Stores[W - 2][O & 1]; \
+    } while (false)
+    switch (Opcode) {
+    default: llvm_unreachable("Unexpected scalar atomic node");
+    case ISD::ATOMIC_CMP_SWAP:
+    case ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS:
+      Opc = CAS[W][O];
+      break;
+    case ISD::ATOMIC_SWAP: Opc = Swap[W][O]; break;
+    case ISD::ATOMIC_LOAD_ADD:
+    case ISD::ATOMIC_LOAD_SUB:
+      if (W < 2) {
+        assert(!Node->hasAnyUseOfValue(0) && !(O & 2));
+        static const unsigned Stores[2][2][2] = {
+            {{LinxV5::SB_ADD, LinxV5::SB_ADD_RL},
+             {LinxV5::SB_SUB, LinxV5::SB_SUB_RL}},
+            {{LinxV5::SH_ADD, LinxV5::SH_ADD_RL},
+             {LinxV5::SH_SUB, LinxV5::SH_SUB_RL}}};
+        StoreOpc = Stores[W][Opcode == ISD::ATOMIC_LOAD_SUB][O & 1];
+      } else {
+        SELECT_RMW(ADD);
+        if (Opcode == ISD::ATOMIC_LOAD_SUB) {
+          StoreOpc = W == 2 ? (O & 1 ? LinxV5::SW_SUB_RL : LinxV5::SW_SUB)
+                            : (O & 1 ? LinxV5::SD_SUB_RL : LinxV5::SD_SUB);
+          // Returning subtraction uses modular addition of the negated value.
+          if (Node->hasAnyUseOfValue(0) || (O & 2))
+            Value = SDValue(CurDAG->getMachineNode(
+                LinxV5::SUB, DL, MVT::i64,
+                {CurDAG->getRegister(LinxV5::R0, MVT::i64), Value,
+                 CurDAG->getTargetConstant(0, DL, MVT::i64)}), 0);
+        }
+      }
+      break;
+    case ISD::ATOMIC_LOAD_AND: SELECT_RMW(AND); break;
+    case ISD::ATOMIC_LOAD_OR: SELECT_RMW(OR); break;
+    case ISD::ATOMIC_LOAD_XOR: SELECT_RMW(XOR); break;
+    case ISD::ATOMIC_LOAD_MIN: SELECT_RMW(SMIN); break;
+    case ISD::ATOMIC_LOAD_MAX: SELECT_RMW(SMAX); break;
+    case ISD::ATOMIC_LOAD_UMIN: SELECT_RMW(UMIN); break;
+    case ISD::ATOMIC_LOAD_UMAX: SELECT_RMW(UMAX); break;
+    case ISD::ATOMIC_LOAD: {
+      // LR is a read-only access and carries native acquire semantics. Unlike
+      // a synthetic CAS load it never requires write permission or writes zero.
+      static const unsigned Loads[4][4] = {
+          ATOMIC_ORDERS(LR_B), ATOMIC_ORDERS(LR_H),
+          ATOMIC_ORDERS(LR_W), ATOMIC_ORDERS(LR_D)};
+      Opc = Loads[W][O];
+      break;
+    }
+    case ISD::ATOMIC_STORE: {
+      if (isReleaseOrStronger(Order)) {
+        // PTO fences only order same-agent events; a relaxed store following
+        // a fence does not become a release event. Exchange supplies the
+        // release event required by a cross-agent acquire reading this value.
+        Opc = Swap[W][O];
+      } else {
+        static const unsigned Stores[] = {LinxV5::SBI, LinxV5::SHI_U,
+                                           LinxV5::SWI_U, LinxV5::SDI_U};
+        StoreOpc = Stores[W];
+      }
+      break;
+    }
+    }
+#undef SELECT_RMW
+#undef ATOMIC_ORDERS
+    bool OrderedStore = Opcode == ISD::ATOMIC_STORE && isReleaseOrStronger(Order);
+    bool NoResult = !OrderedStore &&
+                    (Opcode == ISD::ATOMIC_STORE ||
+                     (StoreOpc && !Node->hasAnyUseOfValue(0) && !(O & 2)));
+    SmallVector<SDValue, 5> Ops;
+    if (Opcode == ISD::ATOMIC_STORE && !OrderedStore) {
+      Ops = {Value, Addr, CurDAG->getTargetConstant(0, DL, MVT::i64)};
+    } else if (Opcode == ISD::ATOMIC_LOAD) {
+      Ops = {Addr};
+    } else {
+      Ops = {Addr, Value};
+      if (Opcode == ISD::ATOMIC_CMP_SWAP ||
+          Opcode == ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS)
+        Ops.push_back(Node->getOperand(3));
+    }
+    Ops.push_back(Chain);
+    SDVTList ResultVTs = NoResult ? CurDAG->getVTList(MVT::Other)
+                                  : CurDAG->getVTList(MVT::i64, MVT::Other);
+    auto *MN = CurDAG->getMachineNode(NoResult ? StoreOpc : Opc, DL,
+                                      ResultVTs, Ops);
+    MachineMemOperand *MMO = AN->getMemOperand();
+    if (OrderedStore)
+      MMO = CurDAG->getMachineFunction().getMachineMemOperand(
+          MMO, MMO->getFlags() | MachineMemOperand::MOLoad);
+    CurDAG->setNodeMemRefs(MN, {MMO});
+    SDValue OutChain(MN, NoResult ? 0 : 1);
+    if (SeqCst)
+      OutChain = Fence(OutChain);
+    if (Opcode == ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS) {
+      SDValue Old(MN, 0), Expected = Value;
+      // Compare the low memory-width bits. Do this after legalization, since
+      // CASB/H zero-extend but CASW sign-extends and promoted inputs may carry
+      // arbitrary upper bits. Explicit masks also avoid modifier folding.
+      if (Bits < 64) {
+        auto Mask = [&](SDValue V) {
+          return SDValue(CurDAG->getMachineNode(
+              LinxV5::BIC, DL, MVT::i64,
+              {V, CurDAG->getTargetConstant(Bits, DL, MVT::i64),
+               CurDAG->getTargetConstant(64 - Bits, DL, MVT::i64)}), 0);
+        };
+        Old = Mask(Old);
+        Expected = Mask(Expected);
+      }
+      SDValue Success(CurDAG->getMachineNode(LinxV5::CMP_EQ, DL, MVT::i64,
+                                             {Old, Expected}), 0);
+      SDValue Results[] = {SDValue(MN, 0), Success, OutChain};
+      CurDAG->ReplaceAllUsesWith(Node, Results);
+      CurDAG->RemoveDeadNode(Node);
+    } else if (Opcode == ISD::ATOMIC_STORE) {
+      CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), OutChain);
+      CurDAG->RemoveDeadNode(Node);
+    } else {
+      SDValue Results[] = {NoResult ? CurDAG->getUNDEF(VT) : SDValue(MN, 0),
+                           OutChain};
+      CurDAG->ReplaceAllUsesWith(Node, Results);
+      CurDAG->RemoveDeadNode(Node);
+    }
+    return;
+  }
+
   switch (Opcode) {
+  case ISD::ATOMIC_FENCE: {
+    ReplaceNode(Node, Fence(Node->getOperand(0)).getNode());
+    return;
+  }
+  case ISD::PREFETCH: {
+    SDValue Addr = Node->getOperand(1);
+    // Locality and read/write are advisory; short PTO prefetch has one
+    // non-binding model. An instruction-cache hint may also be ignored.
+    if (Addr.getOpcode() == ISD::ADD &&
+        !isa<ConstantSDNode>(Addr.getOperand(1))) {
+      SDValue Index = Addr.getOperand(1);
+      unsigned Shift = 0;
+      if (Index.getOpcode() == ISD::SHL) {
+        auto *C = dyn_cast<ConstantSDNode>(Index.getOperand(1));
+        if (C && C->getZExtValue() < 32) {
+          Shift = C->getZExtValue();
+          Index = Index.getOperand(0);
+        }
+      }
+      ReplaceNode(Node, CurDAG->getMachineNode(
+          LinxV5::PRF, DL, MVT::Other,
+          {Addr.getOperand(0), Index,
+           CurDAG->getTargetConstant(Shift, DL, MVT::i64), Node->getOperand(0)}));
+      return;
+    }
+    SDValue Offset = CurDAG->getTargetConstant(0, DL, MVT::i64);
+    if (CurDAG->isBaseWithConstantOffset(Addr)) {
+      auto *C = dyn_cast<ConstantSDNode>(Addr->getOperand(1));
+      if (C && isInt<12>(C->getSExtValue())) {
+        Offset = CurDAG->getTargetConstant(C->getSExtValue(), DL, MVT::i64);
+        Addr = Addr->getOperand(0);
+      }
+    }
+    ReplaceNode(Node, CurDAG->getMachineNode(LinxV5::PRFI_U, DL, MVT::Other,
+                                            {Addr, Offset, Node->getOperand(0)}));
+    return;
+  }
   case ISD::BITCAST: {
     // Equal-width logical element views share the same Tile carrier. The
     // conversion changes LLVM's value type, not bits or the backing descriptor.

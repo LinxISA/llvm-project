@@ -13,7 +13,7 @@ define void @one_sync(ptr %p) {
 ; CHECK-LABEL: one_sync:
 ; CHECK: sd
 ; CHECK: BSTART.SYS FALL
-; CHECK-NEXT: SYNC.CORE
+; CHECK-NEXT: sync.core
 ; CHECK-NEXT: BSTOP
 ; CHECK: sd
 
@@ -25,8 +25,8 @@ define void @two_syncs() {
 
 ; CHECK-LABEL: two_syncs:
 ; CHECK: BSTART.SYS FALL
-; CHECK-NEXT: SYNC.CORE
+; CHECK-NEXT: sync.core
 ; CHECK-NEXT: BSTOP
 ; CHECK: BSTART.SYS FALL
-; CHECK-NEXT: SYNC.CORE
+; CHECK-NEXT: sync.core
 ; CHECK-NEXT: BSTOP
