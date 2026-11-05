@@ -804,9 +804,10 @@ public:
 
   bool isGPRList() const { return isVariableOp(); }
 
-  bool isFenceFlag() const {
-    // TODO: Add more check.
-    return true;
+  bool isFenceFlag() const { return IsUImm<4>(); }
+
+  bool isUImm5SetRet() const {
+    return isBranchTarget<false, 5, 0>();
   }
 
   template <bool Signed, unsigned N, unsigned S> struct isShiftedImm {
@@ -3822,6 +3823,11 @@ OperandMatchResultTy LinxV5AsmParser::parseFenceFlag(OperandVector &Operands) {
   unsigned Flag = 0;
   if (getLexer().getTok().is(AsmToken::EndOfStatement))
     return MatchOperand_ParseFail;
+  if (getTok().is(AsmToken::Integer) || getTok().is(AsmToken::Minus) ||
+      getTok().is(AsmToken::Plus))
+    return parseImmediate(Operands);
+  if (!getTok().is(AsmToken::Identifier))
+    return MatchOperand_ParseFail;
   StringRef Tok = getTok().getIdentifier();
   for (unsigned i = 0; i < Tok.size(); ++i) {
     if (Tok[i] == 'i')
@@ -4512,6 +4518,17 @@ bool LinxV5AsmParser::maybeValidateInlineAsm(MCInst &Inst, SMLoc IDLoc) {
 // TODO: Add legality check for instruction.
 bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
                                           SMLoc IDLoc) {
+  switch (Inst.getOpcode()) {
+  case LinxV5::PRF:
+  case LinxV5::PRF_SW:
+  case LinxV5::PRF_UW:
+    if (!Inst.getOperand(2).isImm() ||
+        !isUInt<5>(Inst.getOperand(2).getImm()))
+      return true;
+    break;
+  default:
+    break;
+  }
   if (MII.get(Inst.getOpcode()).TSFlags &
       llvm::LinxV5II::IsDisassembleOnlyMask) {
     return true;

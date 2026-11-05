@@ -50,7 +50,7 @@ LinxV5AsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_linxv5_tpcrel_lo12_i", 20, 12, MCFixupKindInfo::FKF_IsPCRel},
       {"fixup_linxv5_tpcrel_lo12_l", 20, 12, MCFixupKindInfo::FKF_IsPCRel},
       {"fixup_linxv5_tpcrel_lo12_s", 0, 32, MCFixupKindInfo::FKF_IsPCRel},
-      {"fixup_linxv5_c_addpc", 2, 5, MCFixupKindInfo::FKF_IsPCRel},
+      {"fixup_linxv5_c_addpc", 6, 5, MCFixupKindInfo::FKF_IsPCRel},
       {"fixup_linxv5_addpc", 20, 12, MCFixupKindInfo::FKF_IsPCRel},
       {"fixup_linxv5_hlsetret", 12, 32, MCFixupKindInfo::FKF_IsPCRel},
       {"fixup_linxv5_simt_branch", 32, 32, MCFixupKindInfo::FKF_IsPCRel},
