@@ -433,11 +433,6 @@ MDNode *LoopInfo::createMetadata(
         MDNode::get(Ctx, MDString::get(Ctx, "llvm.loop.mustprogress")));
 
   if (Attrs.LinxElementRegion) {
-    if (Attrs.LinxElementGrain)
-      LoopProperties.push_back(MDNode::get(
-          Ctx, {MDString::get(Ctx, "llvm.loop.linx.pto.element.grain"),
-                ConstantAsMetadata::get(ConstantInt::get(
-                    llvm::Type::getInt32Ty(Ctx), Attrs.LinxElementGrain))}));
     // A required target region must survive generic idiom replacement (for
     // example memcpy recognition) until its own lowering consumes the loop.
     LoopProperties.push_back(
@@ -495,7 +490,6 @@ void LoopAttributes::clear() {
   PipelineInitiationInterval = 0;
   MustProgress = false;
   LinxElementRegion = nullptr;
-  LinxElementGrain = 0;
 }
 
 LoopInfo::LoopInfo(BasicBlock *Header, const LoopAttributes &Attrs,

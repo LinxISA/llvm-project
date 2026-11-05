@@ -2388,8 +2388,7 @@ StmtResult Parser::ParsePragmaLinx(StmtVector &Stmts,
       continue;
 
     ArgsUnion ArgHints[] = {Hint.PragmaNameLoc, Hint.OptionLoc,
-                            Hint.StateLoc, Hint.Grain ? ArgsUnion(Hint.Grain)
-                                                     : ArgsUnion()};
+                            Hint.StateLoc, ArgsUnion()};
     TempAttrs.addNew(Hint.PragmaNameLoc->Ident, Hint.Range, nullptr,
                      Hint.PragmaNameLoc->Loc, ArgHints, 4,
                      ParsedAttr::AS_Pragma);

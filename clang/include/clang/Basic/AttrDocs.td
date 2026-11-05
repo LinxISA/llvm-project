@@ -3483,11 +3483,6 @@ def LinxDocs : Documentation {
   let Content = [{
 1. ``#pragma linx block { }`` hints the region which want to be
 converted to hyper block.
-2. ``#pragma pto element for`` marks a required PTO element loop. The optional
-``grain(N)`` clause selects 128, 256, 512, 1024, 2048 or 4096 primary data bytes
-per batch. Omitting it preserves existing profile selection. Conditions remain
-per-element and incomplete batches suppress inactive accesses. See
-``llvm/docs/PTOElementFor.rst`` for supported shapes and current restrictions.
   }];
 }
 

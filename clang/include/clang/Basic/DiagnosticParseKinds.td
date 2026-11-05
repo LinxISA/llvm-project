@@ -37,8 +37,6 @@ def err_pragma_pto_expected_for : Error<
   "expected 'for' after '#pragma pto element'">;
 def err_pragma_pto_extra_tokens : Error<
   "unexpected token after '#pragma pto element for'">;
-def err_pragma_pto_grain : Error<
-  "expected grain(128), grain(256), grain(512), grain(1024), grain(2048) or grain(4096)">;
 def err_pragma_linx_expected_option : Error<
   "expected 'block' or 'elementwise' after '#pragma linx'">;
 def err_pragma_linx_extra_tokens : Error<

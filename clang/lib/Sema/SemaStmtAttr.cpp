@@ -148,10 +148,7 @@ static Attr *handleLinxAttr(Sema &S, Stmt *St, const ParsedAttr &A,
     assert(0 && "Error: Unsupport pragma linx format!");
   }
 
-  unsigned Grain = 0;
-  if (Expr *Value = A.getArgAsExpr(3))
-    Grain = cast<IntegerLiteral>(Value)->getValue().getZExtValue();
-  return LinxAttr::CreateImplicit(S.Context, Option, Grain, A.getRange());
+  return LinxAttr::CreateImplicit(S.Context, Option, A.getRange());
 }
 
 static Attr *handleLoopHintAttr(Sema &S, Stmt *St, const ParsedAttr &A,

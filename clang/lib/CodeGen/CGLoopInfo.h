@@ -84,7 +84,6 @@ struct LoopAttributes {
 
   /// Identity shared with llvm.linx.experimental.element.region.
   llvm::MDNode *LinxElementRegion = nullptr;
-  unsigned LinxElementGrain = 0;
 };
 
 /// Information used when generating a structured loop.
@@ -290,9 +289,8 @@ public:
   void setMustProgress(bool P) { StagedAttrs.MustProgress = P; }
 
   /// Mark the next loop as a required PTO element region.
-  void setLinxElementRegion(llvm::MDNode *Token, unsigned Grain = 0) {
+  void setLinxElementRegion(llvm::MDNode *Token) {
     StagedAttrs.LinxElementRegion = Token;
-    StagedAttrs.LinxElementGrain = Grain;
     StagedAttrs.VectorizeEnable = LoopAttributes::Disable;
     StagedAttrs.UnrollEnable = LoopAttributes::Disable;
     StagedAttrs.UnrollAndJamEnable = LoopAttributes::Disable;
