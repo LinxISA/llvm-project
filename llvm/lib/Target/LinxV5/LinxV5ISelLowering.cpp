@@ -296,6 +296,20 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::FMA, FPVTs, Legal);
   }
 
+  if (Subtarget.isScalar() && !Subtarget.enableLegacyISel()) {
+    // Keep f16 carriers legal for the ABI, loads/stores and conversions, but
+    // never select the reserved FSU SrcType=2 arithmetic encodings. Operation
+    // promotion inserts an explicit FP_ROUND back to half after each result.
+    // Use double precision rather than an intermediate single rounding.
+    for (unsigned Opc : {ISD::FADD, ISD::FSUB, ISD::FMUL, ISD::FDIV,
+                         ISD::FMA, ISD::STRICT_FADD, ISD::STRICT_FSUB,
+                         ISD::STRICT_FMUL, ISD::STRICT_FDIV, ISD::STRICT_FMA})
+      setOperationPromotedToType(Opc, MVT::f16, MVT::f64);
+    setOperationAction(ISD::SETCC, MVT::f16, Promote);
+    // Negation is a bit operation; it must preserve signed zero and NaNs.
+    setOperationAction(ISD::FNEG, MVT::f16, Custom);
+  }
+
   setOperationAction(ISD::GlobalAddress, XLenVT, Custom);
   setOperationAction(ISD::BlockAddress, XLenVT, Custom);
   setOperationAction(ISD::ConstantPool, XLenVT, Custom);
@@ -303,10 +317,29 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
 
   setOperationAction(ISD::GlobalTLSAddress, XLenVT, Custom);
 
-  setOperationAction(ISD::TRAP, MVT::Other, Legal);
-  setOperationAction(ISD::DEBUGTRAP, MVT::Other, Legal);
+  // PTO BWT is a nonblocking wait request, not a trap. Use LLVM's abort
+  // fallback rather than manufacturing trap semantics for that opcode.
+  setOperationAction(ISD::TRAP, MVT::Other, Expand);
+  setOperationAction(ISD::DEBUGTRAP, MVT::Other, Expand);
 
-  setMaxAtomicSizeInBitsSupported(0);
+  // Native scalar atomics access exactly their IR width, including byte and
+  // halfword CAS. Keep the existing libcall path for legacy and SIMT functions.
+  bool NativeScalar = Subtarget.isScalar() && !Subtarget.enableLegacyISel();
+  setMaxAtomicSizeInBitsSupported(NativeScalar ? 64 : 0);
+  if (NativeScalar) {
+    setMinCmpXchgSizeInBits(8);
+    for (unsigned Opc : {ISD::ATOMIC_CMP_SWAP,
+                         ISD::ATOMIC_CMP_SWAP_WITH_SUCCESS, ISD::ATOMIC_SWAP,
+                         ISD::ATOMIC_LOAD_ADD, ISD::ATOMIC_LOAD_SUB,
+                         ISD::ATOMIC_LOAD_AND, ISD::ATOMIC_LOAD_OR,
+                         ISD::ATOMIC_LOAD_XOR, ISD::ATOMIC_LOAD_MIN,
+                         ISD::ATOMIC_LOAD_MAX, ISD::ATOMIC_LOAD_UMIN,
+                         ISD::ATOMIC_LOAD_UMAX, ISD::ATOMIC_LOAD,
+                         ISD::ATOMIC_STORE})
+      setOperationAction(Opc, MVT::i64, Legal);
+    setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Legal);
+    setOperationAction(ISD::PREFETCH, MVT::Other, Legal);
+  }
 
   setBooleanContents(ZeroOrOneBooleanContent);
   MVT INTVTs[] = {MVT::Other, MVT::i1, MVT::i8,  MVT::i16, MVT::i32, MVT::i64,
@@ -336,6 +369,25 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
 
   if (!Subtarget.enableLegacyISel())
     setTargetDAGCombine(ISD::GlobalAddress);
+}
+
+TargetLowering::AtomicExpansionKind
+LinxV5TargetLowering::shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const {
+  if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())
+    return TargetLowering::shouldExpandAtomicRMWInIR(AI);
+  unsigned Bits = AI->getType()->getPrimitiveSizeInBits();
+  auto Op = AI->getOperation();
+  if (Op == AtomicRMWInst::Xchg)
+    return AtomicExpansionKind::None;
+  // Store-only byte/halfword add/sub have no acquire bit. Preserve these
+  // only when the old value is unused and no acquire semantics are needed.
+  if (Bits < 32 && AI->use_empty() &&
+      !isAcquireOrStronger(AI->getOrdering()) &&
+      (Op == AtomicRMWInst::Add || Op == AtomicRMWInst::Sub))
+    return AtomicExpansionKind::None;
+  if (AI->isFloatingPointOperation() || Op == AtomicRMWInst::Nand || Bits < 32)
+    return AtomicExpansionKind::CmpXChg;
+  return AtomicExpansionKind::None;
 }
 
 const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
@@ -861,6 +913,16 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
     return lowerLOAD(Op, DAG);
   case ISD::STORE:
     return lowerSTORE(Op, DAG);
+  case ISD::FNEG: {
+    // Half carriers live in the low 16 bits of a scalar GPR. Avoid the
+    // generic stack-based bitcast expansion and preserve all payload bits.
+    SDLoc DL(Op);
+    SDValue Bits = DAG.getNode(LinxV5ISD::BITCAST, DL, MVT::i64,
+                               Op.getOperand(0));
+    Bits = DAG.getNode(ISD::XOR, DL, MVT::i64, Bits,
+                       DAG.getConstant(0x8000, DL, MVT::i64));
+    return DAG.getNode(LinxV5ISD::BITCAST, DL, MVT::f16, Bits);
+  }
   case ISD::BITCAST: {
     if (!Subtarget.enableLegacyISel()) {
       SDLoc DL(Op);
@@ -906,6 +968,18 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       unsigned dNum = calcNumTileDefs(Op);
       unsigned uNum = calcNumTileUses(Op);
       return lowerTileOpWithBody(DL, Op, dNum, uNum, DAG, LinxV5ISD::MCALL);
+    }
+    if (IntID == Intrinsic::linx_scalar_fsqrt ||
+        IntID == Intrinsic::linx_scalar_fexp) {
+      EVT VT = Op.getValueType();
+      if (!Subtarget.isScalar() || Subtarget.enableLegacyISel() ||
+          !Subtarget.hasFloat() || (VT != MVT::f32 && VT != MVT::f64))
+        report_fatal_error("scalar FP intrinsic requires native scalar f32/f64");
+      unsigned Opc = IntID == Intrinsic::linx_scalar_fsqrt
+                         ? (VT == MVT::f32 ? LinxV5::FSQRT_FS : LinxV5::FSQRT_FD)
+                         : (VT == MVT::f32 ? LinxV5::FEXP_FS : LinxV5::FEXP_FD);
+      return SDValue(DAG.getMachineNode(Opc, DL, DAG.getVTList(VT, MVT::Other),
+                                       {Op.getOperand(2), Op.getOperand(0)}), 0);
     }
     switch (IntID) {
     default: {
@@ -2929,6 +3003,25 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     }
     return uNum;
   };
+  if (IntNo == Intrinsic::linx_scalar_dma ||
+      IntNo == Intrinsic::linx_scalar_bwt ||
+      IntNo == Intrinsic::linx_scalar_sync_core) {
+    if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())
+      report_fatal_error("scalar system intrinsic requires native scalar codegen");
+    unsigned Opc = IntNo == Intrinsic::linx_scalar_dma ? LinxV5::DMA
+                   : IntNo == Intrinsic::linx_scalar_bwt ? LinxV5::BWT
+                                                        : LinxV5::SYNC_CORE;
+    SmallVector<SDValue, 3> Ops;
+    if (IntNo == Intrinsic::linx_scalar_dma) {
+      // LLVM follows memcpy's (destination, source) convention; the encoded
+      // instruction uses [SrcL=source], SrcR=destination.
+      Ops = {Op.getOperand(3), Op.getOperand(2)};
+    } else if (IntNo == Intrinsic::linx_scalar_bwt) {
+      Ops.push_back(Op.getOperand(2));
+    }
+    Ops.push_back(Chain);
+    return SDValue(DAG.getMachineNode(Opc, DL, MVT::Other, Ops), 0);
+  }
   if (canCallSIMT(DAG) && IntNo == Intrinsic::linx_set_loop_iterations) {
     return lowerSetLoopIterations(Op, DAG);
   } else if (Intrinsic::getBaseName(IntNo).startswith("llvm.linx.vcall.par")) {

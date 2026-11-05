@@ -210,15 +210,21 @@ public:
   bool convertSelectOfConstantsToMath(EVT VT) const override { return true; }
 
   bool shouldInsertFencesForAtomic(const Instruction *I) const override {
-    return isa<LoadInst>(I) || isa<StoreInst>(I);
+    // Native selection retains aq/rl on accesses and emits explicit SC fences.
+    return false;
   }
 
+  AtomicExpansionKind
+  shouldExpandAtomicRMWInIR(AtomicRMWInst *AI) const override;
+
   ISD::NodeType getExtendForAtomicOps() const override {
-    return ISD::SIGN_EXTEND;
+    // Byte/halfword results are zero-extended, word results sign-extended.
+    // Do not assert a uniform extension during generic legalization.
+    return ISD::ANY_EXTEND;
   }
 
   ISD::NodeType getExtendForAtomicCmpSwapArg() const override {
-    return ISD::SIGN_EXTEND;
+    return ISD::ANY_EXTEND;
   }
 
   bool shouldExpandShift(SelectionDAG &DAG, SDNode *N) const override {

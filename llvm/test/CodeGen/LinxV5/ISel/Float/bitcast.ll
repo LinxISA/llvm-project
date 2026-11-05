@@ -24,7 +24,10 @@ define float @i32bcf32(i32 %a, float %b) {
 
 ; CHECK-LABEL: i16bcf16:
 ; DAG:      C.BSTART.FP RET
-; DAG-DAG:  fadd.fh a0, a1, ->a0
+; DAG:      fcvt.fh2fd a0, ->t
+; DAG:      fcvt.fh2fd a1, ->t
+; DAG:      fadd.fd t#2, t#1, ->t
+; DAG:      fcvt.fd2fh t#1, ->a0
 ; DAG-DAG:  c.setc.tgt ra
 ; DAG-NEXT: C.BSTART.FP
 define half @i16bcf16(i16 %a, half %b) {
@@ -59,7 +62,10 @@ define float @f32bci32(float %a, i32 %b) {
 
 ; CHECK-LABEL: f16bci16:
 ; DAG:      C.BSTART
-; DAG-DAG:  fadd.fh a0, a1, ->t
+; DAG:      fcvt.fh2fd a0, ->t
+; DAG:      fcvt.fh2fd a1, ->t
+; DAG:      fadd.fd t#2, t#1, ->t
+; DAG:      fcvt.fd2fh t#1, ->t
 ; DAG-NEXT: add t#1, a2, ->a0
 ; DAG-DAG:  c.setc.tgt ra
 ; DAG-NEXT: C.BSTART.FP

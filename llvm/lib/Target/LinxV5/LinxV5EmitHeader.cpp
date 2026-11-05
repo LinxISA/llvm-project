@@ -154,7 +154,8 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
           MI.getOpcode() == LinxV5::HL_SSR_GET ||
           MI.getOpcode() == LinxV5::SYNC_CORE ||
           MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
-          MI.getOpcode() == LinxV5::PseudoV5SharedS2L) {
+          MI.getOpcode() == LinxV5::PseudoV5SharedS2L ||
+          LinxV5II::getPEMask(TSFlags) == LinxV5II::PET_SYS) {
         if (MI.getIterator() == MBB->getLastNonDebugInstr()) {
           if (MI.getIterator() == MBB->getFirstNonDebugInstr())
             break;
@@ -193,7 +194,7 @@ void LinxV5EmitHeader::addKillInst(MachineBasicBlock &MBB) {
 
   for (MachineInstr &MI : MBB)
     if (LinxV5::isIsolateInstr(MI) ||
-        MI.getOpcode() == LinxV5::SYNC_CORE)
+        LinxV5II::getPEMask(MI.getDesc().TSFlags) == LinxV5II::PET_SYS)
       return;
 
   DebugLoc DL = DebugLoc();
@@ -254,6 +255,21 @@ void LinxV5EmitHeader::insertBlockHeader(MachineBasicBlock &MBB) {
   // skip EHLABEL
   auto HeaderPos = MBB.SkipPHIsLabelsAndDebug(MBB.begin());
   MachineBasicBlock::iterator MBBI = MBB.getFirstTerminator();
+
+  // System blocks have sequential fallthrough only. Isolate each SYS access
+  // from scalar branches/returns; SYNC.CORE additionally needs an exact header.
+  for (MachineInstr &MI : MBB) {
+    if (LinxV5II::getPEMask(MI.getDesc().TSFlags) == LinxV5II::PET_SYS) {
+      BuildMI(MBB, MI, MI.getDebugLoc(),
+              TII->get(LinxV5::BSTART_AUX_WITHOUT_TARGET_32_FALL));
+      // The existing completion pass gives SYNC.CORE its exact header and
+      // stop; other scalar SYS instructions need an explicit stop here.
+      if (MI.getOpcode() != LinxV5::SYNC_CORE)
+        BuildMI(MBB, std::next(MI.getIterator()), MI.getDebugLoc(),
+                TII->get(LinxV5::BSTOP));
+      return;
+    }
+  }
 
   if (isBlockWithoutHeader(&MBB)) {
     return;

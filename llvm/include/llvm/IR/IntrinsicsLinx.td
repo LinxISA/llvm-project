@@ -12,6 +12,27 @@
 
 let TargetPrefix = "linx" in {
 
+// Scalar operations with no equivalent generic LLVM IR instruction.
+// DMA takes (destination, source) pointers and snapshots exactly 64 source
+// bytes before writing the destination.
+def int_linx_scalar_dma : Intrinsic<[], [llvm_ptr_ty, llvm_ptr_ty],
+                                    [IntrHasSideEffects]>;
+def int_linx_scalar_bwt : Intrinsic<[], [llvm_i64_ty],
+                                    [IntrHasSideEffects]>;
+def int_linx_scalar_sync_core : Intrinsic<[], [],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate]>;
+
+// Execute the PTO numeric profile with its active rounding and sticky flags.
+// In particular FEXP's reference algorithm is not generic llvm.exp semantics.
+// Only f32 and f64 overloads are supported by native scalar codegen. These
+// effects are chained so unused results still update status, and operations
+// cannot move across changes to the active numeric profile.
+def int_linx_scalar_fsqrt : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate]>;
+def int_linx_scalar_fexp : Intrinsic<[llvm_anyfloat_ty], [LLVMMatchType<0>],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate]>;
+
+
 // Marks a source `#pragma pto element for` loop until the required LinxV5
 // region compiler consumes it.  The metadata token is also carried by the
 // loop ID, allowing ordinary CFG canonicalization without relying on source

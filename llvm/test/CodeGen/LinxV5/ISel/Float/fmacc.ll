@@ -16,7 +16,9 @@ define float @fmsf32(float %a, float %b, float %c) {
 }
 
 ; CHECK-LABEL: fnmaf16:
-; DAG: fnmadd.fh a0, a1, a2, ->a0
+; DAG: fmadd.fd t#3, t#2, t#1, ->t
+; DAG: fcvt.fd2fh t#1, ->t
+; DAG: xor
 define half @fnmaf16(half %a, half %b, half %c) #1 {
   %res = tail call half @llvm.fmuladd.f16(half %a, half %b, half %c)
   %n = fneg half %res
