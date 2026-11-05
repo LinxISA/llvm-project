@@ -1686,7 +1686,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
                 Text.contains("BSTART.TGEMV") ||
                 Text.contains("BSTART.CUBE TMATMUL") ||
                 Text.contains("BSTART.CUBE TGEMV")))
-    return getLegacyInlineAsmTileDescriptor(MI, Reg, Active);
+    return getLegacyInlineAsmTileDescriptor(MI, Reg);
   bool IsConvert = Text.startswith("BSTART.TEPL 27,") ||
                    Text.startswith("BSTART.TEPL TCVT,");
   if (IsConvert && Text.contains(":D}")) {
