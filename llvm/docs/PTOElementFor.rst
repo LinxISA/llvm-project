@@ -260,6 +260,21 @@ control. Memory operations retain compiler memory barriers. Address offsets
 are shared only when both the typed index source and active Tile mask agree.
 The older bounded gather/atomic lowering also uses Tile execution masks.
 
+Sequential typed element regions may exchange carriers through an enclosing
+batch loop's PHIs. Before lowering such regions, the compiler jointly checks
+their pending final publications and their ordinary predication contracts.
+Only final accumulator values and matching typed publication wrappers may
+serve as pending Tile producers. The imported SSA value must still dominate
+the consuming region's preheader; arbitrary vector arithmetic does not become
+a Tile producer. Publications are tracked across each region's SSA rewrites,
+then undergo the normal Tile legalization and descriptor checks.
+
+``issue-151-two-phase-loop.cpp`` covers a runtime-count batch loop with two
+inlined element phases, including the zero-batch bypass, O2/O3 object generation
+and rejection of an untyped vector producer between phases. This coverage
+uses the supported logical32 typed profile; it does not extend the admitted
+typed-view shapes to logical256 CUBE views.
+
 On the ``0.59`` branch, these effects use Tile predicates by default; the
 experimental PR #146 option ``-linxv5-force-element-tile-mask`` is neither
 required nor available. An aligned monotonic i32 atomic add returns the old

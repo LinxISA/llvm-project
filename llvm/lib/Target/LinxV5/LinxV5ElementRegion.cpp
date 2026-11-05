@@ -36,6 +36,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -1194,8 +1195,12 @@ static bool isTileCarrierProducer(Value *V) {
                       [](const std::string &Code) { return Code == "Tr"; });
 }
 
-static bool isTypedTileImport(Value *V, SmallPtrSetImpl<Value *> &Seen) {
+static bool isTypedTileImport(
+    Value *V, SmallPtrSetImpl<Value *> &Seen,
+    const SmallPtrSetImpl<Value *> *PendingPublications = nullptr) {
   V = stripCarrierLCSSA(V);
+  if (PendingPublications && PendingPublications->contains(V))
+    return true;
   if (!Seen.insert(V).second)
     return true;
   if (auto View = getViewDescriptor(V)) {
@@ -1203,7 +1208,8 @@ static bool isTypedTileImport(Value *V, SmallPtrSetImpl<Value *> &Seen) {
       return false;
     if (View->Marker->getMetadata(PredicatedOwnerMD))
       return true; // Checked by the owning token's complete legalization plan.
-    return isTypedTileImport(View->Marker->getArgOperand(0), Seen);
+    return isTypedTileImport(View->Marker->getArgOperand(0), Seen,
+                             PendingPublications);
   }
   if (auto *Arg = dyn_cast<Argument>(V))
     if (Arg->getParent()->hasFnAttribute("linx-local-tile-abi") &&
@@ -1219,7 +1225,7 @@ static bool isTypedTileImport(Value *V, SmallPtrSetImpl<Value *> &Seen) {
     if (!isElementCarrier(Phi))
       return false;
     return llvm::all_of(Phi->incoming_values(), [&](Value *Incoming) {
-      return isTypedTileImport(Incoming, Seen);
+      return isTypedTileImport(Incoming, Seen, PendingPublications);
     });
   }
   return false;
@@ -1294,9 +1300,15 @@ floatComparisonMapping(CmpInst::Predicate Pred) {
 
 static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
                             DominatorTree &DT, LazyValueInfo &LVI,
-                            AAResults &AA, PredicatedRegion &Plan) {
+                            AAResults &AA, PredicatedRegion &Plan,
+                            const SmallPtrSetImpl<Value *> *PendingPublications =
+                                nullptr) {
   auto Fail = [&](const Instruction *I, const Twine &Why) {
     return diagnose(F, I, Twine("predication: ") + Why);
+  };
+  auto IsTypedImport = [&](Value *Source) {
+    SmallPtrSet<Value *, 16> Seen;
+    return isTypedTileImport(Source, Seen, PendingPublications);
   };
   if (F.hasFnAttribute(Attribute::StrictFP))
     return Fail(L.getHeader()->getTerminator(),
@@ -2385,7 +2397,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         ImmutableImport =
             SourceI && !L.contains(SourceI) &&
             DT.dominates(SourceI, L.getLoopPreheader()->getTerminator()) &&
-            isTypedTileImport(Source);
+            IsTypedImport(Source);
       }
       for (User *U : I.users())
         if (auto *UseI = dyn_cast<Instruction>(U))
@@ -2417,7 +2429,7 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
         if (auto *Producer = dyn_cast<Instruction>(Source)) {
           if (!L.contains(Producer) &&
               (!DT.dominates(Producer, L.getLoopPreheader()->getTerminator()) ||
-               !isTypedTileImport(Source)))
+               !IsTypedImport(Source)))
             return Fail(&I, "typed import requires a dominating Tile producer");
         } else if (!isa<UndefValue>(Source) && !isa<PoisonValue>(Source)) {
           return Fail(&I, "typed import requires an explicit Tile producer");
@@ -2441,9 +2453,9 @@ static bool planPredication(Function &F, Loop &L, ScalarEvolution &SE,
               (!DT.dominates(Source, L.getLoopPreheader()->getTerminator()) ||
                !(Plan.GuardedElementZeroViews.contains(
                      dyn_cast<CallInst>(Source))
-                     ? isTypedTileImport(
+                     ? IsTypedImport(
                            cast<CallInst>(Source)->getArgOperand(0))
-                     : isTypedTileImport(Source))))
+                     : IsTypedImport(Source))))
             return Fail(&I, "typed import requires a dominating Tile producer");
         continue;
       }
@@ -8684,6 +8696,50 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
     AM.invalidate(F, PreservedAnalyses::none());
   Changed |= refreshClonedRegionTokens(F, AM.getResult<LoopAnalysis>(F),
                                       AM.getResult<DominatorTreeAnalysis>(F));
+  SmallVector<WeakTrackingVH, 16> PendingPublicationHandles;
+  {
+    auto &LI = AM.getResult<LoopAnalysis>(F);
+    SmallPtrSet<Value *, 32> PendingPublications;
+    SmallVector<Loop *, 8> Regions;
+    for (Loop *Region : LI.getLoopsInPreorder()) {
+      if (!getElementRegionToken(*Region) || !Region->isInnermost() ||
+          !Region->getLoopLatch())
+        continue;
+      Regions.push_back(Region);
+      for (PHINode &Phi : Region->getHeader()->phis()) {
+        if (!isElementCarrier(&Phi))
+          continue;
+        Value *Final = Phi.getIncomingValueForBlock(Region->getLoopLatch());
+        SmallPtrSet<Value *, 16> Seen;
+        auto Descriptor = carrierDescriptor(Final, *Region, Seen);
+        if (!Descriptor || Descriptor->ScalarizedLaneZero)
+          continue;
+        PendingPublications.insert(stripCarrierLCSSA(Final));
+        for (Instruction &Candidate : instructions(F)) {
+          auto View = getViewDescriptor(&Candidate);
+          if (View && sameCarrierStorage(*Descriptor, *View) &&
+              stripCarrierLCSSA(View->Marker->getArgOperand(0)) ==
+                  stripCarrierLCSSA(Final))
+            PendingPublications.insert(&Candidate);
+        }
+      }
+    }
+    if (Regions.size() > 1 && !PendingPublications.empty()) {
+      for (Loop *Region : Regions) {
+        PredicatedRegion Plan;
+        if (!planPredication(F, *Region,
+                             AM.getResult<ScalarEvolutionAnalysis>(F),
+                             AM.getResult<DominatorTreeAnalysis>(F),
+                             AM.getResult<LazyValueAnalysis>(F),
+                             AM.getResult<AAManager>(F), Plan,
+                             &PendingPublications))
+          return Changed ? PreservedAnalyses::none()
+                         : PreservedAnalyses::all();
+      }
+      for (Value *Publication : PendingPublications)
+        PendingPublicationHandles.push_back(Publication);
+    }
+  }
   for (;;) {
     auto &LI = AM.getResult<LoopAnalysis>(F);
     Loop *Selected = nullptr;
@@ -8738,9 +8794,13 @@ LinxV5ElementPredicationPass::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
     auto &LVI = AM.getResult<LazyValueAnalysis>(F);
+    SmallPtrSet<Value *, 32> PendingPublications;
+    for (const WeakTrackingVH &Publication : PendingPublicationHandles)
+      if (Publication)
+        PendingPublications.insert(Publication);
     PredicatedRegion Plan;
     if (!planPredication(F, *Selected, SE, DT, LVI, AM.getResult<AAManager>(F),
-                         Plan))
+                         Plan, &PendingPublications))
       break;
     emitPredication(F, Plan, LI, SE, DT);
     // No analysis reference is reused after CFG deletion, including when there
