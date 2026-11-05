@@ -1263,7 +1263,6 @@ struct PragmaLinxInfo {
   Token PragmaName;
   Token Option;
   SourceLocation EndLoc;
-  unsigned Grain = 0;
 };
 } // end anonymous namespace
 
@@ -1286,10 +1285,6 @@ bool Parser::HandlePragmaLinx(LinxHint &Hint) {
   ConsumeAnyToken(); // Consume the constant expression eof terminator.
 
   Hint.Range = SourceRange(Info->PragmaName.getLocation(), Info->EndLoc);
-  if (Info->Grain)
-    Hint.Grain = IntegerLiteral::Create(
-        Actions.Context, llvm::APInt(32, Info->Grain),
-        Actions.Context.UnsignedIntTy, Info->EndLoc);
 
   return true;
 }
@@ -1375,29 +1370,6 @@ void PragmaPtoHandler::HandlePragma(Preprocessor &PP,
   }
 
   PP.Lex(Tok);
-  uint64_t Grain = 0;
-  SourceLocation EndLoc = For.getLocation();
-  if (Tok.getIdentifierInfo() && Tok.getIdentifierInfo()->isStr("grain")) {
-    PP.Lex(Tok);
-    bool Valid = Tok.is(tok::l_paren);
-    if (Valid) {
-      PP.Lex(Tok);
-      Valid = Tok.is(tok::numeric_constant) &&
-              PP.parseSimpleIntegerLiteral(Tok, Grain) && Grain >= 128 &&
-              Grain <= 4096 && llvm::isPowerOf2_32(Grain);
-    }
-    if (Valid) {
-      Valid = Tok.is(tok::r_paren);
-      EndLoc = Tok.getLocation();
-    }
-    if (!Valid) {
-      PP.Diag(Tok.getLocation(), diag::err_pragma_pto_grain);
-      if (Tok.isNot(tok::eod))
-        PP.DiscardUntilEndOfDirective();
-      return;
-    }
-    PP.Lex(Tok);
-  }
   if (Tok.isNot(tok::eod)) {
     PP.Diag(Tok.getLocation(), diag::err_pragma_pto_extra_tokens);
     PP.DiscardUntilEndOfDirective();
@@ -1412,8 +1384,7 @@ void PragmaPtoHandler::HandlePragma(Preprocessor &PP,
   auto *Info = new (PP.getPreprocessorAllocator()) PragmaLinxInfo;
   Info->PragmaName = PragmaName;
   Info->Option = Element;
-  Info->EndLoc = EndLoc;
-  Info->Grain = Grain;
+  Info->EndLoc = For.getLocation();
 
   auto TokenArray = std::make_unique<Token[]>(1);
   TokenArray[0].startToken();

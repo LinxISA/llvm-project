@@ -1089,7 +1089,7 @@ void CodeGenFunction::EmitForStmt(const ForStmt &S,
         llvm::Intrinsic::linx_experimental_element_region);
     Builder.CreateCall(
         Sentinel, llvm::MetadataAsValue::get(getLLVMContext(), Token));
-    LoopStack.setLinxElementRegion(Token, Linx->getGrain());
+    LoopStack.setLinxElementRegion(Token);
     break;
   }
 

@@ -3638,8 +3638,7 @@ def Linx : Attr {
 
   let Args = [EnumArgument<"Option", "OptionType",
                           ["block", "elementwise"],
-                          ["Block", "Elementwise"]>,
-              UnsignedArgument<"Grain", 1>];
+                          ["Block", "Elementwise"]>];
   let AdditionalMembers = [{
   static const char *getOptionName(int Option) {
     switch(Option) {
