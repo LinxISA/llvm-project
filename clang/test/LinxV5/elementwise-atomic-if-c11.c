@@ -36,26 +36,26 @@ void histogram_selected_c(unsigned int *restrict old_values,
 
 // IR-LABEL: define{{.*}} @histogram_tail_c
 // IR: @llvm.linx.experimental.ew.tci
-// IR: @llvm.linx.experimental.ew.tcmp
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+// IR: @llvm.linx.experimental.ew.tcmps.gpr
+// IR: @llvm.linx.experimental.ew.tlea
+// IR: @llvm.linx.experimental.ew.mgather.add.masked
 // IR-NOT: atomicrmw
 // IR-LABEL: define{{.*}} @histogram_selected_c
-// IR: @llvm.linx.experimental.ew.tcmp
-// IR: @llvm.linx.experimental.ew.tcmp
-// IR: @llvm.linx.experimental.ew.tbinary
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+// IR: @llvm.linx.experimental.ew.tcmps.gpr
+// IR: @llvm.linx.experimental.ew.tcmps.gpr
+// IR: and i64
+// IR: @llvm.linx.experimental.ew.tlea
+// IR: @llvm.linx.experimental.ew.mgather.add.masked
 // IR-NOT: atomicrmw
 
 // OBJ-LABEL: <histogram_tail_c>:
-// OBJ-DAG: BSTART.TEPL TCMP, U64
+// OBJ-DAG: BSTART.TEPL TCMPS, U64
 // OBJ-DAG: BSTART.TEPL TLEA, U32
 // OBJ-DAG: BSTART.MGATHER.ADD U32
-// OBJ-NOT: ExecMaskPresent
+// OBJ-DAG: ExecMaskPresent
 // OBJ-LABEL: <histogram_selected_c>:
-// OBJ-DAG: BSTART.TEPL TCMP, U64
-// OBJ-DAG: BSTART.TEPL TCMP, U32
+// OBJ-DAG: BSTART.TEPL TCMPS, U64
+// OBJ-DAG: BSTART.TEPL TCMPS, U32
 // OBJ-DAG: BSTART.TEPL TLEA, U32
 // OBJ-DAG: BSTART.MGATHER.ADD U32
-// OBJ-NOT: ExecMaskPresent
+// OBJ-DAG: ExecMaskPresent

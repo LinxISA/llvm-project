@@ -1468,8 +1468,7 @@ static Optional<unsigned> getMatrixFPATROutputType(unsigned Mode) {
 }
 
 static Optional<LinxV5::TileDescriptor>
-getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
-                               SmallVectorImpl<DescriptorPosition> &Active) {
+getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1485,15 +1484,6 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
   Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
   Optional<unsigned> MatrixLeftType = DataType;
   Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
-  if (Text.startswith("BSTART.TEPL TCVT,")) {
-    size_t Attributes = Text.find("B.DATR");
-    if (Attributes == StringRef::npos)
-      return None;
-    StringRef ResultType = Text.drop_front(Attributes + strlen("B.DATR"))
-                               .split(',').second.split(',').first.trim();
-    DataType = getInlineAsmDataType(
-        MI, (Twine("BSTART.TEPL TCVT, ") + ResultType).str());
-  }
   Optional<InlineAsmDimension> ValidColDim =
       getInlineAsmDimensionOperand(MI, Text, 0);
   Optional<InlineAsmDimension> ValidRowDim =
@@ -1551,8 +1541,8 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
     if (!LeftSource || !LeftSource->isReg())
       return None;
     Optional<LinxV5::TileDescriptor> LeftDescriptor =
-        resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
-                              LeftSource->getReg(), Active);
+        LinxV5::tryGetTileRegDescriptor(*MI.getParent(), MI.getIterator(),
+                                        LeftSource->getReg());
     if (!LeftDescriptor ||
         (LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
          LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
@@ -1639,53 +1629,6 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
   }
   LinxV5::TileDescriptor Descriptor{
       *DataType, *Layout, ValidRow, ValidCol, PhysicalCol, *SizeCode};
-  if (Text.startswith("BSTART.TEPL TLEA,"))
-    Descriptor.DataType = *DataType == LinxV5Op::DataType::S32 ||
-                                  *DataType == LinxV5Op::DataType::S64
-                              ? LinxV5Op::DataType::S64
-                              : LinxV5Op::DataType::U64;
-  if (Text.startswith("BSTART.TEPL TCMP,")) {
-    MachineOperand *Source = nullptr;
-    size_t Binding = Text.find("B.IOT");
-    if (Binding == StringRef::npos ||
-        !parseAsmOperand(&MI, Text.drop_front(Binding + strlen("B.IOT"))
-                                   .ltrim().data(), Source) ||
-        !Source || !Source->isReg())
-      return None;
-    auto Input = resolveTileDescriptor(
-        *MI.getParent(), MI.getIterator(), Source->getReg(), Active);
-    if (!Input)
-      return None;
-    if (Input->Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
-        Input->Layout == LinxV5Op::ArgFormat::CUBE_M32) {
-      Descriptor.Layout = Input->Layout;
-      Descriptor.DataType = LinxV5Op::DataType::U8;
-      Descriptor.PredicateBasisType = *DataType;
-    }
-  }
-  if (*DataType == LinxV5Op::DataType::U8 &&
-      (Text.startswith("BSTART.TEPL TAND,") ||
-       Text.startswith("BSTART.TEPL TOR,") ||
-       Text.startswith("BSTART.TEPL TXOR,"))) {
-    MachineOperand *Left = nullptr, *Right = nullptr;
-    size_t Binding = Text.find("B.IOT");
-    if (Binding == StringRef::npos)
-      return None;
-    const char *After = parseAsmOperand(
-        &MI, Text.drop_front(Binding + strlen("B.IOT")).ltrim().data(), Left);
-    if (!After || !Left || !Left->isReg() ||
-        !parseAsmOperand(&MI, skipSeparator(After), Right) || !Right ||
-        !Right->isReg())
-      return None;
-    auto L = resolveTileDescriptor(
-        *MI.getParent(), MI.getIterator(), Left->getReg(), Active);
-    auto R = resolveTileDescriptor(
-        *MI.getParent(), MI.getIterator(), Right->getReg(), Active);
-    if (!L || !R)
-      return None;
-    if (L->PredicateBasisType != 31 && R->PredicateBasisType != 31)
-      Descriptor.PredicateBasisType = LinxV5Op::DataType::U8;
-  }
   if (HasRuntimeDimensions) {
     Descriptor.DimensionRegs = {ValidColDim->Reg, ValidRowDim->Reg,
                                 PhysicalColDim->Reg};
@@ -2077,22 +2020,6 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
 
   if (MI.getOpcode() == LinxV5::PseudoTCMP_Row_SizeI ||
       MI.getOpcode() == LinxV5::PseudoTCMP_SizeI) {
-    unsigned Layout = MI.getOperand(6).getImm();
-    if (MI.getOpcode() == LinxV5::PseudoTCMP_SizeI &&
-        (Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
-         Layout == LinxV5Op::ArgFormat::CUBE_M32)) {
-      if (MI.getOperand(1).getReg() != LinxV5::R0 ||
-          MI.getOperand(3).getReg() != LinxV5::R0)
-        return None;
-      LinxV5::TileDescriptor Descriptor{
-          LinxV5Op::DataType::U8, Layout,
-          static_cast<unsigned>(MI.getOperand(2).getImm()),
-          static_cast<unsigned>(MI.getOperand(4).getImm()),
-          static_cast<unsigned>(MI.getOperand(4).getImm()),
-          static_cast<unsigned>(MI.getOperand(7).getImm())};
-      Descriptor.PredicateBasisType = MI.getOperand(5).getImm();
-      return checkedTileDescriptor(Descriptor);
-    }
     if (MI.getOperand(1).getReg() != LinxV5::R0 ||
         MI.getOperand(3).getReg() != LinxV5::R0 ||
         MI.getOperand(6).getImm() != 0)
@@ -2287,7 +2214,7 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     if (auto Descriptor = getInlineAsmTileDescriptor(MI, Reg, Active, Absent))
       return Descriptor;
     if (!EnableGenericElement)
-      return getLegacyInlineAsmTileDescriptor(MI, Reg, Active);
+      return getLegacyInlineAsmTileDescriptor(MI, Reg);
     return None;
   }
   return None;
@@ -2333,12 +2260,9 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
       Active.pop_back();
       return None;
     }
-    if (Joined) {
-      if (!(*Joined == *Incoming))
-        report_fatal_error(
-            "conflicting Local tile descriptors at COPY/PHI control-flow join");
-
-    }
+    if (Joined && !(*Joined == *Incoming))
+      report_fatal_error(
+          "conflicting Local tile descriptors at COPY/PHI control-flow join");
     Joined = *Incoming;
   }
   Active.pop_back();

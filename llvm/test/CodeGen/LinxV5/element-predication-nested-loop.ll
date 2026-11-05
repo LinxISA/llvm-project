@@ -53,8 +53,8 @@ exit:
 ; SSA-NOT: phi i32
 ; SSA: ret void
 ; TILE-LABEL: define void @nested_break_continue
-; TILE: call <32 x i32> asm sideeffect "BSTART.TEPL TDIV, U32
-; TILE: call void asm sideeffect "BSTART.TLSU MSCATTER, U32
+; TILE: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked
+; TILE: call void @llvm.linx.experimental.ew.mscatter.gpr.masked
 ; TILE-NOT: llvm.vp.
 ; TILE-NOT: llvm.linx.experimental.element.
 ; TILE: ret void
