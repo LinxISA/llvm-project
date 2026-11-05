@@ -395,16 +395,21 @@ inline bool isWeightLayout(unsigned Code) {
   return Code == ArgFormat::OHWI2NK || Code == ArgFormat::OIHW2NK;
 }
 
-/// True if Code is a GM->Local CUBE transport selector (21..23), legal only
-/// for TLOAD.
+/// True if Code is a GM->Local CUBE transport selector (21..23) for TLOAD.
 inline bool isCubeLoadConversion(unsigned Code) {
   return Code >= ArgFormat::ND2M32 && Code <= ArgFormat::ND2N8;
 }
 
-/// True if Code is a Local->GM CUBE transport selector (24..26), legal only
-/// for TSTORE.
+/// True if Code is a Local->GM CUBE transport selector (24..26) for TSTORE.
 inline bool isCubeStoreConversion(unsigned Code) {
   return Code >= ArgFormat::M322ND && Code <= ArgFormat::N82ND;
+}
+
+/// CUBE_M32/M16 <-> Shared ND transports accepted by Function 2 TMOV.
+/// N8 transports (23/26) remain exclusive to TLOAD/TSTORE.
+inline bool isCubeTMovConversion(unsigned Code) {
+  return Code == ArgFormat::ND2M32 || Code == ArgFormat::ND2M16 ||
+         Code == ArgFormat::M322ND || Code == ArgFormat::M162ND;
 }
 
 enum Canon { NORMAL_CANON = 0, CANON = 1, EMPTY_Canon };

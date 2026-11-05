@@ -1003,6 +1003,10 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
       return Case.Result;
   }
   if (HasConditionalLayout && ConditionalActual &&
+      *ConditionalActual == LinxV5Op::ArgFormat::ND2M16 &&
+      Text.contains("B.DATR ND2M16"))
+    return LinxV5Op::ArgFormat::CUBE_M16;
+  if (HasConditionalLayout && ConditionalActual &&
       *ConditionalActual == LinxV5Op::ArgFormat::ND2N8 &&
       Text.contains("B.DATR ND2N8"))
     return LinxV5Op::ArgFormat::ND2N8;
@@ -1100,10 +1104,16 @@ static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
   size_t BStart = Text.find("BSTART.");
   if (BStart == StringRef::npos)
     return None;
-  size_t Comma = Text.find(',', BStart);
-  if (Comma == StringRef::npos)
-    return None;
-  StringRef Token = Text.drop_front(Comma + 1).ltrim();
+  StringRef Header = Text.drop_front(BStart).split('\n').first;
+  StringRef Token;
+  if (Header.consume_front("BSTART.TMOV "))
+    Token = Header.ltrim();
+  else {
+    size_t Comma = Header.find(',');
+    if (Comma == StringRef::npos)
+      return None;
+    Token = Header.drop_front(Comma + 1).ltrim();
+  }
   Token = Token.take_while(
       [](char C) { return isAlnum(C) || C == '_'; });
   if (Token.empty())
@@ -1245,6 +1255,73 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
     SmallVectorImpl<DescriptorPosition> &Active, bool *Absent = nullptr);
 
+// Shared ND produced by the forward CUBE transport retains its backing dtype.
+// Follow COPYs and require every reaching producer to agree. Unknown Shared
+// producers must not invent a dtype for a reverse TMOV's COPY or spill.
+static Optional<unsigned> resolveSharedNDDataType(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
+    SmallVectorImpl<DescriptorPosition> &Active) {
+  DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
+  if (is_contained(Active, Key))
+    return None;
+  Active.push_back(Key);
+  auto Resolve = [&]() -> Optional<unsigned> {
+    for (MachineInstr &MI : reverse(make_range(MBB.begin(), Before))) {
+      if (!MI.definesRegister(Reg))
+        continue;
+      if (MI.isCopy())
+        return resolveSharedNDDataType(MBB, MI.getIterator(),
+                                       MI.getOperand(1).getReg(), Active);
+      if (!MI.isInlineAsm())
+        return None;
+      StringRef Text = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+      if ((!Text.startswith("BSTART.TMOV ") &&
+           !Text.startswith("BSTART.TLSU TMOV,") &&
+           !Text.startswith("BSTART.TLSU 2,")) ||
+          (!Text.contains("B.DATR M322ND,") &&
+           !Text.contains("B.DATR M162ND,")))
+        return None;
+      auto Type = getInlineAsmDataType(MI, Text);
+      if (!Type)
+        return None;
+      if (*Type == LinxV5Op::DataType::EMPTY_DataType) {
+        size_t Binder = Text.find("B.IOT ");
+        if (Binder == StringRef::npos)
+          return None;
+        StringRef Source = Text.drop_front(Binder + strlen("B.IOT ")).ltrim();
+        MachineOperand *Local = nullptr;
+        if (!parseAsmOperand(&MI, Source.data(), Local) || !Local ||
+            !Local->isReg())
+          return None;
+        auto Descriptor = resolveTileDescriptor(MBB, MI.getIterator(),
+                                                Local->getReg(), Active);
+        // A generic carrier load may be S32/NORM even when the C++ object
+        // holds packed b4 or another backing type. Only a proven CUBE
+        // producer supplies the semantic dtype required here.
+        if (!Descriptor || Descriptor->PackedPredicate ||
+            (Descriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32 &&
+             Descriptor->Layout != LinxV5Op::ArgFormat::CUBE_M16))
+          return None;
+        Type = Descriptor->DataType;
+      }
+      if (!getTileDataTypeBits(*Type))
+        return None;
+      return Type;
+    }
+    Optional<unsigned> Joined;
+    for (MachineBasicBlock *Pred : MBB.predecessors()) {
+      auto Incoming = resolveSharedNDDataType(*Pred, Pred->end(), Reg, Active);
+      if (!Incoming || (Joined && Joined != Incoming))
+        return None;
+      Joined = Incoming;
+    }
+    return Joined;
+  };
+  auto Result = Resolve();
+  Active.pop_back();
+  return Result;
+}
+
 static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
     MachineInstr &MI, LinxV5::TileDescriptor Result, Register Left,
     Register Right, SmallVectorImpl<DescriptorPosition> &Active,
@@ -1311,6 +1388,27 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
   Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
   Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
+  bool IsSharedNDToCube =
+      (Text.startswith("BSTART.TMOV DTYPE_NONE") ||
+       Text.startswith("BSTART.TLSU TMOV, DTYPE_NONE") ||
+       Text.startswith("BSTART.TLSU 2, DTYPE_NONE")) &&
+      (Text.contains("B.DATR ND2M32,") || Text.contains("B.DATR ND2M16,")) &&
+      Layout && (*Layout == LinxV5Op::ArgFormat::CUBE_M32 ||
+                 *Layout == LinxV5Op::ArgFormat::CUBE_M16);
+  if (IsSharedNDToCube) {
+    size_t Binder = Text.find("B.IOS ");
+    if (Binder == StringRef::npos)
+      return None;
+    StringRef Source = Text.drop_front(Binder + strlen("B.IOS ")).ltrim();
+    MachineOperand *Shared = nullptr;
+    if (!parseAsmOperand(&MI, Source.data(), Shared) || !Shared ||
+        !Shared->isReg() ||
+        !isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
+                         Shared->getReg()))
+      return None;
+    DataType = resolveSharedNDDataType(*MI.getParent(), MI.getIterator(),
+                                       Shared->getReg(), Active);
+  }
   Optional<unsigned> ValidCol = getInlineAsmDimension(MI, Text, 0);
   Optional<unsigned> ValidRow = getInlineAsmDimension(MI, Text, 1);
   Optional<unsigned> PhysicalCol = getInlineAsmDimension(MI, Text, 2);
@@ -1490,7 +1588,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     auto Selector = getInlineAsmOperandImmediate(MI, Text, Text.find(':'));
     IsLogical = Selector && (*Selector == 6 || *Selector == 7 || *Selector == 8);
   }
-  bool IsMove = Text.startswith("BSTART.TLSU TMOV,");
+  bool IsMove = Text.startswith("BSTART.TLSU TMOV,") && !IsSharedNDToCube;
   if (IsLogical || IsMove) {
     if (Text.contains("B.SUBVIEW") &&
         (Dimensions.ValidRowReg || Dimensions.ValidColReg ||

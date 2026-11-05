@@ -1,0 +1,91 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
+
+# A DTYPE_NONE reverse TMOV inherits the Shared backing dtype, not an
+# arbitrary integer default. Omitted LB2 does not reduce physical CUBE width.
+--- |
+  define void @m32_typed() { ret void }
+  define void @m16_typed() { ret void }
+  define void @m32_inherited() { ret void }
+  define void @m16_inherited() { ret void }
+  define void @m32_conditional() { ret void }
+  define void @m16_conditional() { ret void }
+...
+# CHECK-LABEL: name: m32_typed
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 3, 19, 4, 25, 29
+---
+name: m32_typed
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0, 4
+    INLINEASM &"BSTART.TMOV U32\0AB.DATR M322ND, DTYPE_NONE, Zero\0AB.IOS mask=1111, ->${0:S}<512B>\0AB.IOT $1, mask=1111, last\0A", 25, 655370, def $shared_s0, 720905, killed $tile_u1
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR ND2M32, DTYPE_NONE, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 19, ->lb1\0AB.IOS ${1:S}, mask=1111\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 25, 720906, def $tile_t1, 655369, killed $shared_s0, 13, 3
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+# CHECK-LABEL: name: m16_typed
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 13, 11, 16, 26, 31
+---
+name: m16_typed
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 16, 26, 31, 3, $r0, $r0, 16
+    INLINEASM &"BSTART.TMOV U16\0AB.DATR M162ND, DTYPE_NONE, Zero\0AB.IOS mask=1111, ->${0:S}<512B>\0AB.IOT $1, mask=1111, last\0A", 25, 655370, def $shared_s0, 720905, killed $tile_u1
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR ND2M16, DTYPE_NONE, Zero\0AB.DIM zero, 13, ->lb0\0AB.DIM zero, 11, ->lb1\0AB.IOS ${1:S}, mask=1111\0AB.SUBVIEW 0, zero, 0, 3\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 25, 720906, def $tile_t1, 655369, killed $shared_s0, 13, 3
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+# CHECK-LABEL: name: m32_inherited
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 3, 19, 4, 25, 29
+---
+name: m32_inherited
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0, 4
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR M322ND, DTYPE_NONE, Zero\0AB.IOS mask=1111, ->${0:S}<512B>\0AB.IOT $1, mask=1111, last\0A", 25, 655370, def $shared_s0, 720905, killed $tile_u1
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR ND2M32, DTYPE_NONE, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 19, ->lb1\0AB.IOS ${1:S}, mask=1111\0AB.SUBVIEW 0, zero, 0, 3\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 25, 720906, def $tile_t1, 655369, killed $shared_s0, 13, 3
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+# CHECK-LABEL: name: m16_inherited
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 13, 11, 16, 26, 31
+---
+name: m16_inherited
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 16, 26, 31, 3, $r0, $r0, 16
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR M162ND, DTYPE_NONE, Zero\0AB.IOS mask=1111, ->${0:S}<512B>\0AB.IOT $1, mask=1111, last\0A", 25, 655370, def $shared_s0, 720905, killed $tile_u1
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR ND2M16, DTYPE_NONE, Zero\0AB.DIM zero, 13, ->lb0\0AB.DIM zero, 11, ->lb1\0AB.IOS ${1:S}, mask=1111\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 25, 720906, def $tile_t1, 655369, killed $shared_s0, 13, 3
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+# CHECK-LABEL: name: m32_conditional
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 3, 19, 4, 25, 29
+---
+name: m32_conditional
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 4, 25, 29, 3, $r0, $r0, 4
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0A.if ${2:c} == 24\0AB.DATR M322ND, DTYPE_NONE, Zero\0A.else\0AB.DATR M162ND, DTYPE_NONE, Zero\0A.endif\0AB.IOS mask=1111, ->${0:S}<512B>\0AB.IOT $1, mask=1111, last\0A", 25, 655370, def $shared_s0, 720905, killed $tile_u1, 13, 24
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0AB.DATR ND2M32, DTYPE_NONE, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 19, ->lb1\0AB.IOS ${1:S}, mask=1111\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 25, 720906, def $tile_t1, 655369, killed $shared_s0, 13, 3
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+
+# CHECK-LABEL: name: m16_conditional
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 13, 11, 16, 26, 31
+---
+name: m16_conditional
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 16, 26, 31, 3, $r0, $r0, 16
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0A.if ${2:c} == 24\0AB.DATR M322ND, DTYPE_NONE, Zero\0A.else\0AB.DATR M162ND, DTYPE_NONE, Zero\0A.endif\0AB.IOS mask=1111, ->${0:S}<512B>\0AB.IOT $1, mask=1111, last\0A", 25, 655370, def $shared_s0, 720905, killed $tile_u1, 13, 25
+    INLINEASM &"BSTART.TMOV DTYPE_NONE\0A.if ${3:c} == 21\0AB.DATR ND2M32, DTYPE_NONE, Zero\0A.else\0AB.DATR ND2M16, DTYPE_NONE, Zero\0A.endif\0AB.DIM zero, 13, ->lb0\0AB.DIM zero, 11, ->lb1\0AB.IOS ${1:S}, mask=1111\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0A", 25, 720906, def $tile_t1, 655369, killed $shared_s0, 13, 3, 13, 22
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
