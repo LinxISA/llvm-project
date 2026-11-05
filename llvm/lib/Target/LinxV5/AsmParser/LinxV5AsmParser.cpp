@@ -3587,11 +3587,10 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
   if (Format == static_cast<unsigned>(-1))
     return MatchOperand_NoMatch;
 
-  // PTO-ISA ADR-0070: CUBE transport selectors are direction-restricted.
-  // ND2M32/ND2M16/ND2N8 (21..23) are legal only for TLOAD; M322ND/M162ND/
-  // N82ND (24..26) only for TSTORE. A TLOAD/TSTORE layout must match its
-  // direction; a CUBE code used from a non-TLOAD/TSTORE context is also
-  // rejected (the CUBE selectors are only legal on GM<->Local transport).
+  // PTO-ISA ADR-0070 and PR #423: TLOAD accepts CUBE load selectors
+  // (21..23), TSTORE accepts store selectors (24..26), and Function 2 TMOV
+  // accepts M32/M16 <-> Shared ND selectors (21/22/24/25). N8 transports
+  // (23/26) are not supported by TMOV. Other block contexts reject all six.
   //
   // The pseudo-expansion path (e.g. TLOAD.M322ND) feeds this parser through
   // UnLex'd tokens whose SMLoc has no source buffer, so never emit a
@@ -3601,11 +3600,12 @@ OperandMatchResultTy LinxV5AsmParser::parseBArgFormat(OperandVector &Operands) {
   if (LinxV5Op::isCubeConversion(Format)) {
     bool InTLoad = CurLayoutDirection == 1;
     bool InTStore = CurLayoutDirection == 2;
-    if (CurLayoutDirection == 3 && Format != 24 && Format != 25)
+    if (CurLayoutDirection == 3 && !LinxV5Op::isCubeTMovConversion(Format))
       return MatchOperand_ParseFail;
     if (!InTLoad && !InTStore && CurLayoutDirection != 3) {
       getParser().Error(S, "CUBE layout selectors are legal only on "
-                           "TLOAD/TSTORE or forward TMOV to Shared ND");
+                           "TLOAD/TSTORE or TMOV between Local CUBE M32/M16 "
+                           "and Shared ND");
       return MatchOperand_ParseFail;
     }
     if (InTLoad && !LinxV5Op::isCubeLoadConversion(Format))
@@ -4417,7 +4417,7 @@ bool LinxV5AsmParser::validateInstruction(MCInst &Inst, OperandVector &Operands,
     if (LinxV5Op::isCubeConversion(Layout)) {
       bool InTLoad = CurLayoutDirection == 1;
       bool InTStore = CurLayoutDirection == 2;
-      if (CurLayoutDirection == 3 && Layout != 24 && Layout != 25)
+      if (CurLayoutDirection == 3 && !LinxV5Op::isCubeTMovConversion(Layout))
         return true;
       if (!InTLoad && !InTStore && CurLayoutDirection != 3)
         return true;

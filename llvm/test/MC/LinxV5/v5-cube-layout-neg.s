@@ -2,8 +2,9 @@
 
 # PTO-ISA ADR-0070 direction/role legality: CUBE transport selectors are
 # direction-restricted. Load codes (21..23) are illegal on TSTORE, store
-# codes (24..26) illegal on TLOAD, and the six codes are illegal on any
-# other binding (e.g. a bare B.DATR). Reserved codes never assemble because
+# codes (24..26) illegal on TLOAD. TMOV additionally accepts 21/22/24/25
+# for Local CUBE M32/M16 <-> Shared ND. All six codes are illegal without
+# a transport block (e.g. a bare B.DATR). Reserved codes never assemble because
 # no spelling maps to them.
 
 # CHECK: error: Match Instruction Error!
