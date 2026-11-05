@@ -35,22 +35,22 @@
 ; PUBINDEX: PTO element region: predication: carrier insert requires a typed view and exact element IV
 ; HOIST: PTO element region: predication: unsupported opcode or effect in generic IR stage: call llvm.linx.experimental.ew.tci
 ; VALUE: freeze i32 2
-; VALUE: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+; VALUE: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
 ; VALUE: call void asm sideeffect "", "@2Tr"
-; NONZERO: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+; NONZERO: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
 ; NONZERO: freeze i32 7
-; NONZERO: call <32 x i32> @llvm.linx.experimental.ew.tsel
-; SIGNED: asm sideeffect "BSTART.TEPL TLEA, S32
-; SIGNED: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-; POLARITY: @llvm.linx.experimental.ew.tbinary
-; POLARITY: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-; USE: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-; USE: call <32 x i32> @llvm.linx.experimental.ew.tadd.masked
-; LOAD: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+; NONZERO: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr
+; SIGNED: call <32 x i64> @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 17, i64 29, {{.*}}i64 32)
+; SIGNED: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked.v32i32.v32i64.v32i32(i64 32, i64 1, i64 25, i64 0, i64 29,
+; POLARITY: xor i64
+; POLARITY: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
+; USE: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
+; USE: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0,
+; LOAD: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
 ; LOAD-NOT: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
 ; LOAD: ret void
-; MULTIPLE: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-; MULTIPLE: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+; MULTIPLE: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
+; MULTIPLE: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
 ; MULTIPLE: call void asm sideeffect "", "@2Tr"
 
 ;--- base.ll

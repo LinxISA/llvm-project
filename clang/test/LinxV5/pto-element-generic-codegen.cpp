@@ -1,7 +1,19 @@
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REQUIRE-GENERIC
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O2 \
+// RUN:   -mllvm -linxv5-enable-generic-element=false -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REQUIRE-GENERIC
+// RUN: not %clang++ --target=linx64v5 -mlxbc -O0 \
+// RUN:   -Xclang -disable-llvm-passes \
+// RUN:   -mllvm -linxv5-enable-generic-element=true -c %s -o /dev/null 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=REJECT-O0
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -emit-llvm -S %s -o %t.ll
 // RUN: FileCheck %s --check-prefix=IR < %t.ll
 // RUN: %clang++ --target=linx64v5 -mlxbc -O2 -mllvm -linxv5-enable-generic-element=true -mllvm -enable-all-vector-as-tilereg=true -c %s -o %t.o
 // RUN: llvm-objdump -d --no-show-raw-insn --disassembler-options=no-tile-macros %t.o | FileCheck %s --check-prefix=OBJ
+
+// REQUIRE-GENERIC: error: PTO element region: masked native lowering requires -linxv5-enable-generic-element=true
+// REJECT-O0: error: PTO element region: masked native lowering is unsupported at -O0
 
 extern "C" void generic_i32(const int *__restrict input,
                              const int *__restrict divisor,
@@ -27,19 +39,19 @@ extern "C" void generic_i32(const int *__restrict input,
 // IR-NOT: @llvm.vp.
 // IR-NOT: extractelement
 // IR-NOT: insertelement
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
-// IR: asm sideeffect "BSTART.TEPL TDIV, S32
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, U32
+// IR: @llvm.linx.experimental.ew.tlea
+// IR: @llvm.linx.experimental.ew.mgather.gpr.masked
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked{{.*}}i64 17, i64 29, i64 3,
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked
 // IR-NOT: @llvm.vp.
 // IR: ret void
 // OBJ-LABEL: <generic_i32>:
-// OBJ: BSTART.TEPL TCMP, U64
-// OBJ-NEXT: {{.*}}B.DATR NORM
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
+// OBJ: BSTART.TEPL TCMPS, U64
+// OBJ-NEXT: {{.*}}B.DATR NORM.normal, Zero, LT
+// OBJ: BSTART.MGATHER U32
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} U32
-// OBJ-NOT: ExecMaskPresent
+// OBJ: BSTART.MSCATTER U32
+// OBJ: ExecMaskPresent
 
 extern "C" void generic_compare(const unsigned *__restrict a,
                                  const unsigned *__restrict b,
@@ -51,14 +63,14 @@ extern "C" void generic_compare(const unsigned *__restrict a,
   }
 }
 // IR-LABEL: define{{.*}} @generic_compare
-// IR: @llvm.linx.experimental.ew.tcmp.v32i32.v32i32.v32i32{{.*}}i64 25,
-// IR: @llvm.linx.experimental.ew.tsel.v32i32.v32i32.v32i32.v32i32
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, U32
+// IR: @llvm.linx.experimental.ew.tcmp.gpr{{.*}}i64 25,
+// IR: @llvm.linx.experimental.ew.tsel.gpr
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked
 // IR: ret void
 // OBJ-LABEL: <generic_compare>:
 // OBJ: BSTART.TEPL TCMP, U32
 // OBJ: BSTART.TEPL TSEL, U32
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} U32
+// OBJ: BSTART.MSCATTER U32
 
 extern "C" void generic_signed_store(const int *__restrict input,
                                       const int *__restrict divisor,
@@ -68,9 +80,9 @@ extern "C" void generic_signed_store(const int *__restrict input,
     output[element] = input[element] / divisor[element];
 }
 // IR-LABEL: define{{.*}} @generic_signed_store
-// IR: asm sideeffect "BSTART.TEPL TDIV, S32
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, S32
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked{{.*}}i64 17, i64 29, i64 3,
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked{{.*}}i64 32, i64 1, i64 17, i64 29,
 // IR: ret void
 // OBJ-LABEL: <generic_signed_store>:
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} S32
+// OBJ: BSTART.MSCATTER S32

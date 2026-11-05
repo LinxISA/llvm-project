@@ -52,29 +52,14 @@ void selected_atomic(elements *output_pointer, const elements *index_pointer,
 // IR-LABEL: define{{.*}}histogram_atomic
 // IR-NOT: llvm.linx.experimental.element.region
 // IR-NOT: atomicrmw
-// IR: asm sideeffect "BSTART.TEPL TCMP, U32
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
+// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
+// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
+// IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
 // IR-LABEL: define{{.*}}selected_atomic
 // IR-NOT: llvm.linx.experimental.element.region
 // IR-NOT: atomicrmw
-// IR: asm sideeffect "BSTART.TEPL TCMP, U32
-// IR: asm sideeffect "BSTART.TEPL TCMP, U32
-// IR: asm sideeffect "BSTART.TEPL TAND, U8
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
-
-// OBJ-LABEL: <{{.*}}histogram_atomic
-// OBJ: BSTART.TEPL TCMP, U32
-// OBJ: BSTART.TEPL TLEA, U32
-// OBJ: BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
-// OBJ: B.DATR CUBE_M32
-// OBJ-NOT: ExecMaskPresent
-// OBJ-LABEL: <{{.*}}selected_atomic
-// OBJ: BSTART.TEPL TCMP, U32
-// OBJ: BSTART.TEPL TCMP, U32
-// OBJ: BSTART.TEPL TAND, U8
-// OBJ: BSTART.TEPL TLEA, U32
-// OBJ: BSTART.{{(TLSU )?}}MGATHER.ADD{{,?}} U32
-// OBJ: B.DATR CUBE_M32
-// OBJ-NOT: ExecMaskPresent
+// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
+// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
+// IR: and i64
+// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
+// IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked

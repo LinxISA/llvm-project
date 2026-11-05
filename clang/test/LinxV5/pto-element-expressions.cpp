@@ -53,10 +53,10 @@ void arithmetic(elements &output, const elements &a, const elements &b,
 }
 // IR-LABEL: define{{.*}}arithmetic
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tci
-// IR: asm sideeffect "BSTART.TEPL TADD, U32
-// IR: asm sideeffect "BSTART.TEPL TSHR, U32
-// IR: asm sideeffect "BSTART.TEPL TAND, U32
-// IR: asm sideeffect "BSTART.TEPL TXOR, U32
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 0,
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 9,
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 5,
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 7,
 // IR-NOT: for.body
 // IR-NOT: extractelement
 // OBJ-LABEL: <{{.*}}arithmetic
@@ -82,10 +82,10 @@ void locals(elements &output, const elements &input) {
 // IR-LABEL: define{{.*}}locals
 // IR: freeze i32 -1
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tci
-// IR: asm sideeffect "BSTART.TEPL TMUL, U32
-// IR: asm sideeffect "BSTART.TEPL TXOR, U32
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 2,
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 7,
 // IR: call <32 x i32> @llvm.linx.experimental.ew.tci{{.*}}i64 4294967296
-// IR: asm sideeffect "BSTART.TEPL TADD, U32
+// IR: call <32 x i32> @llvm.linx.experimental.ew.tbinary{{.*}}i64 0,
 // OBJ-LABEL: <{{.*}}locals
 // OBJ: BSTART.TEPL TMUL, U32
 // OBJ: BSTART.TEPL TXOR, U32

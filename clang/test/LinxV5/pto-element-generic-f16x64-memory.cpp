@@ -15,14 +15,14 @@ extern "C" void f16x64_gather_scatter(const _Float16 *__restrict input,
 }
 
 // IR-LABEL: define{{.*}} @f16x64_gather_scatter
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER, FP16
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, FP16
+// IR: @llvm.linx.experimental.ew.tlea.v64i64.v64i32(i64 32, i64 2
+// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v64f16.v64i64
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v64i64.v64f16
 // IR-NOT: @llvm.vp.
 // OBJ-LABEL: <f16x64_gather_scatter>:
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} FP16
+// OBJ: BSTART.TLSU MGATHER, FP16
 // OBJ: C.B.DIMI 2, ->lb2
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} FP16
+// OBJ: BSTART.TLSU MSCATTER, FP16
 // OBJ: C.B.DIMI 2, ->lb2
 
 extern "C" void f16x64_signed_indices(
@@ -34,8 +34,8 @@ extern "C" void f16x64_signed_indices(
 }
 
 // IR-LABEL: define{{.*}} @f16x64_signed_indices
-// IR: asm sideeffect "BSTART.TEPL TADD, S32
-// IR: asm sideeffect "BSTART.TEPL TLEA, S32
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v64i32(i64 32, i64 2, i64 17, i64 29, i64 0, {{.*}}i64 -1,
+// IR: @llvm.linx.experimental.ew.tlea.v64i64.v64i32(i64 32, i64 2, i64 17,
 // OBJ-LABEL: <f16x64_signed_indices>:
 // OBJ: BSTART.TEPL TADD, S32
 // OBJ: BSTART.TEPL TLEA, S32
@@ -54,13 +54,13 @@ extern "C" void u16x64_gather_scatter(
 // IR-LABEL: define{{.*}} @u16x64_gather_scatter
 // The canonical i64 GEP induction is proved to fit B32 and narrowed before
 // TLEA; this preserves the public S32/U32 index contract for flat64 addresses.
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.TLSU MGATHER, U16
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, U16
+// IR: @llvm.linx.experimental.ew.tlea.v64i64.v64i32(i64 32, i64 2, i64 25,
+// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v64i16.v64i64(i64 32, i64 2, i64 26,
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v64i64.v64i16(i64 32, i64 2, i64 26,
 // OBJ-LABEL: <u16x64_gather_scatter>:
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U16
+// OBJ: BSTART.TLSU MGATHER, U16
 // OBJ: C.B.DIMI 2, ->lb2
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} U16
+// OBJ: BSTART.TLSU MSCATTER, U16
 // OBJ: C.B.DIMI 2, ->lb2
 
 extern "C" void u32x64_copy(const unsigned *__restrict input,
@@ -71,12 +71,12 @@ extern "C" void u32x64_copy(const unsigned *__restrict input,
 }
 
 // IR-LABEL: define{{.*}} @u32x64_copy
-// IR: asm sideeffect "BSTART.TLSU MGATHER, U32
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, U32
+// IR: @llvm.linx.experimental.ew.mgather.gpr.masked.v64i32.v64i64(i64 32, i64 2, i64 25,
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v64i64.v64i32(i64 32, i64 2, i64 25,
 // OBJ-LABEL: <u32x64_copy>:
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
+// OBJ: BSTART.TLSU MGATHER, U32
 // OBJ: C.B.DIMI 2, ->lb2
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} U32
+// OBJ: BSTART.TLSU MSCATTER, U32
 // OBJ: C.B.DIMI 2, ->lb2
 
 extern "C" void s32x64_copy(const int *__restrict input,
@@ -88,11 +88,11 @@ extern "C" void s32x64_copy(const int *__restrict input,
 }
 
 // IR-LABEL: define{{.*}} @s32x64_copy
-// IR: asm sideeffect "BSTART.TEPL TDIV, S32
-// IR: asm sideeffect "BSTART.TLSU MSCATTER, S32
+// IR: @llvm.linx.experimental.ew.tbinary.gpr.masked.v64i32(i64 32, i64 2, i64 17,
+// IR: @llvm.linx.experimental.ew.mscatter.gpr.masked.v64i64.v64i32(i64 32, i64 2, i64 17,
 // OBJ-LABEL: <s32x64_copy>:
 // OBJ: BSTART.TEPL TDIV, S32
-// OBJ: BSTART.{{(TLSU )?}}MSCATTER{{,?}} S32
+// OBJ: BSTART.TLSU MSCATTER, S32
 // OBJ: C.B.DIMI 2, ->lb2
 
 extern "C" void u32x64_widen_compare(const unsigned *__restrict input,
@@ -107,7 +107,7 @@ extern "C" void u32x64_widen_compare(const unsigned *__restrict input,
 }
 
 // IR-LABEL: define{{.*}} @u32x64_widen_compare
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
+// IR: @llvm.linx.experimental.ew.tlea.v64i64.v64i32(i64 32, i64 2, i64 25, i64 29, {{.*}}, i64 8)
 // OBJ-LABEL: <u32x64_widen_compare>:
 // OBJ: BSTART.TEPL TLEA, U32
 
@@ -121,11 +121,11 @@ extern "C" void u32x64_runtime_i64_base(const unsigned *__restrict input,
 
 // IR-LABEL: define{{.*}} @u32x64_runtime_i64_base
 // IR: getelementptr i32, ptr %{{.*}}, i64 %{{.*}}
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
+// IR: @llvm.linx.experimental.ew.tlea.v64i64.v64i32
 // IR-NOT: @llvm.linx.experimental.ew.tbinary.gpr.masked.v64i64
 // IR: ret void
 // OBJ-LABEL: <u32x64_runtime_i64_base>:
 // OBJ: BSTART.TEPL TLEA, S32
 // OBJ-NOT: BSTART.TEPL TADD, U64
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
+// OBJ: BSTART.TLSU MGATHER, U32
 

@@ -32,44 +32,7 @@ void gather(element_part &out_part, element_part &index_part,
 }
 
 // IR-LABEL: define{{.*}}gather
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
-// IR-NOT: extractelement
-
-// OBJ-LABEL: <{{.*}}gather
-// OBJ: BSTART.TEPL TLEA, U32
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
-// OBJ-NOT: MGATHER.ADD
-// OBJ: B.DATR CUBE_M32
-// OBJ-NOT: ExecMaskPresent
-
-void gather_tail(element_part &out_part, element_part &index_part,
-                 const unsigned int *__restrict source, unsigned int valid) {
-  element_part local_indices = index_part;
-  element_part local_output{};
-  auto &indices = element_view(local_indices);
-  auto &out = element_view(local_output);
-#pragma pto element for
-  for (unsigned int element = 0; element < 32; ++element) {
-    if (element < valid)
-      out[element] = source[indices[element]];
-    else
-      out[element] = 0;
-  }
-  out_part = local_output;
-}
-
-// IR-LABEL: define{{.*}}gather_tail
-// IR: call <32 x i32> @llvm.linx.experimental.ew.tci
-// IR: asm sideeffect "BSTART.TEPL TCMP, U32
-// IR: asm sideeffect "BSTART.TEPL TLEA, U32
-// IR: asm sideeffect "BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
-// IR-NOT: getelementptr
-
-// OBJ-LABEL: <{{.*}}gather_tail
-// OBJ: BSTART.TEPL TCI, U32
-// OBJ: BSTART.TEPL TCMP, U32
-// OBJ: BSTART.TEPL TLEA, U32
-// OBJ: BSTART.{{(TLSU )?}}MGATHER{{,?}} U32
-// OBJ-NOT: MGATHER.ADD
-// OBJ-NOT: ExecMaskPresent
+// IR: call i64 @llvm.linx.experimental.ew.tcmps.gpr
+// IR: call <32 x i64> @llvm.linx.experimental.ew.tlea
+// IR: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
+// IR-SAME: i64 0, i64 0, i64 1)

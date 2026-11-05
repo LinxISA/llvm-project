@@ -43,18 +43,18 @@ void rejected_profile(elements *sink, const elements *source,
   asm volatile("" : : "Tr"(output));
 }
 // MIXED-LABEL: define{{.*}}rejected_profile
-// MIXED: asm sideeffect "BSTART.TEPL TADD, S32
+// MIXED: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 17, i64 29, i64 0,
 // GATHER-LABEL: define{{.*}}rejected_profile
-// GATHER: asm sideeffect "BSTART.TLSU MGATHER, U32
-// GATHER: call <32 x i32> @llvm.linx.experimental.ew.tsel.v32i32.v32i32.v32i32.v32i32(i64 32, i64 1, i64 17, i64 29,
+// GATHER: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
+// GATHER: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr.v32i32(i64 32, i64 1, i64 17, i64 29,
 // ATOMIC-LABEL: define{{.*}}rejected_profile
-// ATOMIC: call <32 x i32> asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-// ATOMIC: call <32 x i32> @llvm.linx.experimental.ew.tsel.v32i32.v32i32.v32i32.v32i32(i64 32, i64 1, i64 17, i64 29,
+// ATOMIC: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked
+// ATOMIC: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr.v32i32(i64 32, i64 1, i64 17, i64 29,
 // INDEX-LABEL: define{{.*}}rejected_profile
-// INDEX: [[INDEX:%.*]] = call <32 x i32> asm sideeffect "BSTART.TEPL TADD, U32
-// INDEX: call <32 x i64> asm sideeffect "BSTART.TEPL TLEA, U32{{.*}}<32 x i32> [[INDEX]]
-// INDEX: asm sideeffect "BSTART.TLSU MGATHER, U32
+// INDEX: [[INDEX:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 25, i64 29, i64 0,
+// INDEX: call <32 x i64> @llvm.linx.experimental.ew.tlea.v32i64.v32i32(i64 32, i64 1, i64 25, i64 29, <32 x i32> [[INDEX]], i64 32)
+// INDEX: call <32 x i32> @llvm.linx.experimental.ew.mgather.gpr.masked
 // KEY-LABEL: define{{.*}}rejected_profile
-// KEY: call <32 x i32> @llvm.linx.experimental.ew.tcmp.v32i32
-// KEY: call <32 x i32> @llvm.linx.experimental.ew.tcmp.v32i32{{.*}}i64 0)
-// KEY: call <32 x i32> asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
+// KEY: call i64 @llvm.linx.experimental.ew.tcmps.gpr.v32i32
+// KEY: call i64 @llvm.linx.experimental.ew.tcmps.gpr.v32i32{{.*}}i64 0)
+// KEY: call <32 x i32> @llvm.linx.experimental.ew.mgather.add.masked

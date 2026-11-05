@@ -24,10 +24,10 @@ extern "C" void two_streams(int *__restrict__ hist, int *__restrict__ num,
 }
 
 // CHECK-LABEL: define {{.*}}@two_streams(
-// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-// CHECK: asm sideeffect "BSTART.TLSU MSCATTER, U32
-// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-// CHECK: asm sideeffect "BSTART.TLSU MSCATTER, U32
+// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: call void @llvm.linx.experimental.ew.mscatter.gpr.masked
+// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: call void @llvm.linx.experimental.ew.mscatter.gpr.masked
 // CHECK-NOT: call void @llvm.linx.experimental.element.region
 
 extern "C" void three_streams(int *__restrict__ counter0,
@@ -48,9 +48,9 @@ extern "C" void three_streams(int *__restrict__ counter0,
 }
 
 // CHECK-LABEL: define {{.*}}@three_streams(
-// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-// CHECK: asm sideeffect "BSTART.TLSU MSCATTER, U32
-// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-// CHECK: asm sideeffect "BSTART.TLSU MSCATTER, U32
-// CHECK: asm sideeffect "BSTART.TLSU MGATHER.ADD, U32
-// CHECK: asm sideeffect "BSTART.TLSU MSCATTER, U32
+// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: call void @llvm.linx.experimental.ew.mscatter.gpr.masked
+// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: call void @llvm.linx.experimental.ew.mscatter.gpr.masked
+// CHECK: call {{.*}}@llvm.linx.experimental.ew.mgather.add.masked
+// CHECK: call void @llvm.linx.experimental.ew.mscatter.gpr.masked

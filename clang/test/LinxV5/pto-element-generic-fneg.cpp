@@ -43,10 +43,10 @@ extern "C" void optimized_if_add_sub(f32_elements *sink, const f32_elements *a,
 }
 // IR-LABEL: define{{.*}} @optimized_if_add_sub
 // IR: call <32 x float> asm sideeffect "BSTART.TLSU TLOAD, FP32
-// IR-DAG: asm sideeffect "BSTART.TEPL TCMP, FP32
-// IR-DAG: asm sideeffect "BSTART.TEPL TNEG, FP32
-// IR-DAG: asm sideeffect "BSTART.TEPL T{{ADD|SUB}}, FP32
-// IR-DAG: @llvm.linx.experimental.ew.tsel.v32f32.v32i32.v32f32.v32f32
+// IR-DAG: @llvm.linx.experimental.ew.tcmps.gpr.masked.v32f32
+// IR-DAG: @llvm.linx.experimental.ew.tneg.gpr.masked.v32f32
+// IR-DAG: @llvm.linx.experimental.ew.tbinary.gpr.masked.v32f32
+// IR-DAG: @llvm.linx.experimental.ew.tsel.gpr.v32f32
 // IR: call void asm sideeffect "BSTART.TLSU TSTORE, FP32
 // IR-NOT: @llvm.linx.experimental.element.region
 // IR-NOT: @llvm.vp.
@@ -55,11 +55,12 @@ extern "C" void optimized_if_add_sub(f32_elements *sink, const f32_elements *a,
 // IR-NOT: insertelement
 // IR: ret void
 // OBJ-LABEL: <optimized_if_add_sub>:
-// OBJ: BSTART.{{(TLSU )?}}TLOAD{{,?}} FP32
-// OBJ-DAG: BSTART.TEPL TCMP, FP32
+// OBJ: BSTART.TLSU TLOAD, FP32
+// OBJ-DAG: BSTART.TEPL TCMPS, FP32
+// OBJ-DAG: ExecMaskPresent
 // OBJ-DAG: BSTART.TEPL TNEG, FP32
-// OBJ-NOT: ExecMaskPresent
+// OBJ-DAG: ExecMaskPresent
 // OBJ-DAG: BSTART.TEPL TSEL, FP32
-// OBJ: BSTART.{{(TLSU )?}}TSTORE{{,?}} FP32
+// OBJ: BSTART.TLSU TSTORE, FP32
 // InstCombine may rewrite the ordinary if/add/sub CFG to fneg/select/fadd.
 // The backend must accept that standard IR; this test does not suppress it.
