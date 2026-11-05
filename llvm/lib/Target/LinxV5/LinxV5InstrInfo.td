@@ -210,7 +210,11 @@ def ShamtImm : Operand<i64>, ImmLeaf<i64, [{return isUInt<5>(Imm);}]> {
 }
 
 class ALUrr_Base<bits<3> Func, LinxV5InstOpcode opc, LinxV5InstType type, RegWithSrcRType SrcROp, string opcstr> :
-    LinxV5Inst_B<SrcROp.Type, Func, type, opc, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, SrcROp:$SrcR, ShamtImm:$Imm5), opcstr>;
+    // Binary ALU selectors differ from AGU/compare: sw=0, uw=1,
+    // negate/not=2, unmodified=3. Keep parser operand kinds shared.
+    LinxV5Inst_B<!and(!add(SrcROp.Type, 3), 3), Func, type, opc,
+                 (outs DstRWithArrow:$DstR),
+                 (ins GPRSrc:$SrcL, SrcROp:$SrcR, ShamtImm:$Imm5), opcstr>;
 
 class ALUrrZ5_Base<bits<3> Func, LinxV5InstOpcode opc, RegWithSrcRType SrcROp, string opcstr, LinxV5InstType type> :
 LinxV5Inst_B_Z5<SrcROp.Type, Func, type, opc, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, SrcROp:$SrcR), opcstr>;
@@ -348,8 +352,6 @@ class FMAX_Base<bits<3> Func, bits<2> SrcType, string opcstr> :
 multiclass FMAX_RType<bits<3> Func, string opcstr> {
   def _FD : FMAX_Base<Func, 0b00, opcstr # ".fd">;
   def _FS : FMAX_Base<Func, 0b01, opcstr # ".fs">;
-  def _FH : FMAX_Base<Func, 0b10, opcstr # ".fh">;
-  def _FB : FMAX_Base<Func, 0b11, opcstr # ".fb">;
 }
 }
 
@@ -480,6 +482,29 @@ multiclass Load_Base_With_UnScaled<bits<3> Func, Operand ScaleImm, string opcstr
   def "I_U"  : Load_rri<Func, OPC_Load_Unscaled, simm12, opcstr#"i.u", type> {
     let Format = InstFormat_LoadI_UnScaled;
   }
+}
+
+// Short prefetches have an assigned, non-writing destination field. Emit
+// its canonical zero value and do not expose it in assembly.
+class Prefetch_rr<RegWithSrcRType SrcROp> :
+    LinxV5Inst_B<SrcROp.Type, 0b111, Type_100,
+                 OPC_Load_Register_Offset, (outs),
+                 (ins GPRSrc:$SrcL, SrcROp:$SrcR, ShamtImm:$Imm5), "prf"> {
+  let DstR = 0;
+  let AsmString = "prf\t[$SrcL, $SrcR$Imm5]";
+  let hasSideEffects = 1;
+}
+
+def PRF : Prefetch_rr<SrcRNONE>;
+def PRF_SW : Prefetch_rr<SrcRSW>;
+def PRF_UW : Prefetch_rr<SrcRUW>;
+
+def PRFI_U : LinxV5Inst_E<Type_100, OPC_Load_Unscaled, 0b111,
+                          (outs), (ins GPRSrc:$SrcL, simm12:$Imm12),
+                          "prfi.u"> {
+  let DstR = 0;
+  let AsmString = "prfi.u\t[$SrcL, $Imm12]";
+  let hasSideEffects = 1;
 }
 
 def LB : Load_rrr<0b000, OPC_Load_Register_Offset, SrcRNONE, "lb", Type_100>;
@@ -731,37 +756,21 @@ class Float_3Src_Two<bits<3> Func, bits<2> SrcType, string opcstr> :
 
 def FADD_FD : Float_3Src_Two<0b000, 0b00, "fadd.fd">;
 def FADD_FS : Float_3Src_Two<0b000, 0b01, "fadd.fs">;
-def FADD_FH : Float_3Src_Two<0b000, 0b10, "fadd.fh">;
-def FADD_FB : Float_3Src_Two<0b000, 0b11, "fadd.fb">;
 def FSUB_FD : Float_3Src_Two<0b001, 0b00, "fsub.fd">;
 def FSUB_FS : Float_3Src_Two<0b001, 0b01, "fsub.fs">;
-def FSUB_FH : Float_3Src_Two<0b001, 0b10, "fsub.fh">;
-def FSUB_FB : Float_3Src_Two<0b001, 0b11, "fsub.fb">;
 def FMUL_FD : Float_3Src_Two<0b010, 0b00, "fmul.fd">;
 def FMUL_FS : Float_3Src_Two<0b010, 0b01, "fmul.fs">;
-def FMUL_FH : Float_3Src_Two<0b010, 0b10, "fmul.fh">;
-def FMUL_FB : Float_3Src_Two<0b010, 0b11, "fmul.fb">;
 def FDIV_FD : Float_3Src_Two<0b011, 0b00, "fdiv.fd">;
 def FDIV_FS : Float_3Src_Two<0b011, 0b01, "fdiv.fs">;
-def FDIV_FH : Float_3Src_Two<0b011, 0b10, "fdiv.fh">;
-def FDIV_FB : Float_3Src_Two<0b011, 0b11, "fdiv.fb">;
 
 def FMADD_FD : Float_3Src_Base<0b100, 0b00, "fmadd.fd">;
 def FMADD_FS : Float_3Src_Base<0b100, 0b01, "fmadd.fs">;
-def FMADD_FH : Float_3Src_Base<0b100, 0b10, "fmadd.fh">;
-def FMADD_FB : Float_3Src_Base<0b100, 0b11, "fmadd.fb">;
 def FMSUB_FD : Float_3Src_Base<0b101, 0b00, "fmsub.fd">;
 def FMSUB_FS : Float_3Src_Base<0b101, 0b01, "fmsub.fs">;
-def FMSUB_FH : Float_3Src_Base<0b101, 0b10, "fmsub.fh">;
-def FMSUB_FB : Float_3Src_Base<0b101, 0b11, "fmsub.fb">;
 def FNMADD_FD: Float_3Src_Base<0b110, 0b00, "fnmadd.fd">;
 def FNMADD_FS: Float_3Src_Base<0b110, 0b01, "fnmadd.fs">;
-def FNMADD_FH: Float_3Src_Base<0b110, 0b10, "fnmadd.fh">;
-def FNMADD_FB: Float_3Src_Base<0b110, 0b11, "fnmadd.fb">;
 def FNMSUB_FD: Float_3Src_Base<0b111, 0b00, "fnmsub.fd">;
 def FNMSUB_FS: Float_3Src_Base<0b111, 0b01, "fnmsub.fs">;
-def FNMSUB_FH: Float_3Src_Base<0b111, 0b10, "fnmsub.fh">;
-def FNMSUB_FB: Float_3Src_Base<0b111, 0b11, "fnmsub.fb">;
 
 let Format = InstFormatFP in
 class Float_2Src_Compare<bits<3> Func, bits<2> SrcType, string opcstr> :
@@ -781,41 +790,26 @@ class Float_2Src_Compare_S<bits<3> Func, bits<2> SrcType, string opcstr> :
 
 def FEQ_FD: Float_2Src_Compare<0b000, 0b00, "feq.fd">;
 def FEQ_FS: Float_2Src_Compare<0b000, 0b01, "feq.fs">;
-def FEQ_FH: Float_2Src_Compare<0b000, 0b10, "feq.fh">;
-def FEQ_FB: Float_2Src_Compare<0b000, 0b11, "feq.fb">;
 def FNE_FD: Float_2Src_Compare<0b001, 0b00, "fne.fd">;
 def FNE_FS: Float_2Src_Compare<0b001, 0b01, "fne.fs">;
-def FNE_FH: Float_2Src_Compare<0b001, 0b10, "fne.fh">;
-def FNE_FB: Float_2Src_Compare<0b001, 0b11, "fne.fb">;
 def FLT_FD: Float_2Src_Compare<0b010, 0b00, "flt.fd">;
 def FLT_FS: Float_2Src_Compare<0b010, 0b01, "flt.fs">;
-def FLT_FH: Float_2Src_Compare<0b010, 0b10, "flt.fh">;
-def FLT_FB: Float_2Src_Compare<0b010, 0b11, "flt.fb">;
 def FGE_FD: Float_2Src_Compare<0b011, 0b00, "fge.fd">;
 def FGE_FS: Float_2Src_Compare<0b011, 0b01, "fge.fs">;
-def FGE_FH: Float_2Src_Compare<0b011, 0b10, "fge.fh">;
-def FGE_FB: Float_2Src_Compare<0b011, 0b11, "fge.fb">;
 
 def FEQS_FD: Float_2Src_Compare_S<0b000, 0b00, "feqs.fd">;
 def FEQS_FS: Float_2Src_Compare_S<0b000, 0b01, "feqs.fs">;
-def FEQS_FH: Float_2Src_Compare_S<0b000, 0b10, "feqs.fh">;
-def FEQS_FB: Float_2Src_Compare_S<0b000, 0b11, "feqs.fb">;
 def FNES_FD: Float_2Src_Compare_S<0b001, 0b00, "fnes.fd">;
 def FNES_FS: Float_2Src_Compare_S<0b001, 0b01, "fnes.fs">;
-def FNES_FH: Float_2Src_Compare_S<0b001, 0b10, "fnes.fh">;
-def FNES_FB: Float_2Src_Compare_S<0b001, 0b11, "fnes.fb">;
 def FLTS_FD: Float_2Src_Compare_S<0b010, 0b00, "flts.fd">;
 def FLTS_FS: Float_2Src_Compare_S<0b010, 0b01, "flts.fs">;
-def FLTS_FH: Float_2Src_Compare_S<0b010, 0b10, "flts.fh">;
-def FLTS_FB: Float_2Src_Compare_S<0b010, 0b11, "flts.fb">;
 def FGES_FD: Float_2Src_Compare_S<0b011, 0b00, "fges.fd">;
 def FGES_FS: Float_2Src_Compare_S<0b011, 0b01, "fges.fs">;
-def FGES_FH: Float_2Src_Compare_S<0b011, 0b10, "fges.fh">;
-def FGES_FB: Float_2Src_Compare_S<0b011, 0b11, "fges.fb">;
 
 let Format = InstFormatFP in
 class fALGO_Base<bits<3> Func, bits<2> SrcType, string opcstr>
     : LinxV5Inst_A<SrcType, Func, Type_101, OPC_FloatAlgorithm, (outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL), ""> {
+  let PE = PET_FP;
   let SrcD = 0b00000;
   let SrcR = 0b00000;
   let AsmString = opcstr # "\t$SrcL, $DstR";
@@ -824,13 +818,13 @@ class fALGO_Base<bits<3> Func, bits<2> SrcType, string opcstr>
 multiclass fALGO<bits<3> Func, string opcstr> {
 def _FD : fALGO_Base<Func, 0b00, opcstr # ".fd">;
 def _FS : fALGO_Base<Func, 0b01, opcstr # ".fs">;
-def _FH : fALGO_Base<Func, 0b10, opcstr # ".fh">;
-def _FB : fALGO_Base<Func, 0b11, opcstr # ".fb">;
 }
 
 defm FABS   : fALGO<0b000, "fabs">;
+let hasSideEffects = 1, isConvergent = 1, isNotDuplicable = 1 in
 defm FSQRT  : fALGO<0b001, "fsqrt">;
 defm FRECIP : fALGO<0b010, "frecip">;
+let hasSideEffects = 1, isConvergent = 1, isNotDuplicable = 1 in
 defm FEXP : fALGO<0b011, "fexp">;
 
 //===------------------------------------- End Linx040 Floating-point Operation Define -----------------------------===//
@@ -2078,7 +2072,7 @@ def SYNC_CORE : LinxV5InstBase {
   let Inst{31-0} = 0x0330a02b;
   let OutOperandList = (outs);
   let InOperandList = (ins);
-  let AsmString = "SYNC.CORE";
+  let AsmString = "sync.core";
   let PE = PET_SYS;
   let hasSideEffects = 1;
   // The SelectionDAG chain carries the ordering edge; marking this patterned
@@ -2086,6 +2080,7 @@ def SYNC_CORE : LinxV5InstBase {
   let mayLoad = 0;
   let mayStore = 0;
   let isNotDuplicable = 1;
+  let isConvergent = 1;
   let Pattern = [(linxv5_sync_core)];
 }
 
@@ -2211,7 +2206,7 @@ def C_ADDPC : LinxV5InstBase {
   bits<5> imm6;
 
   let OutOperandList = (outs );
-  let InOperandList = (ins uimm6_lsb0:$imm6);
+  let InOperandList = (ins SetRetImm:$imm6);
 
   let Inst{15-11} = 0b01010;
   let Inst{10-6} = imm6;
@@ -2304,7 +2299,7 @@ def : InstAlias<"B.DATR $DataLayout, $SrcType, $PadValue, $RMode", (BDATR BArgFo
 //def : InstAlias<"BSTART.TEPL $TileOP, $Mode", (BSTART_TEPL 31, TileOPTEPL:$TileOP, TEPLMode:$Mode), 1>;
 
 def : InstAlias<"setret\t$imm20", (ADDPC uimm21_lsb0:$imm20), 0>;
-def : InstAlias<"c.setret\t$imm6", (C_ADDPC uimm6_lsb0:$imm6), 0>;
+def : InstAlias<"c.setret\t$imm6", (C_ADDPC SetRetImm:$imm6), 0>;
 def : InstAlias<"C.BSTART $BrType", (BSTART_STD_WITHOUT_TARGET_16 BStartWithoutTargetBrType:$BrType), 0>;
 def : InstAlias<"BSTART DIRECT, $Src", (BSTART_STD_WITH_TARGET_25_DIRECT simm26_lsb0_bnext:$Src), 0>;
 def : InstAlias<"BSTART CALL, $Src", (BSTART_STD_WITH_TARGET_25_DIRECT simm26_lsb0_bnext:$Src), 0>;
@@ -2468,10 +2463,10 @@ class EXECTRL_BASE<bits<12> imm, string opcstr>
 def BSE  : EXECTRL_BASE<0, "bse">;
 def BWE  : EXECTRL_BASE<1, "bwe">;
 def BWI  : EXECTRL_BASE<2, "bwi">;
-let hasSideEffects = 1 in
-def TRAP : EXECTRL_BASE<3, "trap">;
-
-def : Pat<(trap), (TRAP (i64 R0))>;
+let hasSideEffects = 1 in {
+  let PE = PET_SYS in
+  def BWT : EXECTRL_BASE<3, "bwt">;
+}
 
 class FENCE_BASE<dag ins, bit inst, string opcstr, string argstr>
     : LinxV5Inst_F<Type_101, OPC_Execution_Control, 0b010, (outs), ins, opcstr> {
@@ -2513,15 +2508,24 @@ def FenceFlag : Operand<OtherVT> {
   let DecoderMethod = "decodeUImmOperand<4>";
 }
 
+// ACRE has a four-bit field, but only request types 0 and 1 are assigned.
+def ArchitectureEnterType : Operand<i64>, ImmLeaf<i64, [{return isUInt<1>(Imm);}]> {
+  let ParserMatchClass = UImmAsmOperand<1>;
+  let DecoderMethod = "decodeArchitectureEnterType";
+}
+
 let PE = PET_SYS in {
+  let hasSideEffects = 1, mayLoad = 1, mayStore = 1 in {
   def FENCE_D : FENCE_BASE<(ins FenceFlag:$PRED, FenceFlag:$SUCC), 0, "fence.d", "$PRED, $SUCC">;
   def FENCE_I : FENCE_BASE<(ins), 1, "fence.i", ""> {
     let PRED = 0b0000;
     let SUCC = 0b0000;
   }
 
+  } // Fences constrain memory scheduling.
+
   def ACRC : AC_BASE<(ins uimm4:$rType), 0, "acrc", " $rType">;
-  def ACRE : AC_BASE<(ins uimm4:$rType), 1, "acre", " $rType">;
+  def ACRE : AC_BASE<(ins ArchitectureEnterType:$rType), 1, "acre", " $rType">;
   def ASSERT : LinxV5Inst_F<Type_101, OPC_Execution_Control, 0b001, (outs), (ins GPRSrc:$SrcL), "assert"> {
   let Imm12 = 0;
   let Imm5 = 0;
@@ -2557,6 +2561,8 @@ defm BC : CACHE_CTRL_BASE<0b100, "bc">;
 defm IC : CACHE_CTRL_BASE<0b101, "ic">;
 defm DC : DCACHE_CTRL_BASE<0b110, "dc">;
 defm TLB : DCACHE_CTRL_TLB<0b111, "tlb">;
+
+let hasSideEffects = 1, mayLoad = 1, mayStore = 1 in {
 
 class LOAD_RESERVE_BASE<bits<4> width, bits<3> order, string opcstr>
     : LinxV5Inst_B_SYS<width, order, 0b000,
@@ -2642,19 +2648,20 @@ multiclass LOAD_ATOMIC_METHOD<bits<3> func, string opcstr> {
 defm LW : LOAD_ATOMIC_METHOD<0b010, "lw">;
 defm LD : LOAD_ATOMIC_METHOD<0b100, "ld">;
 
-class STORE_ATOMIC_BASE<bits<3> func, bits<4> method, bits<3> order, string opcstr>
-    : LinxV5Inst_B_SYS<method, order, func,
+class STORE_ATOMIC_BASE<bits<3> func, bits<5> method, bits<3> order, string opcstr>
+    : LinxV5Inst_B_SYS<method{3-0}, order, func,
                        (outs),
                        (ins GPRSrc:$SrcL, GPRSrc:$SrcR),
                        opcstr, " [$SrcL], $SrcR"> {
   let DstR = 0b00000;
+  let Inst{31} = method{4};
+  let Inst{30-27} = method{3-0};
+  let Inst{26} = 0;
 }
 
-multiclass STORE_ATOMIC_ORDER<bits<3> func, bits<4> method, string opcstr> {
+multiclass STORE_ATOMIC_ORDER<bits<3> func, bits<5> method, string opcstr> {
   def ""    : STORE_ATOMIC_BASE<func, method, 0b000, opcstr>;
   def _RL   : STORE_ATOMIC_BASE<func, method, 0b001, opcstr # ".rl">;
-  def _F   : STORE_ATOMIC_BASE<func, method, 0b100, opcstr # ".f">;
-  def _RLF   : STORE_ATOMIC_BASE<func, method, 0b101, opcstr # ".rlf">;
 }
 
 multiclass STORE_ATOMIC_METHOD<bits<3> func, string opcstr> {
@@ -2666,10 +2673,15 @@ multiclass STORE_ATOMIC_METHOD<bits<3> func, string opcstr> {
   defm _SMIN : STORE_ATOMIC_ORDER<func, 5, opcstr # ".smin">;
   defm _UMAX : STORE_ATOMIC_ORDER<func, 6, opcstr # ".umax">;
   defm _UMIN : STORE_ATOMIC_ORDER<func, 7, opcstr # ".umin">;
+  defm _SUB  : STORE_ATOMIC_ORDER<func, 8, opcstr # ".sub">;
 }
 
 defm SW : STORE_ATOMIC_METHOD<0b011, "sw">;
 defm SD : STORE_ATOMIC_METHOD<0b101, "sd">;
+defm SB_ADD : STORE_ATOMIC_ORDER<0b011, 16, "sb.add">;
+defm SB_SUB : STORE_ATOMIC_ORDER<0b011, 24, "sb.sub">;
+defm SH_ADD : STORE_ATOMIC_ORDER<0b101, 16, "sh.add">;
+defm SH_SUB : STORE_ATOMIC_ORDER<0b101, 24, "sh.sub">;
 
 class SWAP_BASE<bits<3> func, bits<4> width, bits<3> order, string opcstr>
     : LinxV5Inst_B_SYS<width, order, func,
@@ -2696,6 +2708,50 @@ multiclass  SWAP_WIDTH<bits<3> func, string opcstr> {
 }
 
 defm SWAP : SWAP_WIDTH<0b110, "swap">;
+
+// Short CAS has a third source in [31:27] and only aq/rl ordering bits.
+class CAS_BASE<bits<3> width, bits<2> order, string opcstr>
+    : LinxV5Inst<(outs DstRWithArrow:$DstR),
+                  (ins GPRSrc:$SrcL, GPRSrc:$SrcR, GPRSrc:$SrcD),
+                  opcstr, "[$SrcL], $SrcR, $SrcD, $DstR"> {
+  bits<5> SrcL;
+  bits<5> SrcR;
+  bits<5> SrcD;
+  bits<5> DstR;
+  let Inst{31-27} = SrcD;
+  let Inst{26-25} = order;
+  let Inst{24-20} = SrcR;
+  let Inst{19-15} = SrcL;
+  let Inst{14-12} = width;
+  let Inst{11-7} = DstR;
+  let Inst{6-0} = 0b0011011;
+  let PE = PET_SYS;
+}
+
+multiclass CAS_ORDER<bits<3> width, string opcstr> {
+  def "" : CAS_BASE<width, 0b00, opcstr>;
+  def _AQ : CAS_BASE<width, 0b10, opcstr # ".aq">;
+  def _RL : CAS_BASE<width, 0b01, opcstr # ".rl">;
+  def _AQRL : CAS_BASE<width, 0b11, opcstr # ".aqrl">;
+}
+
+defm CASB : CAS_ORDER<0, "casb">;
+defm CASH : CAS_ORDER<1, "cash">;
+defm CASW : CAS_ORDER<2, "casw">;
+defm CASD : CAS_ORDER<3, "casd">;
+
+def DMA : LinxV5Inst<(outs), (ins GPRSrc:$SrcL, GPRSrc:$SrcR),
+                      "dma", "[$SrcL], $SrcR"> {
+  bits<5> SrcL;
+  bits<5> SrcR;
+  let Inst{31-25} = 0;
+  let Inst{24-20} = SrcR;
+  let Inst{19-15} = SrcL;
+  let Inst{14-0} = 0x700b;
+  let PE = PET_SYS;
+}
+
+} // Scalar AMO side effects.
 
 // ===---------------------- DAG ISel Patterns ------------------------===
 
@@ -2981,7 +3037,6 @@ class PatRRVT<ValueType VT, SDPatternOperator N, Instruction I> :
 multiclass fPatRR<SDPatternOperator N, string I> {
   def : PatRRVT<f64, N, !cast<Instruction>(I # _FD)>;
   def : PatRRVT<f32, N, !cast<Instruction>(I # _FS)>;
-  def : PatRRVT<f16, N, !cast<Instruction>(I # _FH)>;
 }
 
 let Predicates = [isScalar, hasFloat, useDAGISel] in {
@@ -2997,7 +3052,6 @@ class fPatNEG<ValueType VT, Instruction I> :
 let Predicates = [isScalar, hasFloat, useDAGISel] in {
 def : fPatNEG<f64, FSUB_FD>;
 def : fPatNEG<f32, FSUB_FS>;
-def : fPatNEG<f16, FSUB_FH>;
 }
 
 // TODO: the operand sequence of FMADD_* is not same as fmadd.*
@@ -3007,7 +3061,6 @@ class fPatMACC<ValueType VT, SDPatternOperator N, Instruction I> :
 multiclass fPatMACC<SDPatternOperator N, string I> {
   def : fPatMACC<f64, N, !cast<Instruction>(I # _FD)>;
   def : fPatMACC<f32, N, !cast<Instruction>(I # _FS)>;
-  def : fPatMACC<f16, N, !cast<Instruction>(I # _FH)>;
 }
 
 let Predicates = [isScalar, hasFloat, useDAGISel] in {
@@ -4703,7 +4756,11 @@ def HL_PRFI_UA_L3 : LinxV5Inst_48_PRFI_A_Base<0b00010, "hl.prfi.ua.l3">;
 
 class V5Inst_48_Atomic<bits<4> Flag, bits<3> Mask, string opstr>
     : V5Inst_48_A_D<Flag, Mask, (outs DstRWithArrow:$Dst),
-                          (ins GPRSrc:$SrcL, GPRSrc:$SrcR, GPRSrc:$SrcD), opstr>;
+                          (ins GPRSrc:$SrcL, GPRSrc:$SrcR, GPRSrc:$SrcD), opstr> {
+  let hasSideEffects = 1;
+  let mayLoad = 1;
+  let mayStore = 1;
+}
 
 multiclass V5Inst_48_Atomic_Mul<bits<4> Flag, string opcstr> {
   def ""  : V5Inst_48_Atomic<Flag, 0b000, opcstr>;

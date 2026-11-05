@@ -603,8 +603,8 @@ enum TileOPTEPL {
 };
 
 enum FenceFlag {
-  FF_MEMW = 1 << 0,
-  FF_MEMR = 1 << 1,
+  FF_MEMR = 1 << 0,
+  FF_MEMW = 1 << 1,
   FF_DEVO = 1 << 2,
   FF_DEVI = 1 << 3,
   FF_MASK = 15

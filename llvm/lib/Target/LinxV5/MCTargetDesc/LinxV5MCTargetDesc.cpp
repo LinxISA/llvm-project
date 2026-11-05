@@ -125,8 +125,10 @@ public:
         MIFrm == LinxV5II::InstFormat_BSTART_WITH_TARGET_42) {
       Target = Addr + (Inst.getOperand(0).getImm());
       return true;
-    } else if (Inst.getOpcode() == LinxV5::C_ADDPC ||
-               Inst.getOpcode() == LinxV5::ADDPC ||
+    } else if (Inst.getOpcode() == LinxV5::C_ADDPC) {
+      Target = Addr + (Inst.getOperand(0).getImm() << 1);
+      return true;
+    } else if (Inst.getOpcode() == LinxV5::ADDPC ||
                Inst.getOpcode() == LinxV5::HL_SETRET) {
       Target = Addr + (Inst.getOperand(0).getImm());
       return true;

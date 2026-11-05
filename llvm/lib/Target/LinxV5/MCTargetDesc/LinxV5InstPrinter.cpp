@@ -218,7 +218,8 @@ void LinxV5InstPrinter::printBranchOperand(const MCInst *MI, uint64_t Address,
                                            const MCSubtargetInfo &STI,
                                            raw_ostream &O) {
   const MCOperand &MO = MI->getOperand(OpNo);
-  if (!MO.isImm())
+  // C.SETRET displays the raw halfword count even in objdump address mode.
+  if (MI->getOpcode() == LinxV5::C_ADDPC || !MO.isImm())
     return printOperand(MI, OpNo, STI, O);
 
   if (PrintBranchImmAsAddress) {
@@ -931,18 +932,8 @@ void LinxV5InstPrinter::printGPRList(const MCInst *MI, unsigned OpNo,
 void LinxV5InstPrinter::printFenceFlag(const MCInst *MI, unsigned OpNo,
                                        const MCSubtargetInfo &STI,
                                        raw_ostream &O) {
-  unsigned Flag = MI->getOperand(OpNo).getImm();
-  if (!(Flag & LinxV5Op::FF_MASK)) {
-    O << "unexpected fence.d operand";
-  }
-  if (Flag & LinxV5Op::FF_DEVI)
-    O << 'i';
-  if (Flag & LinxV5Op::FF_DEVO)
-    O << 'o';
-  if (Flag & LinxV5Op::FF_MEMR)
-    O << 'r';
-  if (Flag & LinxV5Op::FF_MEMW)
-    O << 'w';
+  // The normative syntax uses explicit raw four-bit masks, including zero.
+  O << MI->getOperand(OpNo).getImm();
 }
 
 void LinxV5InstPrinter::printBstartDataType(const MCInst *MI, unsigned OpNo,

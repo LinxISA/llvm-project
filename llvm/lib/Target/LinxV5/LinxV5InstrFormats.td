@@ -362,6 +362,22 @@ def UIMM3Plus1AsmOperand : AsmOperandClass {
   let RenderMethod = "addImmOperands";
 }
 
+// Numeric C.SETRET operands are raw halfword counts. Symbol operands use
+// the PC-relative byte-displacement fixup and are scaled by the linker.
+def SetRetImm : Operand<OtherVT> {
+  let ParserMatchClass = UImmAsmOperand<5, "SetRet">;
+  let PrintMethod = "printBranchOperand";
+  let EncoderMethod = "getImmOpValue";
+  let DecoderMethod = "decodeUImmOperand<5>";
+  let MCOperandPredicate = [{
+    int64_t Imm;
+    if (MCOp.evaluateAsConstantImm(Imm))
+      return isUInt<5>(Imm);
+    return MCOp.isBareSymbolRef();
+  }];
+  let OperandType = "OPERAND_PCREL";
+}
+
 // A 6-bit unsigned immediate where the least significant bit is zero: bits[5:1]
 def uimm6_lsb0 : Operand<OtherVT> {
   let ParserMatchClass = UImmAsmOperand<6, "Lsb0">;
@@ -680,8 +696,10 @@ class LinxV5Inst_B_SYS<bits<4> Imm, bits<3> order, bits<3> Func,
 
   bits<5> DstR;
 
-  let Inst{31-28} = Imm;
-  let Inst{27-25} = order;
+  // PTO scalar AMO: method/width is independent of the far routing bit.
+  let Inst{31} = order{2};
+  let Inst{30-27} = Imm;
+  let Inst{26-25} = order{1-0};
   let Inst{24-20} = SrcR;
   let Inst{19-15} = SrcL;
   let Inst{14-12} = Func;

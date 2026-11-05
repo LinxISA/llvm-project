@@ -3,7 +3,7 @@
 // RUN: llvm-objdump -d %s.bin | FileCheck %s --dump-input always -vv
 // RUN: rm %s.o %s.bin
 // CHECK: C.BSTART.STD    DIRECT, 0x11132 <test>
-// CHECK: c.setret        0x1112a, ->ra <.Ltmp0>
+// CHECK: c.setret        1, ->ra <.Ltmp0>
 main:
         C.BSTART.STD
         FENTRY  [ra ~ ra], sp!, 16

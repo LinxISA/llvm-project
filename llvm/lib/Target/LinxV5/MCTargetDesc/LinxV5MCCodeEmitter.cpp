@@ -1611,7 +1611,11 @@ unsigned LinxV5MCCodeEmitter::getImmOpValue(const MCInst &MI, unsigned OpNo,
   MCExpr::ExprKind Kind = Expr->getKind();
   LinxV5::Fixups FixupKind = LinxV5::fixup_linxv5_invalid;
   bool RelaxCandidate = false;
-  if (Kind == MCExpr::Target) {
+  if (MI.getOpcode() == LinxV5::C_ADDPC && Kind != MCExpr::Target) {
+    // Preserve the complete label +/- byte addend for the linker. Numeric
+    // immediates returned above are already raw halfword counts.
+    FixupKind = LinxV5::fixup_linxv5_c_addpc;
+  } else if (Kind == MCExpr::Target) {
     const LinxV5MCExpr *RVExpr = cast<LinxV5MCExpr>(Expr);
     switch (RVExpr->getKind()) {
     default:

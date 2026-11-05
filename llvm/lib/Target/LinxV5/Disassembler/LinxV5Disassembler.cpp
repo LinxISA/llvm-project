@@ -408,6 +408,15 @@ static DecodeStatus decodeUImmOperand(MCInst &Inst, uint64_t Imm,
   return MCDisassembler::Success;
 }
 
+static DecodeStatus decodeArchitectureEnterType(
+    MCInst &Inst, uint64_t Imm, int64_t Address,
+    const MCDisassembler *Decoder) {
+  if (Imm > 1)
+    return MCDisassembler::Fail;
+  Inst.addOperand(MCOperand::createImm(Imm));
+  return MCDisassembler::Success;
+}
+
 template <unsigned N>
 static DecodeStatus decodeSImmOperand(MCInst &Inst, uint64_t Imm,
                                       int64_t Address,
@@ -718,6 +727,23 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
           fieldFromInstruction(Insn, 15, 4) != 0 &&
           fieldFromInstruction(Insn, 26, 1) != 0)
         return MCDisassembler::Fail;
+      // Canonicalize assigned non-writing/ignored aliases before decoding.
+      // These fields are not operands of the canonical PTO assembly syntax.
+      if ((Insn & 0x707f) == 0x7009 || (Insn & 0x707f) == 0x7029)
+        Insn &= ~uint64_t(0xf80); // PRF/PRFI.U RegDst is ignored.
+      if ((Insn & 0x7800707f) == 0x0000000b ||
+          (Insn & 0x7800707f) == 0x0800000b ||
+          (Insn & 0x7800707f) == 0x1000000b ||
+          (Insn & 0x7800707f) == 0x1800000b)
+        Insn &= ~uint64_t(0x1f00000); // LR SrcZero is an ignored alias.
+      unsigned Func = (Insn >> 12) & 7;
+      bool AtomicResult = (Insn & 0x7f) == 0x1b ||
+                          ((Insn & 0x7f) == 0x0b &&
+                           (Func == 0 || Func == 1 || Func == 2 ||
+                            Func == 4 || Func == 6));
+      unsigned Dst = (Insn >> 7) & 31;
+      if (AtomicResult && Dst >= 24 && Dst <= 29)
+        Insn &= ~uint64_t(0xf80); // Canonical discard spelling is zero.
       Result =
           decodeInstruction(DecoderTable32, MI, Insn, Address, Decoder, STI);
       // The generated decoder only covers the non-lifetime B.IOT variants;
