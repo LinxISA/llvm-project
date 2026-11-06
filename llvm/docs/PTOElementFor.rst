@@ -232,6 +232,14 @@ fatal. Fast-math, unsupported comparison predicates, F64, casts, FP32 GM element
 accesses and atomics are diagnosed. FP32 memory transport stays at whole-Tile TLOAD/TSTORE
 boundaries.
 
+Integer narrowing from a native logical32 S64/U64 Tile to S32/U32 also
+supports PredicateCell execution masks. With
+``-linxv5-force-element-tile-mask=true``, legalization emits native masked
+TCVT with RNONE, no saturation, and ZERO inactive destinations; the surrounding
+publication selects preserve unchanged source-level destination elements.
+The default GPR-mask path is unchanged. This does not extend the typed-view
+profile to logical64 b64 sources or to arbitrary integer conversion widths.
+
 Vector GEPs retain one uniform base and an explicit element index.  TLEA scales
 the S32/U32 B32 index to S64/U64 B64 byte offsets exactly once. LLVM GEP
 extensions preserve the original B32 source rather than materializing a
