@@ -23,6 +23,96 @@
 
 namespace llvm {
 
+
+bool expandIndexedTLSURange(const MCInst &Inst, const MCInstrInfo &MII,
+                            const MCSubtargetInfo &STI, MCContext &Ctx,
+                            SmallVectorImpl<MCInst> &Expanded) {
+  MCInst Legacy = Inst;
+  unsigned Opcode = 0;
+  switch (Inst.getOpcode()) {
+  case LinxV5::PseudoMGATHER_MASK_SizeI_Range: Opcode = LinxV5::PseudoMGATHER_MASK_SizeI; break;
+  case LinxV5::PseudoMGATHER_GPR_Masked_SizeI_Range: Opcode = LinxV5::PseudoMGATHER_GPR_Masked_SizeI; break;
+  case LinxV5::PseudoMSCATTER_MASK_SizeI_Range: Opcode = LinxV5::PseudoMSCATTER_MASK_SizeI; break;
+  case LinxV5::PseudoMSCATTER_GPR_Masked_SizeI_Range: Opcode = LinxV5::PseudoMSCATTER_GPR_Masked_SizeI; break;
+  case LinxV5::PseudoMGATHER_ADD_SizeI_Range: Opcode = LinxV5::PseudoMGATHER_ADD_SizeI; break;
+  case LinxV5::PseudoMGATHER_ADD_Masked_SizeI_Range: Opcode = LinxV5::PseudoMGATHER_ADD_Masked_SizeI; break;
+  case LinxV5::PseudoMSCATTER_ADD_SizeI_Range: Opcode = LinxV5::PseudoMSCATTER_ADD_SizeI; break;
+  case LinxV5::PseudoMSCATTER_ADD_Predicate_Range: Opcode = LinxV5::PseudoMSCATTER_ADD_Predicate; break;
+  default: return false;
+  }
+  unsigned N = Inst.getNumOperands();
+  MCOperand Minimum = Inst.getOperand(N - 2);
+  MCOperand Maximum = Inst.getOperand(N - 1);
+  if (!Minimum.isReg() || !Maximum.isReg() || Minimum.getReg() == LinxV5::R0)
+    report_fatal_error("indexed range requires a nonzero minimum selector");
+  Legacy.setOpcode(Opcode);
+  Legacy.erase(Legacy.begin() + N - 2, Legacy.end());
+  const bool Predicate = Opcode == LinxV5::PseudoMSCATTER_ADD_Predicate;
+  const bool MaskedGather = Opcode == LinxV5::PseudoMGATHER_GPR_Masked_SizeI;
+  const bool MaskedScatter = Opcode == LinxV5::PseudoMSCATTER_GPR_Masked_SizeI;
+  const bool MaskedAdd = Opcode == LinxV5::PseudoMGATHER_ADD_Masked_SizeI;
+  MCOperand Base;
+  if (Predicate) {
+    expandPredicateScatterAdd(Legacy, Expanded);
+    Base = Legacy.getOperand(3);
+    Expanded.pop_back(); // Replace legacy flagged Base+zero mask record.
+  } else if (MaskedGather || MaskedScatter || MaskedAdd) {
+    unsigned Layout = MaskedScatter ? 6 : 7;
+    unsigned PredInv = MaskedScatter ? 12 : MaskedAdd ? 14 : 13;
+    unsigned BaseIndex = MaskedScatter ? 11 : MaskedAdd ? 13 : 12;
+    unsigned MaskIndex = MaskedScatter ? 9 : MaskedAdd ? 11 : 10;
+    Base = Legacy.getOperand(BaseIndex);
+    Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TMA)
+        .addOperand(Legacy.getOperand(5)).addImm(getPseudoTILEOpcode(Opcode)));
+    Expanded.push_back(MCInstBuilder(LinxV5::BDATR_EXEC_MASK)
+        .addOperand(Legacy.getOperand(Layout)).addImm(0).addImm(31)
+        .addOperand(MaskedScatter ? MCOperand::createImm(0) : Legacy.getOperand(6))
+        .addImm(0).addImm(0).addImm(0).addImm(0)
+        .addOperand(Legacy.getOperand(PredInv))
+        .addOperand(Legacy.getOperand(PredInv + 1)));
+    for (unsigned D = 0; D != 3; ++D) {
+      unsigned R = D == 1 ? 3 : 1;
+      Expanded.push_back(MCInstBuilder(LinxV5::B_DIM).addImm(D)
+          .addOperand(Legacy.getOperand(R)).addOperand(Legacy.getOperand(R + 1)));
+    }
+    if (MaskedScatter)
+      Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_NoDst)
+          .addImm(15).addImm(1).addOperand(Legacy.getOperand(0))
+          .addOperand(Legacy.getOperand(8)));
+    else if (MaskedAdd)
+      Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_TwoSrc_Dst)
+          .addOperand(Legacy.getOperand(0)).addImm(15)
+          .addOperand(Legacy.getOperand(8)).addImm(1)
+          .addOperand(Legacy.getOperand(9)).addOperand(Legacy.getOperand(10)));
+    else
+      Expanded.push_back(MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
+          .addOperand(Legacy.getOperand(0)).addImm(15)
+          .addOperand(Legacy.getOperand(8)).addImm(1)
+          .addOperand(Legacy.getOperand(9)));
+    Expanded.push_back(MCInstBuilder(LinxV5::B_IO).addReg(LinxV5::R0)
+        .addOperand(Base).addOperand(Minimum).addOperand(Maximum));
+    // Current bounded builtin profiles use one low GPR mask word.
+    Expanded.push_back(MCInstBuilder(LinxV5::B_IOR_EXEC_MASK)
+        .addOperand(Legacy.getOperand(MaskIndex)).addReg(LinxV5::R0)
+        .addReg(LinxV5::R0));
+  } else {
+    Base = Legacy.getOperand(Legacy.getNumOperands() - 1);
+    Expanded.push_back(MCInstBuilder(LinxV5::BSTART_TMA)
+        .addOperand(Legacy.getOperand(5)).addImm(getPseudoTILEOpcode(Opcode)));
+    for (const MCInst &C : getBARGFromInst(Legacy, MII)) Expanded.push_back(C);
+    for (const MCInst &C : getBDIMFromInst(Legacy, MII)) Expanded.push_back(C);
+    for (const MCInst &C : getBIOTFromInst(Legacy, MII)) Expanded.push_back(C);
+  }
+  if (!(MaskedGather || MaskedScatter || MaskedAdd))
+    Expanded.push_back(MCInstBuilder(LinxV5::B_IO).addReg(LinxV5::R0)
+        .addOperand(Base).addOperand(Minimum).addOperand(Maximum));
+  for (MCInst &C : Expanded) {
+    MCInst Compressed;
+    if (LinxV5::tryCompressInst(Compressed, C, STI, Ctx)) C = Compressed;
+  }
+  return true;
+}
+
 bool expandPredicateScatterAdd(const MCInst &Inst,
                               SmallVectorImpl<MCInst> &Expanded) {
   if (Inst.getOpcode() != LinxV5::PseudoMSCATTER_ADD_Predicate)

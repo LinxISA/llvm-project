@@ -264,7 +264,10 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
     return;
   }
   SmallVector<MCInst> CompareCommands;
-  if (expandMaskedGPRCompare(TmpInst, *TM.getMCSubtargetInfo(),
+  if (expandIndexedTLSURange(TmpInst, *TM.getMCInstrInfo(),
+                             *TM.getMCSubtargetInfo(),
+                             OutStreamer->getContext(), CompareCommands) ||
+      expandMaskedGPRCompare(TmpInst, *TM.getMCSubtargetInfo(),
                              OutStreamer->getContext(), CompareCommands) ||
       expandMaskedGPRTNeg(TmpInst, *TM.getMCSubtargetInfo(),
                           OutStreamer->getContext(), CompareCommands)) {

@@ -51,6 +51,10 @@ inline StringRef getTileMacroGPRListLabel(const TileMacroBindingDesc &Binding,
   if (Member == 0 &&
       (Syntax.contains("BaseGPR") || Syntax.contains("GMBaseGPR")))
     return "base";
+  if (Member == 1 && Syntax.contains("MinIndexGPR"))
+    return "min";
+  if (Member == 2 && Syntax.contains("MaxIndexGPR"))
+    return "max";
   if (Member == 1 && Syntax.contains("RowStrideGPR"))
     return "stride";
   if (Member == 1 && Syntax.contains("ShapeGPR"))

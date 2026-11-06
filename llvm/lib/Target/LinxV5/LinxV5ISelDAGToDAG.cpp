@@ -1403,6 +1403,71 @@ void LinxV5DAGToDAGISel::Select(SDNode *Node) {
                           DL, CurDAG, Node, LinxV5::PseudoTCMPS_GPR));
     return;
   }
+  case LinxV5ISD::EW_INDEXED_RANGE: {
+    unsigned Count = Node->getNumOperands();
+    unsigned Kind = cast<ConstantSDNode>(Node->getOperand(Count - 1))->getZExtValue();
+    SDNode *Selected = nullptr;
+    switch (Kind) {
+    case LinxV5ISD::EW_MGATHER_MASKED:
+      Selected = selectElementwiseMGatherMasked(DL, CurDAG, Node,
+          LinxV5::PseudoMGATHER_MASK_SizeI);
+      break;
+    case LinxV5ISD::EW_MGATHER_GPR_MASKED:
+      Selected = selectElementwiseMGatherGPRMasked(DL, CurDAG, Node,
+          LinxV5::PseudoMGATHER_GPR_Masked_SizeI);
+      break;
+    case LinxV5ISD::EW_MSCATTER_MASKED:
+      Selected = selectElementwiseMScatterMasked(DL, CurDAG, Node,
+          LinxV5::PseudoMSCATTER_MASK_SizeI);
+      break;
+    case LinxV5ISD::EW_MSCATTER_GPR_MASKED:
+      Selected = selectElementwiseMScatterGPRMasked(DL, CurDAG, Node,
+          LinxV5::PseudoMSCATTER_GPR_Masked_SizeI);
+      break;
+    case LinxV5ISD::EW_MGATHER_ADD:
+      Selected = selectElementwiseMGatherAdd(DL, CurDAG, Node,
+          LinxV5::PseudoMGATHER_ADD_SizeI);
+      break;
+    case LinxV5ISD::EW_MGATHER_ADD_MASKED:
+      Selected = selectElementwiseMGatherAddMasked(DL, CurDAG, Node,
+          LinxV5::PseudoMGATHER_ADD_Masked_SizeI);
+      break;
+    case LinxV5ISD::EW_MSCATTER_ADD:
+      Selected = selectElementwiseMScatterAdd(DL, CurDAG, Node,
+          LinxV5::PseudoMSCATTER_ADD_SizeI);
+      break;
+    case LinxV5ISD::EW_MSCATTER_ADD_PREDICATE: {
+      SmallVector<SDValue> Ops;
+      for (unsigned I = 1; I < Count - 3; ++I)
+        Ops.push_back(Node->getOperand(I));
+      Ops.push_back(Node->getOperand(0));
+      Selected = CurDAG->getMachineNode(LinxV5::PseudoMSCATTER_ADD_Predicate,
+                                        DL, MVT::Other, Ops);
+      break;
+    }
+    default: llvm_unreachable("unexpected indexed range DAG node");
+    }
+    unsigned Opcode = 0;
+    switch (Selected->getMachineOpcode()) {
+    case LinxV5::PseudoMGATHER_MASK_SizeI: Opcode = LinxV5::PseudoMGATHER_MASK_SizeI_Range; break;
+    case LinxV5::PseudoMGATHER_GPR_Masked_SizeI: Opcode = LinxV5::PseudoMGATHER_GPR_Masked_SizeI_Range; break;
+    case LinxV5::PseudoMSCATTER_MASK_SizeI: Opcode = LinxV5::PseudoMSCATTER_MASK_SizeI_Range; break;
+    case LinxV5::PseudoMSCATTER_GPR_Masked_SizeI: Opcode = LinxV5::PseudoMSCATTER_GPR_Masked_SizeI_Range; break;
+    case LinxV5::PseudoMGATHER_ADD_SizeI: Opcode = LinxV5::PseudoMGATHER_ADD_SizeI_Range; break;
+    case LinxV5::PseudoMGATHER_ADD_Masked_SizeI: Opcode = LinxV5::PseudoMGATHER_ADD_Masked_SizeI_Range; break;
+    case LinxV5::PseudoMSCATTER_ADD_SizeI: Opcode = LinxV5::PseudoMSCATTER_ADD_SizeI_Range; break;
+    case LinxV5::PseudoMSCATTER_ADD_Predicate: Opcode = LinxV5::PseudoMSCATTER_ADD_Predicate_Range; break;
+    default: llvm_unreachable("unexpected indexed range pseudo");
+    }
+    SmallVector<SDValue> Ops;
+    for (unsigned I = 0; I + 1 < Selected->getNumOperands(); ++I)
+      Ops.push_back(Selected->getOperand(I));
+    Ops.push_back(Node->getOperand(Count - 3));
+    Ops.push_back(Node->getOperand(Count - 2));
+    Ops.push_back(Node->getOperand(0));
+    ReplaceNode(Node, CurDAG->getMachineNode(Opcode, DL, Node->getVTList(), Ops));
+    return;
+  }
   case LinxV5ISD::EW_MGATHER_MASKED: {
     ReplaceNode(Node, selectElementwiseMGatherMasked(
                           DL, CurDAG, Node,

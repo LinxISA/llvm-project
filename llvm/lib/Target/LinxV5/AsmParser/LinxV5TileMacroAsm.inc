@@ -849,6 +849,37 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       ++Pos;
     if (Pos != Tokens.size())
       return false;
+    if (StringRef(Form.FormID).contains("-range")) {
+      for (unsigned I = 0; I != Form.NumBindings; ++I) {
+        const auto &Binding = TileMacroBindings[Form.FirstBinding + I];
+        if (StringRef(Binding.Field) == "ExecMask") {
+          unsigned Words = LinxV5Op::indexedTLSUMaskWords(P.HeaderType);
+          unsigned Layout = configImm(P, "Layout", 0);
+          auto knownDimension = [&](StringRef Field) -> uint64_t {
+            const ConfigValue *Value = findConfig(P, Field);
+            // Runtime dimensions retain their target-side legality checks.
+            return Value && Value->HasValue && Value->Dim.Reg == LinxV5::R0
+                       ? Value->Dim.Imm
+                       : 1;
+          };
+          if (!Words || Words != Binding.NumMembers ||
+              !LinxV5Op::indexedTLSUMaskShapeLegal(
+                  P.HeaderType, Layout, knownDimension("ValidRow"),
+                  knownDimension("ValidCol")))
+            return false;
+        }
+        if (Binding.Kind != TileMacroBindingKind::GPRListSource)
+          continue;
+        for (unsigned M = 0; M != Binding.NumMembers; ++M)
+          if (getContext().getRegisterInfo()->getEncodingValue(
+                  P.Members[Binding.FirstMember + M].Reg) >= 24)
+            return false;
+        if (StringRef(Binding.Syntax).contains("MinIndexGPR") &&
+            P.Members[Binding.FirstMember + 1].Reg == LinxV5::R0 &&
+            P.Members[Binding.FirstMember + 2].Reg == LinxV5::R0)
+          return false;
+      }
+    }
     if (P.HeaderType == DataType::EMPTY_DataType &&
         Parsed->Operation->HeaderKind != TileMacroHeaderKind::TLSU)
       return false;

@@ -390,6 +390,7 @@ const char *LinxV5TargetLowering::getTargetNodeName(unsigned Opcode) const {
     MAKE_CASE(LinxV5ISD::EW_TCI_ROW)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR)
     MAKE_CASE(LinxV5ISD::EW_TCMPS_GPR_MASKED)
+    MAKE_CASE(LinxV5ISD::EW_INDEXED_RANGE)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_GPR_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MGATHER_MASKED)
     MAKE_CASE(LinxV5ISD::EW_MSCATTER_MASKED)
@@ -965,6 +966,11 @@ case Intrinsic::linx_blk_matmul:
       return lowerElementwiseTCMPSGPR(DL, Op, DAG, true);
     case Intrinsic::linx_experimental_ew_tcmps_gpr:
       return lowerElementwiseTCMPSGPR(DL, Op, DAG);
+    case Intrinsic::linx_experimental_ew_mgather_masked_range:
+    case Intrinsic::linx_experimental_ew_mgather_gpr_masked_range:
+    case Intrinsic::linx_experimental_ew_mgather_add_range:
+    case Intrinsic::linx_experimental_ew_mgather_add_masked_range:
+      return lowerIndexedTLSURange(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mgather_gpr_masked:
       return lowerElementwiseMGatherGPRMasked(DL, Op, DAG);
     case Intrinsic::linx_experimental_ew_mgather_masked:
@@ -1896,6 +1902,55 @@ SDValue LinxV5TargetLowering::lowerElementwiseTCMPSGPR(
   return DAG.getNode(Masked ? LinxV5ISD::EW_TCMPS_GPR_MASKED
                             : LinxV5ISD::EW_TCMPS_GPR, DL,
                      DAG.getVTList(MVT::i64, MVT::Other), Ops);
+}
+
+
+SDValue LinxV5TargetLowering::lowerIndexedTLSURange(
+    SDLoc &DL, SDValue Op, SelectionDAG &DAG) const {
+  SDValue Base;
+  switch (cast<ConstantSDNode>(Op.getOperand(1))->getZExtValue()) {
+  case Intrinsic::linx_experimental_ew_mgather_masked_range:
+    Base = lowerElementwiseMGatherMasked(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mgather_gpr_masked_range:
+    Base = lowerElementwiseMGatherGPRMasked(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mscatter_masked_range:
+    Base = lowerElementwiseMScatterMasked(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mscatter_gpr_masked_range:
+    Base = lowerElementwiseMScatterGPRMasked(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mgather_add_range:
+    Base = lowerElementwiseMGatherAdd(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mgather_add_masked_range:
+    Base = lowerElementwiseMGatherAddMasked(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mscatter_add_range:
+    Base = lowerElementwiseMScatterAdd(DL, Op, DAG);
+    break;
+  case Intrinsic::linx_experimental_ew_mscatter_add_predicate_range:
+    Base = lowerElementwiseMScatterAddPredicate(DL, Op, DAG);
+    break;
+  default: llvm_unreachable("unexpected indexed range intrinsic");
+  }
+  unsigned Count = Op.getNumOperands();
+  SDValue Minimum = Op.getOperand(Count - 2);
+  SDValue Maximum = Op.getOperand(Count - 1);
+  if (Minimum.getValueType() != MVT::i64 || Maximum.getValueType() != MVT::i64)
+    report_fatal_error("indexed TLSU range bounds must be i64 byte displacements");
+  // An explicit singleton zero range must not become the absent selector pair.
+  Register Bound = DAG.getMachineFunction().getRegInfo().createVirtualRegister(
+      &LinxV5::GRNoR0RegClass);
+  SDValue Chain = DAG.getCopyToReg(Base.getOperand(0), DL, Bound, Minimum);
+  Minimum = DAG.getCopyFromReg(Chain, DL, Bound, MVT::i64);
+  SmallVector<SDValue> Operands(Base->op_begin(), Base->op_end());
+  Operands[0] = Minimum.getValue(1);
+  Operands.push_back(Minimum);
+  Operands.push_back(Maximum);
+  Operands.push_back(DAG.getTargetConstant(Base.getOpcode(), DL, MVT::i64));
+  return DAG.getNode(LinxV5ISD::EW_INDEXED_RANGE, DL, Base->getVTList(), Operands);
 }
 
 SDValue LinxV5TargetLowering::lowerElementwiseMGatherMasked(
@@ -2918,6 +2973,11 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     }
     return uNum;
   };
+  if (IntNo == Intrinsic::linx_experimental_ew_mscatter_masked_range ||
+      IntNo == Intrinsic::linx_experimental_ew_mscatter_gpr_masked_range ||
+      IntNo == Intrinsic::linx_experimental_ew_mscatter_add_range ||
+      IntNo == Intrinsic::linx_experimental_ew_mscatter_add_predicate_range)
+    return lowerIndexedTLSURange(DL, Op, DAG);
   if (canCallSIMT(DAG) && IntNo == Intrinsic::linx_set_loop_iterations) {
     return lowerSetLoopIterations(Op, DAG);
   } else if (Intrinsic::getBaseName(IntNo).startswith("llvm.linx.vcall.par")) {
@@ -5378,6 +5438,7 @@ LinxV5TargetLowering::getConstraintType(StringRef Constraint) const {
     default:
       break;
     case 'f':
+    case 'R':
       return C_RegisterClass;
     case 'I':
     case 'J':
@@ -5422,6 +5483,8 @@ LinxV5TargetLowering::getRegForInlineAsmConstraint(
     switch (Constraint[0]) {
     case 'r':
       return std::make_pair(0U, &LinxV5::GRRegClass);
+    case 'R':
+      return std::make_pair(0U, &LinxV5::GRNoR0RegClass);
     default:
       break;
     }

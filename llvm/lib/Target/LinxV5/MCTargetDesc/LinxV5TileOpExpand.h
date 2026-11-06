@@ -48,6 +48,9 @@ bool expandMaskedGPRCompare(const MCInst &Inst, const MCSubtargetInfo &STI,
 bool expandMaskedGPRTNeg(const MCInst &Inst, const MCSubtargetInfo &STI,
                          MCContext &Ctx, SmallVectorImpl<MCInst> &Expanded);
 
+bool expandIndexedTLSURange(const MCInst &Inst, const MCInstrInfo &MII,
+                            const MCSubtargetInfo &STI, MCContext &Ctx,
+                            SmallVectorImpl<MCInst> &Expanded);
 unsigned getPseudoTILEOpcode(unsigned Opcode);
 bool expandPredicateScatterAdd(const MCInst &Inst,
                               SmallVectorImpl<MCInst> &Expanded);

@@ -4724,3 +4724,78 @@ defm L_CASBP : V5_Atomic_64_TwoDst_Mul<0b0000, "l.casbp">;
 defm L_CASHP : V5_Atomic_64_TwoDst_Mul<0b0001, "l.cashp">;
 defm L_CASWP : V5_Atomic_64_TwoDst_Mul<0b0010, "l.caswp">;
 defm L_CASDP : V5_Atomic_64_TwoDst_Mul<0b0011, "l.casdp">;
+
+// PTO #424 range-bearing counterparts. MinIndex excludes R0 even at zero.
+def PseudoMGATHER_MASK_SizeI_Range : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       PRED_TILE_Src_Reg:$MaskTile, GPRSrc:$Base, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMGATHER_GPR_Masked_SizeI_Range : PseudoMTClImpl<
+  (outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       GPRSrc:$MaskLow, GPRSrc:$MaskHigh, GPRSrc:$Base,
+       uimm1:$PredInv, uimm1:$Zero, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMSCATTER_MASK_SizeI_Range : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       PRED_TILE_Src_Reg:$MaskTile,
+       GPRSrc:$Base, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMSCATTER_GPR_Masked_SizeI_Range : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       BArgFormat:$Layout, TileSizeWithBracket:$TileSize,
+       TILE_Src_Reg:$OffsetTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       GPRSrc:$Base, uimm1:$PredInv, uimm1:$Zero, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMGATHER_ADD_SizeI_Range : PseudoMTClImpl<(outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       TILE_Src_Reg:$ValueTile, GPRSrc:$Base, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMGATHER_ADD_Masked_SizeI_Range : PseudoMTClImpl<
+  (outs TILE_DstWithArrow:$DstTile),
+  (ins GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN,
+       BstartDataType:$DataType, PadValue:$PadValue, BArgFormat:$Layout,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       TILE_Src_Reg:$ValueTile, GPRSrc:$MaskLow, GPRSrc:$MaskHigh,
+       GPRSrc:$Base, uimm1:$PredInv, uimm1:$Zero, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMSCATTER_ADD_SizeI_Range : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$SrcTile, GPRPlusImm:$RegM, PlusImm17:$immM,
+       GPRPlusImm:$RegN, PlusImm17:$immN, BstartDataType:$DataType,
+       TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
+       GPRSrc:$Base, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+}
+
+def PseudoMSCATTER_ADD_Predicate_Range : PseudoMTClImpl<(outs),
+  (ins TILE_Src_Reg:$Value, TILE_Src_Reg:$Offsets,
+       PRED_TILE_Src_Reg:$Predicate, GPRSrc:$Base,
+       uimm16:$Rows, uimm16:$Columns, uimm16:$PhysicalColumns,
+       BstartDataType:$DataType, BArgFormat:$Layout, uimm1:$PredInv, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+  let isCodeGenOnly = 1;
+  let mayLoad = 1;
+  let mayStore = 1;
+}

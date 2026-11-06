@@ -455,6 +455,34 @@ enum DataType {
   EMPTY_DataType = 31
 };
 
+// Predicate-GPR carrier widths admitted by the indexed TLSU schema.
+// Zero means the dtype has no GPR execution-mask carrier.
+inline unsigned indexedTLSUMaskWords(unsigned Type) {
+  switch (Type) {
+  case FP64: case FP32: case TF32: case HF32: case FP16: case BF16:
+  case S64: case S32: case S16: case U64: case U32: case U16:
+    return 1;
+  case e4m3: case e5m2: case S8: case U8:
+    return 2;
+  default:
+    return 0;
+  }
+}
+
+// The GPR predicate maps a bounded number of columns across 16 or 32 rows.
+// Callers substitute one for a runtime dimension whose value is unknown.
+inline bool indexedTLSUMaskShapeLegal(unsigned Type, unsigned Layout,
+                                      uint64_t Rows, uint64_t Columns) {
+  unsigned Words = indexedTLSUMaskWords(Type);
+  if (!Words || (Layout != 29 && Layout != 31))
+    return false;
+  unsigned RowBits = Layout == 29 ? 32 : 16;
+  bool Is32Bit = Type == FP32 || Type == TF32 || Type == HF32 ||
+                 Type == S32 || Type == U32;
+  unsigned Fields = Layout == 29 || Is32Bit ? 2 : 4;
+  return Rows && Rows <= RowBits && Columns && Columns <= Fields * Words;
+}
+
 /// Matrix-MX primary types and their scale contract.  HiF4x2 is a Matrix-MX
 /// input type with a 64-element raw U32 scale word; the other scaled MX
 /// inputs use 32-element E8M0 groups.  These helpers deliberately describe

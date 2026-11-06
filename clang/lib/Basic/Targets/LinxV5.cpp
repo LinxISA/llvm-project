@@ -40,6 +40,9 @@ bool LinxV5TargetInfo::isValidCPUName(StringRef Name) const { return true; }
 bool LinxV5TargetInfo::validateAsmConstraint(
     const char *&Name, TargetInfo::ConstraintInfo &Info) const {
   switch (Name[0]) {
+  case 'R': // Absolute GPR excluding the zero register (descriptor presence).
+    Info.setAllowsRegister();
+    return true;
   case 'S':
     if (Name[1] == 'r') {
       Info.setAllowsRegister();
@@ -70,6 +73,7 @@ void LinxV5TargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__linxv5");
   Builder.defineMacro("__linx_v5");
   Builder.defineMacro("__linx_xlen", "64");
+  Builder.defineMacro("__linx_indexed_tlsu_range", "1");
   StringRef CodeModel = getTargetOpts().CodeModel;
   if (CodeModel == "default")
     CodeModel = "small";

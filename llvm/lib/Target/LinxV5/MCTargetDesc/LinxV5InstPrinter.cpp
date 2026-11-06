@@ -554,17 +554,18 @@ void LinxV5InstPrinter::printSharedTIDWithArrow(const MCInst *MI, unsigned OpNo,
 }
 
 // PTO canonical B.IOR spelling.  B_IO has a fixed four-register encoding;
-// R0 is the sentinel for an unused source or destination slot and must not be
-// exposed in the assembly contract.
+// Only trailing zero sources may be elided. An interior zero is positional:
+// dropping it changes the selectors when this text is assembled again.
 void LinxV5InstPrinter::printB_IOR(const MCInst *MI,
                                    const MCSubtargetInfo &STI,
                                    raw_ostream &O) {
   O << "\tB.IOR\t[";
+  unsigned LastSource = 3;
+  while (LastSource && MI->getOperand(LastSource).getReg() == LinxV5::R0)
+    --LastSource;
   bool Printed = false;
-  for (unsigned OpNo = 1; OpNo <= 3; ++OpNo) {
+  for (unsigned OpNo = 1; OpNo <= LastSource; ++OpNo) {
     unsigned Reg = MI->getOperand(OpNo).getReg();
-    if (Reg == LinxV5::R0)
-      continue;
     if (Printed)
       O << ", ";
     printRegName(O, Reg);

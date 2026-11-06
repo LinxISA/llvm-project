@@ -516,3 +516,52 @@ defm int_linx_vcall_par : IntTileCall<onum, inum>;
 defm int_linx_mcall_par : IntTileCall<onum, inum>;
 }
 }
+
+// PTO #424: explicit full-width signed byte bounds; presence is in the ABI.
+let TargetPrefix = "linx" in {
+def int_linx_experimental_ew_mgather_masked_range :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mgather_gpr_masked_range :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_masked_range :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_gpr_masked_range :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mgather_add_range :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_ptr_ty, llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mgather_add_masked_range :
+    Intrinsic<[llvm_anyvector_ty],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_add_range :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+
+def int_linx_experimental_ew_mscatter_add_predicate_range :
+    Intrinsic<[],
+              [llvm_i64_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty,
+               llvm_i64_ty, llvm_ptr_ty, llvm_anyvector_ty,
+               llvm_anyvector_ty, llvm_anyvector_ty, llvm_i64_ty, llvm_i64_ty, llvm_i64_ty], [IntrHasSideEffects]>;
+}

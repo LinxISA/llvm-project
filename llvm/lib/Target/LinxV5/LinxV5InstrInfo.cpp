@@ -445,19 +445,26 @@ unsigned LinxV5::getTileOpRegSize(MachineInstr &MI, Register Reg) {
   } else if ((MI.getOpcode() == LinxV5::PseudoTCI_EW_SizeI ||
               MI.getOpcode() == LinxV5::PseudoTCI_EW_Row_SizeI)) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMGATHER_MASK_SizeI_Range) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI_Range) {
     return MI.getOperand(8).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMSCATTER_MASK_SizeI_Range) {
     return MI.getOperand(6).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_GPR_Masked_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_GPR_Masked_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMSCATTER_GPR_Masked_SizeI_Range) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_SizeI_Range) {
     return MI.getOperand(7).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMGATHER_ADD_Masked_SizeI_Range) {
     return MI.getOperand(8).getImm();
-  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_ADD_SizeI) {
+  } else if (MI.getOpcode() == LinxV5::PseudoMSCATTER_ADD_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMSCATTER_ADD_SizeI_Range) {
     return MI.getOperand(6).getImm();
   } else if (MI.isInlineAsm()) {
     LinxV5::SingleAsm SA = parseSingleAsm(&MI);
@@ -1792,7 +1799,8 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
         static_cast<unsigned>(MI.getOperand(8).getImm())});
   }
 
-  if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI) {
+  if (MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI ||
+             MI.getOpcode() == LinxV5::PseudoMGATHER_GPR_Masked_SizeI_Range) {
     if (!MI.getOperand(1).isReg() || MI.getOperand(1).getReg() != LinxV5::R0 ||
         !MI.getOperand(3).isReg() || MI.getOperand(3).getReg() != LinxV5::R0)
       return None;

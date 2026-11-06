@@ -68,6 +68,7 @@ def extend_model(model):
     add_emitted_forms(model)
     add_address_forms(model)
     add_execution_mask_forms(model)
+    add_indexed_tlsu_range_forms(model)
     for op in model["operations"]:
         if op["name"] in {"TGEMV", "TGEMV_MX"}:
             for base in list(op["forms"]):
@@ -445,6 +446,89 @@ def add_execution_mask_forms(model):
                 ]
             )
             command[2].append([index, 0])
+            op["forms"].append(f)
+
+
+def add_indexed_tlsu_range_forms(model):
+    """PTO #424 / 1981bceffa82: optional S64 relative byte bounds.
+
+    The seed stays at 0.58.7; this is a scoped extension, not a catalog upgrade.
+    Preserve every old encoding ID and require both bound operands explicitly.
+    """
+    for op in model["operations"]:
+        if not op["name"].startswith(("MGATHER", "MSCATTER")):
+            continue
+        ordinary = [f for f in op["forms"]
+                    if not any(c[0] == "ExecMask" for c in f["commands"])]
+        for base in ordinary:
+            for mask_words in (0, 1, 2):
+                f = deepcopy(base)
+                f["id"] += "-range" + (f"-mask{mask_words}" if mask_words else "")
+                f["encoding"] = "E" + str(len(op["forms"]))
+                address = next(i for i, b in enumerate(f["bindings"])
+                               if b[2] == "GPRListSource")
+                binding = f["bindings"][address]
+                f["format"] = f["format"].replace(
+                    binding[1], "[BaseGPR, MinIndexGPR, MaxIndexGPR]")
+                binding[1] = "[BaseGPR, MinIndexGPR, MaxIndexGPR]"
+                binding[3] += [[slot, None, None, False, 0]
+                               for slot in ("RegSrc1", "RegSrc2")]
+                command = next(c for c in f["commands"] if c[0] == "IOR")
+                command[2] += [[address, 1], [address, 2]]
+                if mask_words and not any(c[0] == "PadValue" for c in f["configs"]):
+                    f["configs"].append(config("PadValue", "DATR", "PadValueOrByteId", "Null"))
+                if mask_words:
+                    f["configs"] += [config("PredInv", "DATR", "PredInv", "0"),
+                                     config("ZeroMask", "DATR", "ZeroMask", "0")]
+                    f["format"] += ", ExecMask[" + ", ".join(
+                        ["MaskGPR"] * mask_words) + "]"
+                    mask_index = len(f["bindings"])
+                    f["bindings"].append([
+                        "ExecMask", "ExecMask", "GPRListSource",
+                        [["RegSrc" + str(i), None, None, False, 0]
+                         for i in range(mask_words)]])
+                    position = f["commands"].index(command) + 1
+                    f["commands"].insert(position, ["ExecMask", position,
+                        [[mask_index, i] for i in range(mask_words)]])
+                op["forms"].append(f)
+        # Append generic PredicateTile carriers after all existing encodings.
+        # They use a final IOT, leaving the range as the only IOR.
+        for base in list(op["forms"]):
+            if not base["id"].endswith("-range"):
+                continue
+            attrs = [config("PredInv", "DATR", "PredInv", "0"),
+                     config("ZeroMask", "DATR", "ZeroMask", "0")]
+            if any(b[2] == "PredicateTileSource" for b in base["bindings"]):
+                base["configs"] += attrs
+                continue
+            f = deepcopy(base)
+            f["id"] += "-predicate"
+            f["encoding"] = "E" + str(len(op["forms"]))
+            f["configs"] += attrs
+            if not any(c[0] == "PadValue" for c in f["configs"]):
+                f["configs"].append(config("PadValue", "DATR", "PadValueOrByteId", "Null"))
+            index = len(f["bindings"])
+            f["bindings"].append(["ExecutionPredicate", "ExecutionPredicate",
+                                  "PredicateTileSource",
+                                  [["Role0", None, None, False, 1]]])
+            f["format"] += ", ExecutionPredicate"
+            iots = [i for i, c in enumerate(f["commands"]) if c[0] == "IOT"]
+            ordinal = max(f["commands"][i][1] for i in iots) + 1
+            f["commands"].insert(iots[-1] + 1, ["IOT", ordinal, [[index, 0]]])
+            next(c for c in f["configs"] if c[0] == "PEMask")[8].append(
+                ["IOT", "PEMask", ordinal])
+            op["forms"].append(f)
+        if op["name"] == "MGATHER_MASK":
+            # The intrinsic emitter binds index+destination, then predicate.
+            # Keep this distinct from split and fully combined seed forms.
+            base = next(f for f in op["forms"] if f["id"].endswith("-range"))
+            f = deepcopy(base)
+            f["id"] += "-result-first"
+            f["encoding"] = "E" + str(len(op["forms"]))
+            f["commands"] = [["IOR", 0, [[0, 0], [0, 1], [0, 2]]],
+                             ["IOT", 0, [[1, 0], [3, 0]]],
+                             ["IOT", 1, [[2, 0]]]]
+            f["bindings"][3][3][0][0] = "Role1"
             op["forms"].append(f)
 
 

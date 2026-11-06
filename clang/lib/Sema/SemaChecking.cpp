@@ -4667,9 +4667,21 @@ bool Sema::CheckLinxV5BuiltinElementwiseTLEA(CallExpr *TheCall) {
   return false;
 }
 
-bool Sema::CheckLinxV5BuiltinElementwiseMGatherMasked(CallExpr *TheCall) {
-  if (checkArgCount(*this, TheCall, 8))
+static bool CheckLinxIndexedRangeBounds(Sema &S, CallExpr *Call) {
+  for (unsigned I = Call->getNumArgs() - 2; I < Call->getNumArgs(); ++I) {
+    Expr *Argument = Call->getArg(I);
+    if (!Argument->getType()->isSignedIntegerType() ||
+        S.Context.getTypeSize(Argument->getType()) != 64)
+      return S.Diag(Argument->getBeginLoc(), diag::err_linx_builtin_type_mismatch)
+             << S.Context.LongLongTy << Argument->getType();
+  }
+  return false;
+}
+
+bool Sema::CheckLinxV5BuiltinElementwiseMGatherMasked(CallExpr *TheCall, bool Range) {
+  if (checkArgCount(*this, TheCall, Range ? 10 : 8))
     return true;
+  if (Range && CheckLinxIndexedRangeBounds(*this, TheCall)) return true;
   for (unsigned Index : {0u, 1u, 2u, 3u}) {
     Expr *Arg = TheCall->getArg(Index);
     if (!Arg->getType()->isIntegerType() ||
@@ -4692,9 +4704,10 @@ bool Sema::CheckLinxV5BuiltinElementwiseMGatherMasked(CallExpr *TheCall) {
   return false;
 }
 
-bool Sema::CheckLinxV5BuiltinElementwiseMScatterMasked(CallExpr *TheCall) {
-  if (checkArgCount(*this, TheCall, 7))
+bool Sema::CheckLinxV5BuiltinElementwiseMScatterMasked(CallExpr *TheCall, bool Range) {
+  if (checkArgCount(*this, TheCall, Range ? 9 : 7))
     return true;
+  if (Range && CheckLinxIndexedRangeBounds(*this, TheCall)) return true;
   for (unsigned Index : {0u, 1u, 2u}) {
     Expr *Arg = TheCall->getArg(Index);
     if (!Arg->getType()->isIntegerType() ||
@@ -4717,8 +4730,9 @@ bool Sema::CheckLinxV5BuiltinElementwiseMScatterMasked(CallExpr *TheCall) {
   return false;
 }
 
-bool Sema::CheckLinxV5BuiltinElementwiseMGatherAdd(CallExpr *TheCall) {
-  if (checkArgCount(*this, TheCall, 8)) return true;
+bool Sema::CheckLinxV5BuiltinElementwiseMGatherAdd(CallExpr *TheCall, bool Range) {
+  if (checkArgCount(*this, TheCall, Range ? 10 : 8)) return true;
+  if (Range && CheckLinxIndexedRangeBounds(*this, TheCall)) return true;
   for (unsigned Index : {0u, 1u, 2u, 3u}) {
     Expr *Arg = TheCall->getArg(Index);
     if (!Arg->getType()->isIntegerType() || !Arg->isIntegerConstantExpr(Context))
@@ -4763,8 +4777,9 @@ bool Sema::CheckLinxV5BuiltinElementwiseMGatherAdd(CallExpr *TheCall) {
   return false;
 }
 
-bool Sema::CheckLinxV5BuiltinElementwiseMScatterAdd(CallExpr *TheCall) {
-  if (checkArgCount(*this, TheCall, 6)) return true;
+bool Sema::CheckLinxV5BuiltinElementwiseMScatterAdd(CallExpr *TheCall, bool Range) {
+  if (checkArgCount(*this, TheCall, Range ? 8 : 6)) return true;
+  if (Range && CheckLinxIndexedRangeBounds(*this, TheCall)) return true;
   for (unsigned Index : {0u, 1u, 2u}) {
     Expr *Arg = TheCall->getArg(Index);
     if (!Arg->getType()->isIntegerType() || !Arg->isIntegerConstantExpr(Context))
@@ -4873,17 +4888,28 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
     return CheckLinxV5BuiltinElementwiseTSubMasked(TheCall);
   case LinxV5::BIew_tlea:
     return CheckLinxV5BuiltinElementwiseTLEA(TheCall);
+  case LinxV5::BIew_mgather_masked_range:
+    return CheckLinxV5BuiltinElementwiseMGatherMasked(TheCall, true);
   case LinxV5::BIew_mgather_masked:
     return CheckLinxV5BuiltinElementwiseMGatherMasked(TheCall);
+  case LinxV5::BIew_mscatter_masked_range:
+    return CheckLinxV5BuiltinElementwiseMScatterMasked(TheCall, true);
   case LinxV5::BIew_mscatter_masked:
     return CheckLinxV5BuiltinElementwiseMScatterMasked(TheCall);
+  case LinxV5::BIew_mgather_add_range:
+    return CheckLinxV5BuiltinElementwiseMGatherAdd(TheCall, true);
   case LinxV5::BIew_mgather_add:
     return CheckLinxV5BuiltinElementwiseMGatherAdd(TheCall);
+  case LinxV5::BIew_mscatter_add_range:
+    return CheckLinxV5BuiltinElementwiseMScatterAdd(TheCall, true);
   case LinxV5::BIew_mscatter_add:
     return CheckLinxV5BuiltinElementwiseMScatterAdd(TheCall);
+  case LinxV5::BIew_mscatter_add_predicate_range:
   case LinxV5::BIew_mscatter_add_predicate: {
-    if (checkArgCount(*this, TheCall, 10))
+    bool Range = BuiltinID == LinxV5::BIew_mscatter_add_predicate_range;
+    if (checkArgCount(*this, TheCall, Range ? 12 : 10))
       return true;
+    if (Range && CheckLinxIndexedRangeBounds(*this, TheCall)) return true;
     for (unsigned Index : {0u, 1u, 2u, 3u, 4u, 9u}) {
       Expr *Argument = TheCall->getArg(Index);
       if (!Argument->getType()->isIntegerType() ||

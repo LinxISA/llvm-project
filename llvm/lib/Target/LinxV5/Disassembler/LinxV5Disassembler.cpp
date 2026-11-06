@@ -891,6 +891,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
          DataType != LinxV5Op::DataType::EMPTY_DataType))
       return false;
 
+    const bool IndexedRange = StringRef(Form.FormID).contains("-range");
+    unsigned RangePosition = UINT_MAX;
     unsigned Pos = 0;
     const MCInst *DATR = nullptr;
     const MCInst *FPATR = nullptr;
@@ -945,7 +947,9 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
     if (DATR) {
       bool ExecutionMask = hasTarget(Form, TileMacroTargetKind::DATR,
                                      TileMacroTargetSlot::PredInv, -1);
-      if (DATR->getNumOperands() != (ExecutionMask ? 10u : 8u))
+      // Zero-valued mask attributes decode as the ordinary eight-field DATR.
+      if (DATR->getNumOperands() != (ExecutionMask ? 10u : 8u) &&
+          !(IndexedRange && ExecutionMask && DATR->getNumOperands() == 8))
         return false;
       unsigned Layout = DATR->getOperand(0).getImm();
       unsigned Canon = DATR->getOperand(1).getImm();
@@ -1303,6 +1307,41 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
         }
       } else {
         bool Present = commandMatchesKind(Pos, Expected.Kind);
+        if (IndexedRange && Expected.Kind == TileMacroCommandKind::IOR) {
+          if (!Present ||
+              (Body[Pos].getOperand(2).getReg() == LinxV5::R0 &&
+               Body[Pos].getOperand(3).getReg() == LinxV5::R0))
+            return false;
+          RangePosition = Pos;
+        }
+        if (IndexedRange && Expected.Kind == TileMacroCommandKind::ExecMask) {
+          if (!Present || RangePosition == UINT_MAX || Pos != RangePosition + 1 ||
+              !DATR || (DATR->getOperand(0).getImm() != 29 &&
+                        DATR->getOperand(0).getImm() != 31))
+            return false;
+          // Eight-bit CUBE execution masks require two words; other admitted
+          // indexed transfer widths require one. The final flag makes zero
+          // selectors real mask words, not missing operands.
+          unsigned Words = LinxV5Op::indexedTLSUMaskWords(DataType);
+          auto knownDimension = [&](unsigned Slot) -> uint64_t {
+            for (unsigned P : DimPositions) {
+              const MCInst &Dim = Body[P];
+              if (Dim.getOperand(0).getImm() != Slot)
+                continue;
+              if (Dim.getOpcode() == LinxV5::C_B_DIMI)
+                return Dim.getOperand(1).getImm();
+              return Dim.getOperand(1).getReg() == LinxV5::R0
+                         ? Dim.getOperand(2).getImm()
+                         : 1;
+            }
+            return 1;
+          };
+          if (!Words || Members.size() != Words ||
+              !LinxV5Op::indexedTLSUMaskShapeLegal(
+                  DataType, DATR->getOperand(0).getImm(),
+                  knownDimension(1), knownDimension(0)))
+            return false;
+        }
         if (!Present) {
           if (HasRequired)
             return false;
@@ -1326,6 +1365,10 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           bool Nonzero = !(SourceOnly && Slot == 0) &&
               Body[Pos].getOperand(SourceOnly ? Slot - 1 : Slot).getReg() !=
                   LinxV5::R0;
+          if (IndexedRange && !(SourceOnly && Slot == 0) &&
+              (Body[Pos].getOperand(SourceOnly ? Slot - 1 : Slot).getReg() < LinxV5::R0 ||
+               Body[Pos].getOperand(SourceOnly ? Slot - 1 : Slot).getReg() > LinxV5::R23))
+            return false;
           // A present IOR may explicitly bind the architectural zero GPR.
           // Missing required operands are rejected when the record is absent.
           if (Nonzero && !Allowed[Slot])

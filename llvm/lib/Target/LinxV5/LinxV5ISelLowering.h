@@ -91,6 +91,7 @@ enum NodeType : unsigned {
   EW_TCI_ROW,
   EW_TCMPS_GPR,
   EW_TCMPS_GPR_MASKED,
+  EW_INDEXED_RANGE,
   EW_MGATHER_GPR_MASKED,
   EW_MGATHER_MASKED,
   EW_MSCATTER_MASKED,
@@ -340,6 +341,8 @@ private:
                               bool ExplicitRow = false) const;
   SDValue lowerElementwiseTCMPSGPR(SDLoc &DL, SDValue Op,
                                    SelectionDAG &DAG, bool Masked = false) const;
+  SDValue lowerIndexedTLSURange(SDLoc &DL, SDValue Op,
+                                SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherGPRMasked(SDLoc &DL, SDValue Op,
                                            SelectionDAG &DAG) const;
   SDValue lowerElementwiseMGatherMasked(SDLoc &DL, SDValue Op,

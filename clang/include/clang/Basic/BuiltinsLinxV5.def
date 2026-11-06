@@ -53,3 +53,10 @@ BUILTIN(ew_mscatter_masked, "v.", "nt")
 BUILTIN(ew_mgather_add, "v.", "nt")
 BUILTIN(ew_mscatter_add, "v.", "nt")
 BUILTIN(ew_mscatter_add_predicate, "v.", "nt")
+
+// Explicit S64 byte range descriptors (PTO #424).
+BUILTIN(ew_mgather_masked_range, "v.", "nt")
+BUILTIN(ew_mscatter_masked_range, "v.", "nt")
+BUILTIN(ew_mgather_add_range, "v.", "nt")
+BUILTIN(ew_mscatter_add_range, "v.", "nt")
+BUILTIN(ew_mscatter_add_predicate_range, "v.", "nt")

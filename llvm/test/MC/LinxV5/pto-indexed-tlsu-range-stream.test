@@ -1,0 +1,1 @@
+# RUN: %python %S/../../../utils/linxv5/verify_indexed_tlsu_range_stream.py llvm-mc llvm-objdump

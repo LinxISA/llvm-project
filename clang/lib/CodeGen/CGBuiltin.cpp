@@ -19555,7 +19555,7 @@ llvm::Value *CodeGenFunction::EmitLinxV5TLEAForIndexedBuiltin(
 
 // ew_mgather_masked(rows, cols, dtype, pad, out, base, offsets, mask)
 llvm::Value *
-CodeGenFunction::EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E) {
+CodeGenFunction::EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E, bool Range) {
   SmallVector<llvm::Value *> Args;
   for (unsigned Index : {0u, 1u, 2u, 3u})
     Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
@@ -19566,12 +19566,17 @@ CodeGenFunction::EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E) {
   Args.push_back(ByteOffsets);
   Args.push_back(EmitScalarExpr(E->getArg(7)));
 
+  if (Range)
+    for (unsigned I = E->getNumArgs() - 2; I < E->getNumArgs(); ++I)
+      Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(I)),
+                                           Builder.getInt64Ty(), true));
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
   OverloadTypes.push_back(ByteOffsets->getType());
   OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
   llvm::Function *F = CGM.getIntrinsic(
-      Intrinsic::linx_experimental_ew_mgather_masked, OverloadTypes);
+      Range ? Intrinsic::linx_experimental_ew_mgather_masked_range
+            : Intrinsic::linx_experimental_ew_mgather_masked, OverloadTypes);
   Value *Call = Builder.CreateCall(F, Args, "");
   EmitStoreOfScalar(Call, EmitLValue(E->getArg(4)));
   return Call;
@@ -19579,7 +19584,7 @@ CodeGenFunction::EmitLinxV5ElementwiseMGatherMasked(const CallExpr *E) {
 
 // ew_mscatter_masked(rows, cols, dtype, base, src, offsets, mask)
 llvm::Value *
-CodeGenFunction::EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E) {
+CodeGenFunction::EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E, bool Range) {
   SmallVector<llvm::Value *> Args;
   for (unsigned Index : {0u, 1u, 2u})
     Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
@@ -19591,18 +19596,23 @@ CodeGenFunction::EmitLinxV5ElementwiseMScatterMasked(const CallExpr *E) {
   Args.push_back(ByteOffsets);
   Args.push_back(EmitScalarExpr(E->getArg(6)));
 
+  if (Range)
+    for (unsigned I = E->getNumArgs() - 2; I < E->getNumArgs(); ++I)
+      Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(I)),
+                                           Builder.getInt64Ty(), true));
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
   OverloadTypes.push_back(ByteOffsets->getType());
   OverloadTypes.push_back(ConvertType(E->getArg(6)->getType()));
   llvm::Function *F = CGM.getIntrinsic(
-      Intrinsic::linx_experimental_ew_mscatter_masked, OverloadTypes);
+      Range ? Intrinsic::linx_experimental_ew_mscatter_masked_range
+            : Intrinsic::linx_experimental_ew_mscatter_masked, OverloadTypes);
   return Builder.CreateCall(F, Args, "");
 }
 
 // ew_mgather_add(rows, cols, dtype, pad, out, base, indices, values)
 llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMGatherAdd(
-    const CallExpr *E) {
+    const CallExpr *E, bool Range) {
   SmallVector<llvm::Value *> Args;
   for (unsigned Index : {0u, 1u, 2u, 3u})
     Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
@@ -19612,12 +19622,17 @@ llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMGatherAdd(
       E->getArg(6), E->getArg(2), Args[0], Args[1]);
   Args.push_back(ByteOffsets);
   Args.push_back(EmitScalarExpr(E->getArg(7)));
+  if (Range)
+    for (unsigned I = E->getNumArgs() - 2; I < E->getNumArgs(); ++I)
+      Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(I)),
+                                           Builder.getInt64Ty(), true));
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
   OverloadTypes.push_back(ByteOffsets->getType());
   OverloadTypes.push_back(ConvertType(E->getArg(7)->getType()));
   llvm::Function *F = CGM.getIntrinsic(
-      Intrinsic::linx_experimental_ew_mgather_add, OverloadTypes);
+      Range ? Intrinsic::linx_experimental_ew_mgather_add_range
+            : Intrinsic::linx_experimental_ew_mgather_add, OverloadTypes);
   llvm::Value *Call = Builder.CreateCall(F, Args, "");
   EmitStoreOfScalar(Call, EmitLValue(E->getArg(4)));
   return Call;
@@ -19625,7 +19640,7 @@ llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMGatherAdd(
 
 // ew_mscatter_add(rows, cols, dtype, base, values, indices)
 llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMScatterAdd(
-    const CallExpr *E) {
+    const CallExpr *E, bool Range) {
   SmallVector<llvm::Value *> Args;
   for (unsigned Index : {0u, 1u, 2u})
     Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(Index)),
@@ -19635,11 +19650,16 @@ llvm::Value *CodeGenFunction::EmitLinxV5ElementwiseMScatterAdd(
   llvm::Value *ByteOffsets = EmitLinxV5TLEAForIndexedBuiltin(
       E->getArg(5), E->getArg(2), Args[0], Args[1]);
   Args.push_back(ByteOffsets);
+  if (Range)
+    for (unsigned I = E->getNumArgs() - 2; I < E->getNumArgs(); ++I)
+      Args.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(I)),
+                                           Builder.getInt64Ty(), true));
   SmallVector<llvm::Type *> OverloadTypes;
   OverloadTypes.push_back(ConvertType(E->getArg(4)->getType()));
   OverloadTypes.push_back(ByteOffsets->getType());
   llvm::Function *F = CGM.getIntrinsic(
-      Intrinsic::linx_experimental_ew_mscatter_add, OverloadTypes);
+      Range ? Intrinsic::linx_experimental_ew_mscatter_add_range
+            : Intrinsic::linx_experimental_ew_mscatter_add, OverloadTypes);
   return Builder.CreateCall(F, Args, "");
 }
 
@@ -19723,15 +19743,25 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
       return EmitLinxV5ElementwiseTSubMasked(E);
   case LinxV5::BIew_tlea:
       return EmitLinxV5ElementwiseTLEA(E);
+  case LinxV5::BIew_mgather_masked_range:
+    return EmitLinxV5ElementwiseMGatherMasked(E, true);
   case LinxV5::BIew_mgather_masked:
       return EmitLinxV5ElementwiseMGatherMasked(E);
+  case LinxV5::BIew_mscatter_masked_range:
+    return EmitLinxV5ElementwiseMScatterMasked(E, true);
   case LinxV5::BIew_mscatter_masked:
     return EmitLinxV5ElementwiseMScatterMasked(E);
+  case LinxV5::BIew_mgather_add_range:
+    return EmitLinxV5ElementwiseMGatherAdd(E, true);
   case LinxV5::BIew_mgather_add:
     return EmitLinxV5ElementwiseMGatherAdd(E);
+  case LinxV5::BIew_mscatter_add_range:
+    return EmitLinxV5ElementwiseMScatterAdd(E, true);
   case LinxV5::BIew_mscatter_add:
     return EmitLinxV5ElementwiseMScatterAdd(E);
+  case LinxV5::BIew_mscatter_add_predicate_range:
   case LinxV5::BIew_mscatter_add_predicate: {
+    bool Range = BuiltinID == LinxV5::BIew_mscatter_add_predicate_range;
     SmallVector<llvm::Value *> Arguments;
     for (unsigned Index = 0; Index < 5; ++Index)
       Arguments.push_back(Builder.CreateIntCast(
@@ -19740,8 +19770,13 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
       Arguments.push_back(EmitScalarExpr(E->getArg(Index)));
     Arguments.push_back(Builder.CreateIntCast(
         EmitScalarExpr(E->getArg(9)), Builder.getInt64Ty(), false));
+    if (Range)
+      for (unsigned I : {10u, 11u})
+        Arguments.push_back(Builder.CreateIntCast(EmitScalarExpr(E->getArg(I)),
+                                                  Builder.getInt64Ty(), true));
     llvm::Function *Function = CGM.getIntrinsic(
-        Intrinsic::linx_experimental_ew_mscatter_add_predicate,
+        Range ? Intrinsic::linx_experimental_ew_mscatter_add_predicate_range
+              : Intrinsic::linx_experimental_ew_mscatter_add_predicate,
         {Arguments[6]->getType(), Arguments[7]->getType(),
          Arguments[8]->getType()});
     return Builder.CreateCall(Function, Arguments);

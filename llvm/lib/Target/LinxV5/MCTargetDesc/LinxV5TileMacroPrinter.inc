@@ -418,7 +418,8 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
           Reg = First.getOperand(SourceOnly ? Slot - 1 : Slot).getReg();
         else if (Pos < BodyEnd && Commands[Pos].getOpcode() == LinxV5::B_IO)
           Reg = Commands[Pos].getOperand(1).getReg();
-        bool ExplicitZero = StringRef(Form.Spelling) == "TCI" ||
+        bool ExplicitZero = StringRef(Form.FormID).contains("-range") ||
+            StringRef(Form.Spelling) == "TCI" ||
             (llvm::all_of(First, [](const MCOperand &Op) {
           return Op.isReg() && Op.getReg() == LinxV5::R0;
         }) && Member == Active.front());
@@ -732,8 +733,9 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
     switch (Target->Slot) {
     case TileMacroTargetSlot::PredInv:
     case TileMacroTargetSlot::ZeroMask:
-      O << Field << "=" << DATR->getOperand(
-          Target->Slot == TileMacroTargetSlot::PredInv ? 8 : 9).getImm();
+      O << Field << "=" << (DATR->getNumOperands() == 10
+          ? DATR->getOperand(Target->Slot == TileMacroTargetSlot::PredInv ? 8 : 9).getImm()
+          : 0);
       break;
     case TileMacroTargetSlot::Layout:
       printBArgFormat(DATR, 0, STI, O);

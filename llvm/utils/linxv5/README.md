@@ -30,3 +30,14 @@ combined parent binders, CCTRL, matrix output groups, execution masks, TLEA and
 TIMG2COL. Physical replay checks may canonicalize dimension-one defaults,
 compressed dimension encodings and independent command kinds. Range modifiers
 remain attached to their original binders.
+
+The indexed TLSU range extension is pinned separately to PTO-ISA/pto-spec
+PR #424, head `1981bceffa820e6dc0e56d61b2bb2cfd580e0759`. It appends
+forms for all 23 indexed operations; the seed identity remains 0.58.7.
+Bounds are signed i64 byte displacements of access starts, not element
+indices or GM strides. An explicit zero range must use at least one nonzero
+bound selector; inline asm can use the `R` constraint for Min. The compiler
+feature macro is `__linx_indexed_tlsu_range=1`. Range intrinsics append Min
+and Max to their legacy signature and retain the legacy profile checks.
+Range plus GPR mask uses adjacent unflagged range / flagged mask-only IORs;
+PredicateTile needs only the range IOR. No range inference is performed.
