@@ -4586,8 +4586,6 @@ class ElementTileLegalizer {
       return validate(VP.getArgOperand(0));
     }
     if (VP.getIntrinsicID() == Intrinsic::vp_trunc) {
-      if (UseTileMask)
-        return fail(&VP, "PredicateCell integer narrowing is not implemented");
       if (!isVector(&VP, 32) || !isI64LeafVector(VP.getArgOperand(0)))
         return fail(&VP,
                     "native integer narrowing requires logical32 i64 to i32");
@@ -5563,12 +5561,35 @@ class ElementTileLegalizer {
                 : 25;
         assert((SourceType == 16 || SourceType == 24) &&
                "native narrowing source requires an S64/U64 descriptor");
-        R = call(Intrinsic::linx_experimental_ew_tcvt_gpr_masked,
-                 {Ty, Source->getType()},
-                 {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
-                  B.getInt64(DestinationType), B.getInt64(29), B.getInt64(0),
-                  B.getInt64(0), Source, activeMask(*VP), B.getInt64(0),
-                  B.getInt64(0), B.getInt64(1)});
+        if (UseTileMask) {
+          Value *Predicate = activeMask(*VP);
+          std::string Assembly =
+              std::string("BSTART.TEPL TCVT, ") +
+              (SourceType == 16 ? "S64" : "U64") +
+              "\nB.DATR CUBE_M32, " +
+              (DestinationType == 17 ? "S32" : "U32") +
+              ", Zero, byte0, Eq, RNONE, nosat, 0, 1\n" +
+              "B.DIM zero, " + utostr(Ty->getNumElements() / 32) +
+              ", ->lb0\nB.DIM zero, 32, ->lb1\n" +
+              "B.IOT $1, $2, mask=1111, last, ->$0<${3:Z}>\n";
+          auto *Signature = FunctionType::get(
+              Ty, {Source->getType(), Predicate->getType(), B.getInt64Ty()},
+              false);
+          auto *Operation = InlineAsm::get(
+              Signature, Assembly, "=@2Tr,@2Tr,@2Tr,i", true);
+          unsigned Bytes = Ty->getPrimitiveSizeInBits().getFixedValue() / 8;
+          R = B.CreateCall(Operation,
+                           {Source, Predicate,
+                            B.getInt64(Log2_64(std::max(128U, Bytes)) - 6)},
+                           "pto.tile.narrow.masked");
+        } else {
+          R = call(Intrinsic::linx_experimental_ew_tcvt_gpr_masked,
+                   {Ty, Source->getType()},
+                   {B.getInt64(32), B.getInt64(1), B.getInt64(SourceType),
+                    B.getInt64(DestinationType), B.getInt64(29), B.getInt64(0),
+                    B.getInt64(0), Source, activeMask(*VP), B.getInt64(0),
+                    B.getInt64(0), B.getInt64(1)});
+        }
         PhysicalTypes[R] = DestinationType;
       } else if (VP->getIntrinsicID() == Intrinsic::vp_gather) {
         Address A = address(VP->getArgOperand(0), activeMask(*VP),
