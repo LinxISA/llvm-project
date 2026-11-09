@@ -23,10 +23,12 @@ an exhaustive audit of every changed normative ASL clause or runtime behavior.
 
 L3 retains the existing #398/#399 implementation and #406 PredicateCell logical
 descriptor tracking (``1ff282e03713``), adds Shared ND/CUBE TMOV and the separately
-pinned indexed-range extension. Logical descriptor MIR tests pass; the existing
-``element-predication-typed-view.ll`` and its invalid companion already fail on
-the unmodified branch. Thus #406 does not imply all element typed-view paths
-work on 0.59.
+pinned indexed-range extension. Logical descriptor MIR tests pass. Follow-up
+triage found that ``element-predication-typed-view.ll`` and its invalid companion
+failed because of stale constant-materialization ordering and diagnostic
+expectations, not a demonstrated lowering defect. Both pass after updating the
+checks while retaining normalization dataflow and invalid-path rejection
+coverage. This does not establish that all element typed-view paths work.
 
 L4 adds fail-closed PredicateCell atomic coverage without broadening lowering.
 L5 preserves both Local Tile ABI regression files and descriptor-preserving
@@ -44,6 +46,13 @@ Clang/LinxV5 and the new LLD identity test. Baseline: 464 PASS, 104 FAIL,
 Two existing tests now pass after building llvm-readobj. Existing failures are
 not claimed as fixed or evidence of conformance. Machine-readable logs are in
 ``/home/zhuwei/codex_tmp/llvm-059-isa-alignment/{baseline,final2}.json``.
+
+After rebasing onto development mainline ``b19e8c0e184c``, the suite reported
+490 PASS, 102 FAIL, 2 XFAIL and 1 UNRESOLVED. The typed-view expectation updates
+bring this to 492 PASS, 100 FAIL, 2 XFAIL and 1 UNRESOLVED, with no previously
+passing test regressing. Follow-up logs are in
+``/home/zhuwei/codex_tmp/llvm-059-followup/final.{json,log}``. These two recovered
+tests are test maintenance, not new ISA implementation coverage.
 
 The development identity is ``pto-isa-0.59.0-mode-function-v1``, release
 ``0.59.0``, with encoding projection

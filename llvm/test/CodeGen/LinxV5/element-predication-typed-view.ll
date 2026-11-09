@@ -422,11 +422,11 @@ exit:
 ; CHECK: call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32{{.*}}i64 4,
 ; The i8-to-i16 result is normalized to 16 bits before the i16-to-i32
 ; sign-extension pair.  Thus input 0xff forms 0xffff before becoming -1.
-; CHECK: [[WORD_LEFT:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32{{.*}}i64 8, <32 x i32> [[BYTE]],
-; CHECK: [[WORD_SIGNED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 17, i64 29, i64 9, <32 x i32> [[WORD_LEFT]],
 ; CHECK: [[MASK16_SCALAR:%.*]] = freeze i32 65535
 ; CHECK: [[MASK16_WIDE:%.*]] = zext i32 [[MASK16_SCALAR]] to i64
 ; CHECK: [[MASK16_TILE:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tci.v32i32{{.*}}i64 [[MASK16_WIDE]],
+; CHECK: [[WORD_LEFT:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32{{.*}}i64 8, <32 x i32> [[BYTE]],
+; CHECK: [[WORD_SIGNED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32(i64 32, i64 1, i64 17, i64 29, i64 9, <32 x i32> [[WORD_LEFT]],
 ; CHECK: [[WORD_NORMALIZED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32{{.*}}i64 5, <32 x i32> [[WORD_SIGNED]], <32 x i32> [[MASK16_TILE]],
 ; CHECK: [[WORD_ADJUSTED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32{{.*}}i64 6, <32 x i32> [[WORD_NORMALIZED]],
 ; CHECK: [[WORD_RENORMALIZED:%.*]] = call <32 x i32> @llvm.linx.experimental.ew.tbinary.gpr.masked.v32i32{{.*}}i64 5, <32 x i32> [[WORD_ADJUSTED]], <32 x i32> [[MASK16_TILE]],
