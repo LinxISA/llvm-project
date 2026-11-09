@@ -1,11 +1,10 @@
 ; RUN: not opt -mtriple=linx64v5 -passes=linx-v5-element-predication -disable-output %s 2>&1 | FileCheck %s
-; CHECK: cloned element region requires a unique dominating sentinel
+; CHECK: predication: requires a dominating mandatory region sentinel
 
 declare void @llvm.linx.experimental.element.region(metadata)
 
 define void @ambiguous_clone() {
 entry:
-  call void @llvm.linx.experimental.element.region(metadata !0)
   br label %first
 first:
   %i = phi i32 [0, %entry], [%inext, %first]

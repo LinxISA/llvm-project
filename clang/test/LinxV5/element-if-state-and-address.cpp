@@ -85,11 +85,11 @@ extern "C" void nested_state(u32 *live_pointer, int *value_pointer,
 }
 
 // IR-LABEL: define{{.*}} @nested_state(
-// IR-COUNT-6: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr
+// IR-COUNT-4: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr
 // IR-NOT: call <32 x i32> @llvm.linx.experimental.ew.tsel.gpr
 // IR: ret void
 // OBJ-LABEL: <nested_state>:
-// OBJ-COUNT-6: BSTART.TEPL TSEL
+// OBJ-COUNT-4: BSTART.TEPL TSEL
 // OBJ-NOT: BSTART.TEPL TSEL
 
 extern "C" void gather_bytes(u32 *__restrict output,
@@ -113,7 +113,7 @@ extern "C" void gather_bytes(u32 *__restrict output,
 // IR: ret void
 // OBJ-LABEL: <gather_bytes>:
 // OBJ: BSTART.TEPL TLEA
-// OBJ: BSTART.TLSU MGATHER
+// OBJ: BSTART.MGATHER
 
 extern "C" void frozen_predicate(const u32 *__restrict table,
                                  const u32 *__restrict offsets,
@@ -144,5 +144,5 @@ extern "C" void frozen_predicate(const u32 *__restrict table,
 // IR-NOT: @llvm.vp.
 // IR: ret void
 // OBJ-LABEL: <frozen_predicate>:
-// OBJ: BSTART.TLSU MGATHER
+// OBJ: BSTART.MGATHER
 // OBJ: ExecMaskPresent

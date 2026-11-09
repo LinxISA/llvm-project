@@ -46,7 +46,7 @@ exit:
 ; TILE-NOT: llvm.vp.
 ; TILE: ret void
 ; OBJ-LABEL: <frozen_condition>:
-; OBJ: BSTART.TLSU MGATHER
+; OBJ: BSTART.MGATHER
 ; OBJ: ExecMaskPresent
 
 !0 = distinct !{}
