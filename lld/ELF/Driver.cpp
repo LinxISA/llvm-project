@@ -57,6 +57,7 @@
 #include "llvm/Support/GlobPattern.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/Parallel.h"
+#include "llvm/Support/PTOISAIdentity.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
@@ -2652,12 +2653,60 @@ void LinkerDriver::link(opt::InputArgList &args) {
 
   {
     llvm::TimeTraceScope timeScope("Aggregate sections");
+    if (args.hasArg(OPT_pto_isa_identity)) {
+      if (config->emachine != EM_LinxV5 || !config->is64 ||
+          !config->isLE || !ctx->sharedFiles.empty()) {
+        error("--pto-isa-identity requires ELF64 little-endian LinxV5 objects "
+              "without shared-library inputs");
+        return;
+      } else {
+        InputSectionBase *firstIdentity = nullptr;
+        for (ELFFileBase *file : ctx->objectFiles) {
+          unsigned count = 0;
+          for (InputSectionBase *section : file->getSections()) {
+            if (!section || section == &InputSection::discarded ||
+                section->name != ".note.pto.isa")
+              continue;
+            ++count;
+            ArrayRef<uint8_t> bytes = section->data();
+            StringRef descriptor = PTOISAIdentity::Descriptor;
+            size_t expectedSize = alignTo(size_t(16) + descriptor.size(), 4);
+            if (section->type != SHT_NOTE || section->alignment != 4 ||
+                !(section->flags & SHF_ALLOC) || bytes.size() != expectedSize ||
+                read32(bytes.data()) != 4 ||
+                read32(bytes.data() + 4) != descriptor.size() ||
+                read32(bytes.data() + 8) != 1 ||
+                StringRef(reinterpret_cast<const char *>(bytes.data() + 12), 4) !=
+                    StringRef("PTO\0", 4) ||
+                StringRef(reinterpret_cast<const char *>(bytes.data() + 16),
+                          descriptor.size()) != descriptor ||
+                llvm::any_of(bytes.drop_front(16 + descriptor.size()),
+                             [](uint8_t byte) { return byte != 0; })) {
+              error(toString(file) + ": invalid or mismatched PTO ISA identity");
+              continue;
+            }
+            if (firstIdentity) {
+              section->markDead();
+              continue;
+            }
+            firstIdentity = section;
+            section->markLive();
+          }
+          if (count != 1)
+            error(toString(file) + ": expected exactly one PTO ISA identity");
+        }
+        if (errorCount())
+          return;
+      }
+    }
     // Now that we have a complete list of input files.
     // Beyond this point, no new files are added.
     // Aggregate all input sections into one place.
     for (InputFile *f : ctx->objectFiles)
       for (InputSectionBase *s : f->getSections())
-        if (s && s != &InputSection::discarded)
+        if (s && s != &InputSection::discarded &&
+            !(args.hasArg(OPT_pto_isa_identity) &&
+              s->name == ".note.pto.isa" && !s->isLive()))
           inputSections.push_back(s);
     for (BinaryFile *f : ctx->binaryFiles)
       for (InputSectionBase *s : f->getSections())

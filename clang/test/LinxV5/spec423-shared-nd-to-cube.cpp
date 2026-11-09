@@ -34,12 +34,12 @@ extern "C" void whole_m32(M32 &input) {
 
 // CHECK-LABEL: <whole_m32>:
 // CHECK: B.DATR{{.*}}M322ND.normal, Zero
-// CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+// CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 // CHECK-NEXT: {{.*}}B.DATR{{.*}}ND2M32.normal, Zero
 // CHECK: ->lb0
 // CHECK: ->lb1
 // CHECK-NOT: ->lb2
-// CHECK: B.IOS{{.*}}S{{[0-9]+}}, mask=1111
+// CHECK: B.IOS{{.*}}S{{[0-9]+}}{{(.reuse)?}}, mask=1111
 // CHECK-NEXT: {{.*}}B.IOT{{.*}}mask=1111, last, ->t<512B>
 
 extern "C" void subview_m16(M16 &input, unsigned long base,
@@ -67,9 +67,9 @@ extern "C" void subview_m16(M16 &input, unsigned long base,
 
 // CHECK-LABEL: <subview_m16>:
 // CHECK: B.DATR{{.*}}M162ND.normal, Zero
-// CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+// CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 // CHECK-NEXT: {{.*}}B.DATR{{.*}}ND2M16.normal, Zero
-// CHECK: B.IOS{{.*}}S{{[0-9]+}}, mask=1111
+// CHECK: B.IOS{{.*}}S{{[0-9]+}}{{(.reuse)?}}, mask=1111
 // CHECK-NEXT: {{.*}}B.SUBVIEW{{.*}}0, {{[a-z0-9]+}}, 0, 3
 // CHECK-NEXT: {{.*}}B.IOT{{.*}}mask=1111, last, ->t<512B>
 
@@ -94,9 +94,9 @@ extern "C" void static_subview_m32(M32 &input) {
 }
 
 // CHECK-LABEL: <static_subview_m32>:
-// CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+// CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 // CHECK-NEXT: {{.*}}B.DATR{{.*}}ND2M32.normal, Zero
-// CHECK: B.IOS{{.*}}S{{[0-9]+}}, mask=1000
+// CHECK: B.IOS{{.*}}S{{[0-9]+}}{{(.reuse)?}}, mask=1000
 // CHECK-NEXT: {{.*}}B.SUBVIEW{{.*}}0, zero, 4, 3
 // CHECK-NEXT: {{.*}}B.IOT{{.*}}mask=1000, last, ->t<512B>
 
@@ -126,17 +126,19 @@ extern "C" void cross_call_m32() {
   asm volatile("B.IOT %0, mask=1111, last" : : "Tr"(output));
 }
 
-// The target's raw spill preserves all capacity bytes, and the reload pseudo
-// retains the original CUBE descriptor for subsequent typed copies/consumers.
+// The 0.59 descriptor spill preserves the valid rectangle and the reload
+// restores its CUBE descriptor for subsequent typed copies/consumers.
 // CHECK-LABEL: <cross_call_m32>:
-// CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+// CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 // CHECK: B.DATR{{.*}}ND2M32.normal, Zero
-// CHECK: BSTART.TLSU TSTORE,{{.*}}S64
-// CHECK: B.DATR{{.*}}NORM.normal, Null
-// CHECK: C.B.DIMI{{.*}}64,{{.*}}->lb0
-// CHECK: BSTART.TLSU TLOAD,{{.*}}S64
-// CHECK: B.DATR{{.*}}NORM.normal, Zero
-// CHECK: C.B.DIMI{{.*}}64,{{.*}}->lb0
+// CHECK: BSTART.TSTORE{{.*}}U32
+// CHECK: B.DATR{{.*}}M322ND.normal, Null
+// CHECK: C.B.DIMI{{.*}}3,{{.*}}->lb0
+// CHECK: C.B.DIMI{{.*}}19,{{.*}}->lb1
+// CHECK: BSTART.TLOAD{{.*}}U32
+// CHECK: B.DATR{{.*}}ND2M32.normal, Zero
+// CHECK: C.B.DIMI{{.*}}3,{{.*}}->lb0
+// CHECK: C.B.DIMI{{.*}}19,{{.*}}->lb1
 // DESC-LABEL: name:{{ *}}cross_call_m32
 // DESC: PseudoTSpillDesc{{.*}}, 3, 19, 4, 25, 29, 3
 // DESC: PseudoTReloadDesc{{.*}}, 3, 19, 4, 25, 29, 3
@@ -168,10 +170,10 @@ extern "C" void cross_call_m16() {
 }
 
 // CHECK-LABEL: <cross_call_m16>:
-// CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+// CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 // CHECK: B.DATR{{.*}}ND2M16.normal, Zero
-// CHECK: BSTART.TLSU TSTORE,{{.*}}S64
-// CHECK: BSTART.TLSU TLOAD,{{.*}}S64
+// CHECK: BSTART.TSTORE{{.*}}U16
+// CHECK: BSTART.TLOAD{{.*}}U16
 // DESC-LABEL: name:{{ *}}cross_call_m16
 // DESC: PseudoTSpillDesc{{.*}}, 13, 11, 16, 26, 31, 3
 // DESC: PseudoTReloadDesc{{.*}}, 13, 11, 16, 26, 31, 3

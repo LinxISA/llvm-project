@@ -1,1 +1,2 @@
 # RUN: %python %S/../../../utils/linxv5/generate_tile_macro_catalog.py --output %S/../../../lib/Target/LinxV5/MCTargetDesc/LinxV5TileMacroCatalog.inc --check
+# RUN: %python %S/../../../utils/linxv5/verify_pto_0590_catalog.py

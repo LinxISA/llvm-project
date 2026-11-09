@@ -1,4 +1,4 @@
-// Exact PTO 0.58.7 TileOp macro parser and physical bundle planner.
+// PTO 0.59 TileOp macro parser and physical bundle planner.
 
 bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
   std::unique_ptr<ParsedTileMacroLine> Parsed = std::move(PendingTileMacro);
@@ -230,7 +230,14 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       Value.Imm = 0xf;
     else if (Default == "EQ")
       Value.Imm = CmpMode::EQ;
-    else if (Default == "Null")
+    else if (StringRef(Desc.Field) == "CMode" &&
+             StringRef(P.Form->Spelling).startswith("TSTORE.ATOMIC_")) {
+      Value.Imm = StringSwitch<unsigned>(Default)
+                      .Case("ADD", 0).Case("MIN", 1).Case("MAX", 2)
+                      .Case("AND", 3).Case("OR", 4).Case("XOR", 5)
+                      .Case("INC", 6).Case("DEC", 7).Default(32);
+      Value.HasValue = Value.Imm != 32;
+    } else if (Default == "Null")
       Value.Imm = PadValue::Null;
     else if (Default == "InternalAccHint")
       Value.Imm = 2;
@@ -248,6 +255,12 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       return false;
     StringRef Field = Desc.Field;
     StringRef Name = Tokens[Pos].Text;
+    if ((Field == "CMode" || Field == "Canonicalize") &&
+        Name.equals_insensitive(Field) && tokenIs(Pos + 1, "=") &&
+        Pos + 2 < Tokens.size()) {
+      Pos += 2;
+      Name = Tokens[Pos].Text;
+    }
     unsigned ParsedValue = 32;
     if (Field == "PredInv" || Field == "ZeroMask") {
       if (!Name.equals_insensitive(Field) || !tokenIs(Pos + 1, "=") ||
@@ -291,14 +304,20 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                         .Case("internalacchint", 2)
                         .Case("rawaccumulatorinternalacchint", 3)
                         .Default(32);
-    } else if (Field == "CMode")
-      ParsedValue = parseCmpName(Name);
+    } else if (Field == "CMode") {
+      ParsedValue = StringRef(Parsed->Spelling).startswith_insensitive("TSTORE.ATOMIC_")
+          ? StringSwitch<unsigned>(Name.upper())
+                .Case("ADD", 0).Case("MIN", 1).Case("MAX", 2)
+                .Case("AND", 3).Case("OR", 4).Case("XOR", 5)
+                .Case("INC", 6).Case("DEC", 7).Default(32)
+          : parseCmpName(Name);
+    }
     else if (Field == "RMode")
       ParsedValue = parseRoundName(Name);
     else if (Field == "Sat" || Field == "SatMode")
       ParsedValue = parseSatName(Name);
     else if (Field == "Canonicalize")
-      ParsedValue = parseCanonName(Name);
+      ParsedValue = Name == "0" ? 0 : Name == "1" ? 1 : parseCanonName(Name);
     else if (Field == "Layout" || Field == "CubeLayout" ||
              Field == "WeightLayout") {
       ParsedValue = calculateBArgFormat(Name);
@@ -309,7 +328,7 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
         ParsedValue = 32;
       if (Field == "Layout" && ParsedValue != 32) {
         bool Load = StringRef(Parsed->Spelling).equals_insensitive("TLOAD");
-        bool Store = StringRef(Parsed->Spelling).equals_insensitive("TSTORE");
+        bool Store = StringRef(Parsed->Spelling).startswith_insensitive("TSTORE");
         if ((Load && LinxV5Op::isCubeLoadConversion(ParsedValue)) ||
             (Store && LinxV5Op::isCubeStoreConversion(ParsedValue)))
           ParsedValue = 32;
@@ -676,6 +695,13 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
           return false;
       }
       if (Desc.Constraint && !Desc.IsDimension) {
+        if (StringRef(Desc.Constraint).startswith("Atomic") &&
+            (!Value.HasValue ||
+             Value.Imm != StringSwitch<unsigned>(StringRef(Desc.Constraint).drop_front(6))
+                              .Case("ADD", 0).Case("MIN", 1).Case("MAX", 2)
+                              .Case("AND", 3).Case("OR", 4).Case("XOR", 5)
+                              .Case("INC", 6).Case("DEC", 7).Default(32)))
+          return false;
         if (StringRef(Desc.Constraint) == "VectorParameter" &&
             (!Value.HasValue || !LinxV5Op::tileMacroPreQuantVector(Value.Imm)))
           return false;
@@ -951,6 +977,11 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
                   configImm(P, "DataType",
                             configImm(P, "U8", configImm(P, "U32", 32)))));
     unsigned TypeBits = Type == 32 ? 0 : getTileMacroDataTypeBits(Type);
+    if (StringRef(Form.Spelling).startswith("TSTORE.ATOMIC_") &&
+        (!LinxV5Op::atomicTStoreDataTypeLegal(configImm(P, "CMode", 32), Type) ||
+         configImm(P, "Canonicalize", 0) != 1 ||
+         configImm(P, "CubeLayout", 0) == LinxV5Op::ArgFormat::N82ND))
+      return false;
     if (!TypeBits)
       if (ConfigValue *Layout = findConfig(P, "CubeLayout"))
         if (Layout->HasValue)
@@ -1037,8 +1068,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
   if (Matches.size() != 1)
     return Error(IDLoc, Matches.empty()
                             ? "TileOp operands/configuration do not match any "
-                              "exact PTO 0.58.7 form"
-                            : "TileOp line matches multiple PTO 0.58.7 forms");
+                              "exact PTO 0.59 form"
+                            : "TileOp line matches multiple PTO 0.59 forms");
   Plan &P = Matches.front();
   const auto &Form = *P.Form;
   const auto &Operation = TileMacroOperations[Form.Operation];
@@ -1071,7 +1102,8 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
       Operation.HeaderKind == TileMacroHeaderKind::CUBE ? 0 : PadValue::Null;
   unsigned CompareMode = CmpMode::EQ, RoundMode = RMode::RNONE;
   unsigned Saturate = Sat::NOSAT, Byte = ByteID::BYTE0;
-  bool HasDATR = false, HasFPATR = false;
+  bool HasDATR = StringRef(Form.Spelling).startswith("TSTORE.ATOMIC_"),
+       HasFPATR = false;
   unsigned FPAttrValues[10] = {};
   DimExpr Dims[3];
   auto fpAttrIndex = [](TileMacroTargetSlot Slot) -> int {

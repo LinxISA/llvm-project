@@ -20,7 +20,7 @@ define void @mgather_masked(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp, i64 
   ret void
 }
 ; CHECK-LABEL: <mgather_masked>:
-; CHECK: BSTART.TLSU MGATHER
+; CHECK: BSTART.MGATHER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NOT: ExecMaskPresent
 
@@ -33,7 +33,7 @@ define void @mgather_gpr_masked(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp, 
   ret void
 }
 ; CHECK-LABEL: <mgather_gpr_masked>:
-; CHECK: BSTART.TLSU MGATHER
+; CHECK: BSTART.MGATHER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NEXT: {{.*}}B.IOR {{.*}}ExecMaskPresent
 
@@ -45,7 +45,7 @@ define void @mscatter_masked(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp, i64
   ret void
 }
 ; CHECK-LABEL: <mscatter_masked>:
-; CHECK: BSTART.TLSU MSCATTER
+; CHECK: BSTART.MSCATTER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NOT: ExecMaskPresent
 
@@ -57,7 +57,7 @@ define void @mscatter_gpr_masked(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp,
   ret void
 }
 ; CHECK-LABEL: <mscatter_gpr_masked>:
-; CHECK: BSTART.TLSU MSCATTER
+; CHECK: BSTART.MSCATTER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NEXT: {{.*}}B.IOR {{.*}}ExecMaskPresent
 
@@ -70,7 +70,7 @@ define void @mgather_add(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp, i64 %bi
   ret void
 }
 ; CHECK-LABEL: <mgather_add>:
-; CHECK: BSTART.TLSU MGATHER
+; CHECK: BSTART.MGATHER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NOT: ExecMaskPresent
 
@@ -83,7 +83,7 @@ define void @mgather_add_masked(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp, 
   ret void
 }
 ; CHECK-LABEL: <mgather_add_masked>:
-; CHECK: BSTART.TLSU MGATHER
+; CHECK: BSTART.MGATHER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NEXT: {{.*}}B.IOR {{.*}}ExecMaskPresent
 
@@ -95,7 +95,7 @@ define void @mscatter_add(ptr %out, ptr %base, ptr %ip, ptr %vp, ptr %mp, i64 %b
   ret void
 }
 ; CHECK-LABEL: <mscatter_add>:
-; CHECK: BSTART.TLSU MSCATTER
+; CHECK: BSTART.MSCATTER
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NOT: ExecMaskPresent
 
@@ -118,7 +118,7 @@ define void @predicate_range(ptr %base, ptr %vp, ptr %ip, ptr %mp) {
 
 
 ; CHECK-LABEL: <predicate_range>:
-; CHECK: BSTART.TLSU MSCATTER.ADD
+; CHECK: BSTART.MSCATTER.ADD
 ; CHECK: B.IOR {{.*}}[{{[^]]+,[^]]+}}], []
 ; CHECK-NOT: ExecMaskPresent
 declare void @llvm.linx.experimental.ew.mscatter.add.predicate.range.v128i32.v256i32.v32i32(i64, i64, i64, i64, i64, ptr, <128 x i32>, <256 x i32>, <32 x i32>, i64, i64, i64)

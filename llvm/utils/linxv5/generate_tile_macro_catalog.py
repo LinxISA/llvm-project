@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the exact PTO 0.58.7 TileOp macro schema used by LLVM MC."""
+"""Generate the retained PTO TileOp emitter schema used by LLVM MC."""
 
 from __future__ import annotations
 

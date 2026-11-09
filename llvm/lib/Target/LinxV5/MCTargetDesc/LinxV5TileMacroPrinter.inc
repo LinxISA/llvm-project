@@ -339,7 +339,8 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
       for (unsigned Next = C + 1; Next != Form.NumCommands; ++Next) {
         const auto &Adjacent =
             TileMacroCommands[Form.FirstCommand + Next];
-        if (Adjacent.Kind != TileMacroCommandKind::IOT)
+        if (StringRef(Form.FormID).contains("-range") ||
+            Adjacent.Kind != TileMacroCommandKind::IOT)
           break;
         for (unsigned M = 0; M != Adjacent.NumMembers; ++M) {
           unsigned Member =
@@ -798,7 +799,12 @@ bool LinxV5InstPrinter::printTileMacroDisasm(const MCInst *MI,
         printPadValue(DATR, 3, STI, O);
       break;
     case TileMacroTargetSlot::CMode:
-      printCmpMode(DATR, 4, STI, O);
+      if (StringRef(Form.Spelling).startswith("TSTORE.ATOMIC_")) {
+        static const char *Names[] = {"ADD", "MIN", "MAX", "AND",
+                                      "OR", "XOR", "INC", "DEC"};
+        O << "CMode=" << Names[DATR->getOperand(4).getImm() & 7];
+      } else
+        printCmpMode(DATR, 4, STI, O);
       break;
     case TileMacroTargetSlot::RMode:
       printRMode(DATR, 5, STI, O);

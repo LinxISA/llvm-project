@@ -75,6 +75,7 @@ void LinxV5TargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__linx_xlen", "64");
   Builder.defineMacro("__linx_indexed_tlsu_range", "1");
   Builder.defineMacro("__LINX_PTO_PE_DOMAIN__", "1");
+  Builder.defineMacro("__linx_indexed_tlsu_range", "1");
   StringRef CodeModel = getTargetOpts().CodeModel;
   if (CodeModel == "default")
     CodeModel = "small";

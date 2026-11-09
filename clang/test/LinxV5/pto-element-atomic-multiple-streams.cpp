@@ -1,5 +1,8 @@
 // RUN: %clang++ --target=linx64v5 -O2 -std=c++20 -fno-vectorize -fno-slp-vectorize -Werror=unknown-pragmas -mllvm -linxv5-enable-generic-element=true -mllvm -enable-all-vector-as-tilereg=true -c %s -o %t.o
 // RUN: %clang++ --target=linx64v5 -O2 -std=c++20 -fno-vectorize -fno-slp-vectorize -mllvm -linxv5-enable-generic-element=true -S -emit-llvm %s -o - | FileCheck %s
+// RUN: not %clang++ --target=linx64v5 -O2 -std=c++20 -mllvm -linxv5-enable-generic-element=true -mllvm -linxv5-force-element-tile-mask=true -S -emit-llvm %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=TILE-LIMIT
+
+// TILE-LIMIT: PredicateCell atomic-add legalization is not implemented
 
 extern "C" void two_streams(int *__restrict__ hist, int *__restrict__ num,
                             int *__restrict__ out, int *__restrict__ cand,

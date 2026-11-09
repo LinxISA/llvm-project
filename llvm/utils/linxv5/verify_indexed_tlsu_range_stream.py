@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory() as temp:
                 continue
             command = match[1]
             if 'BSTART' in command:
-                active = bool(re.search(r'BSTART.TLSU\s+M(?:GATHER|SCATTER)', command))
+                active = bool(re.search(r'BSTART\.(?:TLSU\s+)?M(?:GATHER|SCATTER)', command))
             if active:
                 indexed.append(command)
         assert indexed, physical.stdout

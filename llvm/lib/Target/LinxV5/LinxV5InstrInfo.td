@@ -4932,7 +4932,8 @@ def PseudoMGATHER_MASK_SizeI_Range : PseudoMTClImpl<(outs TILE_DstWithArrow:$Dst
   (ins GPRPlusImm:$RegM, PlusImm17:$immM, GPRPlusImm:$RegN, PlusImm17:$immN,
        BstartDataType:$DataType, PadValue:$PadValue,
        TileSizeWithBracket:$TileSize, TILE_Src_Reg:$OffsetTile,
-       PRED_TILE_Src_Reg:$MaskTile, GPRSrc:$Base, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
+       PRED_TILE_Src_Reg:$MaskTile, BArgFormat:$Layout,
+       GPRSrc:$Base, GRNoR0:$MinIndex, GPRSrc:$MaxIndex)> {
   let isCodeGenOnly = 1;
 }
 

@@ -1115,6 +1115,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
         }
       }
     }
+    if (StringRef(Form.Spelling).startswith("TSTORE.ATOMIC_") && !DATR)
+      return false;
     if ((DATR && !AllowsDATR) || (!DATR && RequiresDATR) ||
         (FPATR && !AllowsFPATR) || (!FPATR && RequiresFPATR))
       return false;
@@ -1133,6 +1135,8 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       unsigned Round = DATR->getOperand(5).getImm();
       unsigned Sat = DATR->getOperand(6).getImm();
       unsigned Byte = DATR->getOperand(7).getImm();
+      if (StringRef(Form.Spelling) == "TSTORE" && Canon != 0)
+        return false;
       if (Operation->HeaderKind == TileMacroHeaderKind::CUBE && (Pad & 2) &&
           !StringRef(Operation->Mnemonic).endswith("_ACC"))
         return false;
@@ -1155,7 +1159,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
       if (LayoutConfig && StringRef(LayoutConfig->Field) == "Layout") {
         if ((StringRef(Form.Spelling) == "TLOAD" &&
              LinxV5Op::isCubeLoadConversion(Layout)) ||
-            (StringRef(Form.Spelling) == "TSTORE" &&
+            (StringRef(Form.Spelling).startswith("TSTORE") &&
              LinxV5Op::isCubeStoreConversion(Layout)))
           return false;
       }
@@ -1171,6 +1175,20 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
                      TileMacroTargetSlot::CMode, -1) &&
           Cmp != 0)
         return false;
+      const auto *CModeConfig = targetConfig(Form, TileMacroTargetKind::DATR,
+                                             TileMacroTargetSlot::CMode);
+      if (CModeConfig && CModeConfig->Constraint &&
+          StringRef(CModeConfig->Constraint).startswith("Atomic")) {
+        unsigned Expected = StringSwitch<unsigned>(
+            StringRef(CModeConfig->Constraint).drop_front(6))
+            .Case("ADD", 0).Case("MIN", 1).Case("MAX", 2)
+            .Case("AND", 3).Case("OR", 4).Case("XOR", 5)
+            .Case("INC", 6).Case("DEC", 7).Default(32);
+        if (Cmp != Expected || Canon != LinxV5Op::Canon::CANON ||
+            !LinxV5Op::atomicTStoreDataTypeLegal(Cmp, DataType) ||
+            Layout == LinxV5Op::ArgFormat::N82ND)
+          return false;
+      }
       if (!hasTarget(Form, TileMacroTargetKind::DATR,
                      TileMacroTargetSlot::RMode, -1) &&
           Round != 0)
@@ -1380,7 +1398,7 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
         for (unsigned Next = C + 1; Next != Form.NumCommands; ++Next) {
           const auto &Adjacent =
               TileMacroCommands[Form.FirstCommand + Next];
-          if (Adjacent.Kind != TileMacroCommandKind::IOT)
+          if (IndexedRange || Adjacent.Kind != TileMacroCommandKind::IOT)
             break;
           for (unsigned M = 0; M != Adjacent.NumMembers; ++M) {
             unsigned Member =

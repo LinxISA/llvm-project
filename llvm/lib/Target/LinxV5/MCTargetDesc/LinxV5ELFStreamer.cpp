@@ -23,10 +23,16 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/LinxV5Attributes.h"
+#include "llvm/Support/PTOISAIdentity.h"
 
 using namespace llvm;
+
+static cl::opt<bool> EmitPTOISAIdentity(
+    "linxv5-emit-pto-isa-identity", cl::init(false),
+    cl::desc("Emit the pinned PTO ISA development identity in ELF objects"));
 
 // This part is for ELF object output.
 LinxV5TargetELFStreamer::LinxV5TargetELFStreamer(MCStreamer &S,
@@ -67,6 +73,31 @@ void LinxV5TargetELFStreamer::finishAttributeSection() {
 }
 
 void LinxV5TargetELFStreamer::finish() {
+  if (EmitPTOISAIdentity) {
+    MCStreamer &Output = getStreamer();
+    if (STI.getTargetTriple().getArch() != Triple::linx64v5) {
+      Output.getContext().reportError(
+          SMLoc(), "PTO ISA identity requires ELF64 little-endian LinxV5");
+      return;
+    }
+    MCSectionELF *Section = Output.getContext().getELFSection(
+        ".note.pto.isa", ELF::SHT_NOTE, ELF::SHF_ALLOC);
+    if (Section->isRegistered()) {
+      Output.getContext().reportError(
+          SMLoc(), "PTO ISA identity section already exists");
+    } else {
+      Output.pushSection();
+      Output.switchSection(Section);
+      Output.emitValueToAlignment(4);
+      Output.emitIntValue(4, 4);
+      Output.emitIntValue(PTOISAIdentity::Descriptor.size(), 4);
+      Output.emitIntValue(1, 4);
+      Output.emitBytes(StringRef("PTO\0", 4));
+      Output.emitBytes(PTOISAIdentity::Descriptor);
+      Output.emitValueToAlignment(4);
+      Output.popSection();
+    }
+  }
   LinxV5TargetStreamer::finish();
   MCAssembler &MCA = getStreamer().getAssembler();
   LinxV5ABI::ABI ABI = getTargetABI();

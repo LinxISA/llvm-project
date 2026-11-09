@@ -8,11 +8,28 @@ python3 llvm/utils/linxv5/generate_tile_macro_catalog.py \
 ```
 
 Add `--check` to verify that the generated file is current. The default input
-is `tile_macro_catalog.json`, the expanded 0.58.7 catalog imported from LLVM
+is `tile_macro_catalog.json`, the retained 0.58.7 emitter seed imported from LLVM
 commit `9fb347b6f`, followed by the emitter corrections in `tile_macro_model.py`.
 The JSON `fields` object documents its positional record schema. The generated
 digest covers the complete expanded model, including those corrections.
 `--catalog PATH` retains the original external PTO catalog import workflow.
+
+The expanded model records architecture 0.59.0 and the source digest from
+PTO-SPEC `42067d0f2890`, projected into `pto_0590_catalog.json`. Its 24 atomic
+TSTORE aliases are appended with explicit Encoding IDs, preserving existing
+emitter spellings and IDs. This is a compatibility model, not an exact copy of
+all normative grammar: historical TEPL Layout configurations and MX emitter
+alternatives remain. The verifier checks headers and the migrated atomic
+binders, not complete compiler conformance:
+
+```sh
+python3 llvm/utils/linxv5/import_pto_catalog.py \
+  /path/to/pto-spec/spec/catalog/tile-macro-assembly.json \
+  llvm/utils/linxv5/pto_0590_catalog.json
+```
+
+Use `--check` with the importer to verify the projection against the pinned
+source. See `llvm/docs/PTO059Alignment.rst` for identity and support boundaries.
 
 `Encoding=E<number>` selects an alternative physical binder grouping within an
 operation. Existing source spellings retain their default grouping. Append new
@@ -33,7 +50,7 @@ remain attached to their original binders.
 
 The indexed TLSU range extension is pinned separately to PTO-ISA/pto-spec
 PR #424, head `1981bceffa820e6dc0e56d61b2bb2cfd580e0759`. It appends
-forms for all 23 indexed operations; the seed identity remains 0.58.7.
+forms for all 23 indexed operations; the historical seed remains 0.58.7.
 Bounds are signed i64 byte displacements of access starts, not element
 indices or GM strides. An explicit zero range must use at least one nonzero
 bound selector; inline asm can use the `R` constraint for Min. The compiler

@@ -50,14 +50,14 @@ B.DATR 25, DTYPE_NONE, Zero
 # ENC: B.DATR{{.*}}ND2M16.normal, Zero{{.*}}encoding: [0x23,0x1b,0xf0,0x01]
 # ENC: B.DATR{{.*}}ND2M32.normal, Zero{{.*}}encoding: [0xa3,0x1a,0xf0,0x01]
 # ENC: B.DATR{{.*}}ND2M16.normal, Zero{{.*}}encoding: [0x23,0x1b,0xf0,0x01]
-# CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+# CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 # CHECK-NEXT: {{.*}}B.DATR{{.*}}ND2M32.normal, Zero
 # CHECK: ->lb0
 # CHECK: ->lb1
 # CHECK-NOT: ->lb2
 # CHECK: B.IOS{{.*}}S0, mask=1000
 # CHECK-NEXT: {{.*}}B.IOT{{.*}}mask=1000, last, ->t<128B>
-# CHECK: BSTART.TLSU TMOV,{{.*}}DTYPE_NONE
+# CHECK: BSTART.TMOV{{.*}}DTYPE_NONE
 # CHECK-NEXT: {{.*}}B.DATR{{.*}}ND2M16.normal, Zero
 # CHECK: B.IOS{{.*}}S63, mask=1111
 # CHECK-NEXT: {{.*}}B.SUBVIEW{{.*}}0, a2, 0, 1

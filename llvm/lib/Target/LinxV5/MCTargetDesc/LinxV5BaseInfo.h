@@ -455,6 +455,17 @@ enum DataType {
   EMPTY_DataType = 31
 };
 
+inline bool atomicTStoreDataTypeLegal(unsigned Operation, unsigned Type) {
+  if (Operation >= 6)
+    return Operation <= 7 && Type == U32;
+  if (Operation >= 3)
+    return Type == U32 || Type == U64;
+  if (Operation >= 1)
+    return Type == S32 || Type == S64 || Type == U32 || Type == U64;
+  return Type == FP16 || Type == BF16 || Type == FP32 || Type == FP64 ||
+         Type == S32 || Type == U32 || Type == U64;
+}
+
 // Predicate-GPR carrier widths admitted by the indexed TLSU schema.
 // Zero means the dtype has no GPR execution-mask carrier.
 inline unsigned indexedTLSUMaskWords(unsigned Type) {
