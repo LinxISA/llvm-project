@@ -1,0 +1,65 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -o /dev/null %s
+# RUN: sed 's/zero, 64, ->lb0/zero, 63, ->lb0/' %s > %t.partial.mir
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.partial.mir 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+# RUN: sed 's/B.FPATR 16, 0, 3, 1, 1/B.FPATR 63, 0, 3, 1, 1/' %s > %t.mode.mir
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.mode.mir 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+# UNKNOWN: cannot prove a complete Local tile descriptor for COPY/PHI
+--- |
+  define void @shared_matrix_m64() { ret void }
+  define void @shared_mx_reductions() { ret void }
+  define void @convert_signed_to_unsigned() { ret void }
+  define void @shared_matrix_m128() { ret void }
+...
+# CHECK-LABEL: name: shared_matrix_m64
+# CHECK: $tile_t2 = PseudoTCOPYDesc 4, $tile_t1, 16, 16, 16, 1, 31
+---
+name: shared_matrix_m64
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, FP32\0AB.DATR FP32, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${3:c}, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOS ${1:S}, mask=1111\0AB.IOS ${2:S}, mask=1111\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 720905, $shared_s0, 720905, $shared_s1, 13, 0, 13, 4
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+# CHECK-LABEL: name: shared_mx_reductions
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 256, 32, 256, 5, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 2, 5, 29
+# CHECK: $tile_n2 = PseudoTCOPYDesc 3, $tile_n1, 8, 32, 8, 5, 29
+---
+name: shared_mx_reductions
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5
+    INLINEASM &"BSTART.CUBE TMATMULMX, ${7:D}\0AB.DATR ${7:D}, byte0, Zero, RNONE, NOSAT\0AB.FPATR 16, 0, 3, 1, 1, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 256, ->lb1\0AB.DIM zero, 128, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0AB.IOT mask=1111, ->$0<${8:Z}>\0AB.IOT mask=1111, ->$1<${9:Z}>\0AB.IOT mask=1111, last, ->$2<${10:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 786443, def early-clobber $tile_n1, 720905, $shared_s0, 720905, $shared_s1, 720905, $shared_s4, 720905, $shared_s5, 13, 11, 13, 8, 13, 1, 13, 3
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    $tile_n2 = COPY $tile_n1
+    PseudoRET
+...
+# CHECK-LABEL: name: convert_signed_to_unsigned
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 32, 1, 32, 25, 0
+---
+name: convert_signed_to_unsigned
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 32, 17, 0, 1, $r0, $r0, 32
+    INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNONE\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 32, ->lb2\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 720906, def $tile_t1, 13, 17, 13, 25, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+# CHECK-LABEL: name: shared_matrix_m128
+# CHECK: $tile_t2 = PseudoTCOPYDesc 5, $tile_t1, 16, 32, 16, 1, 29
+---
+name: shared_matrix_m128
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, FP32\0AB.DATR FP32, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${3:c}, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 32, ->lb2\0AB.IOS ${1:S}, mask=1111\0AB.IOS ${2:S}, mask=1111\0AB.IOT mask=1111, last, ->$0<${4:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 720905, $shared_s0, 720905, $shared_s1, 13, 0, 13, 5
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

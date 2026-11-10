@@ -1042,8 +1042,9 @@ static bool hasInlineAsmDimension(StringRef Text, unsigned Dimension) {
 static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
                                                StringRef Text);
 
-static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
-                                             StringRef Text) {
+static Optional<unsigned>
+getInlineAsmLayout(MachineInstr &MI, StringRef Text,
+                   bool AllowConversionResultType = false) {
   struct ConditionalLayout {
     const char *Needle;
     unsigned Result;
@@ -1125,10 +1126,10 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
   if (DefaultLayout)
     return LinxV5Op::ArgFormat::NORM;
 
-  // Identity conversions may spell only dtype and rounding in B.DATR.
+  // Conversions may spell only dtype and rounding in B.DATR.
   // Every possible attribute line then has the architectural default NORM
-  // layout. Require exact two-field spellings and the same resolved dtype as
-  // the header; non-identity conversion result typing needs separate proof.
+  // layout. Require exact two-field spellings; TCVT result typing and source
+  // dtype are checked separately against the reaching producer.
   size_t BStart = Text.find("BSTART.");
   if (BStart == StringRef::npos)
     return None;
@@ -1136,6 +1137,9 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
   Optional<unsigned> HeaderType = getInlineAsmDataType(MI, Header);
   if (!HeaderType || *HeaderType == LinxV5Op::DataType::EMPTY_DataType)
     return None;
+  bool IsConvert = AllowConversionResultType &&
+                   (Header.startswith("BSTART.TEPL 27,") ||
+                    Header.startswith("BSTART.TEPL TCVT,"));
   SmallVector<StringRef, 8> Lines;
   Text.split(Lines, '\n');
   bool SawAttribute = false;
@@ -1155,7 +1159,9 @@ static Optional<unsigned> getInlineAsmLayout(MachineInstr &MI,
     size_t Marker = Type.data() - Text.data() + Type.find(":D}");
     Optional<unsigned> ResultType =
         getInlineAsmOperandImmediate(MI, Text, Marker);
-    if (!ResultType || *ResultType != *HeaderType)
+    if (!ResultType ||
+        *ResultType == LinxV5Op::DataType::EMPTY_DataType ||
+        (!IsConvert && *ResultType != *HeaderType))
       return None;
     SawAttribute = true;
   }
@@ -1589,6 +1595,12 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
         Attribute == StringRef::npos ? MatrixLeftType : None;
     if (ResultType != StringRef::npos)
       MatrixRightType = getInlineAsmOperandImmediate(MI, Text, ResultType);
+    else if (Attribute != StringRef::npos) {
+      StringRef RightType = Text.drop_front(Attribute + strlen("B.DATR"))
+                                .split(',').first.trim();
+      MatrixRightType = getInlineAsmDataType(
+          MI, (Twine("BSTART.TMATMUL ") + RightType).str());
+    }
 
     if (!MatrixLeftType || !MatrixRightType)
       return None;
@@ -1615,14 +1627,31 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
     MachineOperand *LeftSource = getAsmOperand(&MI, WithAccumulator ? 2 : 1);
     if (!LeftSource || !LeftSource->isReg())
       return None;
-    Optional<LinxV5::TileDescriptor> LeftDescriptor =
-        LinxV5::tryGetTileRegDescriptor(*MI.getParent(), MI.getIterator(),
-                                        LeftSource->getReg());
-    if (!LeftDescriptor ||
-        (LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
-         LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
-      return None;
-    Layout = LeftDescriptor->Layout;
+    bool SharedLeft = isSharedTileReg(
+        MI.getParent()->getParent()->getRegInfo(), LeftSource->getReg());
+    if (SharedLeft) {
+      MachineOperand *RightSource = getAsmOperand(&MI, 2);
+      if (WithAccumulator || Text.contains("TGEMV") || Text.contains("MX") ||
+          !RightSource || !RightSource->isReg() ||
+          !isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
+                           RightSource->getReg()) ||
+          ValidColDim->Reg != LinxV5::R0 ||
+          (ValidColDim->Imm != 64 && ValidColDim->Imm != 128))
+        return None;
+      unsigned Rows = ValidColDim->Imm == 64 ? 16 : 32;
+      Layout = Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
+                          : LinxV5Op::ArgFormat::CUBE_M32;
+      ValidColDim = InlineAsmDimension{LinxV5::R0, Rows};
+    } else {
+      Optional<LinxV5::TileDescriptor> LeftDescriptor =
+          LinxV5::tryGetTileRegDescriptor(*MI.getParent(), MI.getIterator(),
+                                          LeftSource->getReg());
+      if (!LeftDescriptor ||
+          (LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
+           LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
+        return None;
+      Layout = LeftDescriptor->Layout;
+    }
     Register TGEMVEncodedM = ValidColDim->Reg;
     std::swap(ValidColDim, ValidRowDim);
     // TGEMV is architecturally a one-row operation.  Some legacy inline-asm
@@ -1640,6 +1669,8 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
             MO.setIsKill(false);
     }
     unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+    if (!DataType)
+      return None;
     unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
     uint64_t CapacityBits = (uint64_t{1} << (*SizeCode + 6)) * 8;
     if (!Bits || CapacityBits % (Rows * Bits))
@@ -1731,7 +1762,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   StringRef Text =
       MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
   Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
-  Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
+  Optional<unsigned> Layout = getInlineAsmLayout(MI, Text, true);
   bool IsSharedNDToCube =
       (Text.startswith("BSTART.TMOV DTYPE_NONE") ||
        Text.startswith("BSTART.TLSU TMOV, DTYPE_NONE") ||
@@ -1778,6 +1809,78 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
   bool IsMX = Text.startswith("BSTART.CUBE TMATMULMX,") ||
               Text.startswith("BSTART.CUBE TMATMULMX.ACC,");
+  if (IsMX && Text.startswith("BSTART.CUBE TMATMULMX,")) {
+    MachineOperand *Left = getAsmOperand(&MI, SA.Defs.size());
+    if (Left && Left->isReg() &&
+        isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
+                        Left->getReg())) {
+      for (unsigned Source = 1; Source != 4; ++Source) {
+        MachineOperand *Operand = getAsmOperand(&MI, SA.Defs.size() + Source);
+        if (!Operand || !Operand->isReg() ||
+            !isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
+                             Operand->getReg()))
+          return None;
+      }
+      if (!ValidCol || !ValidRow ||
+          (*ValidCol != 64 && *ValidCol != 128) ||
+          Dimensions.ValidColReg || Dimensions.ValidRowReg ||
+          Dimensions.PhysicalColReg || Text.contains("B.ASSEMBLE"))
+        return None;
+      size_t Attribute = Text.find("B.FPATR");
+      if (Attribute == StringRef::npos)
+        return None;
+      SmallVector<StringRef, 10> Fields;
+      Text.drop_front(Attribute + strlen("B.FPATR"))
+          .split('\n').first.split(Fields, ',');
+      if (Fields.size() != 10)
+        return None;
+      SmallVector<unsigned, 10> Values;
+      for (StringRef Field : Fields) {
+        Field = Field.trim();
+        if (Field.startswith("${") && Field.endswith(":c}")) {
+          auto Value = getInlineAsmOperandImmediate(
+              MI, Text, Field.data() - Text.data() + Field.find(':'));
+          if (!Value)
+            return None;
+          Values.push_back(*Value);
+        } else {
+          unsigned Value;
+          if (Field.getAsInteger(10, Value))
+            return None;
+          Values.push_back(Value);
+        }
+      }
+      DataType = Values[0] ? getMatrixFPATROutputType(Values[0])
+                           : Optional<unsigned>(LinxV5Op::DataType::FP32);
+      if (!DataType || Values[3] > 1 || Values[4] > 1 || Values[2] > 9 ||
+          SA.Defs.size() != 1 + Values[3] + Values[4])
+        return None;
+      unsigned Ordinal = 0;
+      while (Ordinal < SA.Defs.size() && SA.Defs[Ordinal]->getReg() != Reg)
+        ++Ordinal;
+      unsigned Columns = *ValidRow;
+      if (Values[3] && Ordinal == 1)
+        Columns = 1;
+      else if (Ordinal != 0) {
+        if (!Values[4] || !Values[2])
+          return None;
+        unsigned GroupColumns = Values[2] == 1   ? 8
+                                : Values[2] == 2 ? 16
+                                                 : 16 * (Values[2] - 1);
+        Columns = divideCeil(Columns, GroupColumns);
+      }
+      unsigned Rows = *ValidCol / 4;
+      unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
+      uint64_t CapacityBits = (uint64_t{1} << (*SizeCode + 6)) * 8;
+      if (!Bits || CapacityBits % (Rows * Bits))
+        return None;
+      return checkedTileDescriptor(LinxV5::TileDescriptor{
+          *DataType, Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
+                                : LinxV5Op::ArgFormat::CUBE_M32,
+          Rows, Columns, static_cast<unsigned>(CapacityBits / (Rows * Bits)),
+          *SizeCode});
+    }
+  }
   if (!IsMX && (Text.contains("BSTART.TMATMUL") ||
                 Text.contains("BSTART.TGEMV") ||
                 Text.contains("BSTART.CUBE TMATMUL") ||
@@ -1822,6 +1925,9 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     bool CubeSource = SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
                       SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M32;
     if (IsConvert) {
+      auto SourceType = getInlineAsmDataType(MI, Text.split('\n').first);
+      if (!SourceType || *SourceType != SourceDescriptor->DataType)
+        return None;
       if (!DataType || !ValidCol || !ValidRow)
         return None;
       if (CubeSource) {
