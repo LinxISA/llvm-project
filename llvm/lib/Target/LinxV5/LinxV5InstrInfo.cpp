@@ -17,6 +17,7 @@
 #include "LinxV5TargetMachine.h"
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1350,19 +1351,30 @@ static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
 using DescriptorPosition =
     std::tuple<MachineBasicBlock *, const MachineInstr *, Register>;
 
+struct DescriptorResolutionContext : SmallVector<DescriptorPosition, 8> {
+  struct CachedDescriptor {
+    Optional<LinxV5::TileDescriptor> Descriptor;
+    bool Absent;
+  };
+  DenseMap<DescriptorPosition, CachedDescriptor> Cache;
+  unsigned Cycles = 0;
+};
+
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent = nullptr);
+    DescriptorResolutionContext &Active, bool *Absent = nullptr);
 
 // Shared ND produced by the forward CUBE transport retains its backing dtype.
 // Follow COPYs and require every reaching producer to agree. Unknown Shared
 // producers must not invent a dtype for a reverse TMOV's COPY or spill.
 static Optional<unsigned> resolveSharedNDDataType(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active) {
+    DescriptorResolutionContext &Active) {
   DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
-  if (is_contained(Active, Key))
+  if (is_contained(Active, Key)) {
+    ++Active.Cycles;
     return None;
+  }
   Active.push_back(Key);
   auto Resolve = [&]() -> Optional<unsigned> {
     for (MachineInstr &MI : reverse(make_range(MBB.begin(), Before))) {
@@ -1423,7 +1435,7 @@ static Optional<unsigned> resolveSharedNDDataType(
 
 static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
     MachineInstr &MI, LinxV5::TileDescriptor Result, Register Left,
-    Register Right, SmallVectorImpl<DescriptorPosition> &Active,
+    Register Right, DescriptorResolutionContext &Active,
     bool *Absent) {
   if (Result.DataType != LinxV5Op::DataType::U8 ||
       (Result.Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
@@ -1549,7 +1561,8 @@ static Optional<unsigned> getMatrixFPATROutputType(unsigned Mode) {
 }
 
 static Optional<LinxV5::TileDescriptor>
-getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
+getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
+                                DescriptorResolutionContext &Active) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1644,13 +1657,32 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
       ValidColDim = InlineAsmDimension{LinxV5::R0, Rows};
     } else {
       Optional<LinxV5::TileDescriptor> LeftDescriptor =
-          LinxV5::tryGetTileRegDescriptor(*MI.getParent(), MI.getIterator(),
-                                          LeftSource->getReg());
+          resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
+                                LeftSource->getReg(), Active);
       if (!LeftDescriptor ||
           (LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
            LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
         return None;
       Layout = LeftDescriptor->Layout;
+      if (Text.contains("B.IOS")) {
+        if (ValidColDim->Reg != LinxV5::R0) {
+          auto GroupM = getStaticTileDimensionRegister(
+              *MI.getParent(), MI.getIterator(), ValidColDim->Reg);
+          if (!GroupM)
+            return None;
+          ValidColDim = InlineAsmDimension{
+              LinxV5::R0, *GroupM + ValidColDim->Imm};
+        }
+        if (Text.contains("TGEMV") ||
+            (ValidColDim->Imm != 64 && ValidColDim->Imm != 128))
+          return None;
+        unsigned Rows = ValidColDim->Imm / 4;
+        unsigned ExpectedLayout = Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
+                                             : LinxV5Op::ArgFormat::CUBE_M32;
+        if (*Layout != ExpectedLayout)
+          return None;
+        ValidColDim = InlineAsmDimension{LinxV5::R0, Rows};
+      }
     }
     Register TGEMVEncodedM = ValidColDim->Reg;
     std::swap(ValidColDim, ValidRowDim);
@@ -1748,7 +1780,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg) {
 
 static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     MachineInstr &MI, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent) {
+    DescriptorResolutionContext &Active, bool *Absent) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1885,7 +1917,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
                 Text.contains("BSTART.TGEMV") ||
                 Text.contains("BSTART.CUBE TMATMUL") ||
                 Text.contains("BSTART.CUBE TGEMV")))
-    return getLegacyInlineAsmTileDescriptor(MI, Reg);
+    return getLegacyInlineAsmTileDescriptor(MI, Reg, Active);
   bool IsConvert = Text.startswith("BSTART.TEPL 27,") ||
                    Text.startswith("BSTART.TEPL TCVT,");
   if (IsConvert && Text.contains(":D}")) {
@@ -1966,9 +1998,12 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
         if (!QuantText.getAsInteger(10, Value))
           Quant = Value;
       }
-      if (!Quant || *Quant != 0 || !ValidCol || !ValidRow)
+      if (!Quant || !ValidCol || !ValidRow)
         return None;
-      DataType = LinxV5Op::DataType::FP32;
+      DataType = *Quant ? getMatrixFPATROutputType(*Quant)
+                       : Optional<unsigned>(LinxV5Op::DataType::FP32);
+      if (!DataType)
+        return None;
       unsigned SharedCount = Text.count("B.IOS");
       if (SharedCount) {
         if (SharedCount != 2 || (*ValidCol != 64 && *ValidCol != 128))
@@ -1980,7 +2015,11 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
           *Layout != LinxV5Op::ArgFormat::CUBE_M32)
         return None;
       unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
-      PhysicalCol = ((uint64_t{1} << (*SizeCode + 6)) * 8) / (Rows * 32);
+      unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
+      uint64_t CapacityBits = (uint64_t{1} << (*SizeCode + 6)) * 8;
+      if (!Bits || CapacityBits % (Rows * Bits))
+        return None;
+      PhysicalCol = CapacityBits / (Rows * Bits);
     }
   }
   if (!DataType || *DataType == LinxV5Op::DataType::EMPTY_DataType ||
@@ -2164,7 +2203,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
 
 static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     MachineInstr &MI, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent) {
+    DescriptorResolutionContext &Active, bool *Absent) {
   if (MI.getOpcode() == LinxV5::PseudoV5GMOV)
     return resolveTileDescriptor(*MI.getParent(), MI.getIterator(),
                                  MI.getOperand(5).getReg(), Active);
@@ -2442,19 +2481,20 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     if (auto Descriptor = getInlineAsmTileDescriptor(MI, Reg, Active, Absent))
       return Descriptor;
     if (!EnableGenericElement)
-      return getLegacyInlineAsmTileDescriptor(MI, Reg);
+      return getLegacyInlineAsmTileDescriptor(MI, Reg, Active);
     return None;
   }
   return None;
 }
 
-static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
+static Optional<LinxV5::TileDescriptor> resolveTileDescriptorImpl(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<DescriptorPosition> &Active, bool *Absent) {
+    DescriptorResolutionContext &Active, bool *Absent) {
   if (Absent)
     *Absent = false;
   DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
   if (is_contained(Active, Key)) {
+    ++Active.Cycles;
     if (Absent)
       *Absent = true;
     return None;
@@ -2499,6 +2539,27 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
   return Joined;
 }
 
+static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
+    DescriptorResolutionContext &Active, bool *Absent) {
+  DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
+  auto Cached = Active.Cache.find(Key);
+  if (Cached != Active.Cache.end()) {
+    if (Absent)
+      *Absent = Cached->second.Absent;
+    return Cached->second.Descriptor;
+  }
+  unsigned Cycles = Active.Cycles;
+  bool ResultAbsent = false;
+  auto Result =
+      resolveTileDescriptorImpl(MBB, Before, Reg, Active, &ResultAbsent);
+  if (Cycles == Active.Cycles)
+    Active.Cache.insert({Key, {Result, ResultAbsent}});
+  if (Absent)
+    *Absent = ResultAbsent;
+  return Result;
+}
+
 LinxV5::TileDescriptor
 LinxV5::getTileRegDescriptor(MachineBasicBlock &MBB,
                              MachineBasicBlock::iterator MBBI,
@@ -2515,7 +2576,7 @@ Optional<LinxV5::TileDescriptor>
 LinxV5::tryGetTileRegDescriptor(MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MBBI,
                                 MCRegister Reg) {
-  SmallVector<DescriptorPosition, 8> Active;
+  DescriptorResolutionContext Active;
   return resolveTileDescriptor(MBB, MBBI, Reg, Active);
 }
 
