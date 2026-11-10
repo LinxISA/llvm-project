@@ -14,6 +14,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/Support/MathExtras.h"
 #include <llvm/CodeGen/LiveIntervals.h>
@@ -107,6 +108,7 @@ public:
   void assignScalarReg(MachineFunction &MF);
   void assignSIMTReg(MachineFunction &MF);
   void assignTileReg(MachineFunction &MF);
+  bool legalizeMatrixAccumulatorHands(MachineFunction &MF);
   void assignMultiOutput(MachineFunction &MF);
   SmallVector<Register> findOpenAssembleParents(MachineFunction &MF);
   bool assign(Register OriReg, const TargetRegisterClass *RC);
@@ -1888,6 +1890,79 @@ void ColoringInChain::ReportAssignResult(StringRef Prefix) {
 #endif
 }
 
+bool LinxV5ClockhandsColoring::legalizeMatrixAccumulatorHands(
+    MachineFunction &MF) {
+  bool Changed = false;
+  const auto *TII = MF.getSubtarget<LinxV5Subtarget>().getInstrInfo();
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm())
+        continue;
+      StringRef Text =
+          MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+      StringRef Header = Text.split('\n').first;
+      if (!Header.contains("TMATMUL.ACC") &&
+          !Header.contains("TMATMULMX.ACC") &&
+          !Header.contains("TGEMV.ACC") &&
+          !Header.contains("TGEMVMX.ACC"))
+        continue;
+      size_t Binding = Text.find("B.IOT ");
+      if (Binding == StringRef::npos)
+        continue;
+      StringRef Source = Text.drop_front(Binding + 6).ltrim();
+      if (!Source.consume_front("$"))
+        continue;
+      Source.consume_front("{");
+      StringRef Digits = Source.take_while([](char Character) {
+        return Character >= '0' && Character <= '9';
+      });
+      unsigned Group;
+      if (Digits.getAsInteger(10, Group))
+        continue;
+      unsigned OperandIndex = InlineAsm::MIOp_FirstOperand;
+      while (Group && OperandIndex < MI.getNumOperands() &&
+             MI.getOperand(OperandIndex).isImm()) {
+        OperandIndex += InlineAsm::getNumOperandRegisters(
+                            MI.getOperand(OperandIndex).getImm()) +
+                        1;
+        --Group;
+      }
+      if (Group || OperandIndex + 1 >= MI.getNumOperands() ||
+          !MI.getOperand(OperandIndex).isImm() ||
+          InlineAsm::getNumOperandRegisters(
+              MI.getOperand(OperandIndex).getImm()) != 1)
+        continue;
+      MachineOperand &Accumulator = MI.getOperand(OperandIndex + 1);
+      if (!Accumulator.isReg() || !Accumulator.isUse() ||
+          !Accumulator.getReg().isVirtual())
+        continue;
+      Register Original = Accumulator.getReg();
+      const TargetRegisterClass *RC = MRI->getRegClass(Original);
+      if (!LinxV5::Tile_ABSRegClass.hasSubClassEq(RC) ||
+          llvm::none_of(*RC, [](MCPhysReg Reg) {
+            return LinxV5::Tile_TRRegClass.contains(Reg);
+          }))
+        continue;
+      Register Rebound = MRI->createVirtualRegister(&LinxV5::Tile_UMNRegClass);
+      MachineInstr *Copy =
+          BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(TargetOpcode::COPY),
+                  Rebound)
+              .addReg(Original);
+      LIS->InsertMachineInstrInMaps(*Copy);
+      Accumulator.setReg(Rebound);
+      MI.getOperand(OperandIndex).setImm(InlineAsm::getFlagWordForRegClass(
+          MI.getOperand(OperandIndex).getImm() & 0xffff,
+          LinxV5::Tile_UMNRegClassID));
+      MRI->clearKillFlags(Original);
+      LIS->removeInterval(Original);
+      LIS->createAndComputeVirtRegInterval(Original);
+      LIS->createAndComputeVirtRegInterval(Rebound);
+      Changed = true;
+    }
+  }
+  return Changed;
+}
+
 bool LinxV5ClockhandsColoring::runOnMachineFunction(MachineFunction &MF) {
 
   MRI = &MF.getRegInfo();
@@ -1895,12 +1970,16 @@ bool LinxV5ClockhandsColoring::runOnMachineFunction(MachineFunction &MF) {
   VRM = &getAnalysis<VirtRegMap>();
   MLI = &getAnalysis<MachineLoopInfo>();
 
-  if (!EnableClockHandOpt)
-    return false;
+  if (!EnableClockHandOpt) {
+    bool Changed = legalizeMatrixAccumulatorHands(MF);
+    VRM->grow();
+    return Changed;
+  }
   getChains(MF);
   assignScalarReg(MF);
   assignSIMTReg(MF);
   assignTileReg(MF);
+  legalizeMatrixAccumulatorHands(MF);
 
   VRM->grow();
   return true;

@@ -1644,6 +1644,14 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
         MI.getParent()->getParent()->getRegInfo(), LeftSource->getReg());
     if (SharedLeft) {
       MachineOperand *RightSource = getAsmOperand(&MI, 2);
+      if (ValidColDim->Reg != LinxV5::R0) {
+        auto GroupM = getStaticTileDimensionRegister(
+            *MI.getParent(), MI.getIterator(), ValidColDim->Reg);
+        if (!GroupM)
+          return None;
+        ValidColDim =
+            InlineAsmDimension{LinxV5::R0, *GroupM + ValidColDim->Imm};
+      }
       if (WithAccumulator || Text.contains("TGEMV") || Text.contains("MX") ||
           !RightSource || !RightSource->isReg() ||
           !isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),

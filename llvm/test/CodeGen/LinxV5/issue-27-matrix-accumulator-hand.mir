@@ -1,0 +1,23 @@
+# RUN: llc -mtriple=linx64v5 -linxv5-enable-tile-clock-hand=false -run-pass=linxv5-clockhands -verify-machineinstrs -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -linxv5-enable-tile-clock-hand=true -run-pass=linxv5-clockhands -verify-machineinstrs -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -linxv5-enable-clock-hand-opt=false -run-pass=linxv5-clockhands -verify-machineinstrs -o - %s | FileCheck %s
+# CHECK-LABEL: name: shared_accumulator
+# CHECK: [[REBOUND:%[0-9]+]]:tile_umn = COPY
+# CHECK: INLINEASM
+# CHECK-SAME: reguse:Tile_UMN
+# CHECK-SAME: [[REBOUND]]
+--- |
+  define void @shared_accumulator() { ret void }
+...
+---
+name: shared_accumulator
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: tile_abs }
+  - { id: 1, class: tile_abs }
+body: |
+  bb.0:
+    %0:tile_abs = IMPLICIT_DEF
+    INLINEASM &"BSTART.CUBE TMATMUL.ACC, FP32\0AB.DATR FP32, byte0, Zero, RNONE, NOSAT\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 25, 786443, def early-clobber %1, 786441, %0, 13, 6
+    PseudoRET
+...
