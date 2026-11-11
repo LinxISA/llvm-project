@@ -17,6 +17,11 @@
 
 BUILTIN(__builtin_linx_get_system_reg, "ULiULi", "n")
 
+// PTO MSGB (#426). Address is an immediate; value/control are runtime words.
+BUILTIN(__builtin_linx_msgb_read, "ULiULi", "")
+BUILTIN(__builtin_linx_msgb_write, "vULiULi", "")
+BUILTIN(__builtin_linx_msgb_send, "vULi", "")
+
 // Returns the current PE ID (0..3) from the read-only PEID SSR (0x0802).
 BUILTIN(__builtin_linx_get_thread_id, "Ui", "nc")
 // Compatibility spelling retained for existing sources.

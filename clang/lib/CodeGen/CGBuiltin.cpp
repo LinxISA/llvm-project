@@ -19676,6 +19676,16 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   case LinxV5::BI__builtin_linx_get_system_reg:
       ID = Intrinsic::linx_get_sysreg;
       return EmitLinxV5GetSysReg(E, ID);
+  case LinxV5::BI__builtin_linx_msgb_read:
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::linx_msgb_read),
+                              {EmitScalarExpr(E->getArg(0))});
+  case LinxV5::BI__builtin_linx_msgb_write:
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::linx_msgb_write),
+                              {EmitScalarExpr(E->getArg(0)),
+                               EmitScalarExpr(E->getArg(1))});
+  case LinxV5::BI__builtin_linx_msgb_send:
+    return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::linx_msgb_send),
+                              {EmitScalarExpr(E->getArg(0))});
   case LinxV5::BI__builtin_linx_get_thread_id:
   case LinxV5::BI__builtin_linx_get_thread_idx: {
       ID = Intrinsic::linx_get_thread_id;

@@ -2374,11 +2374,19 @@ def MSET:     TMPL_MEM<0b001, "MSET">;
 
 let hasSideEffects = 1 in {
 def SSR_GET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b000, (outs DstRWithArrow:$DstR), (ins uimm12:$Imm12), "ssrget"> {
+  let isConvergent = 1;
+  let isNotDuplicable = 1;
+  let mayLoad = 1;
+  let mayStore = 1;
   let SrcL = 0b00000;
   let AsmString = "ssrget\t$Imm12, $DstR";
 }
 
 def SSR_SET : LinxV5Inst_E<Type_101, OPC_SSR_Access, 0b001, (outs), (ins GPRSrc:$SrcL, uimm12:$Imm12), "ssrset"> {
+  let isConvergent = 1;
+  let isNotDuplicable = 1;
+  let mayLoad = 1;
+  let mayStore = 1;
   let DstR = 0b00000;
   let AsmString = "ssrset\t$SrcL, $Imm12";
 }
@@ -2460,7 +2468,10 @@ class CTRL_BASE<bits<3> Func, bits<12> imm, dag ins, string opcstr, string argst
 class EXECTRL_BASE<bits<12> imm, string opcstr>
     : CTRL_BASE<0b000, imm, (ins GPRSrc:$SrcL), opcstr, "$SrcL">;
 
-def BSE  : EXECTRL_BASE<0, "bse">;
+// BSE can commit an opt-in MSGB message. Preserve it even without a result.
+let hasSideEffects = 1, mayLoad = 1, mayStore = 1,
+    isConvergent = 1, isNotDuplicable = 1, PE = PET_SYS in
+  def BSE : EXECTRL_BASE<0, "bse">;
 def BWE  : EXECTRL_BASE<1, "bwe">;
 def BWI  : EXECTRL_BASE<2, "bwi">;
 let hasSideEffects = 1 in {

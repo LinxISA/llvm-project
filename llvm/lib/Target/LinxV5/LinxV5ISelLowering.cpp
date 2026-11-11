@@ -1004,6 +1004,18 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       return lowerV5SharedS2L(Op, DAG, LinxV5Op::TileOPTMA::TMOV);
     case Intrinsic::linx_get_simt_ret:
       return lowerGetSIMTRet(Op, DAG);
+    case Intrinsic::linx_msgb_read: {
+      if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())
+        report_fatal_error("MSGB requires native scalar codegen");
+      auto *Address = dyn_cast<ConstantSDNode>(Op.getOperand(2));
+      if (!Address || Address->getZExtValue() < 0x0830 ||
+          Address->getZExtValue() > 0x084b)
+        report_fatal_error("MSGB address must be in 0x0830..0x084b");
+      return SDValue(DAG.getMachineNode(
+          LinxV5::SSR_GET, DL, MVT::i64, MVT::Other,
+          DAG.getTargetConstant(Address->getZExtValue(), DL, MVT::i64),
+          Op.getOperand(0)), 0);
+    }
     case Intrinsic::linx_get_sysreg: {
       return lowerSysGet(Op, DAG);
     }
@@ -3098,6 +3110,21 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     }
     return uNum;
   };
+  if (IntNo == Intrinsic::linx_msgb_write ||
+      IntNo == Intrinsic::linx_msgb_send) {
+    if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())
+      report_fatal_error("MSGB requires native scalar codegen");
+    if (IntNo == Intrinsic::linx_msgb_send)
+      return SDValue(DAG.getMachineNode(LinxV5::BSE, DL, MVT::Other,
+                                        Op.getOperand(2), Chain), 0);
+    auto *Address = dyn_cast<ConstantSDNode>(Op.getOperand(2));
+    if (!Address || Address->getZExtValue() < 0x0830 ||
+        Address->getZExtValue() > 0x084b)
+      report_fatal_error("MSGB address must be in 0x0830..0x084b");
+    return SDValue(DAG.getMachineNode(
+        LinxV5::SSR_SET, DL, MVT::Other, Op.getOperand(3),
+        DAG.getTargetConstant(Address->getZExtValue(), DL, MVT::i64), Chain), 0);
+  }
   if (IntNo == Intrinsic::linx_scalar_dma ||
       IntNo == Intrinsic::linx_scalar_bwt ||
       IntNo == Intrinsic::linx_scalar_sync_core) {

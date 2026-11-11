@@ -152,6 +152,8 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
       if (LinxV5II::isTileOp(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
           MI.getOpcode() == LinxV5::SSR_GET ||
           MI.getOpcode() == LinxV5::HL_SSR_GET ||
+          MI.getOpcode() == LinxV5::SSR_SET ||
+          MI.getOpcode() == LinxV5::HL_SSR_SET ||
           MI.getOpcode() == LinxV5::SYNC_CORE ||
           MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
           MI.getOpcode() == LinxV5::PseudoV5SharedS2L ||
@@ -506,7 +508,9 @@ unsigned LinxV5EmitHeader::getPEType(MachineBasicBlock &MBB) {
   unsigned Mask = LinxV5II::PET_ALL;
   for (MachineInstr &MI : MBB) {
     if (MI.getOpcode() == LinxV5::SSR_GET ||
-        MI.getOpcode() == LinxV5::HL_SSR_GET) {
+        MI.getOpcode() == LinxV5::HL_SSR_GET ||
+        MI.getOpcode() == LinxV5::SSR_SET ||
+        MI.getOpcode() == LinxV5::HL_SSR_SET) {
       Mask &= LinxV5II::PET_SYS;
       continue;
     }

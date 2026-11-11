@@ -12,6 +12,16 @@
 
 let TargetPrefix = "linx" in {
 
+// Opt-in PTO MSGB profile, pinned by downstream software to PTO PR #426.
+// Conservative memory effects serialize SSR state and software copies. These
+// are neither speculatable nor duplicable, and may wait for older GM work.
+def int_linx_msgb_read : Intrinsic<[llvm_i64_ty], [llvm_i64_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate, ImmArg<ArgIndex<0>>]>;
+def int_linx_msgb_write : Intrinsic<[], [llvm_i64_ty, llvm_i64_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate, ImmArg<ArgIndex<0>>]>;
+def int_linx_msgb_send : Intrinsic<[], [llvm_i64_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate]>;
+
 // Scalar operations with no equivalent generic LLVM IR instruction.
 // DMA takes (destination, source) pointers and snapshots exactly 64 source
 // bytes before writing the destination.

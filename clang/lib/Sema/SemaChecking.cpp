@@ -4870,6 +4870,9 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
   switch (BuiltinID) {
   case LinxV5::BI__builtin_linx_get_system_reg:
     return CheckLinxV5BuiltinSysGetReg(TheCall);
+  case LinxV5::BI__builtin_linx_msgb_read:
+  case LinxV5::BI__builtin_linx_msgb_write:
+    return SemaBuiltinConstantArgRange(TheCall, 0, 0x0830, 0x084b);
   case LinxV5::BIblk_matmul:
   case LinxV5::BIblk_matmul_ac:
   case LinxV5::BIblk_tload:
