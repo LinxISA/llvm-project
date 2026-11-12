@@ -18,10 +18,10 @@
 # RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
 # RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/runtime-regmask.mir 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=RUNTIME-REGMASK
-# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN: not llc -mtriple=linx64v5-unknown-linux-musl \
 # RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/runtime-redefined.mir 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=RUNTIME-REDEFINED
-# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
+# RUN: not llc -mtriple=linx64v5-unknown-linux-musl \
 # RUN:   -run-pass=linxv5-treg-to-offset -o /dev/null %t/mismatch.mir 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=MISMATCH
 # RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl \
