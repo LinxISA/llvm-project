@@ -1,4 +1,4 @@
-# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
 # CHECK: cannot prove a complete Local tile descriptor for COPY/PHI
 --- |
   define void @unknown_logical_source() { ret void }

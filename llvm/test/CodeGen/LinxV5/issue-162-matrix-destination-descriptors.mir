@@ -1,0 +1,155 @@
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -linxv5-enable-generic-element=true -o - %s | FileCheck %s
+# RUN: sed 's/13, 8, 13, 1, 13, 3/13, 8, 13, 1, 13, 1/' %s > %t.small.mir
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.small.mir 2>&1 | FileCheck %s --check-prefix=CAPACITY
+# CAPACITY: error: {{.*}}CUBE descriptor geometry does not fit exact capacity: rows=32, cols=4, dtype=1, size=1
+# CAPACITY-NOT: PLEASE submit a bug report
+#
+# A CUBE bundle publishes D, RowMaxOut and GroupMaxOut with independent
+# capacities. Auxiliaries use the intermediate dtype even when D converts.
+# Shared ACC must resolve the same per-PE descriptor as its initial producer.
+# Every COPY checks the full descriptor, rather than merely successful codegen.
+# CHECK-LABEL: name: fp32_row
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 128, 32, 128, 1, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+# CHECK-LABEL: name: fp32_group
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 128, 32, 128, 1, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+# CHECK: $tile_n2 = PseudoTCOPYDesc 3, $tile_n1, 4, 32, 4, 1, 29
+# CHECK-LABEL: name: bf16_row
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 128, 32, 128, 5, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+# CHECK-LABEL: name: bf16_group
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 128, 32, 128, 5, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+# CHECK: $tile_n2 = PseudoTCOPYDesc 3, $tile_n1, 4, 32, 4, 1, 29
+# CHECK-LABEL: name: fp8_row
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 128, 32, 128, 1, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+# CHECK-LABEL: name: fp8_group
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 128, 32, 128, 1, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+# CHECK: $tile_n2 = PseudoTCOPYDesc 3, $tile_n1, 4, 32, 4, 1, 29
+# CHECK-LABEL: name: shared_acc_m64
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: shared_acc_m128
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: local_bf16_row
+# CHECK: $tile_u2 = PseudoTCOPYDesc 6, $tile_u1, 64, 32, 64, 5, 29
+# CHECK: $tile_t2 = PseudoTCOPYDesc 8, $tile_t1, 128, 32, 128, 1, 29
+# CHECK: $tile_m2 = PseudoTCOPYDesc 1, $tile_m1, 1, 32, 1, 1, 29
+--- |
+  define void @fp32_row() { ret void }
+  define void @fp32_group() { ret void }
+  define void @bf16_row() { ret void }
+  define void @bf16_group() { ret void }
+  define void @fp8_row() { ret void }
+  define void @fp8_group() { ret void }
+  define void @shared_acc_m64() { ret void }
+  define void @shared_acc_m128() { ret void }
+  define void @local_bf16_row() { ret void }
+...
+---
+name: fp32_row
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, FP32\0AB.DATR FP32, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${4:c}, 0, 0, 1, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOT mask=1111, ->$0<${5:Z}>\0AB.IOT mask=1111, last, ->$1<${6:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 13, 0, 13, 8, 13, 1
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...
+---
+name: fp32_group
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, FP32\0AB.DATR FP32, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${5:c}, 0, 3, 1, 1, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOT mask=1111, ->$0<${6:Z}>\0AB.IOT mask=1111, ->$1<${7:Z}>\0AB.IOT mask=1111, last, ->$2<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 786443, def early-clobber $tile_n1, 655369, $shared_s0, 655369, $shared_s1, 13, 0, 13, 8, 13, 1, 13, 3
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    $tile_n2 = COPY $tile_n1
+    PseudoRET
+...
+---
+name: bf16_row
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, BF16\0AB.DATR BF16, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${4:c}, 0, 0, 1, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOT mask=1111, ->$0<${5:Z}>\0AB.IOT mask=1111, last, ->$1<${6:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 13, 16, 13, 7, 13, 1
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...
+---
+name: bf16_group
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, BF16\0AB.DATR BF16, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${5:c}, 0, 3, 1, 1, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOT mask=1111, ->$0<${6:Z}>\0AB.IOT mask=1111, ->$1<${7:Z}>\0AB.IOT mask=1111, last, ->$2<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 786443, def early-clobber $tile_n1, 655369, $shared_s0, 655369, $shared_s1, 13, 16, 13, 7, 13, 1, 13, 3
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    $tile_n2 = COPY $tile_n1
+    PseudoRET
+...
+---
+name: fp8_row
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${4:c}, 0, 0, 1, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOT mask=1111, ->$0<${5:Z}>\0AB.IOT mask=1111, last, ->$1<${6:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 13, 0, 13, 8, 13, 1
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...
+---
+name: fp8_group
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    INLINEASM &"BSTART.CUBE TMATMUL, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR ${5:c}, 0, 3, 1, 1, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOT mask=1111, ->$0<${6:Z}>\0AB.IOT mask=1111, ->$1<${7:Z}>\0AB.IOT mask=1111, last, ->$2<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 786443, def early-clobber $tile_n1, 655369, $shared_s0, 655369, $shared_s1, 13, 0, 13, 8, 13, 1, 13, 3
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    $tile_n2 = COPY $tile_n1
+    PseudoRET
+...
+---
+name: shared_acc_m64
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMUL.ACC, BF16\0AB.DATR BF16, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOT $1, mask=1111, last, ->$0<${4:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: shared_acc_m128
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMUL.ACC, BF16\0AB.DATR BF16, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOT $1, mask=1111, last, ->$0<${4:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: local_bf16_row
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $tile_n1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 5, 29, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMUL, BF16\0AB.DATR BF16, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 1, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOT $2, $3, mask=1111, ->$0<${4:Z}>\0AB.IOT mask=1111, last, ->$1<${5:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786443, def early-clobber $tile_m1, 786441, $tile_u1, 786441, $tile_n1, 13, 8, 13, 1
+    $tile_u2 = COPY $tile_u1
+    $tile_t2 = COPY $tile_t1
+    $tile_m2 = COPY $tile_m1
+    PseudoRET
+...

@@ -1012,7 +1012,8 @@ bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
           report_fatal_error(
               "LinxV5 TRegToOffset attempted PseudoTCOPY with non-Local tile");
         if (!RegOp.Descriptor)
-          report_fatal_error(
+          LinxV5::reportTileDescriptorError(
+              *MBB,
               "cannot prove a complete Local tile descriptor for window COPY");
         LinxV5::TileDescriptor Descriptor = *RegOp.Descriptor;
         if (Descriptor.SizeCode != RegSizeCode)
@@ -1909,8 +1910,8 @@ SlotStatus *LinxV5TRegToOffsetOpt::getInitStatus(
           !MBB.isLiveIn(Reference.RegOp.Reg))
         continue;
       if (!Reference.RegOp.Descriptor)
-        report_fatal_error(
-            "unknown Local tile descriptor at COPY/PHI control-flow join");
+        LinxV5::reportTileDescriptorError(
+            MBB, "unknown Local tile descriptor at COPY/PHI control-flow join");
       for (SlotStatus *Incoming : drop_begin(DoneMBBsSlotStatus)) {
         const TRCopyRange *Match = nullptr;
         for (const TRCopyRange &Candidate : Incoming->TRCopyRanges)
@@ -1920,11 +1921,13 @@ SlotStatus *LinxV5TRegToOffsetOpt::getInitStatus(
             break;
           }
         if (!Match || !Match->RegOp.Descriptor)
-          report_fatal_error(
+          LinxV5::reportTileDescriptorError(
+              MBB,
               "unknown Local tile descriptor at COPY/PHI control-flow join");
         if (!(*Reference.RegOp.Descriptor == *Match->RegOp.Descriptor))
-          report_fatal_error(
-              "conflicting Local tile descriptors at COPY/PHI control-flow join");
+          LinxV5::reportTileDescriptorError(
+              MBB, "conflicting Local tile descriptors at COPY/PHI "
+                   "control-flow join");
       }
     }
   }
@@ -4894,8 +4897,8 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
       if (hasAnyReachingExplicitUndef(MBB, Reg))
         continue;
       if (!LinxV5::tryGetTileRegDescriptor(MBB, MBB.begin(), Reg)) {
-        report_fatal_error(
-            "unknown Local tile descriptor at COPY/PHI control-flow join");
+        LinxV5::reportTileDescriptorError(
+            MBB, "unknown Local tile descriptor at COPY/PHI control-flow join");
       }
     }
   }

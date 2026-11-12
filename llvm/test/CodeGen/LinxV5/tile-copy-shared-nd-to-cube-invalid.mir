@@ -1,7 +1,7 @@
 # RUN: split-file %s %t
-# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos %t/unknown.mir -o /dev/null 2>&1 | FileCheck %s
-# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos %t/conflict.mir -o /dev/null 2>&1 | FileCheck %s
-# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos %t/carrier.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos %t/unknown.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos %t/conflict.mir -o /dev/null 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos %t/carrier.mir -o /dev/null 2>&1 | FileCheck %s
 # CHECK: cannot prove a complete Local tile descriptor for COPY/PHI
 
 #--- unknown.mir
