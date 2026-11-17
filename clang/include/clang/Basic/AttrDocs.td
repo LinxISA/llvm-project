@@ -6663,3 +6663,16 @@ The symbol used for ``thunk-extern`` is target specific:
 As such, this function attribute is currently only supported on X86 targets.
   }];
 }
+
+def LinxScalarShareabilityDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+On Linx, ``__attribute__((linx_scalar_shareability("intra")))`` selects a
+conservative default scope for ordinary Scalar GM accesses in that function.
+The accepted strings are ``private``, ``intra``, and ``inter``. Explicit scoped
+builtins keep their own scope. The function is not inlined, because unmarked
+caller accesses must not silently inherit or discard its default. Memory-
+accessing callees must declare the same contract. Indirect calls and inline
+assembly require explicit interfaces. Scope does not imply synchronization.
+}];
+}

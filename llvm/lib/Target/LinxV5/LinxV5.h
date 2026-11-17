@@ -38,6 +38,18 @@ bool LowerLinxV5MachineOperandToMCOperand(const MachineOperand &MO,
                                           const AsmPrinter &AP);
 
 FunctionPass *createLinxV5ISelDag(LinxV5TargetMachine &TM);
+struct LinxV5ScalarShareabilityEarlyPass
+    : PassInfoMixin<LinxV5ScalarShareabilityEarlyPass> {
+  const LinxV5TargetMachine *TM;
+  explicit LinxV5ScalarShareabilityEarlyPass(
+      const LinxV5TargetMachine *TM = nullptr)
+      : TM(TM) {}
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+  static bool isRequired() { return true; }
+};
+FunctionPass *
+createLinxV5ScalarShareabilityPass(const LinxV5TargetMachine *TM = nullptr);
+void initializeLinxV5ScalarShareabilityPass(PassRegistry &);
 FunctionPass *createLinxV5InlineAsmTileLifetimePass();
 void initializeLinxV5InlineAsmTileLifetimePass(PassRegistry &);
 

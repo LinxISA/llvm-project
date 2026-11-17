@@ -4868,6 +4868,37 @@ bool Sema::CheckLinxV5BuiltinFunctionCall(const TargetInfo &TI,
                                           unsigned BuiltinID,
                                           CallExpr *TheCall) {
   switch (BuiltinID) {
+  case LinxV5::BI__builtin_linx_scalar_load:
+  case LinxV5::BI__builtin_linx_scalar_store:
+  case LinxV5::BI__builtin_linx_scalar_atomic: {
+    bool Atomic = BuiltinID == LinxV5::BI__builtin_linx_scalar_atomic;
+    unsigned W = Atomic ? 3 :
+        BuiltinID == LinxV5::BI__builtin_linx_scalar_load ? 1 : 2;
+    if (SemaBuiltinConstantArgRange(TheCall, W, 1, 8) ||
+        SemaBuiltinConstantArgRange(TheCall, W + 1, 0, 2))
+      return true;
+    llvm::APSInt Width;
+    if (SemaBuiltinConstantArg(TheCall, W, Width)) return true;
+    if (Width != 1 && Width != 2 && Width != 4 && Width != 8)
+      return Diag(TheCall->getArg(W)->getBeginLoc(), diag::err_linx_scalar_memory)
+             << "scalar access width must be 1, 2, 4, or 8 bytes";
+    if (Atomic && (SemaBuiltinConstantArgRange(TheCall, 5, 0, 4) ||
+                   SemaBuiltinConstantArgRange(TheCall, 6, 0, 11)))
+      return true;
+    if (Atomic) {
+      llvm::APSInt Order, Op;
+      if (SemaBuiltinConstantArg(TheCall, 5, Order) ||
+          SemaBuiltinConstantArg(TheCall, 6, Op)) return true;
+      if ((Op == 3 && (Order == 1 || Order == 3)) ||
+          (Op == 4 && (Order == 2 || Order == 3)))
+        return Diag(TheCall->getArg(5)->getBeginLoc(), diag::err_linx_scalar_memory)
+               << "LR cannot release and SC cannot acquire";
+      if ((Op == 0 || Op >= 5) && Width < 4)
+        return Diag(TheCall->getArg(W)->getBeginLoc(), diag::err_linx_scalar_memory)
+               << "scalar arithmetic atomics require 4 or 8 bytes";
+    }
+    return false;
+  }
   case LinxV5::BI__builtin_linx_get_system_reg:
     return CheckLinxV5BuiltinSysGetReg(TheCall);
   case LinxV5::BI__builtin_linx_msgb_read:

@@ -4114,3 +4114,11 @@ def LinxBLKFuncNoSpill : InheritableAttr {
   let Subjects = SubjectList<[Function]>;
   let Documentation = [Undocumented];
 }
+
+// Conservative per-function default for ordinary Scalar GM accesses.
+def LinxScalarShareability : InheritableAttr {
+  let Spellings = [Clang<"linx_scalar_shareability">];
+  let Subjects = SubjectList<[Function]>;
+  let Args = [StringArgument<"Scope">];
+  let Documentation = [LinxScalarShareabilityDocs];
+}

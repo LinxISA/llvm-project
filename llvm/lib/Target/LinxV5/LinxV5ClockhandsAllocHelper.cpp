@@ -10,6 +10,7 @@
 #include "LinxV5MachineFunctionInfo.h"
 #include "LinxV5RegisterInfo.h"
 #include "LinxV5Subtarget.h"
+#include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/Statistic.h"
 #include <llvm/CodeGen/LiveDebugVariables.h>
@@ -50,6 +51,14 @@ INITIALIZE_PASS(LinxV5ClockhandsPreAlloc, "linxv5-clockhands-prealloc",
 void LinxV5ClockhandsPreAlloc::recalculateReserves(MachineFunction &MF) {
   MF.getInfo<LinxV5MachineFunctionInfo>()->startClockhandsAllocation();
   MRI->freezeReservedRegs(MF);
+  // Global registers have already been allocated. They are now reserved for
+  // the second allocation stage, so their operands cannot remain renamable.
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB)
+      for (MachineOperand &MO : MI.operands())
+        if (MO.isReg() && MO.getReg().isPhysical() &&
+            MRI->isReserved(MO.getReg()))
+          MO.setIsRenamable(false);
 }
 
 void LinxV5ClockhandsPreAlloc::releaseLiveDebugVariables(MachineFunction &MF) {
@@ -61,6 +70,17 @@ bool LinxV5ClockhandsPreAlloc::runOnMachineFunction(MachineFunction &MF) {
     return false;
 
   MRI = &MF.getRegInfo();
+  // The first allocator constrains scoped operands to global registers.
+  // Subsequent target passes may introduce Local scalar temporaries; use the
+  // full architectural operand classes once that allocation is complete.
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
+  for (MachineBasicBlock &MBB : MF)
+    for (MachineInstr &MI : MBB)
+      if (LinxV5Shareability::isScoped(MI.getDesc().TSFlags)) {
+        unsigned Base = LinxV5Shareability::baseOpcode(MI.getOpcode());
+        unsigned Scope = (MI.getDesc().TSFlags >> 20) & 3;
+        MI.setDesc(TII->get(LinxV5Shareability::scopedOpcode(Base, Scope)));
+      }
   recalculateReserves(MF);
   releaseLiveDebugVariables(MF);
 

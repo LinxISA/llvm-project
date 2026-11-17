@@ -19,6 +19,58 @@
 
 namespace llvm {
 
+namespace LinxV5Shareability {
+unsigned scopedOpcode(unsigned Base, unsigned Scope) {
+  if (Scope > 2)
+    return 0;
+  switch (Base) {
+#define SCOPED_SCALAR(B, P, I, E)                                              \
+  case LinxV5::B: {                                                            \
+    const unsigned Ops[] = {LinxV5::P, LinxV5::I, LinxV5::E};                  \
+    return Ops[Scope];                                                         \
+  }
+#define CG_SCOPED_SCALAR(B, P, I, E)
+#include "LinxV5ScopedScalar.inc"
+#undef CG_SCOPED_SCALAR
+#undef SCOPED_SCALAR
+  default:
+    return 0;
+  }
+}
+unsigned codegenOpcode(unsigned Base, unsigned Scope) {
+  if (Scope > 2)
+    return 0;
+  switch (Base) {
+#define SCOPED_SCALAR(B, P, I, E)
+#define CG_SCOPED_SCALAR(B, P, I, E)                                           \
+  case LinxV5::B: {                                                            \
+    const unsigned Ops[] = {LinxV5::P, LinxV5::I, LinxV5::E};                  \
+    return Ops[Scope];                                                         \
+  }
+#include "LinxV5ScopedScalar.inc"
+#undef CG_SCOPED_SCALAR
+#undef SCOPED_SCALAR
+  default:
+    return 0;
+  }
+}
+unsigned baseOpcode(unsigned Scoped) {
+  switch (Scoped) {
+#define SCOPED_SCALAR(B, P, I, E)                                              \
+  case LinxV5::P:                                                              \
+  case LinxV5::I:                                                              \
+  case LinxV5::E:                                                              \
+    return LinxV5::B;
+#define CG_SCOPED_SCALAR SCOPED_SCALAR
+#include "LinxV5ScopedScalar.inc"
+#undef CG_SCOPED_SCALAR
+#undef SCOPED_SCALAR
+  default:
+    return 0;
+  }
+}
+} // namespace LinxV5Shareability
+
 namespace LinxV5ABI {
 ABI computeTargetABI(const Triple &TT, FeatureBitset FeatureBits,
                      StringRef ABIName) {

@@ -11687,6 +11687,7 @@ def err_shared_non_global : Error<
   "'%0' variables must have global storage">;
 
 // LinxV5 extension
+def err_linx_scalar_memory : Error<"%0">;
 def err_linxv5_blk_dim_requires_integer : Error<
   "linxv5 blk require integer for dimensions.">;
 def err_linxv5_blk_tile_size_requires_imm : Error<

@@ -25,6 +25,15 @@ namespace llvm {
 
 // LinxV5II - This namespace holds all of the target specific flags that
 // instruction info tracks. All definitions must match LinxV5InstrFormats.td.
+namespace LinxV5Shareability {
+// Returns zero for an excluded or unsupported base opcode.
+unsigned scopedOpcode(unsigned Base, unsigned Scope);
+unsigned codegenOpcode(unsigned Base, unsigned Scope);
+unsigned baseOpcode(unsigned Scoped);
+constexpr uint64_t Marker = 1ULL << 22;
+inline bool isScoped(uint64_t Flags) { return Flags & Marker; }
+} // namespace LinxV5Shareability
+
 namespace LinxV5II {
 enum TII {
   // {0~7} For MC Fix-up

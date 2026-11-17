@@ -104,6 +104,7 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   OperandMatchResultTy tryParseRegister(unsigned &RegNo, SMLoc &StartLoc,
                                         SMLoc &EndLoc) override;
 
+  int PendingScalarScope = -1;
   bool ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
                         SMLoc NameLoc, OperandVector &Operands) override;
 
@@ -1442,8 +1443,11 @@ bool LinxV5AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
                                               MCStreamer &Out,
                                               uint64_t &ErrorInfo,
                                               bool MatchingInlineAsm) {
-  if (PendingTileMacro)
+  if (PendingTileMacro) {
+    if (PendingScalarScope >= 0)
+      return Error(IDLoc, "shareability suffix requires a covered Scalar load/store or atomic instruction");
     return emitTileMacroLine(IDLoc, Out);
+  }
 
   MCInst Inst;
   FeatureBitset MissingFeatures;
@@ -1464,10 +1468,19 @@ bool LinxV5AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
     return Error(IDLoc, Msg);
   }
   case Match_Success:
+    unsigned ScopedOpcode = Inst.getOpcode();
+    if (PendingScalarScope >= 0) {
+      ScopedOpcode = LinxV5Shareability::scopedOpcode(Inst.getOpcode(), PendingScalarScope);
+      if (!ScopedOpcode)
+        return Error(IDLoc, "shareability suffix requires a covered Scalar load/store or atomic instruction");
+    }
+    if (unsigned Base = LinxV5Shareability::baseOpcode(ScopedOpcode))
+      Inst.setOpcode(Base);
     if (maybeValidateInlineAsm(Inst, IDLoc))
       return true;
     if (validateInstruction(Inst, Operands, IDLoc))
       return Error(IDLoc, "Match Instruction Invalid!");
+    Inst.setOpcode(ScopedOpcode);
     return processInstruction(Inst, IDLoc, Operands, Out);
   }
 
@@ -4245,6 +4258,14 @@ bool LinxV5AsmParser::ParseInstruction(ParseInstructionInfo &Info,
                                        StringRef Name, SMLoc NameLoc,
                                        OperandVector &Operands) {
   PendingTileMacro.reset();
+  PendingScalarScope = -1;
+  for (auto Suffix : {StringRef(".private"), StringRef(".intra"), StringRef(".inter")}) {
+    if (Name.endswith_insensitive(Suffix)) {
+      PendingScalarScope = Suffix == ".private" ? 0 : Suffix == ".intra" ? 1 : 2;
+      Name = Name.drop_back(Suffix.size());
+      break;
+    }
+  }
   bool IsLegacyColonSyntax = false;
   if (getLexer().is(AsmToken::Less)) {
     AsmToken Less = getLexer().getTok();

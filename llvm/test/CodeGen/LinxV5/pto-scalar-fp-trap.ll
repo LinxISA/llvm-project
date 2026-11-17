@@ -176,7 +176,7 @@ define i1 @half_compare(half %a, half %b) {
   ret i1 %r
 }
 ; CHECK-LABEL: half_memory:
-; CHECK: lh [
+; CHECK: lhui.intra [
 ; CHECK: sh
 define void @half_memory(ptr %src, ptr %dst) {
   %v = load volatile half, ptr %src, align 2

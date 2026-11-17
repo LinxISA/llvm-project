@@ -8024,6 +8024,17 @@ static void handleOpenCLAccessAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   D->addAttr(::new (S.Context) OpenCLAccessAttr(S.Context, AL));
 }
 
+static void handleLinxScalarShareabilityAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  StringRef Scope;
+  if (!S.checkStringLiteralArgumentAttr(AL, 0, Scope)) return;
+  if (Scope != "private" && Scope != "intra" && Scope != "inter") {
+    S.Diag(AL.getLoc(), diag::err_linx_scalar_memory)
+        << "shareability must be private, intra, or inter";
+    return;
+  }
+  D->addAttr(LinxScalarShareabilityAttr::Create(S.Context, Scope, AL));
+}
+
 static void handleLinxNoAliasAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   bool IsLinx = S.Context.getTargetInfo().getTriple().isLinxClass();
   if (!IsLinx) {
@@ -9194,6 +9205,9 @@ ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D, const ParsedAttr &AL,
     handleSimpleAttribute<UsingIfExistsAttr>(S, D, AL);
     break;
 
+  case ParsedAttr::AT_LinxScalarShareability:
+    handleLinxScalarShareabilityAttr(S, D, AL);
+    break;
   case ParsedAttr::AT_LinxNoAlias:
     handleLinxNoAliasAttr(S, D, AL);
     break;

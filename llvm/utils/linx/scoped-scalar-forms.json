@@ -1,0 +1,5661 @@
+{
+  "source_commit": "d0884b821c6df76a37b82cdd92a36392df9c610a",
+  "source": "https://github.com/PTO-ISA/pto-spec",
+  "forms": [
+    {
+      "form_id": "c_ldi_16_973f42d37f29",
+      "mnemonic": "C.LDI",
+      "length_bits": 16,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x003f",
+          "match": "0x001a",
+          "width_bits": 16
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "c_lwi_16_b224525971da",
+      "mnemonic": "C.LWI",
+      "length_bits": 16,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x003f",
+          "match": "0x000a",
+          "width_bits": 16
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "c_sdi_16_bbec69bcfd5d",
+      "mnemonic": "C.SDI",
+      "length_bits": 16,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x003f",
+          "match": "0x003a",
+          "width_bits": 16
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "c_swi_16_ca6c111163e5",
+      "mnemonic": "C.SWI",
+      "length_bits": 16,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x003f",
+          "match": "0x002a",
+          "width_bits": 16
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "casb_32_7e529b871832",
+      "mnemonic": "CASB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x0000001b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "casd_32_5852c57277a6",
+      "mnemonic": "CASD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x0000301b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "cash_32_cb1315ff6cb5",
+      "mnemonic": "CASH",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x0000101b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "casw_32_cb29e4287223",
+      "mnemonic": "CASW",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x0000201b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "hl_casb_48_21fb578617a8",
+      "mnemonic": "HL.CASB",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xf000707ff83f",
+          "match": "0x0000600b000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 42,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 43,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 41,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "hl_casd_48_fbb5c4256d30",
+      "mnemonic": "HL.CASD",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xf000707ff83f",
+          "match": "0x3000600b000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 42,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 43,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 41,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "hl_cash_48_eee12c324d97",
+      "mnemonic": "HL.CASH",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xf000707ff83f",
+          "match": "0x1000600b000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 42,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 43,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 41,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "hl_casw_48_a89b3d58d8f0",
+      "mnemonic": "HL.CASW",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xf000707ff83f",
+          "match": "0x2000600b000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 42,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 43,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 41,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "hl_lb_pcr_48_c0ba9a54c8e0",
+      "mnemonic": "HL.LB.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00000039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lb_po_48_5c7f5c82b186",
+      "mnemonic": "HL.LB.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00000009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lb_pr_48_cf73675cad50",
+      "mnemonic": "HL.LB.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00000009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbi_48_250803040cc8",
+      "mnemonic": "HL.LBI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbi_po_48_afbc00c48aba",
+      "mnemonic": "HL.LBI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbi_pr_48_b4bdbd29f859",
+      "mnemonic": "HL.LBI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbip_48_70a5767aff16",
+      "mnemonic": "HL.LBIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbp_48_9d1fd0b3105b",
+      "mnemonic": "HL.LBP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00000009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbu_pcr_48_504b34c0ec9d",
+      "mnemonic": "HL.LBU.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00004039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbu_po_48_5c8a5b39e6c5",
+      "mnemonic": "HL.LBU.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00004009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbu_pr_48_bf9a0ea4b0db",
+      "mnemonic": "HL.LBU.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00004009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbui_48_50579e3558f4",
+      "mnemonic": "HL.LBUI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00004019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbui_po_48_c889b4445022",
+      "mnemonic": "HL.LBUI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00004019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbui_pr_48_78a81538a7fa",
+      "mnemonic": "HL.LBUI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00004019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbuip_48_ad419fc474c0",
+      "mnemonic": "HL.LBUIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00004019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lbup_48_c9598658dde4",
+      "mnemonic": "HL.LBUP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00004009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ld_pcr_48_703673c266da",
+      "mnemonic": "HL.LD.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00003039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ld_po_48_870e30995d10",
+      "mnemonic": "HL.LD.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00003009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ld_pr_48_7ec4111b123b",
+      "mnemonic": "HL.LD.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00003009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldi_48_088e69e45b37",
+      "mnemonic": "HL.LDI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldi_po_48_0cc539e6798d",
+      "mnemonic": "HL.LDI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldi_pr_48_d07cced5a281",
+      "mnemonic": "HL.LDI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldi_u_48_894d02c12dcc",
+      "mnemonic": "HL.LDI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003029000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldi_upo_48_5126b735cfe8",
+      "mnemonic": "HL.LDI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003029003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldi_upr_48_7a8e2794526f",
+      "mnemonic": "HL.LDI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003029002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldip_48_60afa6423d39",
+      "mnemonic": "HL.LDIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldip_u_48_6813f4fdce5c",
+      "mnemonic": "HL.LDIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003029001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ldp_48_a7a45a43dff9",
+      "mnemonic": "HL.LDP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00003009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lh_pcr_48_37df3cfe0d6e",
+      "mnemonic": "HL.LH.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00001039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lh_po_48_7ca3e8b77906",
+      "mnemonic": "HL.LH.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00001009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lh_pr_48_d59f64cde1dc",
+      "mnemonic": "HL.LH.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00001009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhi_48_6d94cb04aeac",
+      "mnemonic": "HL.LHI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhi_po_48_aa393747abda",
+      "mnemonic": "HL.LHI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhi_pr_48_9ec8198594ad",
+      "mnemonic": "HL.LHI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhi_u_48_4d4b89e63c98",
+      "mnemonic": "HL.LHI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001029000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhi_upo_48_81c796b13b12",
+      "mnemonic": "HL.LHI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001029003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhi_upr_48_2a7c09d4b645",
+      "mnemonic": "HL.LHI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001029002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhip_48_2c664751c537",
+      "mnemonic": "HL.LHIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhip_u_48_e37e98d63bfd",
+      "mnemonic": "HL.LHIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001029001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhp_48_128eb429101f",
+      "mnemonic": "HL.LHP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00001009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhu_pcr_48_444cb4ddde1d",
+      "mnemonic": "HL.LHU.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00005039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhu_po_48_c57c3b4a74e8",
+      "mnemonic": "HL.LHU.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00005009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhu_pr_48_f874b126e29c",
+      "mnemonic": "HL.LHU.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00005009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhui_48_6450dca3aad9",
+      "mnemonic": "HL.LHUI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhui_po_48_16db8d40eee8",
+      "mnemonic": "HL.LHUI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhui_pr_48_6a99a2b99298",
+      "mnemonic": "HL.LHUI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhui_u_48_d75649bac1c7",
+      "mnemonic": "HL.LHUI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005029000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhui_upo_48_7f2c3eae793e",
+      "mnemonic": "HL.LHUI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005029003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhui_upr_48_7e66aaf61701",
+      "mnemonic": "HL.LHUI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005029002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhuip_48_0b0ef5bd2405",
+      "mnemonic": "HL.LHUIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhuip_u_48_11a0e580caf1",
+      "mnemonic": "HL.LHUIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005029001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lhup_48_ea24f978b27a",
+      "mnemonic": "HL.LHUP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00005009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lw_pcr_48_00cf25e2ac36",
+      "mnemonic": "HL.LW.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00002039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lw_po_48_ff2c6de58064",
+      "mnemonic": "HL.LW.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00002009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lw_pr_48_2b0d62d28b57",
+      "mnemonic": "HL.LW.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00002009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwi_48_549c666c56fd",
+      "mnemonic": "HL.LWI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwi_po_48_2dc642d88d9d",
+      "mnemonic": "HL.LWI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwi_pr_48_3b5e1524de1b",
+      "mnemonic": "HL.LWI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwi_u_48_267e0f4a6222",
+      "mnemonic": "HL.LWI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002029000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwi_upo_48_1c25d6266934",
+      "mnemonic": "HL.LWI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002029003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwi_upr_48_03b5f7994b14",
+      "mnemonic": "HL.LWI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002029002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwip_48_e459297b8b7c",
+      "mnemonic": "HL.LWIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwip_u_48_c9aca369eab2",
+      "mnemonic": "HL.LWIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002029001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwp_48_10fe25c62553",
+      "mnemonic": "HL.LWP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00002009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwu_pcr_48_95ba33b7b68c",
+      "mnemonic": "HL.LWU.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00006039000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwu_po_48_98730d2ddead",
+      "mnemonic": "HL.LWU.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00006009003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwu_pr_48_f105cacec36c",
+      "mnemonic": "HL.LWU.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00006009002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwui_48_eeb551f8269d",
+      "mnemonic": "HL.LWUI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006019000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwui_po_48_09a75b628dc4",
+      "mnemonic": "HL.LWUI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006019003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwui_pr_48_32de19a508f0",
+      "mnemonic": "HL.LWUI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006019002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwui_u_48_4570cc517629",
+      "mnemonic": "HL.LWUI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006029000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwui_upo_48_33260eb06a2c",
+      "mnemonic": "HL.LWUI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006029003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwui_upr_48_998a98c46469",
+      "mnemonic": "HL.LWUI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006029002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwuip_48_2a5d6d8f3b70",
+      "mnemonic": "HL.LWUIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006019001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwuip_u_48_0fed3b8c43b6",
+      "mnemonic": "HL.LWUIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006029001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_lwup_48_30f20380c354",
+      "mnemonic": "HL.LWUP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f07ff",
+          "match": "0x00006009001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sb_pcr_48_d0ba4b6e0f54",
+      "mnemonic": "HL.SB.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00000069000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sb_po_48_c21837f2c14d",
+      "mnemonic": "HL.SB.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00000049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sb_pr_48_40eae4513905",
+      "mnemonic": "HL.SB.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00000049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sbi_48_3504e6935382",
+      "mnemonic": "HL.SBI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sbi_po_48_493d9c8b27eb",
+      "mnemonic": "HL.SBI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sbi_pr_48_d6f48429cca5",
+      "mnemonic": "HL.SBI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sbip_48_48a212ee655e",
+      "mnemonic": "HL.SBIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00000059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sbp_48_12e03c011f0a",
+      "mnemonic": "HL.SBP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00000049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sd_pcr_48_8ed6bb942a78",
+      "mnemonic": "HL.SD.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00003069000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sd_po_48_9ced722101a8",
+      "mnemonic": "HL.SD.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00003049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sd_pr_48_4f96249f5efe",
+      "mnemonic": "HL.SD.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00003049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sd_upo_48_ba930fbec5c7",
+      "mnemonic": "HL.SD.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00007049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sd_upr_48_af7118270a90",
+      "mnemonic": "HL.SD.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00007049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdi_48_3203094081da",
+      "mnemonic": "HL.SDI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdi_po_48_4b6af4b433bb",
+      "mnemonic": "HL.SDI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdi_pr_48_8b2688251991",
+      "mnemonic": "HL.SDI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdi_u_48_d9597eeba6b4",
+      "mnemonic": "HL.SDI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00007059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdi_upo_48_0ceed9e5fdb0",
+      "mnemonic": "HL.SDI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00007059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdi_upr_48_f8aba43b65d5",
+      "mnemonic": "HL.SDI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00007059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdip_48_6d622cf167ca",
+      "mnemonic": "HL.SDIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00003059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdip_u_48_3260b03bb762",
+      "mnemonic": "HL.SDIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00007059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdp_48_5884c49a7e55",
+      "mnemonic": "HL.SDP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00003049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sdp_u_48_66de58724f2f",
+      "mnemonic": "HL.SDP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00007049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sh_pcr_48_705ea4062d0b",
+      "mnemonic": "HL.SH.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00001069000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sh_po_48_e0b543d5b724",
+      "mnemonic": "HL.SH.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00001049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sh_pr_48_40ab17f5a580",
+      "mnemonic": "HL.SH.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00001049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sh_upo_48_5bfb8ea0c992",
+      "mnemonic": "HL.SH.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00005049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sh_upr_48_719102d66e45",
+      "mnemonic": "HL.SH.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00005049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shi_48_38ea3f0a4f08",
+      "mnemonic": "HL.SHI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shi_po_48_636fea832c7b",
+      "mnemonic": "HL.SHI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shi_pr_48_1020eb4dff56",
+      "mnemonic": "HL.SHI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shi_u_48_79dbaa14d2c2",
+      "mnemonic": "HL.SHI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shi_upo_48_de81eed370cf",
+      "mnemonic": "HL.SHI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shi_upr_48_ca9f1acbb1b2",
+      "mnemonic": "HL.SHI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ship_48_156afe74f95b",
+      "mnemonic": "HL.SHIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00001059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_ship_u_48_fa5e1d981a8a",
+      "mnemonic": "HL.SHIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00005059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shp_48_ccc507e71a27",
+      "mnemonic": "HL.SHP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00001049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_shp_u_48_232b2200b7b9",
+      "mnemonic": "HL.SHP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00005049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sw_pcr_48_8f8900dfac6b",
+      "mnemonic": "HL.SW.PCR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f000f",
+          "match": "0x00002069000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sw_po_48_84cf0cd97fde",
+      "mnemonic": "HL.SW.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00002049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sw_pr_48_d80424b0a9cb",
+      "mnemonic": "HL.SW.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00002049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sw_upo_48_59be7b468f8a",
+      "mnemonic": "HL.SW.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00006049003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_sw_upr_48_d4ccb513944a",
+      "mnemonic": "HL.SW.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff07ff",
+          "match": "0x00006049002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swi_48_13deb2849df5",
+      "mnemonic": "HL.SWI",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swi_po_48_66a80d0fa7f5",
+      "mnemonic": "HL.SWI.PO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swi_pr_48_68b9003e0421",
+      "mnemonic": "HL.SWI.PR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swi_u_48_fac636330fd6",
+      "mnemonic": "HL.SWI.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006059000e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swi_upo_48_243d3c38cd1a",
+      "mnemonic": "HL.SWI.UPO",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006059003e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swi_upr_48_15c2fb96aab0",
+      "mnemonic": "HL.SWI.UPR",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006059002e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swip_48_e2fca8cde001",
+      "mnemonic": "HL.SWIP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00002059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swip_u_48_e2dc917c8505",
+      "mnemonic": "HL.SWIP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f003f",
+          "match": "0x00006059001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swp_48_d0efe96e09f0",
+      "mnemonic": "HL.SWP",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00002049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "hl_swp_u_48_c244a576be8e",
+      "mnemonic": "HL.SWP.U",
+      "length_bits": 48,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007ffff83f",
+          "match": "0x00006049001e",
+          "width_bits": 48
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lb_32_b718aa88e28f",
+      "mnemonic": "LB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00000009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lb_pcr_32_3fa2540b22d0",
+      "mnemonic": "LB.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00000039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lbi_32_9af2cdbeb38f",
+      "mnemonic": "LBI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00000019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lbu_32_a9a58ab4ea22",
+      "mnemonic": "LBU",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00004009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lbu_pcr_32_5b571b0c8dc2",
+      "mnemonic": "LBU.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00004039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lbui_32_c39b9aa11f02",
+      "mnemonic": "LBUI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00004019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "ld_32_7c48838bc4e6",
+      "mnemonic": "LD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00003009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "ld_add_32_a4038a6c7e86",
+      "mnemonic": "LD.ADD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0000400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_and_32_2a46b3003480",
+      "mnemonic": "LD.AND",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0800400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_or_32_456d270cfc7d",
+      "mnemonic": "LD.OR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1000400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_pcr_32_99bc3d2d487b",
+      "mnemonic": "LD.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00003039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "ld_smax_32_a3aad6120226",
+      "mnemonic": "LD.SMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x2000400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_smin_32_9461d345718f",
+      "mnemonic": "LD.SMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x2800400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_umax_32_a84af75745d9",
+      "mnemonic": "LD.UMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x3000400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_umin_32_4bf2f357eff3",
+      "mnemonic": "LD.UMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x3800400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ld_xor_32_33072c0fde61",
+      "mnemonic": "LD.XOR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1800400b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "ldi_32_d82a643f7a2b",
+      "mnemonic": "LDI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00003019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "ldi_u_32_111bb521a439",
+      "mnemonic": "LDI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00003029",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lh_32_d0f04d7d7696",
+      "mnemonic": "LH",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00001009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lh_pcr_32_aabf46d21e49",
+      "mnemonic": "LH.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00001039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lhi_32_46a45ec7074d",
+      "mnemonic": "LHI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00001019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lhi_u_32_bb0c81c6e61d",
+      "mnemonic": "LHI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00001029",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lhu_32_730caf67ecd1",
+      "mnemonic": "LHU",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00005009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lhu_pcr_32_9f4a1c04f258",
+      "mnemonic": "LHU.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00005039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lhui_32_6da39bba900b",
+      "mnemonic": "LHUI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00005019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lhui_u_32_748b15cd2ced",
+      "mnemonic": "LHUI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00005029",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lr_b_32_cf80903a761a",
+      "mnemonic": "LR.B",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0000000b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lr_d_32_84d21a553dc1",
+      "mnemonic": "LR.D",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1800000b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lr_h_32_f936df218d63",
+      "mnemonic": "LR.H",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0800000b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lr_w_32_efecc735bb75",
+      "mnemonic": "LR.W",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1000000b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_32_3a77ffafcb34",
+      "mnemonic": "LW",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00002009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lw_add_32_5be3ad1ad081",
+      "mnemonic": "LW.ADD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0000200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_and_32_f8dd9866b069",
+      "mnemonic": "LW.AND",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0800200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_or_32_d6d2f87706fd",
+      "mnemonic": "LW.OR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1000200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_pcr_32_d135a1aa4ffb",
+      "mnemonic": "LW.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00002039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lw_smax_32_838b8c673c91",
+      "mnemonic": "LW.SMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x2000200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_smin_32_44452ae44d02",
+      "mnemonic": "LW.SMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x2800200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_umax_32_3c6a5a534674",
+      "mnemonic": "LW.UMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x3000200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_umin_32_fd9b7bb538a3",
+      "mnemonic": "LW.UMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x3800200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lw_xor_32_4d4aa82c676a",
+      "mnemonic": "LW.XOR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1800200b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "lwi_32_7085c98058fa",
+      "mnemonic": "LWI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00002019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lwi_u_32_4a7426a70f10",
+      "mnemonic": "LWI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00002029",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lwu_32_678935925636",
+      "mnemonic": "LWU",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00006009",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lwu_pcr_32_df27ea51c564",
+      "mnemonic": "LWU.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00006039",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lwui_32_b435f946eb71",
+      "mnemonic": "LWUI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00006019",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "lwui_u_32_1fcbb98df571",
+      "mnemonic": "LWUI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00006029",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sb_32_43c106ae3749",
+      "mnemonic": "SB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00000049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sb_pcr_32_7625a9a24c59",
+      "mnemonic": "SB.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00000069",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sbi_32_f3c6b796f0d9",
+      "mnemonic": "SBI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00000059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sc_b_32_baf609e1d5c3",
+      "mnemonic": "SC.B",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0000100b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sc_d_32_2e714149031c",
+      "mnemonic": "SC.D",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1800100b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sc_h_32_108941eabac6",
+      "mnemonic": "SC.H",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0800100b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sc_w_32_14b238f02bfd",
+      "mnemonic": "SC.W",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1000100b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_32_9dbc40328653",
+      "mnemonic": "SD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00003049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sd_add_32_2a55ae1228bd",
+      "mnemonic": "SD.ADD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x0000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_and_32_71963e1769c2",
+      "mnemonic": "SD.AND",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x0800500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_or_32_2a65eedfae0f",
+      "mnemonic": "SD.OR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x1000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_pcr_32_2340e0085413",
+      "mnemonic": "SD.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00003069",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sd_smax_32_e59bf90b50c3",
+      "mnemonic": "SD.SMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x2000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_smin_32_188d93125032",
+      "mnemonic": "SD.SMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x2800500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_u_32_1602c58c2031",
+      "mnemonic": "SD.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00007049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sd_umax_32_89c5ec42be68",
+      "mnemonic": "SD.UMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x3000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_umin_32_2388cbb378ac",
+      "mnemonic": "SD.UMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x3800500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_xor_32_7655ceaf9497",
+      "mnemonic": "SD.XOR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x1800500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sdi_32_fab563230a66",
+      "mnemonic": "SDI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00003059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sdi_u_32_cba5a4a04e7b",
+      "mnemonic": "SDI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00007059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sh_32_bc7d4a7dea28",
+      "mnemonic": "SH",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00001049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sh_pcr_32_14ba505eb3c2",
+      "mnemonic": "SH.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00001069",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sh_u_32_fa87afbf8f24",
+      "mnemonic": "SH.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00005049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "shi_32_21351c202204",
+      "mnemonic": "SHI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00001059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "shi_u_32_caaf3ed72a8f",
+      "mnemonic": "SHI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00005059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sw_32_28ad317b1b41",
+      "mnemonic": "SW",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00002049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sw_add_32_3dca755552cb",
+      "mnemonic": "SW.ADD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x0000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_and_32_7ef0872d5502",
+      "mnemonic": "SW.AND",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x0800300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_or_32_354579538c4e",
+      "mnemonic": "SW.OR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x1000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_pcr_32_436677679523",
+      "mnemonic": "SW.PCR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00002069",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sw_smax_32_8bab38a878d7",
+      "mnemonic": "SW.SMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x2000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_smin_32_773e7d83b011",
+      "mnemonic": "SW.SMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x2800300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_u_32_718a61f75d33",
+      "mnemonic": "SW.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x00007fff",
+          "match": "0x00006049",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [
+        {
+          "field": "SrcRType",
+          "operator": "one-of",
+          "values": [
+            0,
+            1,
+            2
+          ]
+        }
+      ],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sw_umax_32_5530dfa23323",
+      "mnemonic": "SW.UMAX",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x3000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_umin_32_3ce114819cfc",
+      "mnemonic": "SW.UMIN",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x3800300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sw_xor_32_874c32572226",
+      "mnemonic": "SW.XOR",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x1800300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "swapb_32_80733f03b77f",
+      "mnemonic": "SWAPB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0000600b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "swapd_32_cd31ccde2303",
+      "mnemonic": "SWAPD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1800600b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "swaph_32_8c2d4a28bf25",
+      "mnemonic": "SWAPH",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x0800600b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "swapw_32_ef15c3ebac33",
+      "mnemonic": "SWAPW",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x7800707f",
+          "match": "0x1000600b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "aq",
+          "pieces": [
+            {
+              "instruction_lsb": 26,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "far",
+          "pieces": [
+            {
+              "instruction_lsb": 31,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        },
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "swi_32_147e55489c41",
+      "mnemonic": "SWI",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00002059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "swi_u_32_1630e926da1a",
+      "mnemonic": "SWI.U",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0x0000707f",
+          "match": "0x00006059",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": []
+    },
+    {
+      "form_id": "sw_sub_32_op5_v0587",
+      "mnemonic": "SW.SUB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x4000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sd_sub_32_op5_v0587",
+      "mnemonic": "SD.SUB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x4000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sb_add_32_op5_v0587",
+      "mnemonic": "SB.ADD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x8000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sb_sub_32_op5_v0587",
+      "mnemonic": "SB.SUB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0xc000300b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sh_add_32_op5_v0587",
+      "mnemonic": "SH.ADD",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0x8000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    },
+    {
+      "form_id": "sh_sub_32_op5_v0587",
+      "mnemonic": "SH.SUB",
+      "length_bits": 32,
+      "encoding": [
+        {
+          "index": 0,
+          "mask": "0xfc007fff",
+          "match": "0xc000500b",
+          "width_bits": 32
+        }
+      ],
+      "constraints": [],
+      "ordering_fields": [
+        {
+          "name": "rl",
+          "pieces": [
+            {
+              "instruction_lsb": 25,
+              "value_lsb": 0,
+              "width": 1
+            }
+          ],
+          "signedness": "encoding-defined",
+          "width": 1
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,26 @@
 
 let TargetPrefix = "linx" in {
 
+// Per-request shareability is distinct from LLVM atomic syncscope and order.
+// Conservative memory effects intentionally prevent generic optimizers from
+// replacing these accesses with unscoped operations or libc calls.
+def int_linx_scalar_load : Intrinsic<[llvm_i64_ty],
+    [llvm_ptr_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrHasSideEffects, ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>]>;
+def int_linx_scalar_store : Intrinsic<[],
+    [llvm_ptr_ty, llvm_i64_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrHasSideEffects, ImmArg<ArgIndex<2>>, ImmArg<ArgIndex<3>>]>;
+// (ptr, value/expected, desired, bytes, scope, order, operation).
+// order: 0=relaxed, 1=release, 2=acquire, 3=acq_rel, 4=seq_cst.
+// operation: 0=add, 1=swap, 2=CAS, 3=LR, 4=SC, 5=and, 6=or, 7=xor,
+// 8=signed min, 9=signed max, 10=unsigned min, 11=unsigned max.
+def int_linx_scalar_atomic : Intrinsic<[llvm_i64_ty],
+    [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty, llvm_i32_ty,
+     llvm_i32_ty, llvm_i32_ty, llvm_i32_ty],
+    [IntrHasSideEffects, IntrConvergent, IntrNoDuplicate,
+     ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
+     ImmArg<ArgIndex<5>>, ImmArg<ArgIndex<6>>]>;
+
 // Opt-in PTO MSGB profile, pinned by downstream software to PTO PR #426.
 // Conservative memory effects serialize SSR state and software copies. These
 // are neither speculatable nor duplicable, and may wait for older GM work.

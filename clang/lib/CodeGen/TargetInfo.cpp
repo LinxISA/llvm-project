@@ -12256,6 +12256,10 @@ void LinxV5TargetCodeGenInfo::setTargetAttributes(
     return;
 
   auto *Fn = cast<llvm::Function>(GV);
+  if (const auto *A = FD->getAttr<LinxScalarShareabilityAttr>()) {
+    Fn->addFnAttr("linx-scalar-shareability", A->getScope());
+    Fn->addFnAttr(llvm::Attribute::NoInline);
+  }
   if (FD->hasAttr<LinxBLKFuncVECAttr>()) {
     Fn->addFnAttr("__vec__");
     Fn->addFnAttr("no-builtins");

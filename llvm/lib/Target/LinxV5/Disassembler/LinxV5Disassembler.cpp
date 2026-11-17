@@ -687,7 +687,33 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
   uint64_t Insn;
   DecodeStatus Result;
 
-  if (Bytes.size() > 4 && (Bytes[0] & 0xf) == 0xf) {
+  if (Bytes.empty()) {
+    Size = 0;
+    return MCDisassembler::Fail;
+  }
+  if (Bytes.size() >= 2 &&
+      (support::endian::read16le(Bytes.data()) & 0xf0ff) == 0x001f) {
+    Size = Bytes.size() >= 8 ? 8 : 0;
+    if (!Size) return MCDisassembler::Fail;
+    unsigned Scope = (Bytes[1] & 3);
+    unsigned Length = (Bytes[1] >> 2) & 3;
+    if (Scope == 3 || Length == 3) return MCDisassembler::Fail;
+    unsigned InnerBytes = 2 * (Length + 1);
+    for (unsigned I = 2 + InnerBytes; I < 8; ++I)
+      if (Bytes[I]) return MCDisassembler::Fail;
+    uint64_t DecodedSize = 0;
+    // Preserve the base decoder's canonical ignored-field aliases and use
+    // outer TPC for PC-relative operands. The payload is never a second insn.
+    DecodeStatus Inner = decodeOneLinxV5Instruction(
+        MI, DecodedSize, Bytes.slice(2, InnerBytes), Address, Decoder, STI);
+    if (Inner == MCDisassembler::Fail || DecodedSize != InnerBytes)
+      return MCDisassembler::Fail;
+    unsigned Scoped = LinxV5Shareability::scopedOpcode(MI.getOpcode(), Scope);
+    if (!Scoped) return MCDisassembler::Fail;
+    MI.setOpcode(Scoped);
+    return Inner;
+  }
+  if ((Bytes[0] & 0xf) == 0xf) {
     if (Bytes.size() < 8) {
       Size = 0;
       return MCDisassembler::Fail;
@@ -696,13 +722,14 @@ static DecodeStatus decodeOneLinxV5Instruction(MCInst &MI, uint64_t &Size,
     Insn = support::endian::read64le(Bytes.data());
     Result = decodeInstruction(DecoderTable64, MI, Insn, Address, Decoder, STI);
   } else {
-    if (Bytes.size() > 4 && (Bytes[0] & 0xf) == 0xe) { // HL.BSTART.STD/SYS/FP
+    if ((Bytes[0] & 0xf) == 0xe) { // HL.BSTART.STD/SYS/FP
       if (Bytes.size() < 6) {
         Size = 0;
         return MCDisassembler::Fail;
       }
       Size = 6;
-      Insn = support::endian::read64le(Bytes.data()) & 0xffffffffffffULL;
+      Insn = support::endian::read32le(Bytes.data()) |
+             (uint64_t(support::endian::read16le(Bytes.data() + 4)) << 32);
       Result =
           decodeInstruction(DecoderTable48, MI, Insn, Address, Decoder, STI);
     } else if ((Bytes[0] & 0x1) == 0x1 && (Bytes[0] & 0xf) != 0xf) {

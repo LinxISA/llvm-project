@@ -133,7 +133,7 @@ attributes #2 = { "linx-local-tile-abi"="0:2048:2048" }
 
 ;--- unmarked-inreg.ll
 @marker_out = internal global [128 x i32] zeroinitializer, align 128
-declare inreg <128 x i32> @unmarked_return()
+declare inreg <128 x i32> @unmarked_return() "linx-scalar-shareability"="intra"
 define void @unmarked_caller() {
   %result = call inreg <128 x i32> @unmarked_return()
   store <128 x i32> %result, ptr @marker_out, align 128

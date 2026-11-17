@@ -18,6 +18,7 @@
 #include "LinxV5Subtarget.h"
 #include "LinxV5TargetMachine.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
+#include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LegacyDivergenceAnalysis.h"
@@ -969,6 +970,105 @@ SDValue LinxV5TargetLowering::LowerOperation(SDValue Op,
       unsigned dNum = calcNumTileDefs(Op);
       unsigned uNum = calcNumTileUses(Op);
       return lowerTileOpWithBody(DL, Op, dNum, uNum, DAG, LinxV5ISD::MCALL);
+    }
+    if (IntID == Intrinsic::linx_scalar_load ||
+        IntID == Intrinsic::linx_scalar_atomic) {
+      if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())
+        report_fatal_error("scoped memory requires native scalar codegen");
+      bool Atomic = IntID == Intrinsic::linx_scalar_atomic;
+      auto Imm = [&](unsigned I) {
+        auto *C = dyn_cast<ConstantSDNode>(Op.getOperand(I));
+        if (!C) report_fatal_error("scoped memory requires immediate selectors");
+        return C->getZExtValue();
+      };
+      unsigned Bytes = Imm(Atomic ? 5 : 3);
+      unsigned Scope = Imm(Atomic ? 6 : 4);
+      if ((Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8) || Scope > 2)
+        report_fatal_error("invalid scoped memory width or scope");
+      unsigned W = Bytes == 1 ? 0 : Bytes == 2 ? 1 : Bytes == 4 ? 2 : 3;
+      unsigned Opc;
+      SDValue Chain = Op.getOperand(0);
+      SDValue Address = Op.getOperand(2);
+      if (auto *FI = dyn_cast<FrameIndexSDNode>(Address))
+        Address = SDValue(DAG.getMachineNode(LinxV5::ADDI, DL, MVT::i64,
+            DAG.getTargetFrameIndex(FI->getIndex(), MVT::i64),
+            DAG.getTargetConstant(0, DL, MVT::i64)), 0);
+      SmallVector<SDValue, 5> Args{Address};
+      unsigned Order = 0;
+      auto Fence = [&]() {
+        auto Mask = DAG.getTargetConstant(3, DL, MVT::i64);
+        Chain = SDValue(DAG.getMachineNode(LinxV5::FENCE_D, DL, MVT::Other,
+                                         {Mask, Mask, Chain}), 0);
+      };
+      if (!Atomic) {
+        const unsigned Loads[] = {LinxV5::LBUI, LinxV5::LHUI, LinxV5::LWUI, LinxV5::LDI};
+        Opc = Loads[W];
+        Args.push_back(DAG.getTargetConstant(0, DL, MVT::i64));
+      } else {
+        Order = Imm(7);
+        unsigned Kind = Imm(8);
+        if (Order > 4 || Kind > 11 ||
+            ((Kind == 0 || Kind >= 5) && Bytes < 4) ||
+            (Kind == 3 && (Order == 1 || Order == 3)) ||
+            (Kind == 4 && (Order == 2 || Order == 3)))
+          report_fatal_error("invalid scoped atomic operation, order, or width");
+        if (Order == 4) Fence();
+        unsigned O = Order == 4 ? (Kind == 3 ? 2 : Kind == 4 ? 1 : 3) : Order;
+#define SCOPED_ORDERS(N) {LinxV5::N, LinxV5::N##_RL, LinxV5::N##_AQ, LinxV5::N##_AQRL}
+        static const unsigned CAS[4][4] = {SCOPED_ORDERS(CASB), SCOPED_ORDERS(CASH), SCOPED_ORDERS(CASW), SCOPED_ORDERS(CASD)};
+        static const unsigned Swap[4][4] = {SCOPED_ORDERS(SWAPB), SCOPED_ORDERS(SWAPH), SCOPED_ORDERS(SWAPW), SCOPED_ORDERS(SWAPD)};
+        static const unsigned LR[4][2] = {{LinxV5::LR_B, LinxV5::LR_B_AQ}, {LinxV5::LR_H, LinxV5::LR_H_AQ}, {LinxV5::LR_W, LinxV5::LR_W_AQ}, {LinxV5::LR_D, LinxV5::LR_D_AQ}};
+        static const unsigned SC[4][2] = {{LinxV5::SC_B, LinxV5::SC_B_RL}, {LinxV5::SC_H, LinxV5::SC_H_RL}, {LinxV5::SC_W, LinxV5::SC_W_RL}, {LinxV5::SC_D, LinxV5::SC_D_RL}};
+        switch (Kind) {
+        case 1: Opc = Swap[W][O]; break;
+        case 2: Opc = CAS[W][O]; break;
+        case 3: Opc = LR[W][O >> 1]; break;
+        case 4: Opc = SC[W][O & 1]; break;
+#define SCOPED_RMW(K, N) case K: { static const unsigned Ops[2][4] = {SCOPED_ORDERS(LW_##N), SCOPED_ORDERS(LD_##N)}; Opc = Ops[W-2][O]; break; }
+        SCOPED_RMW(0, ADD)
+        SCOPED_RMW(5, AND)
+        SCOPED_RMW(6, OR)
+        SCOPED_RMW(7, XOR)
+        SCOPED_RMW(8, SMIN)
+        SCOPED_RMW(9, SMAX)
+        SCOPED_RMW(10, UMIN)
+        SCOPED_RMW(11, UMAX)
+#undef SCOPED_RMW
+#undef SCOPED_ORDERS
+        default: llvm_unreachable("validated scoped atomic kind");
+        }
+        if (Kind == 4) {
+          Args.clear();
+          Args.push_back(Op.getOperand(3));
+          Args.push_back(Address);
+        } else if (Kind != 3) Args.push_back(Op.getOperand(3));
+        if (Kind == 2) Args.push_back(Op.getOperand(4));
+      }
+      Opc = LinxV5Shareability::codegenOpcode(Opc, Scope);
+      if (!Opc) report_fatal_error("missing scoped scalar opcode");
+      Args.push_back(Chain);
+      auto *Node = DAG.getMachineNode(Opc, DL, DAG.getVTList(MVT::i64, MVT::Other), Args);
+      // Unknown provenance and volatile flags keep machine optimizers as
+      // conservative as the IR intrinsic. In particular, preserve atomic
+      // ordering on the selected request instead of dropping its MMO.
+      auto Flags = MachineMemOperand::MOLoad | MachineMemOperand::MOVolatile;
+      if (Atomic && Imm(8) != 3)
+        Flags |= MachineMemOperand::MOStore;
+      static const AtomicOrdering Orders[] = {
+          AtomicOrdering::Monotonic, AtomicOrdering::Release,
+          AtomicOrdering::Acquire, AtomicOrdering::AcquireRelease,
+          AtomicOrdering::SequentiallyConsistent};
+      AtomicOrdering Ordering = Atomic ? Orders[Order] : AtomicOrdering::NotAtomic;
+      AtomicOrdering Failure = Atomic && Imm(8) == 2
+          ? AtomicCmpXchgInst::getStrongestFailureOrdering(Ordering)
+          : AtomicOrdering::NotAtomic;
+      auto *MMO = DAG.getMachineFunction().getMachineMemOperand(
+          MachinePointerInfo(), Flags, Bytes, Atomic ? Align(Bytes) : Align(1),
+          AAMDNodes(), nullptr, SyncScope::System, Ordering, Failure);
+      DAG.setNodeMemRefs(Node, {MMO});
+      Chain = SDValue(Node, 1);
+      if (Order == 4) Fence();
+      return DAG.getMergeValues({SDValue(Node, 0), Chain}, DL);
     }
     if (IntID == Intrinsic::linx_scalar_fsqrt ||
         IntID == Intrinsic::linx_scalar_fexp) {
@@ -3110,6 +3210,32 @@ SDValue LinxV5TargetLowering::LowerINTRINSIC_VOID(SDValue Op,
     }
     return uNum;
   };
+  if (IntNo == Intrinsic::linx_scalar_store) {
+    if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())
+      report_fatal_error("scoped memory requires native scalar codegen");
+    auto *Width = dyn_cast<ConstantSDNode>(Op.getOperand(4));
+    auto *Scope = dyn_cast<ConstantSDNode>(Op.getOperand(5));
+    if (!Width || !Scope || Scope->getZExtValue() > 2)
+      report_fatal_error("invalid scoped store selectors");
+    unsigned Bytes = Width->getZExtValue();
+    unsigned W = Bytes == 1 ? 0 : Bytes == 2 ? 1 : Bytes == 4 ? 2 : 3;
+    if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8)
+      report_fatal_error("invalid scoped store width");
+    const unsigned Stores[] = {LinxV5::SBI, LinxV5::SHI, LinxV5::SWI, LinxV5::SDI};
+    unsigned Opc = LinxV5Shareability::codegenOpcode(Stores[W], Scope->getZExtValue());
+    SDValue Address = Op.getOperand(2);
+    if (auto *FI = dyn_cast<FrameIndexSDNode>(Address))
+      Address = SDValue(DAG.getMachineNode(LinxV5::ADDI, DL, MVT::i64,
+          DAG.getTargetFrameIndex(FI->getIndex(), MVT::i64),
+          DAG.getTargetConstant(0, DL, MVT::i64)), 0);
+    auto *Node = DAG.getMachineNode(Opc, DL, MVT::Other,
+        {Op.getOperand(3), Address, DAG.getTargetConstant(0, DL, MVT::i64), Chain});
+    auto *MMO = DAG.getMachineFunction().getMachineMemOperand(
+        MachinePointerInfo(), MachineMemOperand::MOStore | MachineMemOperand::MOVolatile,
+        Bytes, Align(1));
+    DAG.setNodeMemRefs(Node, {MMO});
+    return SDValue(Node, 0);
+  }
   if (IntNo == Intrinsic::linx_msgb_write ||
       IntNo == Intrinsic::linx_msgb_send) {
     if (!Subtarget.isScalar() || Subtarget.enableLegacyISel())

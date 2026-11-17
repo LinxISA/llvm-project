@@ -19673,6 +19673,17 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   switch (BuiltinID) {
   default:
       llvm_unreachable("unexpected builtin ID");
+  case LinxV5::BI__builtin_linx_scalar_load:
+  case LinxV5::BI__builtin_linx_scalar_store:
+  case LinxV5::BI__builtin_linx_scalar_atomic: {
+    ID = BuiltinID == LinxV5::BI__builtin_linx_scalar_load
+             ? Intrinsic::linx_scalar_load
+         : BuiltinID == LinxV5::BI__builtin_linx_scalar_store
+             ? Intrinsic::linx_scalar_store : Intrinsic::linx_scalar_atomic;
+    for (const Expr *Arg : E->arguments())
+      Ops.push_back(EmitScalarExpr(Arg));
+    return Builder.CreateCall(CGM.getIntrinsic(ID), Ops);
+  }
   case LinxV5::BI__builtin_linx_get_system_reg:
       ID = Intrinsic::linx_get_sysreg;
       return EmitLinxV5GetSysReg(E, ID);

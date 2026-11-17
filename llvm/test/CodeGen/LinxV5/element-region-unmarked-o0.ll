@@ -2,7 +2,7 @@
 
 target triple = "linx64v5"
 
-declare i32 @ordinary_call(i32)
+declare i32 @ordinary_call(i32) "linx-scalar-shareability"="intra"
 
 define i32 @unmarked_o0(i32 %value) noinline optnone {
 entry:

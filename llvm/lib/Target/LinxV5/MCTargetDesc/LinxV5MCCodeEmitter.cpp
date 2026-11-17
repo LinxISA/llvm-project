@@ -206,6 +206,35 @@ MCCodeEmitter *llvm::createLinxV5MCCodeEmitter(const MCInstrInfo &MCII,
 void LinxV5MCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
+  if (unsigned Base = LinxV5Shareability::baseOpcode(MI.getOpcode())) {
+    MCInst Inner = MI;
+    Inner.setOpcode(Base);
+    SmallVector<MCFixup, 2> InnerFixups;
+    uint64_t Payload = getBinaryCodeForInstr(Inner, InnerFixups, STI);
+    unsigned Bytes = MCII.get(Base).getSize();
+    unsigned Scope = (MCII.get(MI.getOpcode()).TSFlags >> 20) & 3;
+    for (const MCFixup &F : InnerFixups) {
+      // A RELAX marker must never allow the linker to unwrap the envelope.
+      if (F.getTargetKind() == LinxV5::fixup_linxv5_relax) continue;
+      const MCExpr *Expr = F.getValue();
+      switch (F.getTargetKind()) {
+      case LinxV5::fixup_linxv5_load_symbol:
+      case LinxV5::fixup_linxv5_store_symbol:
+      case LinxV5::fixup_linxv5_load_symbol_target_29:
+      case LinxV5::fixup_linxv5_store_symbol_target_29:
+        // The relocation place moves by two bytes; execution still uses outer TPC.
+        Expr = MCBinaryExpr::createAdd(Expr, MCConstantExpr::create(2, Ctx), Ctx);
+        break;
+      default: break; // paired low relocations reference their own HI anchor
+      }
+      Fixups.push_back(MCFixup::create(F.getOffset() + 2, Expr, F.getKind(), F.getLoc()));
+    }
+    uint64_t Encoding = (Payload << 16) | ((Bytes / 2 - 1) << 10) |
+                        (Scope << 8) | 0x1f;
+    support::endian::write<uint64_t>(OS, Encoding, support::little);
+    ++MCNumEmitted;
+    return;
+  }
   validateTilePEDomainInstruction(MI);
   SmallVector<MCInst> CompareCommands;
   if (expandIndexedTLSURange(MI, MCII, STI, Ctx, CompareCommands) ||

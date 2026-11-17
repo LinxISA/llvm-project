@@ -39,6 +39,16 @@ static uint64_t extractBits(uint64_t v, uint32_t begin, uint32_t end) {
   return (v & ((1ULL << (begin + 1)) - 1)) >> end;
 }
 
+// A 48-bit payload may end exactly at the end of an eight-byte scoped
+// instruction. Do not read or overwrite two bytes beyond that instruction.
+static uint64_t read48le(const uint8_t *loc) {
+  return read32le(loc) | (uint64_t(read16le(loc + 4)) << 32);
+}
+static void write48le(uint8_t *loc, uint64_t value) {
+  write32le(loc, value);
+  write16le(loc + 4, value >> 32);
+}
+
 static uint32_t setLO12_I(uint32_t insn, uint32_t imm) {
   return (insn & 0xfffff) | (imm << 20);
 }
@@ -336,23 +346,23 @@ void LinxV5::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
   case R_LinxV5_Load_Symbol_Target_29: {
     checkInt(loc, val, 29, rel);
     checkAlignment(loc, val, 2, rel);
-    uint64_t insn = read64le(loc) & 0xFFFF00007FFF000F;
+    uint64_t insn = read48le(loc) & 0xFFFF00007FFF000F;
     uint64_t imm29 = ((uint64_t)extractBits(val, 16, 0) << 31) |
                      ((uint64_t)extractBits(val, 28, 17) << 4);
     insn |= imm29;
-    write64le(loc, insn);
+    write48le(loc, insn);
     return;
   }
 
   case R_LinxV5_Store_Symbol_Target_29: {
     checkInt(loc, val, 29, rel);
     checkAlignment(loc, val, 2, rel);
-    uint64_t insn = read64le(loc) & 0xFFFF000FF07F000F;
+    uint64_t insn = read48le(loc) & 0xFFFF000FF07F000F;
     uint64_t imm29 = ((uint64_t)extractBits(val, 11, 0) << 36) |
                      ((uint64_t)extractBits(val, 16, 12) << 23) |
                      ((uint64_t)extractBits(val, 28, 17) << 4);
     insn |= imm29;
-    write64le(loc, insn);
+    write48le(loc, insn);
     return;
   }
 

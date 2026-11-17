@@ -30,7 +30,9 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FormattedStream.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/SROA.h"
 
 using namespace llvm;
 
@@ -53,6 +55,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5BGPRFixupPass(*PR);
   initializeLinxV5ClockhandsPreAllocPass(*PR);
   initializeLinxV5LoadStoreBridgeOptPass(*PR);
+  initializeLinxV5ScalarShareabilityPass(*PR);
   initializeLinxV5ClockhandsPostAllocPass(*PR);
   initializeLinxV5ClockhandsColoringPass(*PR);
   initializeLinxV5SharedRegAllocPass(*PR);
@@ -186,8 +189,12 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         return false;
       });
   PB.registerPipelineParsingCallback(
-      [](StringRef Name, FunctionPassManager &FPM,
+      [this](StringRef Name, FunctionPassManager &FPM,
          ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "linx-v5-scalar-shareability") {
+          FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
+          return true;
+        }
         if (Name == "linx-v5-element-region-prepare") {
           FPM.addPass(LinxV5ElementRegionPreparePass());
           return true;
@@ -219,8 +226,16 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         return false;
       });
   PB.registerPipelineStartEPCallback(
-      [](ModulePassManager &MPM, OptimizationLevel) {
+      [this](ModulePassManager &MPM, OptimizationLevel) {
         MPM.addPass(LinxV5PEDomainPreparePass());
+        MPM.addPass(AlwaysInlinerPass());
+        FunctionPassManager FPM;
+        // Promote local induction/control and Tile carrier temporaries first.
+        // This does not optimize externally visible GM accesses, but prevents
+        // a marked loop's local control storage becoming a scoped GM request.
+        FPM.addPass(SROAPass());
+        FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
+        MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
   PB.registerOptimizerLastEPCallback(
       [](ModulePassManager &MPM, OptimizationLevel) {
@@ -305,6 +320,7 @@ void LinxV5PassConfig::addIRPasses() {
   addPass(createLinxV5PEDomainRawVerifierPass());
   addPass(createLinxV5ElementRegionPreparePass());
   addPass(createLinxV5ElementRegionPass());
+  addPass(createLinxV5ScalarShareabilityPass(&getLinxV5TargetMachine()));
   addPass(createAtomicExpandPass());
   // Call SeparateConstOffsetFromGEP pass to extract constants within indices
   // and lower a GEP with multiple indices to either arithmetic operations or
@@ -369,6 +385,7 @@ bool LinxV5PassConfig::addRegAssignAndRewriteOptimized() {
 }
 
 bool LinxV5PassConfig::addPreISel() {
+  addPass(createLinxV5ScalarShareabilityPass(&getLinxV5TargetMachine()));
   addPass(createLinxV5ElementRegionVerifierPass());
   addPass(createLinxV5ElementwiseMaskPass());
   addPass(createStructurizeCFGPass(true)); // true -> SkipUniformRegions

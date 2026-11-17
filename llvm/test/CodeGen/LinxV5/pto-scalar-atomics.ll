@@ -917,28 +917,28 @@ define i64 @rmw_64_umin_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_8_add_monotonic:
-; CHECK: sb.add
+; CHECK: casb.intra
 define void @unused_8_add_monotonic(ptr %p, i8 %v) {
   %r = atomicrmw add ptr %p, i8 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_8_add_release:
-; CHECK: sb.add.rl
+; CHECK: casb.rl.intra
 define void @unused_8_add_release(ptr %p, i8 %v) {
   %r = atomicrmw add ptr %p, i8 %v release
   ret void
 }
 
 ; CHECK-LABEL: unused_8_sub_monotonic:
-; CHECK: sb.sub
+; CHECK: casb.intra
 define void @unused_8_sub_monotonic(ptr %p, i8 %v) {
   %r = atomicrmw sub ptr %p, i8 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_8_sub_release:
-; CHECK: sb.sub.rl
+; CHECK: casb.rl.intra
 define void @unused_8_sub_release(ptr %p, i8 %v) {
   %r = atomicrmw sub ptr %p, i8 %v release
   ret void
@@ -959,14 +959,14 @@ define i8 @load_8_acquire(ptr %p) {
 }
 
 ; CHECK-LABEL: load_8_seq_cst:
-; CHECK: lr.b.aqrl
+; CHECK: lr.b.aq
 define i8 @load_8_seq_cst(ptr %p) {
   %r = load atomic i8, ptr %p seq_cst, align 1
   ret i8 %r
 }
 
 ; CHECK-LABEL: store_8_monotonic:
-; CHECK: sbi
+; CHECK: swapb.intra
 define void @store_8_monotonic(ptr %p, i8 %v) {
   store atomic i8 %v, ptr %p monotonic, align 1
   ret void
@@ -988,28 +988,28 @@ define void @store_8_seq_cst(ptr %p, i8 %v) {
 }
 
 ; CHECK-LABEL: unused_16_add_monotonic:
-; CHECK: sh.add
+; CHECK: cash.intra
 define void @unused_16_add_monotonic(ptr %p, i16 %v) {
   %r = atomicrmw add ptr %p, i16 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_16_add_release:
-; CHECK: sh.add.rl
+; CHECK: cash.rl.intra
 define void @unused_16_add_release(ptr %p, i16 %v) {
   %r = atomicrmw add ptr %p, i16 %v release
   ret void
 }
 
 ; CHECK-LABEL: unused_16_sub_monotonic:
-; CHECK: sh.sub
+; CHECK: cash.intra
 define void @unused_16_sub_monotonic(ptr %p, i16 %v) {
   %r = atomicrmw sub ptr %p, i16 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_16_sub_release:
-; CHECK: sh.sub.rl
+; CHECK: cash.rl.intra
 define void @unused_16_sub_release(ptr %p, i16 %v) {
   %r = atomicrmw sub ptr %p, i16 %v release
   ret void
@@ -1030,14 +1030,14 @@ define i16 @load_16_acquire(ptr %p) {
 }
 
 ; CHECK-LABEL: load_16_seq_cst:
-; CHECK: lr.h.aqrl
+; CHECK: lr.h.aq
 define i16 @load_16_seq_cst(ptr %p) {
   %r = load atomic i16, ptr %p seq_cst, align 2
   ret i16 %r
 }
 
 ; CHECK-LABEL: store_16_monotonic:
-; CHECK: shi.u
+; CHECK: swaph.intra
 define void @store_16_monotonic(ptr %p, i16 %v) {
   store atomic i16 %v, ptr %p monotonic, align 2
   ret void
@@ -1059,28 +1059,28 @@ define void @store_16_seq_cst(ptr %p, i16 %v) {
 }
 
 ; CHECK-LABEL: unused_32_add_monotonic:
-; CHECK: sw.add
+; CHECK: lw.add.intra
 define void @unused_32_add_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw add ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_add_release:
-; CHECK: sw.add.rl
+; CHECK: lw.add.rl.intra
 define void @unused_32_add_release(ptr %p, i32 %v) {
   %r = atomicrmw add ptr %p, i32 %v release
   ret void
 }
 
 ; CHECK-LABEL: unused_32_sub_monotonic:
-; CHECK: sw.sub
+; CHECK: lw.add.intra
 define void @unused_32_sub_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw sub ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_sub_release:
-; CHECK: sw.sub.rl
+; CHECK: lw.add.rl.intra
 define void @unused_32_sub_release(ptr %p, i32 %v) {
   %r = atomicrmw sub ptr %p, i32 %v release
   ret void
@@ -1101,14 +1101,14 @@ define i32 @load_32_acquire(ptr %p) {
 }
 
 ; CHECK-LABEL: load_32_seq_cst:
-; CHECK: lr.w.aqrl
+; CHECK: lr.w.aq
 define i32 @load_32_seq_cst(ptr %p) {
   %r = load atomic i32, ptr %p seq_cst, align 4
   ret i32 %r
 }
 
 ; CHECK-LABEL: store_32_monotonic:
-; CHECK: swi.u
+; CHECK: swapw.intra
 define void @store_32_monotonic(ptr %p, i32 %v) {
   store atomic i32 %v, ptr %p monotonic, align 4
   ret void
@@ -1130,28 +1130,28 @@ define void @store_32_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_64_add_monotonic:
-; CHECK: sd.add
+; CHECK: ld.add.intra
 define void @unused_64_add_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw add ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_add_release:
-; CHECK: sd.add.rl
+; CHECK: ld.add.rl.intra
 define void @unused_64_add_release(ptr %p, i64 %v) {
   %r = atomicrmw add ptr %p, i64 %v release
   ret void
 }
 
 ; CHECK-LABEL: unused_64_sub_monotonic:
-; CHECK: sd.sub
+; CHECK: ld.add.intra
 define void @unused_64_sub_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw sub ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_sub_release:
-; CHECK: sd.sub.rl
+; CHECK: ld.add.rl.intra
 define void @unused_64_sub_release(ptr %p, i64 %v) {
   %r = atomicrmw sub ptr %p, i64 %v release
   ret void
@@ -1172,14 +1172,14 @@ define i64 @load_64_acquire(ptr %p) {
 }
 
 ; CHECK-LABEL: load_64_seq_cst:
-; CHECK: lr.d.aqrl
+; CHECK: lr.d.aq
 define i64 @load_64_seq_cst(ptr %p) {
   %r = load atomic i64, ptr %p seq_cst, align 8
   ret i64 %r
 }
 
 ; CHECK-LABEL: store_64_monotonic:
-; CHECK: sdi.u
+; CHECK: swapd.intra
 define void @store_64_monotonic(ptr %p, i64 %v) {
   store atomic i64 %v, ptr %p monotonic, align 8
   ret void
@@ -1390,14 +1390,14 @@ define void @dead_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_32_and_monotonic:
-; CHECK: sw.and
+; CHECK: lw.and.intra
 define void @unused_32_and_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw and ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_and_release:
-; CHECK: sw.and.rl
+; CHECK: lw.and.rl.intra
 define void @unused_32_and_release(ptr %p, i32 %v) {
   %r = atomicrmw and ptr %p, i32 %v release
   ret void
@@ -1425,14 +1425,14 @@ define void @unused_32_and_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_32_or_monotonic:
-; CHECK: sw.or
+; CHECK: lw.or.intra
 define void @unused_32_or_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw or ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_or_release:
-; CHECK: sw.or.rl
+; CHECK: lw.or.rl.intra
 define void @unused_32_or_release(ptr %p, i32 %v) {
   %r = atomicrmw or ptr %p, i32 %v release
   ret void
@@ -1460,14 +1460,14 @@ define void @unused_32_or_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_32_xor_monotonic:
-; CHECK: sw.xor
+; CHECK: lw.xor.intra
 define void @unused_32_xor_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw xor ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_xor_release:
-; CHECK: sw.xor.rl
+; CHECK: lw.xor.rl.intra
 define void @unused_32_xor_release(ptr %p, i32 %v) {
   %r = atomicrmw xor ptr %p, i32 %v release
   ret void
@@ -1495,14 +1495,14 @@ define void @unused_32_xor_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_32_min_monotonic:
-; CHECK: sw.smin
+; CHECK: lw.smin.intra
 define void @unused_32_min_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw min ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_min_release:
-; CHECK: sw.smin.rl
+; CHECK: lw.smin.rl.intra
 define void @unused_32_min_release(ptr %p, i32 %v) {
   %r = atomicrmw min ptr %p, i32 %v release
   ret void
@@ -1530,14 +1530,14 @@ define void @unused_32_min_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_32_max_monotonic:
-; CHECK: sw.smax
+; CHECK: lw.smax.intra
 define void @unused_32_max_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw max ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_max_release:
-; CHECK: sw.smax.rl
+; CHECK: lw.smax.rl.intra
 define void @unused_32_max_release(ptr %p, i32 %v) {
   %r = atomicrmw max ptr %p, i32 %v release
   ret void
@@ -1565,14 +1565,14 @@ define void @unused_32_max_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_32_umin_monotonic:
-; CHECK: sw.umin
+; CHECK: lw.umin.intra
 define void @unused_32_umin_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw umin ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_umin_release:
-; CHECK: sw.umin.rl
+; CHECK: lw.umin.rl.intra
 define void @unused_32_umin_release(ptr %p, i32 %v) {
   %r = atomicrmw umin ptr %p, i32 %v release
   ret void
@@ -1600,14 +1600,14 @@ define void @unused_32_umin_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_32_umax_monotonic:
-; CHECK: sw.umax
+; CHECK: lw.umax.intra
 define void @unused_32_umax_monotonic(ptr %p, i32 %v) {
   %r = atomicrmw umax ptr %p, i32 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_32_umax_release:
-; CHECK: sw.umax.rl
+; CHECK: lw.umax.rl.intra
 define void @unused_32_umax_release(ptr %p, i32 %v) {
   %r = atomicrmw umax ptr %p, i32 %v release
   ret void
@@ -1635,14 +1635,14 @@ define void @unused_32_umax_seq_cst(ptr %p, i32 %v) {
 }
 
 ; CHECK-LABEL: unused_64_and_monotonic:
-; CHECK: sd.and
+; CHECK: ld.and.intra
 define void @unused_64_and_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw and ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_and_release:
-; CHECK: sd.and.rl
+; CHECK: ld.and.rl.intra
 define void @unused_64_and_release(ptr %p, i64 %v) {
   %r = atomicrmw and ptr %p, i64 %v release
   ret void
@@ -1670,14 +1670,14 @@ define void @unused_64_and_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_64_or_monotonic:
-; CHECK: sd.or
+; CHECK: ld.or.intra
 define void @unused_64_or_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw or ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_or_release:
-; CHECK: sd.or.rl
+; CHECK: ld.or.rl.intra
 define void @unused_64_or_release(ptr %p, i64 %v) {
   %r = atomicrmw or ptr %p, i64 %v release
   ret void
@@ -1705,14 +1705,14 @@ define void @unused_64_or_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_64_xor_monotonic:
-; CHECK: sd.xor
+; CHECK: ld.xor.intra
 define void @unused_64_xor_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw xor ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_xor_release:
-; CHECK: sd.xor.rl
+; CHECK: ld.xor.rl.intra
 define void @unused_64_xor_release(ptr %p, i64 %v) {
   %r = atomicrmw xor ptr %p, i64 %v release
   ret void
@@ -1740,14 +1740,14 @@ define void @unused_64_xor_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_64_min_monotonic:
-; CHECK: sd.smin
+; CHECK: ld.smin.intra
 define void @unused_64_min_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw min ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_min_release:
-; CHECK: sd.smin.rl
+; CHECK: ld.smin.rl.intra
 define void @unused_64_min_release(ptr %p, i64 %v) {
   %r = atomicrmw min ptr %p, i64 %v release
   ret void
@@ -1775,14 +1775,14 @@ define void @unused_64_min_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_64_max_monotonic:
-; CHECK: sd.smax
+; CHECK: ld.smax.intra
 define void @unused_64_max_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw max ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_max_release:
-; CHECK: sd.smax.rl
+; CHECK: ld.smax.rl.intra
 define void @unused_64_max_release(ptr %p, i64 %v) {
   %r = atomicrmw max ptr %p, i64 %v release
   ret void
@@ -1810,14 +1810,14 @@ define void @unused_64_max_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_64_umin_monotonic:
-; CHECK: sd.umin
+; CHECK: ld.umin.intra
 define void @unused_64_umin_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw umin ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_umin_release:
-; CHECK: sd.umin.rl
+; CHECK: ld.umin.rl.intra
 define void @unused_64_umin_release(ptr %p, i64 %v) {
   %r = atomicrmw umin ptr %p, i64 %v release
   ret void
@@ -1845,14 +1845,14 @@ define void @unused_64_umin_seq_cst(ptr %p, i64 %v) {
 }
 
 ; CHECK-LABEL: unused_64_umax_monotonic:
-; CHECK: sd.umax
+; CHECK: ld.umax.intra
 define void @unused_64_umax_monotonic(ptr %p, i64 %v) {
   %r = atomicrmw umax ptr %p, i64 %v monotonic
   ret void
 }
 
 ; CHECK-LABEL: unused_64_umax_release:
-; CHECK: sd.umax.rl
+; CHECK: ld.umax.rl.intra
 define void @unused_64_umax_release(ptr %p, i64 %v) {
   %r = atomicrmw umax ptr %p, i64 %v release
   ret void
