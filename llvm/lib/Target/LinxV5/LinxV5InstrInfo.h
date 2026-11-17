@@ -130,6 +130,11 @@ struct SingleAsm {
   SmallVector<unsigned, 2> Sizes;
 };
 
+// Descriptor failures are source diagnostics. Never fabricate an untyped
+// Local copy: the ISA copy also publishes dtype, layout and valid geometry.
+[[noreturn]] void reportTileDescriptorError(MachineBasicBlock &MBB,
+                                            const Twine &Message);
+
 struct TileDescriptor {
   unsigned DataType = 0;
   unsigned Layout = 0;

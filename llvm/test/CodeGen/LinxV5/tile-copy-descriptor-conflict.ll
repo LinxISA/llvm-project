@@ -1,6 +1,6 @@
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
+; RUN: not llc -mtriple=linx64v5-unknown-linux-musl -O2 \
 ; RUN:   -enable-all-vector-as-tilereg=true %s -o /dev/null 2>&1 | FileCheck %s
-; RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -O2 \
+; RUN: not llc -mtriple=linx64v5-unknown-linux-musl -O2 \
 ; RUN:   -enable-all-vector-as-tilereg=true \
 ; RUN:   -linxv5-enable-generic-element=true %s -o /dev/null 2>&1 | FileCheck %s
 ; CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join

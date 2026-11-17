@@ -31,7 +31,9 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -211,6 +213,130 @@ static inline const char *skipSeparator(const char *p) {
   return p;
 }
 
+static bool isMatrixInlineAsm(StringRef Text) {
+  return Text.startswith("BSTART.TGEMV") || Text.startswith("BSTART.TMATMUL") ||
+         Text.startswith("BSTART.CUBE TGEMV") ||
+         Text.startswith("BSTART.CUBE TMATMUL");
+}
+
+// Descriptor analysis sees the unexpanded asm template. In particular, the
+// CScale templates spell the same destination in both arms of a constant .if.
+// Select the active arm before counting destinations or mathematical sources.
+// This deliberately accepts only constant operands and simple comparisons;
+// unknown assembler expressions cannot prove a descriptor.
+static Optional<std::string> getActiveMatrixInlineAsm(MachineInstr &MI,
+                                                      StringRef Text) {
+  auto Constant = [&](StringRef Field) -> Optional<int64_t> {
+    Field = Field.trim();
+    if (Field.consume_front("${")) {
+      if (!Field.consume_back(":c}"))
+        return None;
+      unsigned Index;
+      if (Field.getAsInteger(10, Index))
+        return None;
+      MachineOperand *MO = getAsmOperand(&MI, Index);
+      if (!MO || !MO->isImm())
+        return None;
+      return MO->getImm();
+    }
+    int64_t Value;
+    if (Field.getAsInteger(0, Value))
+      return None;
+    return Value;
+  };
+  auto Condition = [&](auto &&Self, StringRef Expr) -> Optional<bool> {
+    Expr = Expr.trim();
+    // LLVM asm escapes a literal '$' with '$$' and a literal '|' with '$|'.
+    // Matrix templates use the latter for assembler logical OR.
+    for (StringRef Op : {StringRef("$|$|"), StringRef("||"), StringRef("&&")}) {
+      unsigned Depth = 0;
+      for (size_t I = 0; I < Expr.size(); ++I) {
+        if (Expr[I] == '(')
+          ++Depth;
+        else if (Expr[I] == ')') {
+          if (!Depth)
+            return None;
+          --Depth;
+        } else if (!Depth && Expr.substr(I).startswith(Op)) {
+          auto Left = Self(Self, Expr.take_front(I));
+          auto Right = Self(Self, Expr.drop_front(I + Op.size()));
+          if (!Left || !Right)
+            return None;
+          return Op == "&&" ? *Left && *Right : *Left || *Right;
+        }
+      }
+      if (Depth)
+        return None;
+    }
+    if (Expr.startswith("(") && Expr.endswith(")"))
+      return Self(Self, Expr.drop_front().drop_back());
+    for (StringRef Op : {StringRef("=="), StringRef("!=")}) {
+      size_t Pos = Expr.find(Op);
+      if (Pos == StringRef::npos)
+        continue;
+      auto Left = Constant(Expr.take_front(Pos));
+      auto Right = Constant(Expr.drop_front(Pos + Op.size()));
+      if (!Left || !Right)
+        return None;
+      return Op == "==" ? *Left == *Right : *Left != *Right;
+    }
+    auto Value = Constant(Expr);
+    if (!Value)
+      return None;
+    return *Value != 0;
+  };
+  struct Conditional {
+    bool ParentActive;
+    bool Taken;
+    bool SawElse = false;
+  };
+  SmallVector<Conditional, 4> Stack;
+  bool Active = true;
+  std::string Result;
+  SmallVector<StringRef, 32> Lines;
+  Text.split(Lines, '\n');
+  for (StringRef Line : Lines) {
+    StringRef Directive = Line.trim();
+    if (Directive.consume_front(".if ")) {
+      auto Value =
+          Active ? Condition(Condition, Directive) : Optional<bool>(false);
+      if (!Value)
+        return None;
+      Stack.push_back({Active, *Value});
+      Active = Active && *Value;
+    } else if (Directive.consume_front(".elseif ")) {
+      if (Stack.empty() || Stack.back().SawElse)
+        return None;
+      auto Value = Stack.back().ParentActive && !Stack.back().Taken
+                       ? Condition(Condition, Directive)
+                       : Optional<bool>(false);
+      if (!Value)
+        return None;
+      auto &Top = Stack.back();
+      Active = Top.ParentActive && !Top.Taken && *Value;
+      Top.Taken |= *Value;
+    } else if (Directive == ".else") {
+      if (Stack.empty() || Stack.back().SawElse)
+        return None;
+      auto &Top = Stack.back();
+      Active = Top.ParentActive && !Top.Taken;
+      Top.SawElse = true;
+    } else if (Directive == ".endif") {
+      if (Stack.empty())
+        return None;
+      Active = Stack.pop_back_val().ParentActive;
+    } else if (Directive.startswith(".if")) {
+      return None;
+    } else if (Active) {
+      Result.append(Line.data(), Line.size());
+      Result.push_back('\n');
+    }
+  }
+  if (!Stack.empty())
+    return None;
+  return Result;
+}
+
 LinxV5::SingleAsm LinxV5::parseSingleAsm(MachineInstr *MI) {
   LinxV5::SingleAsm SA;
   assert(MI->isInlineAsm() && "parseSingleAsm only works on inline asms");
@@ -225,6 +351,13 @@ LinxV5::SingleAsm LinxV5::parseSingleAsm(MachineInstr *MI) {
 
   // Disassemble the AsmStr, printing out the literal pieces, the operands, etc.
   const char *AsmStr = MI->getOperand(NumDefs).getSymbolName();
+  Optional<std::string> ActiveText;
+  if (isMatrixInlineAsm(AsmStr)) {
+    ActiveText = getActiveMatrixInlineAsm(*MI, AsmStr);
+    if (!ActiveText)
+      return SA;
+    AsmStr = ActiveText->c_str();
+  }
   const char *p = AsmStr;
   while (*p) {
     if (StringRef(p).startswith("->")) {
@@ -1237,14 +1370,29 @@ static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
       .Default(None);
 }
 
+[[noreturn]] void LinxV5::reportTileDescriptorError(MachineBasicBlock &MBB,
+                                                    const Twine &Message) {
+  Function &F = MBB.getParent()->getFunction();
+  F.getContext().diagnose(
+      DiagnosticInfoUnsupported(F, Message, DebugLoc(), DS_Error));
+  report_fatal_error("Local tile descriptor lowering failed",
+                     /*gen_crash_diag=*/false);
+}
+
 static LinxV5::TileDescriptor
-checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
+checkedTileDescriptor(LinxV5::TileDescriptor Descriptor,
+                      MachineInstr *Producer = nullptr) {
+  auto Reject = [&](const Twine &Message) -> void {
+    if (Producer)
+      LinxV5::reportTileDescriptorError(*Producer->getParent(), Message);
+    report_fatal_error(Message);
+  };
   if (Descriptor.HasRuntimeDimensions) {
     if (EnableGenericElement || Descriptor.PackedPredicate ||
         !LinxV5::getTileDataTypeBits(Descriptor.DataType) ||
         Descriptor.SizeCode == 0 || Descriptor.SizeCode > 12 ||
         !Descriptor.RuntimeDimensionProducer)
-      report_fatal_error("invalid runtime Local tile COPY descriptor");
+      Reject("invalid runtime Local tile COPY descriptor");
     return Descriptor;
   }
   unsigned TypeBits = LinxV5::getTileDataTypeBits(Descriptor.DataType);
@@ -1252,7 +1400,7 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
       (!Descriptor.ValidCol && !Descriptor.ValidColReg) ||
       (!Descriptor.PhysicalCol && !Descriptor.PhysicalColReg) ||
       Descriptor.SizeCode == 0 || Descriptor.SizeCode > 12)
-    report_fatal_error("invalid Local tile descriptor for typed COPY");
+    Reject("invalid Local tile descriptor for typed COPY");
 
   uint64_t CapacityBits =
       (uint64_t{1} << (Descriptor.SizeCode + 6)) * 8;
@@ -1262,7 +1410,7 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
                         ? 16 : 32;
     if (CapacityBits % (Rows * TypeBits) || Descriptor.ValidRow > Rows ||
         Descriptor.ValidCol > CapacityBits / (Rows * TypeBits))
-      report_fatal_error(
+      Reject(
           Twine("CUBE descriptor geometry does not fit exact capacity: rows=") +
           Twine(Descriptor.ValidRow) + ", cols=" + Twine(Descriptor.ValidCol) +
           ", dtype=" + Twine(Descriptor.DataType) +
@@ -1273,11 +1421,11 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
   }
   if (!Descriptor.PhysicalColReg && !Descriptor.ValidColReg &&
       Descriptor.PhysicalCol < Descriptor.ValidCol)
-    report_fatal_error("invalid Local tile descriptor for typed COPY");
+    Reject("invalid Local tile descriptor for typed COPY");
   if (Descriptor.PackedPredicate) {
     if (Descriptor.ValidRowReg || Descriptor.ValidColReg ||
         Descriptor.PhysicalColReg)
-      report_fatal_error("dynamic packed predicate COPY is unsupported");
+      Reject("dynamic packed predicate COPY is unsupported");
     bool SupportedShape =
         (Descriptor.ValidRow == 1 &&
          (Descriptor.PhysicalCol == 128 ||
@@ -1289,7 +1437,7 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
         !SupportedShape ||
         CapacityBits / 8 <
             uint64_t{Descriptor.ValidRow} * Descriptor.PhysicalCol)
-      report_fatal_error("invalid packed NORM predicate COPY descriptor");
+      Reject("invalid packed NORM predicate COPY descriptor");
     return Descriptor;
   }
   if (Descriptor.PhysicalColReg)
@@ -1297,12 +1445,12 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor) {
   uint64_t RowBits = uint64_t{Descriptor.PhysicalCol} * TypeBits;
   if (!RowBits || CapacityBits % RowBits ||
       CapacityBits / RowBits < Descriptor.ValidRow)
-    report_fatal_error(
-        Twine("Local tile descriptor geometry does not fit its SizeCode: rows=") +
+    Reject(
+        Twine(
+            "Local tile descriptor geometry does not fit its SizeCode: rows=") +
         Twine(Descriptor.ValidRow) + ", cols=" + Twine(Descriptor.ValidCol) +
-        ", physicalCols=" + Twine(Descriptor.PhysicalCol) +
-        ", dtype=" + Twine(Descriptor.DataType) +
-        ", layout=" + Twine(Descriptor.Layout) +
+        ", physicalCols=" + Twine(Descriptor.PhysicalCol) + ", dtype=" +
+        Twine(Descriptor.DataType) + ", layout=" + Twine(Descriptor.Layout) +
         ", size=" + Twine(Descriptor.SizeCode));
   return Descriptor;
 }
@@ -1560,9 +1708,83 @@ static Optional<unsigned> getMatrixFPATROutputType(unsigned Mode) {
   }
 }
 
+// Resolve each FPATR field independently. Legacy templates use immediate asm
+// operands while newer templates also spell the fields as literal numbers.
+static Optional<SmallVector<unsigned, 10>>
+getMatrixInlineAsmAttributes(MachineInstr &MI, StringRef Text) {
+  size_t Start = Text.find("B.FPATR");
+  if (Start == StringRef::npos)
+    return SmallVector<unsigned, 10>(10, 0);
+  SmallVector<StringRef, 10> Fields;
+  Text.drop_front(Start + strlen("B.FPATR"))
+      .split('\n')
+      .first.split(Fields, ',');
+  if (Fields.size() != 10)
+    return None;
+  SmallVector<unsigned, 10> Values;
+  for (StringRef Field : Fields) {
+    Field = Field.trim();
+    if (Field.startswith("${") && Field.endswith(":c}")) {
+      auto Value = getInlineAsmOperandImmediate(
+          MI, Text, Field.data() - Text.data() + Field.find(':'));
+      if (!Value)
+        return None;
+      Values.push_back(*Value);
+    } else {
+      unsigned Value;
+      if (Field.getAsInteger(10, Value))
+        return None;
+      Values.push_back(Value);
+    }
+  }
+  if (Values[2] > 9 || Values[3] > 1 || Values[4] > 1)
+    return None;
+  return Values;
+}
+
+struct MatrixInlineAsmSources {
+  SmallVector<MachineOperand *, 6> Local;
+  SmallVector<MachineOperand *, 4> Shared;
+};
+
+// Constraint slots can include unused CScale/scale carriers and need not be in
+// architectural order. Only source-form binders contribute mathematical inputs.
+static Optional<MatrixInlineAsmSources>
+getMatrixInlineAsmSources(MachineInstr &MI, StringRef Text) {
+  MatrixInlineAsmSources Result;
+  SmallVector<StringRef, 32> Lines;
+  Text.split(Lines, '\n');
+  for (StringRef Line : Lines) {
+    Line = Line.trim();
+    bool Shared = Line.consume_front("B.IOS ");
+    if (!Shared && !Line.consume_front("B.IOT "))
+      continue;
+    Line = Line.ltrim();
+    unsigned Count = 0;
+    while (Line.startswith("$")) {
+      MachineOperand *Source = nullptr;
+      const char *After = parseAsmOperand(&MI, Line.data(), Source);
+      if (!After || !Source || !Source->isReg() ||
+          isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
+                          Source->getReg()) != Shared ||
+          ++Count > (Shared ? 1u : 2u))
+        return None;
+      if (Shared)
+        Result.Shared.push_back(Source);
+      else
+        Result.Local.push_back(Source);
+      Line = Line.drop_front(After - Line.data()).ltrim();
+      if (!Line.consume_front(","))
+        break;
+      Line = Line.ltrim();
+    }
+  }
+  return Result;
+}
+
 static Optional<LinxV5::TileDescriptor>
 getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
-                                DescriptorResolutionContext &Active) {
+                                 DescriptorResolutionContext &Active) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1570,11 +1792,17 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
       SizeCode = SA.Sizes[I];
       break;
     }
-  if (!SizeCode || *SizeCode == 0)
+  if (!SizeCode || *SizeCode == 0 || *SizeCode > 12)
     return None;
 
-  StringRef Text =
-      MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  StringRef Text = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  Optional<std::string> ActiveText;
+  if (isMatrixInlineAsm(Text)) {
+    ActiveText = getActiveMatrixInlineAsm(MI, Text);
+    if (!ActiveText)
+      return None;
+    Text = *ActiveText;
+  }
   Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
   Optional<unsigned> MatrixLeftType = DataType;
   Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
@@ -1600,6 +1828,16 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
       Layout = LinxV5Op::ArgFormat::CUBE_M16;
   }
   if (CubeFamily) {
+    // Matrix templates pass compile-time shapes through GPR constraints.
+    // Fold those reaching constants before deciding whether COPY needs live
+    // runtime dimensions, including when generic element lowering is enabled.
+    for (auto *Dimension : {&ValidColDim, &ValidRowDim, &PhysicalColDim}) {
+      if ((*Dimension)->Reg == LinxV5::R0)
+        continue;
+      if (auto Value = getStaticTileDimensionRegister(
+              *MI.getParent(), MI.getIterator(), (*Dimension)->Reg))
+        *Dimension = InlineAsmDimension{LinxV5::R0, *Value + (*Dimension)->Imm};
+    }
     size_t Attribute = Text.find("B.DATR");
     size_t ResultType =
         Attribute == StringRef::npos ? StringRef::npos
@@ -1618,32 +1856,49 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
     if (!MatrixLeftType || !MatrixRightType)
       return None;
     DataType = getCubeAccumulatorType(*MatrixLeftType, *MatrixRightType);
-    size_t FPATR = Text.find("B.FPATR");
-    if (FPATR != StringRef::npos) {
-      size_t FirstField = Text.find("${", FPATR);
-      if (FirstField == StringRef::npos)
-        return None;
-      size_t FieldEnd = Text.find(':', FirstField);
-      Optional<unsigned> Mode =
-          getInlineAsmOperandImmediate(MI, Text, FieldEnd);
-      if (!Mode)
-        return None;
-      if (*Mode != 0)
-        DataType = getMatrixFPATROutputType(*Mode);
-    }
+    auto Attributes = getMatrixInlineAsmAttributes(MI, Text);
+    if (!Attributes ||
+        SA.Defs.size() != 1 + (*Attributes)[3] + (*Attributes)[4])
+      return None;
+    unsigned Ordinal = 0;
+    while (SA.Defs[Ordinal]->getReg() != Reg)
+      ++Ordinal;
+    // D, RowMaxOut and GroupMaxOut all publish EffectiveDType. Only their
+    // valid widths and independently allocated capacities differ.
+    if ((*Attributes)[0])
+      DataType = getMatrixFPATROutputType((*Attributes)[0]);
 
     // Matrix D is an M x N accumulator/result in A's persistent CUBE_M
     // layout.  LB2 is K and never describes D's physical columns.
     const bool WithAccumulator =
         Text.contains("TGEMV.ACC") || Text.contains("TGEMVMX.ACC") ||
         Text.contains("TMATMUL.ACC") || Text.contains("TMATMULMX.ACC");
-    MachineOperand *LeftSource = getAsmOperand(&MI, WithAccumulator ? 2 : 1);
-    if (!LeftSource || !LeftSource->isReg())
+    const bool IsMX = Text.contains("TMATMULMX") || Text.contains("TGEMVMX");
+    auto Sources = getMatrixInlineAsmSources(MI, Text);
+    if (!Sources)
       return None;
-    bool SharedLeft = isSharedTileReg(
-        MI.getParent()->getParent()->getRegInfo(), LeftSource->getReg());
+    auto GroupSize = [IsMX](unsigned Type) {
+      return 1u + (IsMX && LinxV5Op::matrixMXTypeNeedsScale(Type));
+    };
+    unsigned SharedCount = Sources->Shared.size();
+    unsigned RightGroup = GroupSize(*MatrixRightType);
+    bool SharedLeft = SharedCount == GroupSize(*MatrixLeftType) + RightGroup;
+    if (SharedCount && !SharedLeft && SharedCount != RightGroup)
+      return None;
+    unsigned LeftOrdinal = WithAccumulator ? 1 : 0;
+    MachineOperand *Accumulator = nullptr;
+    if (WithAccumulator) {
+      if (Sources->Local.empty())
+        return None;
+      Accumulator = Sources->Local.front();
+    }
+    MachineOperand *LeftSource = nullptr;
+    if (!SharedLeft) {
+      if (Sources->Local.size() <= LeftOrdinal)
+        return None;
+      LeftSource = Sources->Local[LeftOrdinal];
+    }
     if (SharedLeft) {
-      MachineOperand *RightSource = getAsmOperand(&MI, 2);
       if (ValidColDim->Reg != LinxV5::R0) {
         auto GroupM = getStaticTileDimensionRegister(
             *MI.getParent(), MI.getIterator(), ValidColDim->Reg);
@@ -1652,16 +1907,21 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
         ValidColDim =
             InlineAsmDimension{LinxV5::R0, *GroupM + ValidColDim->Imm};
       }
-      if (WithAccumulator || Text.contains("TGEMV") || Text.contains("MX") ||
-          !RightSource || !RightSource->isReg() ||
-          !isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
-                           RightSource->getReg()) ||
-          ValidColDim->Reg != LinxV5::R0 ||
+      if (Text.contains("TGEMV") || ValidColDim->Reg != LinxV5::R0 ||
           (ValidColDim->Imm != 64 && ValidColDim->Imm != 128))
         return None;
       unsigned Rows = ValidColDim->Imm == 64 ? 16 : 32;
       Layout = Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
                           : LinxV5Op::ArgFormat::CUBE_M32;
+      if (WithAccumulator) {
+        auto Descriptor = resolveTileDescriptor(
+            *MI.getParent(), MI.getIterator(), Accumulator->getReg(), Active);
+        // A loop-carried C may recurse back to this producer. The complete
+        // cooperative group_M already proves the per-PE M layout, so absence
+        // of a reaching C descriptor must not break the fixed point.
+        if (Descriptor && Descriptor->Layout != *Layout)
+          return None;
+      }
       ValidColDim = InlineAsmDimension{LinxV5::R0, Rows};
     } else {
       Optional<LinxV5::TileDescriptor> LeftDescriptor =
@@ -1672,7 +1932,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
            LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
         return None;
       Layout = LeftDescriptor->Layout;
-      if (Text.contains("B.IOS")) {
+      if (SharedCount) {
         if (ValidColDim->Reg != LinxV5::R0) {
           auto GroupM = getStaticTileDimensionRegister(
               *MI.getParent(), MI.getIterator(), ValidColDim->Reg);
@@ -1707,6 +1967,26 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
         for (MachineOperand &MO : MI.operands())
           if (MO.isReg() && MO.isUse() && MO.getReg() == TGEMVEncodedM)
             MO.setIsKill(false);
+    }
+    // Each published destination owns its shape and capacity. B.DIM N is
+    // D's width, never RowMaxOut's or GroupMaxOut's width. Inputs retain
+    // their reaching producer descriptors and are not retyped here.
+    if ((*Attributes)[3] && Ordinal == 1)
+      ValidColDim = InlineAsmDimension{LinxV5::R0, 1};
+    else if (Ordinal != 0) {
+      if (!(*Attributes)[4] || !(*Attributes)[2])
+        return None;
+      if (ValidColDim->Reg != LinxV5::R0) {
+        auto Columns = getStaticTileDimensionRegister(
+            *MI.getParent(), MI.getIterator(), ValidColDim->Reg);
+        if (!Columns)
+          return None;
+        ValidColDim =
+            InlineAsmDimension{LinxV5::R0, *Columns + ValidColDim->Imm};
+      }
+      unsigned Code = (*Attributes)[2];
+      unsigned GroupColumns = Code == 1 ? 8 : Code == 2 ? 16 : 16 * (Code - 1);
+      ValidColDim->Imm = divideCeil(ValidColDim->Imm, GroupColumns);
     }
     unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
     if (!DataType)
@@ -1783,7 +2063,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
     Descriptor.HasRuntimeDimensions = true;
     Descriptor.RuntimeDimensionProducer = &MI;
   }
-  return checkedTileDescriptor(Descriptor);
+  return checkedTileDescriptor(Descriptor, &MI);
 }
 
 static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
@@ -1847,84 +2127,9 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     return Result;
   };
   bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
-  bool IsMX = Text.startswith("BSTART.CUBE TMATMULMX,") ||
-              Text.startswith("BSTART.CUBE TMATMULMX.ACC,");
-  if (IsMX && Text.startswith("BSTART.CUBE TMATMULMX,")) {
-    MachineOperand *Left = getAsmOperand(&MI, SA.Defs.size());
-    if (Left && Left->isReg() &&
-        isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
-                        Left->getReg())) {
-      for (unsigned Source = 1; Source != 4; ++Source) {
-        MachineOperand *Operand = getAsmOperand(&MI, SA.Defs.size() + Source);
-        if (!Operand || !Operand->isReg() ||
-            !isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
-                             Operand->getReg()))
-          return None;
-      }
-      if (!ValidCol || !ValidRow ||
-          (*ValidCol != 64 && *ValidCol != 128) ||
-          Dimensions.ValidColReg || Dimensions.ValidRowReg ||
-          Dimensions.PhysicalColReg || Text.contains("B.ASSEMBLE"))
-        return None;
-      size_t Attribute = Text.find("B.FPATR");
-      if (Attribute == StringRef::npos)
-        return None;
-      SmallVector<StringRef, 10> Fields;
-      Text.drop_front(Attribute + strlen("B.FPATR"))
-          .split('\n').first.split(Fields, ',');
-      if (Fields.size() != 10)
-        return None;
-      SmallVector<unsigned, 10> Values;
-      for (StringRef Field : Fields) {
-        Field = Field.trim();
-        if (Field.startswith("${") && Field.endswith(":c}")) {
-          auto Value = getInlineAsmOperandImmediate(
-              MI, Text, Field.data() - Text.data() + Field.find(':'));
-          if (!Value)
-            return None;
-          Values.push_back(*Value);
-        } else {
-          unsigned Value;
-          if (Field.getAsInteger(10, Value))
-            return None;
-          Values.push_back(Value);
-        }
-      }
-      DataType = Values[0] ? getMatrixFPATROutputType(Values[0])
-                           : Optional<unsigned>(LinxV5Op::DataType::FP32);
-      if (!DataType || Values[3] > 1 || Values[4] > 1 || Values[2] > 9 ||
-          SA.Defs.size() != 1 + Values[3] + Values[4])
-        return None;
-      unsigned Ordinal = 0;
-      while (Ordinal < SA.Defs.size() && SA.Defs[Ordinal]->getReg() != Reg)
-        ++Ordinal;
-      unsigned Columns = *ValidRow;
-      if (Values[3] && Ordinal == 1)
-        Columns = 1;
-      else if (Ordinal != 0) {
-        if (!Values[4] || !Values[2])
-          return None;
-        unsigned GroupColumns = Values[2] == 1   ? 8
-                                : Values[2] == 2 ? 16
-                                                 : 16 * (Values[2] - 1);
-        Columns = divideCeil(Columns, GroupColumns);
-      }
-      unsigned Rows = *ValidCol / 4;
-      unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
-      uint64_t CapacityBits = (uint64_t{1} << (*SizeCode + 6)) * 8;
-      if (!Bits || CapacityBits % (Rows * Bits))
-        return None;
-      return checkedTileDescriptor(LinxV5::TileDescriptor{
-          *DataType, Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
-                                : LinxV5Op::ArgFormat::CUBE_M32,
-          Rows, Columns, static_cast<unsigned>(CapacityBits / (Rows * Bits)),
-          *SizeCode});
-    }
-  }
-  if (!IsMX && (Text.contains("BSTART.TMATMUL") ||
-                Text.contains("BSTART.TGEMV") ||
-                Text.contains("BSTART.CUBE TMATMUL") ||
-                Text.contains("BSTART.CUBE TGEMV")))
+  if (Text.contains("BSTART.TMATMUL") || Text.contains("BSTART.TGEMV") ||
+      Text.contains("BSTART.CUBE TMATMUL") ||
+      Text.contains("BSTART.CUBE TGEMV"))
     return getLegacyInlineAsmTileDescriptor(MI, Reg, Active);
   bool IsConvert = Text.startswith("BSTART.TEPL 27,") ||
                    Text.startswith("BSTART.TEPL TCVT,");
@@ -1949,7 +2154,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
         MI, (Twine("BSTART.TEPL TCVT, ") + ResultType).str());
   }
   bool HasDerivedPhysicalCol = false;
-  if (IsMX || IsConvert) {
+  if (IsConvert) {
     size_t Binding = Text.find("B.IOT");
     if (Binding == StringRef::npos)
       return None;
@@ -1964,70 +2169,25 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       return None;
     bool CubeSource = SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
                       SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M32;
-    if (IsConvert) {
-      auto SourceType = getInlineAsmDataType(MI, Text.split('\n').first);
-      if (!SourceType || *SourceType != SourceDescriptor->DataType)
-        return None;
-      if (!DataType || !ValidCol || !ValidRow)
-        return None;
-      if (CubeSource) {
-        Layout = SourceDescriptor->Layout;
-        unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
-        unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
-        if (!Bits)
-          return None;
-        PhysicalCol = ((uint64_t{1} << (*SizeCode + 6)) * 8) / (Rows * Bits);
-        HasDerivedPhysicalCol = true;
-        if (Text.contains("B.ASSEMBLE")) {
-          if (Dimensions.ValidRowReg || Dimensions.ValidColReg)
-            return None;
-          ValidRow = Rows;
-          ValidCol = PhysicalCol;
-        }
-      }
-    } else {
-      if (Dimensions.ValidRowReg || Dimensions.ValidColReg ||
-          Dimensions.PhysicalColReg)
-        return None;
-      if (!CubeSource || SA.Defs.empty() || SA.Defs.front()->getReg() != Reg)
-        return None;
+    auto SourceType = getInlineAsmDataType(MI, Text.split('\n').first);
+    if (!SourceType || *SourceType != SourceDescriptor->DataType)
+      return None;
+    if (!DataType || !ValidCol || !ValidRow)
+      return None;
+    if (CubeSource) {
       Layout = SourceDescriptor->Layout;
-      size_t Attributes = Text.find("B.FPATR");
-      if (Attributes == StringRef::npos)
-        return None;
-      StringRef QuantText = Text.drop_front(Attributes + strlen("B.FPATR"))
-                                .split(',').first.trim();
-      Optional<unsigned> Quant;
-      if (QuantText.startswith("${") && QuantText.endswith(":c}"))
-        Quant = getInlineAsmOperandImmediate(
-            MI, Text, QuantText.data() - Text.data() + QuantText.find(':'));
-      else {
-        unsigned Value;
-        if (!QuantText.getAsInteger(10, Value))
-          Quant = Value;
-      }
-      if (!Quant || !ValidCol || !ValidRow)
-        return None;
-      DataType = *Quant ? getMatrixFPATROutputType(*Quant)
-                       : Optional<unsigned>(LinxV5Op::DataType::FP32);
-      if (!DataType)
-        return None;
-      unsigned SharedCount = Text.count("B.IOS");
-      if (SharedCount) {
-        if (SharedCount != 2 || (*ValidCol != 64 && *ValidCol != 128))
-          return None;
-        *ValidCol /= 4;
-      }
-      std::swap(ValidCol, ValidRow);
-      if (*Layout != LinxV5Op::ArgFormat::CUBE_M16 &&
-          *Layout != LinxV5Op::ArgFormat::CUBE_M32)
-        return None;
       unsigned Rows = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
       unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
-      uint64_t CapacityBits = (uint64_t{1} << (*SizeCode + 6)) * 8;
-      if (!Bits || CapacityBits % (Rows * Bits))
+      if (!Bits)
         return None;
-      PhysicalCol = CapacityBits / (Rows * Bits);
+      PhysicalCol = ((uint64_t{1} << (*SizeCode + 6)) * 8) / (Rows * Bits);
+      HasDerivedPhysicalCol = true;
+      if (Text.contains("B.ASSEMBLE")) {
+        if (Dimensions.ValidRowReg || Dimensions.ValidColReg)
+          return None;
+        ValidRow = Rows;
+        ValidCol = PhysicalCol;
+      }
     }
   }
   if (!DataType || *DataType == LinxV5Op::DataType::EMPTY_DataType ||
@@ -2537,7 +2697,8 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptorImpl(
       return None;
     }
     if (Joined && !(*Joined == *Incoming))
-      report_fatal_error(
+      LinxV5::reportTileDescriptorError(
+          MBB,
           "conflicting Local tile descriptors at COPY/PHI control-flow join");
     Joined = *Incoming;
   }
@@ -2575,8 +2736,8 @@ LinxV5::getTileRegDescriptor(MachineBasicBlock &MBB,
   Optional<TileDescriptor> Descriptor =
       tryGetTileRegDescriptor(MBB, MBBI, Reg);
   if (!Descriptor)
-    report_fatal_error(
-        "cannot prove a complete Local tile descriptor for COPY/PHI");
+    reportTileDescriptorError(
+        MBB, "cannot prove a complete Local tile descriptor for COPY/PHI");
   return *Descriptor;
 }
 

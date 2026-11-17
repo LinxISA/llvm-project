@@ -1,4 +1,4 @@
-# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %s 2>&1 | FileCheck %s
 # CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join
 --- |
   define void @predicate_numeric_join() { ret void }

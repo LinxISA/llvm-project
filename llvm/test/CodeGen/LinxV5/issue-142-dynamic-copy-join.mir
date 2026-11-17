@@ -1,4 +1,4 @@
-# RUN: not --crash llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s 2>&1 | FileCheck %s
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s 2>&1 | FileCheck %s
 # CHECK: conflicting Local tile descriptors at COPY/PHI control-flow join
 --- |
   define void @different_runtime_dimensions() { ret void }
