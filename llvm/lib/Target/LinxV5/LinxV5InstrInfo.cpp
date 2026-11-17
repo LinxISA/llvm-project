@@ -213,6 +213,130 @@ static inline const char *skipSeparator(const char *p) {
   return p;
 }
 
+static bool isMatrixInlineAsm(StringRef Text) {
+  return Text.startswith("BSTART.TGEMV") || Text.startswith("BSTART.TMATMUL") ||
+         Text.startswith("BSTART.CUBE TGEMV") ||
+         Text.startswith("BSTART.CUBE TMATMUL");
+}
+
+// Descriptor analysis sees the unexpanded asm template. In particular, the
+// CScale templates spell the same destination in both arms of a constant .if.
+// Select the active arm before counting destinations or mathematical sources.
+// This deliberately accepts only constant operands and simple comparisons;
+// unknown assembler expressions cannot prove a descriptor.
+static Optional<std::string> getActiveMatrixInlineAsm(MachineInstr &MI,
+                                                      StringRef Text) {
+  auto Constant = [&](StringRef Field) -> Optional<int64_t> {
+    Field = Field.trim();
+    if (Field.consume_front("${")) {
+      if (!Field.consume_back(":c}"))
+        return None;
+      unsigned Index;
+      if (Field.getAsInteger(10, Index))
+        return None;
+      MachineOperand *MO = getAsmOperand(&MI, Index);
+      if (!MO || !MO->isImm())
+        return None;
+      return MO->getImm();
+    }
+    int64_t Value;
+    if (Field.getAsInteger(0, Value))
+      return None;
+    return Value;
+  };
+  auto Condition = [&](auto &&Self, StringRef Expr) -> Optional<bool> {
+    Expr = Expr.trim();
+    // LLVM asm escapes a literal '$' with '$$' and a literal '|' with '$|'.
+    // Matrix templates use the latter for assembler logical OR.
+    for (StringRef Op : {StringRef("$|$|"), StringRef("||"), StringRef("&&")}) {
+      unsigned Depth = 0;
+      for (size_t I = 0; I < Expr.size(); ++I) {
+        if (Expr[I] == '(')
+          ++Depth;
+        else if (Expr[I] == ')') {
+          if (!Depth)
+            return None;
+          --Depth;
+        } else if (!Depth && Expr.substr(I).startswith(Op)) {
+          auto Left = Self(Self, Expr.take_front(I));
+          auto Right = Self(Self, Expr.drop_front(I + Op.size()));
+          if (!Left || !Right)
+            return None;
+          return Op == "&&" ? *Left && *Right : *Left || *Right;
+        }
+      }
+      if (Depth)
+        return None;
+    }
+    if (Expr.startswith("(") && Expr.endswith(")"))
+      return Self(Self, Expr.drop_front().drop_back());
+    for (StringRef Op : {StringRef("=="), StringRef("!=")}) {
+      size_t Pos = Expr.find(Op);
+      if (Pos == StringRef::npos)
+        continue;
+      auto Left = Constant(Expr.take_front(Pos));
+      auto Right = Constant(Expr.drop_front(Pos + Op.size()));
+      if (!Left || !Right)
+        return None;
+      return Op == "==" ? *Left == *Right : *Left != *Right;
+    }
+    auto Value = Constant(Expr);
+    if (!Value)
+      return None;
+    return *Value != 0;
+  };
+  struct Conditional {
+    bool ParentActive;
+    bool Taken;
+    bool SawElse = false;
+  };
+  SmallVector<Conditional, 4> Stack;
+  bool Active = true;
+  std::string Result;
+  SmallVector<StringRef, 32> Lines;
+  Text.split(Lines, '\n');
+  for (StringRef Line : Lines) {
+    StringRef Directive = Line.trim();
+    if (Directive.consume_front(".if ")) {
+      auto Value =
+          Active ? Condition(Condition, Directive) : Optional<bool>(false);
+      if (!Value)
+        return None;
+      Stack.push_back({Active, *Value});
+      Active = Active && *Value;
+    } else if (Directive.consume_front(".elseif ")) {
+      if (Stack.empty() || Stack.back().SawElse)
+        return None;
+      auto Value = Stack.back().ParentActive && !Stack.back().Taken
+                       ? Condition(Condition, Directive)
+                       : Optional<bool>(false);
+      if (!Value)
+        return None;
+      auto &Top = Stack.back();
+      Active = Top.ParentActive && !Top.Taken && *Value;
+      Top.Taken |= *Value;
+    } else if (Directive == ".else") {
+      if (Stack.empty() || Stack.back().SawElse)
+        return None;
+      auto &Top = Stack.back();
+      Active = Top.ParentActive && !Top.Taken;
+      Top.SawElse = true;
+    } else if (Directive == ".endif") {
+      if (Stack.empty())
+        return None;
+      Active = Stack.pop_back_val().ParentActive;
+    } else if (Directive.startswith(".if")) {
+      return None;
+    } else if (Active) {
+      Result.append(Line.data(), Line.size());
+      Result.push_back('\n');
+    }
+  }
+  if (!Stack.empty())
+    return None;
+  return Result;
+}
+
 LinxV5::SingleAsm LinxV5::parseSingleAsm(MachineInstr *MI) {
   LinxV5::SingleAsm SA;
   assert(MI->isInlineAsm() && "parseSingleAsm only works on inline asms");
@@ -227,6 +351,13 @@ LinxV5::SingleAsm LinxV5::parseSingleAsm(MachineInstr *MI) {
 
   // Disassemble the AsmStr, printing out the literal pieces, the operands, etc.
   const char *AsmStr = MI->getOperand(NumDefs).getSymbolName();
+  Optional<std::string> ActiveText;
+  if (isMatrixInlineAsm(AsmStr)) {
+    ActiveText = getActiveMatrixInlineAsm(*MI, AsmStr);
+    if (!ActiveText)
+      return SA;
+    AsmStr = ActiveText->c_str();
+  }
   const char *p = AsmStr;
   while (*p) {
     if (StringRef(p).startswith("->")) {
@@ -1611,9 +1742,49 @@ getMatrixInlineAsmAttributes(MachineInstr &MI, StringRef Text) {
   return Values;
 }
 
+struct MatrixInlineAsmSources {
+  SmallVector<MachineOperand *, 6> Local;
+  SmallVector<MachineOperand *, 4> Shared;
+};
+
+// Constraint slots can include unused CScale/scale carriers and need not be in
+// architectural order. Only source-form binders contribute mathematical inputs.
+static Optional<MatrixInlineAsmSources>
+getMatrixInlineAsmSources(MachineInstr &MI, StringRef Text) {
+  MatrixInlineAsmSources Result;
+  SmallVector<StringRef, 32> Lines;
+  Text.split(Lines, '\n');
+  for (StringRef Line : Lines) {
+    Line = Line.trim();
+    bool Shared = Line.consume_front("B.IOS ");
+    if (!Shared && !Line.consume_front("B.IOT "))
+      continue;
+    Line = Line.ltrim();
+    unsigned Count = 0;
+    while (Line.startswith("$")) {
+      MachineOperand *Source = nullptr;
+      const char *After = parseAsmOperand(&MI, Line.data(), Source);
+      if (!After || !Source || !Source->isReg() ||
+          isSharedTileReg(MI.getParent()->getParent()->getRegInfo(),
+                          Source->getReg()) != Shared ||
+          ++Count > (Shared ? 1u : 2u))
+        return None;
+      if (Shared)
+        Result.Shared.push_back(Source);
+      else
+        Result.Local.push_back(Source);
+      Line = Line.drop_front(After - Line.data()).ltrim();
+      if (!Line.consume_front(","))
+        break;
+      Line = Line.ltrim();
+    }
+  }
+  return Result;
+}
+
 static Optional<LinxV5::TileDescriptor>
 getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
-                                DescriptorResolutionContext &Active) {
+                                 DescriptorResolutionContext &Active) {
   LinxV5::SingleAsm SA = LinxV5::parseSingleAsm(&MI);
   Optional<unsigned> SizeCode;
   for (unsigned I = 0; I < SA.Defs.size(); ++I)
@@ -1624,8 +1795,14 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
   if (!SizeCode || *SizeCode == 0 || *SizeCode > 12)
     return None;
 
-  StringRef Text =
-      MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  StringRef Text = MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName();
+  Optional<std::string> ActiveText;
+  if (isMatrixInlineAsm(Text)) {
+    ActiveText = getActiveMatrixInlineAsm(MI, Text);
+    if (!ActiveText)
+      return None;
+    Text = *ActiveText;
+  }
   Optional<unsigned> DataType = getInlineAsmDataType(MI, Text);
   Optional<unsigned> MatrixLeftType = DataType;
   Optional<unsigned> Layout = getInlineAsmLayout(MI, Text);
@@ -1686,9 +1863,9 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
     unsigned Ordinal = 0;
     while (SA.Defs[Ordinal]->getReg() != Reg)
       ++Ordinal;
-    // Auxiliary reductions publish the intermediate accumulator type, before
-    // D's optional conversion (Bundle destination-shape contract).
-    if (Ordinal == 0 && (*Attributes)[0])
+    // D, RowMaxOut and GroupMaxOut all publish EffectiveDType. Only their
+    // valid widths and independently allocated capacities differ.
+    if ((*Attributes)[0])
       DataType = getMatrixFPATROutputType((*Attributes)[0]);
 
     // Matrix D is an M x N accumulator/result in A's persistent CUBE_M
@@ -1696,28 +1873,31 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
     const bool WithAccumulator =
         Text.contains("TGEMV.ACC") || Text.contains("TGEMVMX.ACC") ||
         Text.contains("TMATMUL.ACC") || Text.contains("TMATMULMX.ACC");
-    // Outputs precede inputs in the constraint list. In particular RowMax
-    // and GroupMax must not be mistaken for A or C.
-    MachineOperand *LeftSource =
-        getAsmOperand(&MI, SA.Defs.size() + (WithAccumulator ? 1 : 0));
     const bool IsMX = Text.contains("TMATMULMX") || Text.contains("TGEMVMX");
-    // MX templates may list Shared inputs before Local inputs. B.IOT, unlike
-    // constraint order, carries the ordered Local mathematical sources.
-    if (IsMX && Text.startswith("BSTART.CUBE ") && Text.count("B.IOS") < 4) {
-      size_t Binder = Text.find("B.IOT ");
-      if (Binder == StringRef::npos)
-        return None;
-      StringRef Sources = Text.drop_front(Binder + strlen("B.IOT ")).ltrim();
-      if (WithAccumulator)
-        Sources = Sources.split(',').second.ltrim();
-      LeftSource = nullptr;
-      if (!Sources.empty())
-        parseAsmOperand(&MI, Sources.data(), LeftSource);
-    }
-    if (!LeftSource || !LeftSource->isReg())
+    auto Sources = getMatrixInlineAsmSources(MI, Text);
+    if (!Sources)
       return None;
-    bool SharedLeft = isSharedTileReg(
-        MI.getParent()->getParent()->getRegInfo(), LeftSource->getReg());
+    auto GroupSize = [IsMX](unsigned Type) {
+      return 1u + (IsMX && LinxV5Op::matrixMXTypeNeedsScale(Type));
+    };
+    unsigned SharedCount = Sources->Shared.size();
+    unsigned RightGroup = GroupSize(*MatrixRightType);
+    bool SharedLeft = SharedCount == GroupSize(*MatrixLeftType) + RightGroup;
+    if (SharedCount && !SharedLeft && SharedCount != RightGroup)
+      return None;
+    unsigned LeftOrdinal = WithAccumulator ? 1 : 0;
+    MachineOperand *Accumulator = nullptr;
+    if (WithAccumulator) {
+      if (Sources->Local.empty())
+        return None;
+      Accumulator = Sources->Local.front();
+    }
+    MachineOperand *LeftSource = nullptr;
+    if (!SharedLeft) {
+      if (Sources->Local.size() <= LeftOrdinal)
+        return None;
+      LeftSource = Sources->Local[LeftOrdinal];
+    }
     if (SharedLeft) {
       if (ValidColDim->Reg != LinxV5::R0) {
         auto GroupM = getStaticTileDimensionRegister(
@@ -1727,17 +1907,13 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
         ValidColDim =
             InlineAsmDimension{LinxV5::R0, *GroupM + ValidColDim->Imm};
       }
-      if (Text.contains("TGEMV") || Text.count("B.IOS") != (IsMX ? 4u : 2u) ||
-          ValidColDim->Reg != LinxV5::R0 ||
+      if (Text.contains("TGEMV") || ValidColDim->Reg != LinxV5::R0 ||
           (ValidColDim->Imm != 64 && ValidColDim->Imm != 128))
         return None;
       unsigned Rows = ValidColDim->Imm == 64 ? 16 : 32;
       Layout = Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
                           : LinxV5Op::ArgFormat::CUBE_M32;
       if (WithAccumulator) {
-        MachineOperand *Accumulator = getAsmOperand(&MI, SA.Defs.size());
-        if (!Accumulator || !Accumulator->isReg())
-          return None;
         auto Descriptor = resolveTileDescriptor(
             *MI.getParent(), MI.getIterator(), Accumulator->getReg(), Active);
         // A loop-carried C may recurse back to this producer. The complete
@@ -1756,7 +1932,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
            LeftDescriptor->Layout != LinxV5Op::ArgFormat::CUBE_M32))
         return None;
       Layout = LeftDescriptor->Layout;
-      if (Text.contains("B.IOS")) {
+      if (SharedCount) {
         if (ValidColDim->Reg != LinxV5::R0) {
           auto GroupM = getStaticTileDimensionRegister(
               *MI.getParent(), MI.getIterator(), ValidColDim->Reg);

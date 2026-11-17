@@ -1,0 +1,204 @@
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -linxv5-enable-generic-element=true -o - %s | FileCheck %s
+#
+# Real Shared-AB MX ACC constraint order keeps an unbound CScale slot.
+# The folded template repeats D in mutually exclusive assembler branches.
+# Reordering constraints or dropping an unused slot must preserve descriptors.
+# CHECK-LABEL: name: mx_acc_m64_cscale0_emit
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_m64_cscale0_emit_no_dummy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_m64_cscale0_fold
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_m64_cscale0_fold_no_dummy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_m64_cscale1_emit
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_m64_cscale1_fold
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_m128_cscale0_emit
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: mx_acc_m128_cscale0_emit_no_dummy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: mx_acc_m128_cscale0_fold
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: mx_acc_m128_cscale0_fold_no_dummy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: mx_acc_m128_cscale1_emit
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: mx_acc_m128_cscale1_fold
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 64, 32, 64, 1, 29
+# CHECK-LABEL: name: mx_acc_reordered_constraints
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+# CHECK-LABEL: name: mx_acc_constant_expression
+# CHECK: $tile_t2 = PseudoTCOPYDesc 6, $tile_t1, 64, 16, 64, 1, 31
+--- |
+  define void @mx_acc_m64_cscale0_emit() { ret void }
+  define void @mx_acc_m64_cscale0_emit_no_dummy() { ret void }
+  define void @mx_acc_m64_cscale0_fold() { ret void }
+  define void @mx_acc_m64_cscale0_fold_no_dummy() { ret void }
+  define void @mx_acc_m64_cscale1_emit() { ret void }
+  define void @mx_acc_m64_cscale1_fold() { ret void }
+  define void @mx_acc_m128_cscale0_emit() { ret void }
+  define void @mx_acc_m128_cscale0_emit_no_dummy() { ret void }
+  define void @mx_acc_m128_cscale0_fold() { ret void }
+  define void @mx_acc_m128_cscale0_fold_no_dummy() { ret void }
+  define void @mx_acc_m128_cscale1_emit() { ret void }
+  define void @mx_acc_m128_cscale1_fold() { ret void }
+  define void @mx_acc_reordered_constraints() { ret void }
+  define void @mx_acc_constant_expression() { ret void }
+...
+---
+name: mx_acc_m64_cscale0_emit
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${7:c}\0AB.IOT $2, mask=1111\0A.endif\0AB.IOT mask=1111, last, ->$0<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m64_cscale0_emit_no_dummy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${6:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${6:c}\0AB.IOT $1, mask=1111\0A.endif\0AB.IOT mask=1111, last, ->$0<${7:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m64_cscale0_fold
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0A.if ${7:c}\0AB.IOT $1, $2, mask=1111, last, ->$0<${8:Z}>\0A.else\0AB.IOT $1, mask=1111, last, ->$0<${8:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m64_cscale0_fold_no_dummy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${6:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0A.if ${6:c}\0AB.IOT $1, $1, mask=1111, last, ->$0<${7:Z}>\0A.else\0AB.IOT $1, mask=1111, last, ->$0<${7:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m64_cscale1_emit
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${7:c}\0AB.IOT $2, mask=1111\0A.endif\0AB.IOT mask=1111, last, ->$0<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 1, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m64_cscale1_fold
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0A.if ${7:c}\0AB.IOT $1, $2, mask=1111, last, ->$0<${8:Z}>\0A.else\0AB.IOT $1, mask=1111, last, ->$0<${8:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 1, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m128_cscale0_emit
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${7:c}\0AB.IOT $2, mask=1111\0A.endif\0AB.IOT mask=1111, last, ->$0<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m128_cscale0_emit_no_dummy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${6:c}\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${6:c}\0AB.IOT $1, mask=1111\0A.endif\0AB.IOT mask=1111, last, ->$0<${7:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m128_cscale0_fold
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0A.if ${7:c}\0AB.IOT $1, $2, mask=1111, last, ->$0<${8:Z}>\0A.else\0AB.IOT $1, mask=1111, last, ->$0<${8:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m128_cscale0_fold_no_dummy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${6:c}\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${2:S}, mask=1111\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0A.if ${6:c}\0AB.IOT $1, $1, mask=1111, last, ->$0<${7:Z}>\0A.else\0AB.IOT $1, mask=1111, last, ->$0<${7:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m128_cscale1_emit
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${7:c}\0AB.IOT $2, mask=1111\0A.endif\0AB.IOT mask=1111, last, ->$0<${8:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 1, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_m128_cscale1_fold
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 32, $r0, 64, 1, 29, 7, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 128, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0A.if ${7:c}\0AB.IOT $1, $2, mask=1111, last, ->$0<${8:Z}>\0A.else\0AB.IOT $1, mask=1111, last, ->$0<${8:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 1, 13, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_reordered_constraints
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0A.if ${7:c}\0AB.IOT $2, $1, mask=1111, last, ->$0<${8:Z}>\0A.else\0AB.IOT $2, mask=1111, last, ->$0<${8:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_m1, 786441, $tile_u1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 1, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: mx_acc_constant_expression
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $shared_s1, $shared_s4, $shared_s5, $tile_m1
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 1, 31, 6, $r0, $r0, 64
+    INLINEASM &"BSTART.CUBE TMATMULMX.ACC, E4M3\0AB.DATR E4M3, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, ${7:c}\0AB.DIM zero, 64, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOS ${4:S}, mask=1111\0AB.IOS ${5:S}, mask=1111\0AB.IOS ${6:S}, mask=1111\0AB.IOT $1, mask=1111\0A.if ${7:c}\0AB.IOT $2, mask=1111\0A.endif\0A.if (0 == 1 $|$| 1 != 0) && (1 == 1)\0AB.IOT mask=1111, last, ->$0<${8:Z}>\0A.else\0AB.IOT mask=1111, last, ->$0<${7:Z}>\0A.endif\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_u1, 786441, $tile_m1, 655369, $shared_s0, 655369, $shared_s1, 655369, $shared_s4, 655369, $shared_s5, 13, 0, 13, 6
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
