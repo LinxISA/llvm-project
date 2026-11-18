@@ -5790,8 +5790,13 @@ LinxV5TargetLowering::getRegForInlineAsmConstraint(
     }
   }
 
-  if (Constraint == "vr")
+  if (Constraint == "vr") {
+    // Janus has no SIMT registers. Accepting this class creates narrow
+    // CopyFromReg results that scalar integer legalization cannot promote.
+    if (!Subtarget.isSIMT())
+      return std::make_pair(0U, nullptr);
     return std::make_pair(0U, &LinxV5::SIMTCGVRegClass);
+  }
   if (Constraint == "Tr")
     return std::make_pair(0U, &LinxV5::Tile_ABSRegClass);
   if (Constraint == "Sr")
