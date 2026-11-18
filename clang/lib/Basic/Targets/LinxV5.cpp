@@ -76,6 +76,11 @@ void LinxV5TargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__LINX_PTO_PE_DOMAIN__", "1");
   Builder.defineMacro("__linx_indexed_tlsu_range", "1");
   Builder.defineMacro("__linx_scalar_shareability", "1");
+  // Translation-unit capability. Function-level __vec__/__mtc__ attributes
+  // select a different backend subtarget but cannot change these macros.
+  Builder.defineMacro("__linx_simt_contract", "1");
+  if (HasSIMT)
+    Builder.defineMacro("__linx_simt", "1");
   StringRef CodeModel = getTargetOpts().CodeModel;
   if (CodeModel == "default")
     CodeModel = "small";
@@ -119,15 +124,32 @@ bool LinxV5TargetInfo::hasFeature(StringRef Feature) const {
   return llvm::StringSwitch<bool>(Feature)
       .Case("linx64v5", true)
       .Case("m", HasM)
+      .Case("simt", HasSIMT)
       .Default(false);
 }
 
 /// Perform initialization based on the user configured set of features.
+bool LinxV5TargetInfo::initFeatureMap(
+    llvm::StringMap<bool> &Features, DiagnosticsEngine &Diags, StringRef CPUName,
+    const std::vector<std::string> &FeaturesVec) const {
+  // Match LinxV5Subtarget's default Janus CPU, and apply explicit overrides
+  // after the CPU default. The canonical feature map also reaches CodeGen.
+  // Do not synthesize -simt for Janus: legacy __vec__/__mtc__ functions select
+  // the SIMT CPU in CodeGen, and must not inherit a new disabling feature.
+  if (CPUName == "simt")
+    Features["simt"] = true;
+  return TargetInfo::initFeatureMap(Features, Diags, CPUName, FeaturesVec);
+}
+
 bool LinxV5TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
                                             DiagnosticsEngine &Diags) {
   for (const auto &Feature : Features) {
     if (Feature == "+m")
       HasM = true;
+    else if (Feature == "+simt")
+      HasSIMT = true;
+    else if (Feature == "-simt")
+      HasSIMT = false;
   }
   return true;
 }
