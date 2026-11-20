@@ -584,6 +584,12 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   addLinkerCompressDebugSectionsOption(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
 
+  if (Triple.isLinxV5() && Args.hasArg(options::OPT_mlinx_group_runtime)) {
+    CmdArgs.push_back("-u");
+    CmdArgs.push_back("__linx_group_worker_start");
+  }
+
+
   addHIPRuntimeLibArgs(ToolChain, Args, CmdArgs);
 
   // The profile runtime also needs access to system libraries.

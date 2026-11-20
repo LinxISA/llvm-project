@@ -92,6 +92,9 @@ isPrivateObject(Value *P, SmallDenseMap<const Value *, bool, 8> &Cache,
               (C->getCalledFunction() &&
                (C->getCalledFunction()->getIntrinsicID() ==
                     Intrinsic::lifetime_start ||
+                C->getCalledFunction()->getIntrinsicID() == Intrinsic::vastart ||
+                C->getCalledFunction()->getIntrinsicID() == Intrinsic::vacopy ||
+                C->getCalledFunction()->getIntrinsicID() == Intrinsic::vaend ||
                 C->getCalledFunction()->getIntrinsicID() ==
                     Intrinsic::lifetime_end)))
             continue;
@@ -208,6 +211,7 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
   };
   SmallVector<MemIntrinsic *, 8> Mem;
   SmallVector<CallBase *, 8> Library;
+  SmallVector<CallBase *, 4> VaCopies;
   for (Instruction &I : instructions(F)) {
     if (TileBlocks.contains(I.getParent()))
       continue;
@@ -253,6 +257,16 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         case Intrinsic::var_annotation:
         case Intrinsic::experimental_noalias_scope_decl:
           continue;
+        case Intrinsic::vastart:
+          // The varargs ABI lowers these to pointer stores/copies. Keep the
+          // ordinary private lowering only for nonescaping stack va_lists;
+          // shared va_list objects still need explicit scoped operations.
+          if (NeedsScope(C->getArgOperand(0)))
+            Fail("shared va_list needs an explicit scoped lowering");
+          continue;
+        case Intrinsic::vacopy:
+          VaCopies.push_back(C);
+          continue;
         default:
           if (!C->doesNotAccessMemory())
             Fail(Twine("memory intrinsic '") + Callee->getName() +
@@ -269,6 +283,19 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         Library.push_back(C);
         continue;
       }
+      // Runtime libraries may explicitly assert a uniform call ABI at each
+      // call site (including constructor/function-pointer calls). Ordinary
+      // code still requires a checked direct callee contract. Do not override
+      // a visible incompatible callee with the call-site assertion.
+      auto CallContract = C->getFnAttr("linx-scalar-shareability");
+      auto CalleeContract = Callee ? Callee->getFnAttribute(
+                                        "linx-scalar-shareability")
+                                  : Attribute();
+      if (CallContract.isStringAttribute() &&
+          CallContract.getValueAsString() == Name &&
+          (!CalleeContract.isStringAttribute() ||
+           CalleeContract.getValueAsString() == Name))
+        continue;
       if (!Callee)
         Fail("indirect memory call needs a scoped callee contract");
       auto Contract = Callee->getFnAttribute("linx-scalar-shareability");
@@ -288,6 +315,16 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
            "' needs linx_scalar_shareability(\"intra\") or a visible "
            "definition");
     }
+  }
+  // Linx va_list is a single pointer. Materialize its copy before the scoped
+  // memory sweep, so even escaped/shared source and destination lists retain
+  // the appropriate request scope (vfprintf uses this across calls).
+  for (CallBase *C : VaCopies) {
+    IRBuilder<> B(C);
+    Type *PtrTy = B.getPtrTy();
+    Value *V = B.CreateAlignedLoad(PtrTy, C->getArgOperand(1), Align(1));
+    B.CreateAlignedStore(V, C->getArgOperand(0), Align(1));
+    C->eraseFromParent();
   }
   for (CallBase *C : Library) {
     if (!isa<CallInst>(C))
@@ -381,7 +418,7 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
       Work.push_back(&I);
   }
   if (Work.empty())
-    return !Mem.empty();
+    return !Mem.empty() || !VaCopies.empty();
   // Scoped intrinsics conservatively model normal GM aliasing and effects.
   // Do not leave preexisting function summaries claiming these new calls are
   // readonly/argmemonly/speculatable or cannot synchronize.

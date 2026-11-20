@@ -2,8 +2,8 @@
 // RUN: %clang++ --target=linx64v5 -mcpu=janus -O3 -c %s -o %t.o
 // RUN: llvm-objdump -dr --no-show-raw-insn --disassembler-options=no-tile-macros %t.o | FileCheck %s --check-prefix=OBJ
 
-extern "C" void shared_initialize();
-extern "C" void invocation_work(unsigned);
+extern "C" void shared_initialize() __attribute__((linx_scalar_shareability("intra")));
+extern "C" void invocation_work(unsigned) __attribute__((linx_scalar_shareability("intra")));
 
 extern "C" void common_runtime_entry() {
   unsigned thread = __builtin_linx_get_thread_idx();

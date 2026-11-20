@@ -203,6 +203,11 @@ void LinxV5::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   bool WantCRTs =
       !Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles);
 
+  if (Args.hasArg(options::OPT_mlinx_group_runtime)) {
+    CmdArgs.push_back("-u");
+    CmdArgs.push_back("__linx_group_worker_start");
+  }
+
   if (WantCRTs) {
     CmdArgs.push_back(Args.MakeArgString(
         D.InstalledDir + "/../linx64v5-unknown-elf/lib/crt0.o"));

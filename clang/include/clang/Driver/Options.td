@@ -3520,6 +3520,15 @@ def mlxbc : Flag<["-"], "mlxbc">, Group<m_linx_Features_Group>,
   HelpText<"enable cuda stype calling like `foo<<<dimx, dimy, dimz>>>(args)' in c/c++ language">,
   MarshallingInfoFlag<LangOpts<"LinxBlockC">>;
 
+def mlinx_group_runtime : Flag<["-"], "mlinx-group-runtime">,
+  Group<m_linx_Features_Group>,
+  HelpText<"Retain the Linx four-PE common-entry runtime from compiler-rt">;
+
+def mlinx_runtime_intra_abi : Flag<["-"], "mlinx-runtime-intra-abi">,
+  Group<m_linx_Features_Group>, Flags<[CC1Option]>,
+  HelpText<"Assert that all runtime callees, including indirect calls, use the Linx IntraCore scalar memory ABI">,
+  MarshallingInfoFlag<LangOpts<"LinxRuntimeIntraABI">>;
+
 def mlinx_single_layer : Flag<["-"], "mlinx-single-layer">, Group<m_linx_Features_Group>,
   Flags<[CC1Option]>,
   HelpText<"Enable Linx single-layer (scalar-only) architecture: reject __mtc__/__vec__ function attributes.">,

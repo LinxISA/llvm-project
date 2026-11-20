@@ -48,6 +48,7 @@ if (COMPILER_RT_BUILD_PROFILE)
 endif(COMPILER_RT_BUILD_PROFILE)
 
 set(COMPILER_RT_HEADERS
+  linx/pto_runtime.h
   ${SANITIZER_HEADERS}
   ${FUZZER_HEADERS}
   ${MEMPROF_HEADERS}
@@ -114,3 +115,7 @@ if (NOT CMAKE_CONFIGURATION_TYPES) # don't add this for IDEs.
                             -P "${CMAKE_BINARY_DIR}/cmake_install.cmake"
                     USES_TERMINAL)
 endif()
+
+install(FILES linx/pto_runtime.h
+  COMPONENT compiler-rt-headers
+  DESTINATION ${COMPILER_RT_INSTALL_INCLUDE_DIR}/linx)
