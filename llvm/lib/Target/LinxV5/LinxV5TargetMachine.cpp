@@ -18,12 +18,14 @@
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -76,6 +78,38 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5ConstantRegOptPass(*PR);
   initializeLinxV5SIMTSpillFixupPass(*PR);
 }
+
+namespace {
+// SROA can expose an aggregate ABI's pointer -> integer -> pointer round trip.
+// Fold only address/aggregate plumbing, then promote the newly visible local
+// carrier. Do not run memory optimizations before request scopes are assigned.
+struct LinxV5CarrierPreparePass : PassInfoMixin<LinxV5CarrierPreparePass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    bool Changed = false, Again;
+    do {
+      Again = false;
+      for (Instruction &I : make_early_inc_range(instructions(F))) {
+        if (!isa<CastInst>(I) && !isa<ExtractValueInst>(I) &&
+            !isa<InsertValueInst>(I) && !isa<GetElementPtrInst>(I))
+          continue;
+        if (Value *V = simplifyInstruction(
+                &I, SimplifyQuery(F.getParent()->getDataLayout()))) {
+          I.replaceAllUsesWith(V);
+          I.eraseFromParent();
+          Again = Changed = true;
+        } else if (I.use_empty()) {
+          I.eraseFromParent();
+          Again = Changed = true;
+        }
+      }
+    } while (Again);
+    if (Changed)
+      AM.invalidate(F, PreservedAnalyses::none());
+    auto PA = SROAPass().run(F, AM);
+    return Changed ? PreservedAnalyses::none() : PA;
+  }
+};
+} // namespace
 
 static StringRef computeDataLayout(const Triple &TT) {
   assert(TT.isArch64Bit() && "only 64-bits are currently supported");
@@ -234,6 +268,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // This does not optimize externally visible GM accesses, but prevents
         // a marked loop's local control storage becoming a scoped GM request.
         FPM.addPass(SROAPass());
+        FPM.addPass(LinxV5CarrierPreparePass());
         FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
