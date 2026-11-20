@@ -3711,7 +3711,7 @@ def PseudoTCOPYDesc : PseudoMCalllImpl<(outs TILE_DstWithArrow:$DstTile),
     (ins TileSizeWithBracket:$TileSize, TILE_Src_Reg:$SrcTile,
          TileCopyDimension:$ValidCol, TileCopyDimension:$ValidRow,
          TileCopyDimension:$PhysicalCol,
-         BstartDataType:$DataType, BArgFormat:$Layout)>;
+         BstartDataType:$DataType, BArgFormat:$Layout, variable_ops)>;
 
 // Identity TMOV preserving a one-row packed Predicate storage descriptor.
 let isCodeGenOnly = 1 in
@@ -4176,7 +4176,8 @@ class PseudoTEPL_TEXPANDS_Row_Base :
   (ins GPRPlusImm:$RegM, PlusImm17:$immM,
        GPRPlusImm:$RegN, PlusImm17:$immN,
        BstartDataType:$DataType, BArgFormat:$Layout,
-       TileSizeWithBracket:$TileSize, GPRSrc:$Scalar, uimm16:$PhysicalCols)> {
+       TileSizeWithBracket:$TileSize, GPRSrc:$Scalar, uimm16:$PhysicalCols,
+       variable_ops)> {
   let AsmString = "TEXPANDS\t<Rows: $RegM$immM, Cols: $RegN$immN, ${DataType}>, $Scalar, $DstTile$TileSize";
 }
 

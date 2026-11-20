@@ -922,6 +922,8 @@ static void buildTileDescriptorCopy(
       .addReg(Src, SrcFlags);
   LinxV5::addTileCopyDimensions(Copy, Descriptor);
   Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
+  if (Descriptor.PEMask != 0b1111)
+    Copy.addImm(Descriptor.PEMask);
 }
 
 bool SlotCalc::BuildCopy(MachineBasicBlock::iterator Before, LinxRegOp RegOp,
@@ -2511,6 +2513,7 @@ void LinxV5TRegToOffsetOpt::normalizeEntryContracts(MachineFunction &MF) {
             if (LHS.DataType != RHS.DataType ||
                 LHS.Layout != RHS.Layout ||
                 LHS.SizeCode != RHS.SizeCode ||
+                LHS.PEMask != RHS.PEMask ||
                 LHS.PackedPredicate != RHS.PackedPredicate)
               return false;
             bool HasSymbolicDimension = false;
@@ -4930,6 +4933,42 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   markTileLastUses(MF);
 
+  SmallVector<std::pair<MachineOperand *, unsigned>, 8> PartialMatrixDefs;
+  for (MachineBasicBlock &MBB : MF) {
+    for (MachineInstr &MI : MBB) {
+      if (!MI.isInlineAsm() ||
+          !StringRef(MI.getOperand(InlineAsm::MIOp_AsmString).getSymbolName())
+               .contains("TMATMUL"))
+        continue;
+      for (MachineOperand *Def : LinxV5::parseSingleAsm(&MI).Defs) {
+        if (!LinxV5::Tile_ABSRegClass.contains(Def->getReg()))
+          continue;
+        auto Descriptor = LinxV5::tryGetTileRegDescriptor(
+            MBB, std::next(MI.getIterator()), Def->getReg());
+        if (Descriptor && Descriptor->PEMask != 0b1111)
+          PartialMatrixDefs.emplace_back(Def, Descriptor->PEMask);
+      }
+    }
+  }
+  auto BalanceMatrixPublications = [&] {
+    for (const auto &Entry : PartialMatrixDefs) {
+      MachineInstr &MI = *Entry.first->getParent();
+      for (unsigned PEBit = 0b1000; PEBit; PEBit >>= 1) {
+        if (Entry.second & PEBit)
+          continue;
+        BuildMI(*MI.getParent(), std::next(MI.getIterator()), MI.getDebugLoc(),
+                TII->get(LinxV5::PseudoTEXPANDS_Row_SizeI))
+            .addReg(Entry.first->getReg(), RegState::Define | RegState::Dead)
+            .addReg(LinxV5::R0).addImm(1)
+            .addReg(LinxV5::R0).addImm(1)
+            .addImm(LinxV5Op::DataType::U32)
+            .addImm(LinxV5Op::ArgFormat::NORM)
+            .addImm(1).addReg(LinxV5::R0).addImm(1)
+            .addImm(PEBit);
+      }
+    }
+  };
+
   // So that we can use absolute register for LLVM-MCA to build DEF-USE Chain.
   if (!EnableReg2Offset) {
     if (EnableGenericElement) {
@@ -4944,6 +4983,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
       preserveRequiredTileSources(MF, false);
     }
     eraseLocalTileABISeeds(MF);
+    BalanceMatrixPublications();
     return true;
   }
 
@@ -4967,6 +5007,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
     }
     preserveRequiredTileSources(MF, false);
     eraseLocalTileABISeeds(MF);
+    BalanceMatrixPublications();
     return true;
   }
   for (MachineBasicBlock &MBB : MF) {
@@ -5055,6 +5096,7 @@ bool LinxV5TRegToOffsetOpt::runOnMachineFunction(MachineFunction &MF) {
 
   preserveRequiredTileSources(MF, true);
   eraseLocalTileABISeeds(MF);
+  BalanceMatrixPublications();
 
   return true;
 }
@@ -5134,6 +5176,7 @@ getTCOPYDescriptor(const MachineInstr &MI) {
   Descriptor.PhysicalCol = MI.getOperand(5).getImm();
   Descriptor.DataType = MI.getOperand(6).getImm();
   Descriptor.Layout = MI.getOperand(7).getImm();
+  Descriptor.PEMask = LinxV5::getTileCopyPEMask(MI);
   Descriptor.PackedPredicate = MI.getOpcode() == LinxV5::PseudoPCOPYDesc;
   return Descriptor;
 }

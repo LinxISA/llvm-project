@@ -604,6 +604,9 @@ bool LinxV5TileFixup::AnnotateTileSpillDescriptors(MachineFunction &MF) {
         if (!MaybeD)
           continue;
         const LinxV5::TileDescriptor &D = *MaybeD;
+        if (D.PEMask != 0b1111)
+          LinxV5::reportTileDescriptorError(
+              MBB, "cannot spill a partially published cooperative tile");
         int FI = MI.getOperand(1).getIndex();
         uint64_t Bytes = CapacityBytes(D);
         MachineFrameInfo &MFI = MF.getFrameInfo();

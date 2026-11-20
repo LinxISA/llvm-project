@@ -1,0 +1,59 @@
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -linxv5-enable-generic-element=true -o - %s | FileCheck %s
+# RUN: sed 's/zero, 32, ->lb0/zero, 64, ->lb0/' %s > %t.full.mir
+# RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -o - %t.full.mir | FileCheck %s --check-prefix=FULL
+# RUN: sed 's/zero, 32, ->lb0/zero, 33, ->lb0/' %s > %t.partial.mir
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.partial.mir 2>&1 | FileCheck %s --check-prefix=PARTIAL
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos,linxv5-treg-to-offset -o - %s | FileCheck %s --check-prefix=QUEUE
+# RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o %t.postra.mir %s
+# RUN: llc -mtriple=linx64v5 -start-after=linxv5-emit-header -filetype=obj -o %t.o %t.postra.mir
+# RUN: llvm-objdump --disassembler-options=no-tile-macros -dr --no-show-raw-insn %t.o | FileCheck %s --check-prefix=OBJ
+# RUN: sed '/    \$tile_t2 = PseudoTCOPYDesc/i\    $r23 = ORI $r0, 32' %t.postra.mir > %t.scratch.mir
+# RUN: llc -mtriple=linx64v5 -start-after=linxv5-emit-header -filetype=obj -o %t.scratch.o %t.scratch.mir
+# RUN: llvm-objdump --disassembler-options=no-tile-macros -d --no-show-raw-insn %t.scratch.o | FileCheck %s --check-prefix=SCRATCH
+
+# CHECK: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 128, 16, 128, 1, 31, 12
+# FULL: $tile_t2 = PseudoTCOPYDesc 7, $tile_t1, 128, 16, 128, 1, 31{{$}}
+# PARTIAL: cannot lower Local tile COPY/PHI of a cooperative TMATMUL result with group_M=33: per-PE result shape or participation is not uniform
+# QUEUE: INLINEASM
+# QUEUE-NEXT: dead $tile_t = PseudoTEXPANDS_Row_SizeI $r0, 1, $r0, 1, 25, 0, 1, $r0, 1, 1
+# QUEUE-NEXT: dead $tile_t = PseudoTEXPANDS_Row_SizeI $r0, 1, $r0, 1, 25, 0, 1, $r0, 1, 2
+# QUEUE-NEXT: $tile_t = PseudoTCOPYDesc 7, $tile_tos1{{.*}}, 128, 16, 128, 1, 31, 12
+# OBJ: BSTART.TMATMUL.ACC
+# OBJ: B.IOS S0.reuse, mask=1111
+# OBJ-NEXT: B.IOT n#1, u#1, mask=1111, last, ->t<8KB>
+# OBJ: ssrget 38, ->x3
+# OBJ: BSTART.STD COND,
+# OBJ-NEXT: R_LinxV5_32_BNEXT
+# OBJ-NEXT: setc.geui x3, 2
+# OBJ-NEXT: BSTART.TMOV FP32
+# OBJ: B.IOT t#1, mask=1100, last, ->u<8KB>
+# OBJ-NEXT: BSTART.STD DIRECT,
+# OBJ-NEXT: R_LinxV5_32_BNEXT
+# OBJ-NEXT: BSTART.STD COND,
+# OBJ-NEXT: R_LinxV5_32_BNEXT
+# OBJ-NEXT: setc.nei x3, 2
+# OBJ-NEXT: BSTART.TEPL TEXPANDS, U32
+# OBJ: B.IOT mask=0010, last, ->u<128B>
+# OBJ-NEXT: BSTART.STD COND,
+# OBJ-NEXT: R_LinxV5_32_BNEXT
+# OBJ-NEXT: setc.nei x3, 3
+# OBJ-NEXT: BSTART.TEPL TEXPANDS, U32
+# OBJ: B.IOT mask=0001, last, ->u<128B>
+# SCRATCH: ssrget 38, ->x2
+# SCRATCH: setc.geui x2, 2
+# SCRATCH: setc.nei x2, 2
+# SCRATCH: setc.nei x2, 3
+
+---
+name: local_a_shared_b_tail_copy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    $tile_u1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 64, 4, 31, 5, $r0, $r0, 64
+    $tile_n1 = PseudoTCI_EW_Row_SizeI $r0, 16, $r0, 128, 1, 31, 7, $r0, $r0, 128
+    INLINEASM &"BSTART.CUBE TMATMUL.ACC, FP16\0AB.DATR FP16, byte0, Zero, RNONE, NOSAT\0AB.FPATR 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\0AB.DIM zero, 32, ->lb0\0AB.DIM zero, 128, ->lb1\0AB.DIM zero, 64, ->lb2\0AB.IOS ${3:S}, mask=1111\0AB.IOT $1, $2, mask=1111, last, ->$0<${4:Z}>\0A", 25, 786443, def early-clobber $tile_t1, 786441, $tile_n1, 786441, $tile_u1, 655369, $shared_s0, 13, 7
+    $tile_t2 = COPY $tile_t1
+    BSTOP
+...

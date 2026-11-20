@@ -156,6 +156,7 @@ struct TileDescriptor {
   std::array<int64_t, 3> DimensionImms = {1, 1, 1};
   bool HasRuntimeDimensions = false;
   MachineInstr *RuntimeDimensionProducer = nullptr;
+  unsigned PEMask = 0b1111;
 
   bool operator==(const TileDescriptor &Other) const {
     return DataType == Other.DataType && Layout == Other.Layout &&
@@ -170,12 +171,14 @@ struct TileDescriptor {
            DimensionRegs == Other.DimensionRegs &&
            DimensionImms == Other.DimensionImms &&
            HasRuntimeDimensions == Other.HasRuntimeDimensions &&
-           RuntimeDimensionProducer == Other.RuntimeDimensionProducer;
+           RuntimeDimensionProducer == Other.RuntimeDimensionProducer &&
+           PEMask == Other.PEMask;
   }
 };
 
 void addTileCopyDimensions(MachineInstrBuilder &Copy,
                           const TileDescriptor &Descriptor);
+unsigned getTileCopyPEMask(const MachineInstr &MI);
 
 struct LocalTileABIInfo {
   unsigned ArgumentIndex = 0;

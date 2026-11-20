@@ -1169,6 +1169,13 @@ void LinxV5::addTileCopyDimensions(MachineInstrBuilder &Copy,
                Descriptor.PhysicalColDef);
 }
 
+unsigned LinxV5::getTileCopyPEMask(const MachineInstr &MI) {
+  return MI.getOpcode() == LinxV5::PseudoTCOPYDesc &&
+                 MI.getNumExplicitOperands() > 8
+             ? MI.getOperand(8).getImm()
+             : 0b1111;
+}
+
 static bool hasInlineAsmDimension(StringRef Text, unsigned Dimension) {
   return Text.contains((Twine("->lb") + Twine(Dimension)).str());
 }
@@ -1506,6 +1513,7 @@ struct DescriptorResolutionContext : SmallVector<DescriptorPosition, 8> {
   };
   DenseMap<DescriptorPosition, CachedDescriptor> Cache;
   unsigned Cycles = 0;
+  Optional<unsigned> UnsupportedCooperativeGroupM;
 };
 
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
@@ -1813,6 +1821,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
   Optional<InlineAsmDimension> PhysicalColDim =
       getInlineAsmDimensionOperand(MI, Text, 2);
   bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
+  unsigned PEMask = 0b1111;
   if (!ValidColDim || !ValidRowDim || !PhysicalColDim)
     return None;
   if (!HasPhysicalCol)
@@ -1898,6 +1907,17 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
         return None;
       LeftSource = Sources->Local[LeftOrdinal];
     }
+    auto IsSupportedCooperativeGroupM = [&](int64_t GroupM) {
+      if (GroupM == 16 || GroupM == 32 || GroupM == 48 || GroupM == 64 ||
+          GroupM == 96 || GroupM == 128) {
+        unsigned Rows = GroupM <= 64 ? 16 : 32;
+        PEMask = 0b1111 & (0b1111 << (4 - GroupM / Rows));
+        return true;
+      }
+      if (GroupM > 0 && GroupM <= 128)
+        Active.UnsupportedCooperativeGroupM = GroupM;
+      return false;
+    };
     if (SharedLeft) {
       if (ValidColDim->Reg != LinxV5::R0) {
         auto GroupM = getStaticTileDimensionRegister(
@@ -1908,9 +1928,9 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
             InlineAsmDimension{LinxV5::R0, *GroupM + ValidColDim->Imm};
       }
       if (Text.contains("TGEMV") || ValidColDim->Reg != LinxV5::R0 ||
-          (ValidColDim->Imm != 64 && ValidColDim->Imm != 128))
+          !IsSupportedCooperativeGroupM(ValidColDim->Imm))
         return None;
-      unsigned Rows = ValidColDim->Imm == 64 ? 16 : 32;
+      unsigned Rows = ValidColDim->Imm <= 64 ? 16 : 32;
       Layout = Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
                           : LinxV5Op::ArgFormat::CUBE_M32;
       if (WithAccumulator) {
@@ -1942,9 +1962,9 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
               LinxV5::R0, *GroupM + ValidColDim->Imm};
         }
         if (Text.contains("TGEMV") ||
-            (ValidColDim->Imm != 64 && ValidColDim->Imm != 128))
+            !IsSupportedCooperativeGroupM(ValidColDim->Imm))
           return None;
-        unsigned Rows = ValidColDim->Imm / 4;
+        unsigned Rows = ValidColDim->Imm <= 64 ? 16 : 32;
         unsigned ExpectedLayout = Rows == 16 ? LinxV5Op::ArgFormat::CUBE_M16
                                              : LinxV5Op::ArgFormat::CUBE_M32;
         if (*Layout != ExpectedLayout)
@@ -2055,7 +2075,10 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
   }
   LinxV5::TileDescriptor Descriptor{
       *DataType, *Layout, ValidRow, ValidCol, PhysicalCol, *SizeCode};
+  Descriptor.PEMask = PEMask;
   if (HasRuntimeDimensions) {
+    if (PEMask != 0b1111)
+      return None;
     Descriptor.DimensionRegs = {ValidColDim->Reg, ValidRowDim->Reg,
                                 PhysicalColDim->Reg};
     Descriptor.DimensionImms = {ValidColDim->Imm, ValidRowDim->Imm,
@@ -2409,6 +2432,7 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     Result.DataType = MI.getOperand(6).getImm();
     Result.Layout = MI.getOperand(7).getImm();
     Result.SizeCode = MI.getOperand(1).getImm();
+    Result.PEMask = LinxV5::getTileCopyPEMask(MI);
     Result.PackedPredicate = MI.getOpcode() == LinxV5::PseudoPCOPYDesc;
     Result.ValidCol = Dimension(3, Result.ValidColReg, Result.ValidColDef);
     Result.ValidRow = Dimension(4, Result.ValidRowReg, Result.ValidRowDef);
@@ -2733,8 +2757,15 @@ LinxV5::TileDescriptor
 LinxV5::getTileRegDescriptor(MachineBasicBlock &MBB,
                              MachineBasicBlock::iterator MBBI,
                              MCRegister Reg) {
+  DescriptorResolutionContext Active;
   Optional<TileDescriptor> Descriptor =
-      tryGetTileRegDescriptor(MBB, MBBI, Reg);
+      resolveTileDescriptor(MBB, MBBI, Reg, Active);
+  if (!Descriptor && Active.UnsupportedCooperativeGroupM)
+    reportTileDescriptorError(
+        MBB, Twine("cannot lower Local tile COPY/PHI of a cooperative "
+                   "TMATMUL result with group_M=") +
+                 Twine(*Active.UnsupportedCooperativeGroupM) +
+                 ": per-PE result shape or participation is not uniform");
   if (!Descriptor)
     reportTileDescriptorError(
         MBB, "cannot prove a complete Local tile descriptor for COPY/PHI");
@@ -3016,6 +3047,8 @@ void LinxV5InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
         .addReg(SrcReg, getKillRegState(KillSrc));
     LinxV5::addTileCopyDimensions(Copy, Descriptor);
     Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
+    if (Descriptor.PEMask != 0b1111)
+      Copy.addImm(Descriptor.PEMask);
   } else {
     BuildMI(MBB, MBBI, DL, get(LinxV5::ORI), DstReg)
         .addReg(SrcReg, getKillRegState(KillSrc))

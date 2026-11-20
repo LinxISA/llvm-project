@@ -29,7 +29,10 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCInstrInfo.h"
@@ -62,6 +65,7 @@ class LinxV5AsmPrinter : public AsmPrinter {
   const LinxV5Subtarget *STI;
   const LinxV5InstrInfo *TII;
   unsigned CurrentTilePEDomain = LinxV5TilePEDomain::Default;
+  MCRegister TilePEScratch;
 
 public:
   void getAnalysisUsage(AnalysisUsage &AU) const override {
@@ -90,6 +94,10 @@ public:
   void emitFunctionBodyEnd() override;
 
   void EmitToStreamer(MCStreamer &S, const MCInst &Inst);
+  void emitTileQueuePadding(MCRegister Hand, unsigned Mask);
+  MCRegister getTilePEScratch();
+  void emitTilePEGuard(MCSymbol *Skip, unsigned Compare, unsigned PE,
+                       bool ReadPE);
 
   void emitStartOfAsmFile(Module &M) override;
   void emitEndOfAsmFile(Module &M) override;
@@ -119,6 +127,65 @@ void LinxV5AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
   AsmPrinter::EmitToStreamer(*OutStreamer, Emitted);
 }
 
+MCRegister LinxV5AsmPrinter::getTilePEScratch() {
+  if (TilePEScratch)
+    return TilePEScratch;
+  const MachineRegisterInfo &MRI = MF->getRegInfo();
+  for (MCRegister Reg : {LinxV5::R23, LinxV5::R22, LinxV5::R21, LinxV5::R20,
+                         LinxV5::R9, LinxV5::R8, LinxV5::R7, LinxV5::R6,
+                         LinxV5::R5, LinxV5::R4, LinxV5::R3, LinxV5::R2}) {
+    if (!STI->isRegisterReservedByUser(Reg.id()) && !MRI.isLiveIn(Reg.id()) &&
+        !MRI.isPhysRegUsed(Reg, true) &&
+        llvm::none_of(*MF, [Reg](const MachineBasicBlock &MBB) {
+          return MBB.isLiveIn(Reg);
+        })) {
+      TilePEScratch = Reg;
+      return Reg;
+    }
+  }
+  report_fatal_error("partially published cooperative tile requires an unused "
+                     "caller-saved GPR for PE dispatch");
+}
+
+void LinxV5AsmPrinter::emitTilePEGuard(MCSymbol *Skip, unsigned Compare,
+                                      unsigned PE, bool ReadPE) {
+  MCRegister Scratch = getTilePEScratch();
+  if (ReadPE) {
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::BSTART_AUX_WITHOUT_TARGET_32_FALL));
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::SSR_GET).addReg(Scratch).addImm(38));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(LinxV5::BSTOP));
+  }
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(LinxV5::BSTART_STD_WITH_TARGET_17_COND)
+                     .addExpr(MCSymbolRefExpr::create(Skip, OutContext)));
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(Compare).addReg(Scratch).addImm(PE));
+}
+
+void LinxV5AsmPrinter::emitTileQueuePadding(MCRegister Hand, unsigned Mask) {
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
+                     .addImm(LinxV5Op::DataType::U32).addImm(59));
+  EmitToStreamer(*OutStreamer,
+                 MCInstBuilder(LinxV5::BDATR)
+                     .addImm(LinxV5Op::ArgFormat::NORM)
+                     .addImm(LinxV5Op::Canon::NORMAL_CANON)
+                     .addImm(LinxV5Op::DataType::EMPTY_DataType)
+                     .addImm(LinxV5Op::PadValue::Null)
+                     .addImm(LinxV5Op::CmpMode::EQ)
+                     .addImm(LinxV5Op::RMode::RNONE)
+                     .addImm(LinxV5Op::Sat::NOSAT)
+                     .addImm(LinxV5Op::ByteID::BYTE0));
+  for (unsigned Dimension = 0; Dimension != 3; ++Dimension)
+    EmitToStreamer(*OutStreamer, MCInstBuilder(LinxV5::B_DIM)
+                                     .addImm(Dimension).addReg(LinxV5::R0)
+                                     .addImm(1));
+  EmitToStreamer(*OutStreamer, MCInstBuilder(LinxV5::B_IOT_NoSrc_Dst)
+                                   .addReg(Hand).addImm(Mask).addImm(1).addImm(1));
+}
+
 void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
   if (MI->getOpcode() == LinxV5::PseudoLABEL) {
     OutStreamer->emitLabel(MI->getOperand(0).getMCSymbol());
@@ -132,6 +199,16 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
   LowerLinxV5MachineInstrToMCInst(MI, TmpInst, *this);
   if (TmpInst.getOpcode() == LinxV5::PseudoTEXPANDS_SizeI ||
       TmpInst.getOpcode() == LinxV5::PseudoTEXPANDS_Row_SizeI) {
+    if (TmpInst.getNumOperands() > 10) {
+      unsigned Mask = TmpInst.getOperand(10).getImm();
+      MCSymbol *Done = OutContext.createTempSymbol();
+      emitTilePEGuard(Done, LinxV5::SETC_NEI, 3 - Log2_32(Mask), true);
+      emitTileQueuePadding(TmpInst.getOperand(0).getReg(), Mask);
+      OutStreamer->emitLabel(Done);
+      EmitToStreamer(*OutStreamer,
+                     MCInstBuilder(LinxV5::BSTART_STD_WITHOUT_TARGET_32_FALL));
+      return;
+    }
     EmitToStreamer(*OutStreamer,
                    MCInstBuilder(LinxV5::BSTART_TEPL_NoMode)
                        .addOperand(TmpInst.getOperand(5))
@@ -264,6 +341,7 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
   }
   if ((TmpInst.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        TmpInst.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
+    unsigned PEMask = LinxV5::getTileCopyPEMask(*MI);
     // PseudoTCOPYDesc operands:
     //   Dst, SizeCode, Src, ValidCol, ValidRow, PhysicalCol, DType, Layout.
     // Emit the physical TMOV bundle here. Sending a synthetic PseudoTMOV to
@@ -297,12 +375,33 @@ void LinxV5AsmPrinter::emitInstruction(const MachineInstr *MI) {
     Commands.push_back(
         MCInstBuilder(LinxV5::B_IOT_OneSrc_Dst)
             .addOperand(TmpInst.getOperand(0))
-            .addOperand(MCOperand::createImm(0b1111))
+            .addImm(PEMask)
             .addOperand(TmpInst.getOperand(1))
             .addOperand(MCOperand::createImm(1))
             .addOperand(TmpInst.getOperand(2)));
+    if (PEMask == 0b1111) {
+      for (const MCInst &Command : Commands)
+        EmitToStreamer(*OutStreamer, Command);
+      return;
+    }
+    MCSymbol *Inactive = OutContext.createTempSymbol();
+    MCSymbol *Done = OutContext.createTempSymbol();
+    emitTilePEGuard(Inactive, LinxV5::SETC_GEUI, countPopulation(PEMask), true);
     for (const MCInst &Command : Commands)
       EmitToStreamer(*OutStreamer, Command);
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::BSTART_STD_WITH_TARGET_17_DIRECT)
+                       .addExpr(MCSymbolRefExpr::create(Done, OutContext)));
+    OutStreamer->emitLabel(Inactive);
+    for (unsigned PE = countPopulation(PEMask); PE != 4; ++PE) {
+      MCSymbol *Next = OutContext.createTempSymbol();
+      emitTilePEGuard(Next, LinxV5::SETC_NEI, PE, false);
+      emitTileQueuePadding(TmpInst.getOperand(0).getReg(), 0b1000 >> PE);
+      OutStreamer->emitLabel(Next);
+    }
+    OutStreamer->emitLabel(Done);
+    EmitToStreamer(*OutStreamer,
+                   MCInstBuilder(LinxV5::BSTART_STD_WITHOUT_TARGET_32_FALL));
     return;
   }
   SmallVector<MCInst> CompareCommands;
@@ -506,6 +605,7 @@ bool LinxV5AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 bool LinxV5AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   STI = &MF.getSubtarget<LinxV5Subtarget>();
   TII = STI->getInstrInfo();
+  TilePEScratch = MCRegister();
   SetupMachineFunction(MF);
   emitFunctionBody();
   return false;

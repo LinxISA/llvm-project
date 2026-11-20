@@ -1,10 +1,11 @@
 # RUN: llc -mtriple=linx64v5 -run-pass=postrapseudos -o - %s | FileCheck %s
 # RUN: llc -mtriple=linx64v5 -verify-machineinstrs -run-pass=postrapseudos -o /dev/null %s
 # RUN: sed 's/zero, 64, ->lb0/zero, 63, ->lb0/' %s > %t.partial.mir
-# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.partial.mir 2>&1 | FileCheck %s --check-prefix=UNKNOWN
+# RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.partial.mir 2>&1 | FileCheck %s --check-prefix=PARTIAL
 # RUN: sed 's/B.FPATR 16, 0, 3, 1, 1/B.FPATR 63, 0, 3, 1, 1/' %s > %t.mode.mir
 # RUN: not llc -mtriple=linx64v5 -run-pass=postrapseudos -o /dev/null %t.mode.mir 2>&1 | FileCheck %s --check-prefix=UNKNOWN
 # UNKNOWN: cannot prove a complete Local tile descriptor for COPY/PHI
+# PARTIAL: cannot lower Local tile COPY/PHI of a cooperative TMATMUL result with group_M=63: per-PE result shape or participation is not uniform
 --- |
   define void @shared_matrix_m64() { ret void }
   define void @shared_mx_reductions() { ret void }
