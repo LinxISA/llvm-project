@@ -194,6 +194,17 @@ def SrcRUW : RegWithSrcRType<"UW", 0b10>;
 def SrcRNEG : RegWithSrcRType<"NEG", 0b11>;
 def SrcRNOT : RegWithSrcRType<"NOT", 0b11>;
 
+// PTO v0.58 assigns a separate SrcRType encoding to the binary ALU family:
+// 00=.sw, 01=.uw, 10=.neg/.not, 11=unmodified.  Address, comparison and
+// select instructions keep the operand encodings above.  Reusing their
+// parser/print traits preserves the public suffix spelling while making the
+// instruction family own the encoded value.
+def BinarySrcRNONE : RegWithSrcRType<"NONE", 0b11>;
+def BinarySrcRSW : RegWithSrcRType<"SW", 0b00>;
+def BinarySrcRUW : RegWithSrcRType<"UW", 0b01>;
+def BinarySrcRNEG : RegWithSrcRType<"NEG", 0b10>;
+def BinarySrcRNOT : RegWithSrcRType<"NOT", 0b10>;
+
 def ShamtImmAsmOperand : AsmOperandClass {
   let Name = "ShamtImm";
   let ParserMethod = "parseShamtImm";
@@ -216,10 +227,10 @@ class ALUri_Base<bits<3> Func, LinxV5InstOpcode opc, Operand Imm, string opcstr,
     LinxV5Inst_E<type, opc, Func,(outs DstRWithArrow:$DstR), (ins GPRSrc:$SrcL, Imm:$Imm12), opcstr>;
 
 multiclass ALUarith<bits<3> Func, string opcstr, LinxV5InstOpcode opc, LinxV5InstType type> {
-  def ""   : ALUrr_Base<Func, opc, type, SrcRNONE, opcstr>;
-  def _SW  : ALUrr_Base<Func, opc, type, SrcRSW, opcstr>;
-  def _UW  : ALUrr_Base<Func, opc, type, SrcRUW, opcstr>;
-  def _NEG : ALUrr_Base<Func, opc, type, SrcRNEG, opcstr>;
+  def ""   : ALUrr_Base<Func, opc, type, BinarySrcRNONE, opcstr>;
+  def _SW  : ALUrr_Base<Func, opc, type, BinarySrcRSW, opcstr>;
+  def _UW  : ALUrr_Base<Func, opc, type, BinarySrcRUW, opcstr>;
+  def _NEG : ALUrr_Base<Func, opc, type, BinarySrcRNEG, opcstr>;
 }
 
 defm ADD : ALUarith<0b000, "add", OPC_Arithmetic_Operation_64, Type_010>;
@@ -244,10 +255,10 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1 in
 defm SUBI : ALUarithI<0b001, "subi", Type_010>;
 
 multiclass ALUlogic<bits<3> Func, string opcstr, LinxV5InstOpcode opc, LinxV5InstType type> {
-  def ""  :  ALUrr_Base<Func, opc, type, SrcRNONE, opcstr>;
-  def _SW  : ALUrr_Base<Func, opc, type, SrcRSW, opcstr>;
-  def _UW  : ALUrr_Base<Func, opc, type, SrcRUW, opcstr>;
-  def _NOT : ALUrr_Base<Func, opc, type, SrcRNOT, opcstr>;
+  def ""  :  ALUrr_Base<Func, opc, type, BinarySrcRNONE, opcstr>;
+  def _SW  : ALUrr_Base<Func, opc, type, BinarySrcRSW, opcstr>;
+  def _UW  : ALUrr_Base<Func, opc, type, BinarySrcRUW, opcstr>;
+  def _NOT : ALUrr_Base<Func, opc, type, BinarySrcRNOT, opcstr>;
 }
 
 defm AND : ALUlogic<0b010, "and", OPC_Arithmetic_Operation_64, Type_010>;
