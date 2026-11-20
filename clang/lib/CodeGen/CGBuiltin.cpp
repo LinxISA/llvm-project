@@ -19246,14 +19246,10 @@ Value *CodeGenFunction::EmitHexagonBuiltinExpr(unsigned BuiltinID,
 }
 
 llvm::Value *CodeGenFunction::EmitLinxV5GetSysReg(const CallExpr *E,
-                                                  llvm::Intrinsic::ID ID) {
-  SmallVector<llvm::Value *> Args;
-  Args.push_back(EmitScalarExpr(E->getArg(0)));
-  Args.push_back(EmitScalarExpr(E->getArg(1)));
-
-  SmallVector<llvm::Type *> OverloadTypes;
-  llvm::Function *F = CGM.getIntrinsic(ID, OverloadTypes);
-  return Builder.CreateCall(F, Args, "");
+                                                llvm::Intrinsic::ID ID) {
+  auto Address = E->getArg(0)->EvaluateKnownConstInt(getContext());
+  return Builder.CreateCall(CGM.getIntrinsic(ID),
+                            ConstantInt::get(Int64Ty, Address.getZExtValue()));
 }
 
 // BLK built-in format:
@@ -19674,8 +19670,7 @@ Value *CodeGenFunction::EmitLinxV5BuiltinExpr(unsigned BuiltinID,
   default:
       llvm_unreachable("unexpected builtin ID");
   case LinxV5::BI__builtin_linx_get_system_reg:
-      ID = Intrinsic::linx_get_sysreg;
-      return EmitLinxV5GetSysReg(E, ID);
+    return EmitLinxV5GetSysReg(E, Intrinsic::linx_get_sysreg);
   case LinxV5::BI__builtin_linx_get_thread_id:
   case LinxV5::BI__builtin_linx_get_thread_idx: {
       ID = Intrinsic::linx_get_thread_id;

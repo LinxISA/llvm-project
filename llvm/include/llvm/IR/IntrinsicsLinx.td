@@ -61,8 +61,9 @@ def int_linx_hyper_region_start : Intrinsic<[], [llvm_i64_ty], [IntrHasSideEffec
 def int_linx_hyper_region_end : Intrinsic<[],[llvm_i64_ty], [IntrHasSideEffects]>;
 
 def int_linx_get_sysreg : DefaultAttrsIntrinsic<[llvm_i64_ty],
-                                                [llvm_i64_ty],
-                                                [IntrHasSideEffects,]>;
+                                               [llvm_i64_ty],
+                                               [IntrHasSideEffects,
+                                                ImmArg<ArgIndex<0>>]>;
 
 def int_linx_get_thread_id : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;
 def int_linx_get_thread_idx : Intrinsic<[llvm_i64_ty], [], [IntrNoMem]>;

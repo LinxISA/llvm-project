@@ -148,6 +148,8 @@ void LinxV5EmitHeader::instIsolate(MachineFunction &MF) {
       // Isolate them just like ordinary Tile operations so a Local TCOPY/TMOV
       // inserted by TRegToOffset cannot become part of the same final block.
       if (LinxV5II::isTileOp(TSFlags) || LinxV5II::isHeaderOnly(TSFlags) ||
+          MI.getOpcode() == LinxV5::SSR_GET ||
+          MI.getOpcode() == LinxV5::HL_SSR_GET ||
           MI.getOpcode() == LinxV5::PseudoV5SharedL2S ||
           MI.getOpcode() == LinxV5::PseudoV5SharedS2L) {
         if (MI.getIterator() == MBB->getLastNonDebugInstr()) {
@@ -471,7 +473,11 @@ void LinxV5EmitHeader::emitBranchHint(MachineBasicBlock *MBB) {
 unsigned LinxV5EmitHeader::getPEType(MachineBasicBlock &MBB) {
   unsigned Mask = LinxV5II::PET_ALL;
   for (MachineInstr &MI : MBB) {
-    Mask &= LinxV5II::getPEMask(MI.getDesc().TSFlags);
+    if (MI.getOpcode() == LinxV5::SSR_GET ||
+        MI.getOpcode() == LinxV5::HL_SSR_GET)
+      Mask &= LinxV5II::PET_SYS;
+    else
+      Mask &= LinxV5II::getPEMask(MI.getDesc().TSFlags);
     if (Mask == 0) {
       errs() << "Block PEType conflict at:\n";
       errs() << MI;

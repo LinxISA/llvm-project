@@ -3347,12 +3347,18 @@ SDValue LinxV5TargetLowering::lowerSysGet(SDValue Op, SelectionDAG &DAG) const {
   Ops.push_back(Op->getOperand(0));
 
   if (Subtarget.enableLegacyISel()) {
+    if (!isUInt<16>(Imm))
+      report_fatal_error(
+          "LinxV5 legacy system register address must fit in 16 bits");
     return SDValue(DAG.getMachineNode(LinxV5::PseudoVBXSYSGET, DL,
                                       Op.getValueType(), MVT::Other, Ops),
                    0);
   } else {
-    return SDValue(DAG.getMachineNode(LinxV5::SSR_GET, DL, Op.getValueType(),
-                                      MVT::Other, Ops),
+    if (!isUInt<24>(Imm))
+      report_fatal_error("LinxV5 system register address must fit in 24 bits");
+    unsigned Opcode = isUInt<12>(Imm) ? LinxV5::SSR_GET : LinxV5::HL_SSR_GET;
+    return SDValue(DAG.getMachineNode(Opcode, DL, Op.getValueType(), MVT::Other,
+                                      Ops),
                    0);
   }
 }

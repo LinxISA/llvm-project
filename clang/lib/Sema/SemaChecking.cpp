@@ -4487,10 +4487,17 @@ bool Sema::CheckRISCVBuiltinFunctionCall(const TargetInfo &TI,
 }
 bool Sema::CheckLinxV5BuiltinSysGetReg(CallExpr *TheCall) {
   Expr *Arg0 = TheCall->getArg(0);
-  if (!Arg0->isIntegerConstantExpr(Context)) {
+  if (Arg0->isValueDependent())
+    return false;
+
+  auto Address = Arg0->getIntegerConstantExpr(Context);
+  if (!Address) {
     return Diag(TheCall->getBeginLoc(), diag::err_linx_builtin_requires_imm)
            << TheCall->getSourceRange();
   }
+  if (!Address->isIntN(24))
+    return Diag(TheCall->getBeginLoc(), diag::err_argument_invalid_range)
+           << toString(*Address, 10) << 0 << 0xffffff << Arg0->getSourceRange();
 
   return false;
 }
