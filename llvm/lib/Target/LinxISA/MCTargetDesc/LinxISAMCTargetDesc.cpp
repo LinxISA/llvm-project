@@ -66,8 +66,11 @@ public:
 };
 
 class LinxISAObjectTargetStreamer final : public MCTargetStreamer {
+  const StringRef Identity;
+
 public:
-  explicit LinxISAObjectTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
+  explicit LinxISAObjectTargetStreamer(MCStreamer &S, StringRef Identity)
+      : MCTargetStreamer(S), Identity(Identity) {}
 
   void finish() override {
     MCStreamer &Out = getStreamer();
@@ -85,10 +88,10 @@ public:
     Out.switchSection(Note);
     Out.emitValueToAlignment(Align(4));
     Out.emitIntValue(4, 4); // namesz: PTO\0
-    Out.emitIntValue(PTOISA::Identity.size(), 4);
+    Out.emitIntValue(Identity.size(), 4);
     Out.emitIntValue(1, 4); // PTO_NT_ISA_IDENTITY
     Out.emitBytes(StringRef("PTO", 4));
-    Out.emitBytes(PTOISA::Identity);
+    Out.emitBytes(Identity);
     Out.emitValueToAlignment(Align(4));
     Out.endSection(Note);
     Out.switchSection(Previous);
@@ -99,7 +102,13 @@ static MCTargetStreamer *
 createLinxISAObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
   if (!STI.getTargetTriple().isOSBinFormatELF())
     return nullptr;
-  return new LinxISAObjectTargetStreamer(S);
+  static constexpr StringLiteral ScopedIdentity{
+#include "LinxISAScopedScalarIdentity.inc"
+  };
+  const auto Identity = STI.getFeatureBits()[LinxISA::FeaturePTO0591Scoped]
+                            ? ScopedIdentity
+                            : PTOISA::Identity;
+  return new LinxISAObjectTargetStreamer(S, Identity);
 }
 
 } // namespace

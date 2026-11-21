@@ -8,6 +8,7 @@
 
 #include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
+#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/SmallVector.h"
@@ -1600,6 +1601,7 @@ bool LinxISAAsmParser::parseInstruction(ParseInstructionInfo &Info,
   (void)Info;
 
   Operands.push_back(LinxOperand::createToken(Name, NameLoc));
+  LinxISA::takeScopedScalarSuffix(Name);
 
   // Bracketed operands are ambiguous in LinxISA syntax:
   // - Memory operands: [base, off] or [base, lc0<<k, off]
@@ -4274,6 +4276,9 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
   auto *TokOp = static_cast<LinxOperand *>(Operands[0].get());
   StringRef Mnemonic = TokOp->getToken();
+  const unsigned Scope = LinxISA::takeScopedScalarSuffix(Mnemonic);
+  if (Scope && !getSTI().getFeatureBits()[LinxISA::FeaturePTO0591Scoped])
+    return Error(IDLoc, "scoped Scalar requires +pto-v0591-scoped");
   if (auto LegacyDiag = getLegacyAliasDiag(Mnemonic))
     return Error(IDLoc, *LegacyDiag);
 
@@ -4503,6 +4508,10 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
   }
   if (It == Map.end())
     return Error(IDLoc, ("unrecognized instruction '" + Mnemonic + "'").str());
+  if (Scope && llvm::none_of(It->second, [](unsigned Index) {
+        return LinxISA::isScopedScalarForm(linxisa_inst_forms[Index].id);
+      }))
+    return Error(IDLoc, "no matching scoped Scalar form");
 
   ParsedInst PI;
   buildParsedInst(Operands, PI);
@@ -4653,6 +4662,8 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
   for (unsigned FormIndex : It->second) {
     const linxisa_inst_form &F = linxisa_inst_forms[FormIndex];
+    if (Scope && !LinxISA::isScopedScalarForm(F.id))
+      continue;
     MCInst MI;
     std::string Err;
     if (!buildMCInstForForm(FormIndex, PI, MI, Err)) {
@@ -4706,9 +4717,18 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return Error(IDLoc, *ShapeMatchedErr);
     if (!LastErr.empty())
       return Error(IDLoc, LastErr);
-    return Error(IDLoc, "no matching encoding for instruction");
+    return Error(IDLoc, Scope ? "no matching scoped Scalar form"
+                              : "no matching encoding for instruction");
   }
 
+  if (Scope) {
+    for (const MCOperand &Operand : Best->Inst) {
+      if (Operand.isExpr())
+        return Error(IDLoc,
+                     "scoped Scalar symbol operands require a scoped relocation");
+    }
+    Best->Inst.setFlags(Scope);
+  }
   Out.emitInstruction(Best->Inst, getSTI());
   return false;
 }

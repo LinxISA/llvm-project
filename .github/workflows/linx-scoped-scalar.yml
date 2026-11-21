@@ -30,6 +30,7 @@ jobs:
           sparse-checkout: |
             isa/v0.58/linxisa-v0.58.json
             isa/v0.59/state/pto_scalar_forms.json
+            isa/v0.59/pto-spec.lock.json
           sparse-checkout-cone-mode: false
       - name: Check generated whitelist
         run: python3 llvm/utils/linxisa/gen_scoped_scalar_forms.py linx-catalog --check
@@ -37,7 +38,7 @@ jobs:
         run: |
           cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_TARGETS_TO_BUILD= -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=LinxISA
-          cmake --build build --target llvm-mc llvm-objdump llvm-config FileCheck count not -j 3
+          cmake --build build --target llvm-mc llvm-objdump llvm-readobj llvm-config FileCheck count not -j 3
       - name: Test scoped disassembly
         run: |
           build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s
