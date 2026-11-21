@@ -1,4 +1,5 @@
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
@@ -80,7 +81,8 @@ static bool isLegalCompressedStdBrType(const linxisa_inst_form &Form,
 }
 
 static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
-                                          unsigned &OutOpcode) {
+                                         unsigned &OutOpcode,
+                                         bool Scoped = false) {
   // Best-effort: pick the matching form with the most fixed bits.
   unsigned Best = ~0U;
   unsigned BestFixed = 0;
@@ -90,6 +92,8 @@ static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
     if (unsigned(F.length_bits) != Bits)
       continue;
     if ((Insn & F.mask) != F.match)
+      continue;
+    if (Scoped && !LinxISA::isScopedScalarForm(F.id))
       continue;
 
     // Disambiguate packed tile/par headers from MSEQ/MPAR in canonical PTO
@@ -316,21 +320,41 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
   const linxisa_inst_form *Matched = nullptr;
   unsigned MatchedBits = 0;
 
-  for (unsigned Bits : CandidateBits) {
-    if (!isSupportedLength(Bits))
-      continue;
-    unsigned SizeBytes = Bits / 8;
-    if (Bytes.size() < SizeBytes)
-      continue;
-    uint64_t Insn = readLE(Bytes, SizeBytes);
-    unsigned Opcode = 0;
-    const linxisa_inst_form *Form = findMatch(Insn, Bits, Opcode);
-    if (!Form)
-      continue;
-    Matched = Form;
-    MatchedOpcode = Opcode;
-    MatchedBits = Bits;
-    break;
+  unsigned Scope = LinxISA::ScopeUnqualified;
+  uint64_t Insn = 0;
+  const bool IsCarrier =
+      Bytes.size() >= 2 && (readLE(Bytes, 2) & 0xf0ff) == 0x001f;
+  if (IsCarrier) {
+    Size = std::min<size_t>(Bytes.size(), 8);
+    if (Size != 8)
+      return Fail;
+    const uint64_t Carrier = readLE(Bytes, Size);
+    const unsigned EncodedScope = (Carrier >> 8) & 3;
+    const unsigned EncodedLength = (Carrier >> 10) & 3;
+    if (EncodedScope == 3 || EncodedLength == 3)
+      return Fail;
+    Insn = Carrier >> 16;
+    MatchedBits = (EncodedLength + 1) * 16;
+    if (Insn >> MatchedBits)
+      return Fail;
+    Matched = findMatch(Insn, MatchedBits, MatchedOpcode, /*Scoped=*/true);
+    if (!Matched)
+      return Fail;
+    Scope = EncodedScope + LinxISA::ScopePrivate;
+  } else {
+    for (unsigned Bits : CandidateBits) {
+      if (!isSupportedLength(Bits))
+        continue;
+      unsigned SizeBytes = Bits / 8;
+      if (Bytes.size() < SizeBytes)
+        continue;
+      Insn = readLE(Bytes, SizeBytes);
+      Matched = findMatch(Insn, Bits, MatchedOpcode);
+      if (!Matched)
+        continue;
+      Size = SizeBytes;
+      break;
+    }
   }
 
   if (!Matched) {
@@ -339,11 +363,9 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
     return Fail;
   }
 
-  Size = MatchedBits / 8;
-  uint64_t Insn = readLE(Bytes, Size);
-
   Instr.clear();
   Instr.setOpcode(MatchedOpcode);
+  Instr.setFlags(Scope);
 
   StringRef Mnem(Matched->mnemonic ? Matched->mnemonic : "");
 
@@ -392,7 +414,11 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
       // *.PCR/HL.*.PCR: PC-relative data access.
       WantsSym = true;
       IsBranchLike = false;
-      SymValue = static_cast<int64_t>(Address) + V;
+      if (IsCarrier)
+        SymValue = static_cast<int64_t>((Address & ~uint64_t(3)) +
+                                        static_cast<uint64_t>(V) * 4);
+      else
+        SymValue = static_cast<int64_t>(Address) + V;
     } else if (FieldName == "simm12" && Mnem.starts_with("B.")) {
       // Conditional branches (halfword-scaled).
       WantsSym = true;
