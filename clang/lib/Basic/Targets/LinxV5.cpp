@@ -73,6 +73,8 @@ void LinxV5TargetInfo::getTargetDefines(const LangOptions &Opts,
   Builder.defineMacro("__linxv5");
   Builder.defineMacro("__linx_v5");
   Builder.defineMacro("__linx_xlen", "64");
+  if (HasSIMT)
+    Builder.defineMacro("__linx_simt", "1");
   Builder.defineMacro("__LINX_PTO_PE_DOMAIN__", "1");
   Builder.defineMacro("__linx_indexed_tlsu_range", "1");
   Builder.defineMacro("__linx_scalar_shareability", "1");
@@ -119,15 +121,21 @@ bool LinxV5TargetInfo::hasFeature(StringRef Feature) const {
   return llvm::StringSwitch<bool>(Feature)
       .Case("linx64v5", true)
       .Case("m", HasM)
+      .Case("simt", HasSIMT)
       .Default(false);
 }
 
 /// Perform initialization based on the user configured set of features.
 bool LinxV5TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
                                             DiagnosticsEngine &Diags) {
+  HasSIMT = CPU == "simt";
   for (const auto &Feature : Features) {
     if (Feature == "+m")
       HasM = true;
+    else if (Feature == "+simt")
+      HasSIMT = true;
+    else if (Feature == "-simt")
+      HasSIMT = false;
   }
   return true;
 }

@@ -89,6 +89,7 @@ public:
 protected:
   std::string ABI, CPU;
   bool HasM = false;
+  bool HasSIMT = false;
 
   static const Builtin::Info BuiltinInfo[];
 };
