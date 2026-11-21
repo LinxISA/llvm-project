@@ -35,6 +35,14 @@ inline StringRef getScopedScalarSuffix(unsigned Flags) {
   }
 }
 
+inline unsigned takeScopedScalarSuffix(StringRef &Mnemonic) {
+  for (unsigned Scope : {ScopePrivate, ScopeIntra, ScopeInter}) {
+    if (Mnemonic.consume_back_insensitive(getScopedScalarSuffix(Scope)))
+      return Scope;
+  }
+  return ScopeUnqualified;
+}
+
 inline uint64_t getScopedPCRTarget(uint64_t Address, int64_t Displacement) {
   return (Address & ~uint64_t(3)) + static_cast<uint64_t>(Displacement) * 4;
 }

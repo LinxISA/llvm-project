@@ -45,6 +45,10 @@ def FeatureLNXM
                        "Enable Linx matrix/tile extension",
                        [FeatureLNXS32]>;
 
+def FeaturePTO0591Scoped
+    : SubtargetFeature<"pto-v0591-scoped", "HasPTO0591Scoped", "true",
+                       "Enable PTO 0.59.1 scoped Scalar assembly candidate">;
+
 //===----------------------------------------------------------------------===//
 // Register File, Calling Convention, Instruction Descriptions.
 //===----------------------------------------------------------------------===//

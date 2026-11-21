@@ -10,6 +10,7 @@
 #include "MCTargetDesc/LinxISAMCAsmInfo.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -109,6 +110,13 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     report_fatal_error("Linx: MC opcode out of range");
 
   const linxisa_inst_form &Form = linxisa_inst_forms[Opcode];
+  const unsigned Scope = MI.getFlags();
+  if (Scope && (LinxISA::getScopedScalarSuffix(Scope).empty() ||
+                !LinxISA::isScopedScalarForm(Form.id) ||
+                Form.length_bits > 48)) {
+    Ctx.reportError(MI.getLoc(), "invalid scoped Scalar form");
+    return;
+  }
   uint64_t Insn = Form.match;
 
   const unsigned FieldCount = Form.field_count;
@@ -117,6 +125,11 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     const MCOperand &Op = MI.getOperand(i);
     StringRef Name = F.name ? StringRef(F.name) : StringRef();
     StringRef Mnemonic = Form.mnemonic ? StringRef(Form.mnemonic) : StringRef();
+
+    // The scoped LR carrier uses the released zero-filled SrcZero witness.
+    // Hardware ignores this field, and old unqualified assembly keeps its bits.
+    if (Scope && Name == "SrcZero")
+      continue;
 
     if (Op.isImm()) {
       if (Name == "simm" && Mnemonic.starts_with("L.BSTART")) {
@@ -135,6 +148,12 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
 
     if (!Op.isExpr())
       report_fatal_error("Linx: unsupported MCOperand kind for field");
+
+    if (Scope) {
+      Ctx.reportError(MI.getLoc(),
+                      "scoped Scalar symbol operands require a scoped relocation");
+      return;
+    }
 
     const MCExpr *Expr = Op.getExpr();
     // Minimal fixup support for early bring-up: only branch/jump PC-relative
@@ -221,7 +240,14 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
         MCFixup::create(FixupOffset, Expr, Kind, /*PCRel=*/PCRel));
   }
 
-  const unsigned Bytes = Form.length_bits / 8;
+  unsigned Bytes = Form.length_bits / 8;
+  if (Scope) {
+    const unsigned LengthCode = Form.length_bits / 16 - 1;
+    const unsigned Prefix = 0x001f | (LengthCode << 10) |
+                            ((Scope - LinxISA::ScopePrivate) << 8);
+    Insn = (Insn << 16) | Prefix;
+    Bytes = 8;
+  }
   for (unsigned i = 0; i < Bytes; ++i)
     CB.push_back(static_cast<char>((Insn >> (i * 8)) & 0xFF));
 }
