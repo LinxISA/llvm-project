@@ -1,0 +1,44 @@
+name: Linx scoped Scalar
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/linx-scoped-scalar.yml'
+      - 'llvm/lib/Target/LinxISA/**'
+      - 'llvm/test/MC/LinxISA/**'
+      - 'llvm/utils/linxisa/gen_scoped_scalar_forms.py'
+
+permissions:
+  contents: read
+
+jobs:
+  scoped-scalar-mc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out LLVM
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Check out locked LinxISA catalogs
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: LinxISA/linx-isa
+          ref: 2a29daf7ed6ea33c1719c27abd1ac48d2e75b1cd
+          path: linx-catalog
+          persist-credentials: false
+          sparse-checkout: |
+            isa/v0.58/linxisa-v0.58.json
+            isa/v0.59/state/pto_scalar_forms.json
+          sparse-checkout-cone-mode: false
+      - name: Check generated whitelist
+        run: python3 llvm/utils/linxisa/gen_scoped_scalar_forms.py linx-catalog --check
+      - name: Build Linx MC tools
+        run: |
+          cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_TARGETS_TO_BUILD= -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=LinxISA
+          cmake --build build --target llvm-mc llvm-objdump llvm-config FileCheck count not -j 3
+      - name: Test scoped disassembly
+        run: |
+          build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s
+          python3 llvm/utils/linxisa/gen_scoped_scalar_forms.py linx-catalog --check --tool-dir build/bin

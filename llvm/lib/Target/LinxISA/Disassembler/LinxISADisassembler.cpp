@@ -415,8 +415,7 @@ LinxISADisassembler::getInstruction(MCInst &Instr, uint64_t &Size,
       WantsSym = true;
       IsBranchLike = false;
       if (IsCarrier)
-        SymValue = static_cast<int64_t>((Address & ~uint64_t(3)) +
-                                        static_cast<uint64_t>(V) * 4);
+        SymValue = static_cast<int64_t>(LinxISA::getScopedPCRTarget(Address, V));
       else
         SymValue = static_cast<int64_t>(Address) + V;
     } else if (FieldName == "simm12" && Mnem.starts_with("B.")) {

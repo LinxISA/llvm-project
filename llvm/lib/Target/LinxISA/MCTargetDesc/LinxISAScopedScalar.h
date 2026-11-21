@@ -3,6 +3,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 
 namespace llvm::LinxISA {
@@ -32,6 +33,10 @@ inline StringRef getScopedScalarSuffix(unsigned Flags) {
   default:
     return {};
   }
+}
+
+inline uint64_t getScopedPCRTarget(uint64_t Address, int64_t Displacement) {
+  return (Address & ~uint64_t(3)) + static_cast<uint64_t>(Displacement) * 4;
 }
 
 } // namespace llvm::LinxISA

@@ -5,6 +5,8 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -47,6 +49,7 @@ def render(linx_dir):
     compiled = {row[0]: (int(row[1]), int(row[2], 0), int(row[3], 0)) for row in entries}
 
     forms = []
+    witnesses = []
     for identity, rows in scoped.items():
         base = bases[identity]
         width, mask, match = compiled[mapped[identity]]
@@ -63,6 +66,8 @@ def render(linx_dir):
             expected = (64, ((mask | padding) << 16) | 0xFFFF, (match << 16) | prefix)
             if packed_encoding(row["encoding"]) != expected:
                 raise ValueError(f"incompatible carrier for {row['form_id']}")
+            suffix = (".private", ".intra", ".inter")[scope]
+            witnesses.append((expected[2], base["mnemonic"].lower() + suffix))
         forms.append(mapped[identity])
 
     lines = [
@@ -71,21 +76,45 @@ def render(linx_dir):
         "// Each entry is a stable ID from the generated LinxISA MC forms.",
     ]
     lines += [f'"{identity}",' for identity in sorted(forms)]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", witnesses
+
+
+def verify_disassembly(tool_dir, witnesses):
+    with tempfile.TemporaryDirectory(prefix="linx-scoped-disassembly-") as tmp:
+        obj = Path(tmp) / "witnesses.o"
+        asm = ".text\n" + "".join(f".8byte 0x{word:016x}\n" for word, _ in witnesses)
+        subprocess.run(
+            [tool_dir / "llvm-mc", "-triple=linx64", "-filetype=obj", "-o", obj],
+            input=asm, text=True, check=True,
+        )
+        output = subprocess.check_output(
+            [tool_dir / "llvm-objdump", "-d", "--no-show-raw-insn", "--triple=linx64", obj],
+            text=True,
+        )
+    actual = re.findall(r"^\s*([0-9a-f]+):\s+(\S+)", output, re.MULTILINE)
+    if len(actual) != len(witnesses):
+        raise ValueError(f"decoded {len(actual)} instructions, expected {len(witnesses)}")
+    for index, ((address, mnemonic), (_, expected)) in enumerate(zip(actual, witnesses, strict=True)):
+        if int(address, 16) != 8 * index or mnemonic.lower() != expected:
+            raise ValueError(f"witness {index}: got {mnemonic} at {address}, expected {expected} at {8 * index:x}")
+    print(f"Validated all {len(witnesses)} scoped Scalar carrier witnesses")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("linx_dir", type=Path, help="LinxISA checkout at the locked revision")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--tool-dir", type=Path, help="Verify every witness with built LLVM tools")
     args = parser.parse_args()
     output = TABLES / "LinxISAScopedScalarForms.inc"
-    expected = render(args.linx_dir)
+    expected, witnesses = render(args.linx_dir)
     if args.check:
         if output.read_text() != expected:
             raise SystemExit(f"stale generated table: {output}")
     else:
         output.write_text(expected)
+    if args.tool_dir:
+        verify_disassembly(args.tool_dir.resolve(), witnesses)
 
 
 if __name__ == "__main__":
