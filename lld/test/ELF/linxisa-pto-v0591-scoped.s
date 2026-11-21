@@ -8,6 +8,12 @@
 # RUN: llvm-readobj --string-dump=.note.pto.isa %t.scoped.relinked | FileCheck %s --check-prefix=NOTE
 # RUN: not ld.lld -m elf64linx %t.scoped.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=DEFAULT
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t.scoped.o %t.legacy.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=MIXED
+# RUN: ld.lld -m elf64linx --linx-pto-v0591-scoped -shared %t.scoped.o -o %t.scoped.so
+# RUN: ld.lld -m elf64linx --linx-pto-v0591-scoped %t.scoped.o %t.scoped.so -o %t.dynamic
+# RUN: llvm-readobj --string-dump=.note.pto.isa %t.scoped.so %t.dynamic | FileCheck %s --check-prefix=DSO
+# RUN: ld.lld -m elf64linx -shared %t.legacy.o -o %t.legacy.so
+# RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t.scoped.o %t.legacy.so -o /dev/null 2>&1 | FileCheck %s --check-prefix=OLD-DSO
+# RUN: not ld.lld -m elf64linx %t.legacy.o %t.scoped.so -o /dev/null 2>&1 | FileCheck %s --check-prefix=NEW-DSO
 
         .text
         .globl _start
@@ -20,3 +26,6 @@ _start:
 # CODE-NEXT: {{.*}}1f 05 99 21 11 00 00 00{{.*}}lwi.intra
 # DEFAULT: scoped.o: invalid .note.pto.isa: release mismatch (expected 0.58.7)
 # MIXED: legacy.o: invalid .note.pto.isa: release mismatch (expected 0.59.1)
+# DSO-COUNT-2: "release":"0.59.1"
+# OLD-DSO: legacy.so: invalid .note.pto.isa: release mismatch (expected 0.59.1)
+# NEW-DSO: scoped.so: invalid .note.pto.isa: release mismatch (expected 0.58.7)
