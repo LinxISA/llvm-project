@@ -366,6 +366,7 @@ struct Config {
   bool rejectMismatch;
   bool relax;
   bool linxRelaxSeqFusion;
+  bool linxPtoV0591Scoped;
   bool relaxGP;
   bool relocatable;
   bool resolveGroups;

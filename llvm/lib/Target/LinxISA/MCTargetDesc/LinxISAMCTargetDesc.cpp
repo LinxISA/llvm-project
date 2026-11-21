@@ -7,6 +7,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/PTOISA.h"
+#include "llvm/BinaryFormat/PTOISAScoped.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
@@ -102,11 +103,8 @@ static MCTargetStreamer *
 createLinxISAObjectTargetStreamer(MCStreamer &S, const MCSubtargetInfo &STI) {
   if (!STI.getTargetTriple().isOSBinFormatELF())
     return nullptr;
-  static constexpr StringLiteral ScopedIdentity{
-#include "LinxISAScopedScalarIdentity.inc"
-  };
   const auto Identity = STI.getFeatureBits()[LinxISA::FeaturePTO0591Scoped]
-                            ? ScopedIdentity
+                            ? PTOISAScoped::Identity
                             : PTOISA::Identity;
   return new LinxISAObjectTargetStreamer(S, Identity);
 }

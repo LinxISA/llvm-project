@@ -7,6 +7,10 @@ on:
       - 'llvm/lib/Target/LinxISA/**'
       - 'llvm/test/MC/LinxISA/**'
       - 'llvm/utils/linxisa/gen_scoped_scalar_forms.py'
+      - 'llvm/include/llvm/BinaryFormat/PTOISAScoped.h'
+      - 'lld/ELF/**'
+      - 'lld/test/ELF/linxisa-pto-v0591-scoped.s'
+      - 'lld/test/ELF/linxisa-pto-identity.test'
 
 permissions:
   contents: read
@@ -37,9 +41,13 @@ jobs:
       - name: Build Linx MC tools
         run: |
           cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DLLVM_TARGETS_TO_BUILD= -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=LinxISA
-          cmake --build build --target llvm-mc llvm-objdump llvm-readobj llvm-config FileCheck count not -j 3
+            -DLLVM_TARGETS_TO_BUILD= -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=LinxISA \
+            -DLLVM_ENABLE_PROJECTS=lld
+          cmake --build build --target llvm-mc llvm-objdump llvm-readobj llvm-readelf llvm-config \
+            FileCheck count not split-file yaml2obj lld -j 3
       - name: Test scoped disassembly
         run: |
           build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s
+          build/bin/llvm-lit -sv lld/test/ELF/linxisa-pto-v0591-scoped.s \
+            lld/test/ELF/linxisa-pto-identity.test
           python3 llvm/utils/linxisa/gen_scoped_scalar_forms.py linx-catalog --check --tool-dir build/bin
