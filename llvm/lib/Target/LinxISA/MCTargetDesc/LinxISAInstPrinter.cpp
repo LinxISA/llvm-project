@@ -1,6 +1,7 @@
 #include "MCTargetDesc/LinxISAInstPrinter.h"
 #include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -496,11 +497,26 @@ static bool asmImpliesArrowDest(StringRef Asm, StringRef Dest) {
 
 void LinxISAInstPrinter::printInst(const MCInst *MI, uint64_t Address,
                                    StringRef Annot,
-                                   const MCSubtargetInfo & /*STI*/,
+                                   const MCSubtargetInfo &STI,
                                    raw_ostream &OS) {
   const unsigned Opcode = MI->getOpcode();
   if (Opcode >= linxisa_inst_forms_count) {
     OS << "<bad-opcode>";
+    return;
+  }
+
+  if (StringRef Scope = LinxISA::getScopedScalarSuffix(MI->getFlags());
+      !Scope.empty()) {
+    MCInst Inner = *MI;
+    Inner.setFlags(LinxISA::ScopeUnqualified);
+    SmallString<96> Text;
+    raw_svector_ostream InnerOS(Text);
+    printInst(&Inner, Address, Annot, STI, InnerOS);
+    const StringRef Rendered = Text;
+    const size_t MnemonicEnd =
+        std::min(Rendered.find_first_of(" \t"), Rendered.size());
+    OS << Rendered.take_front(MnemonicEnd) << Scope
+       << Rendered.drop_front(MnemonicEnd);
     return;
   }
 

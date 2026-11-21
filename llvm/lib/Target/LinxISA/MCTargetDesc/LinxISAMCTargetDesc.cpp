@@ -2,6 +2,7 @@
 #include "MCTargetDesc/LinxISAInstPrinter.h"
 #include "MCTargetDesc/LinxISAMCAsmInfo.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -9,6 +10,8 @@
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrAnalysis.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -35,6 +38,32 @@
 using namespace llvm;
 
 namespace {
+
+class LinxISAInstrAnalysis final : public MCInstrAnalysis {
+public:
+  explicit LinxISAInstrAnalysis(const MCInstrInfo *Info)
+      : MCInstrAnalysis(Info) {}
+
+  std::optional<uint64_t>
+  evaluateMemoryOperandAddress(const MCInst &Inst, const MCSubtargetInfo *,
+                               uint64_t Address, uint64_t Size) const override {
+    if (Size != 8 || LinxISA::getScopedScalarSuffix(Inst.getFlags()).empty() ||
+        Inst.getOpcode() >= linxisa_inst_forms_count)
+      return std::nullopt;
+
+    const linxisa_inst_form &Form = linxisa_inst_forms[Inst.getOpcode()];
+    if (!StringRef(Form.mnemonic).ends_with(".PCR"))
+      return std::nullopt;
+
+    for (unsigned I = 0; I < Form.field_count && I < Inst.getNumOperands(); ++I) {
+      StringRef Field = linxisa_fields[Form.field_start + I].name;
+      const MCOperand &Operand = Inst.getOperand(I);
+      if ((Field == "simm17" || Field == "simm") && Operand.isImm())
+        return LinxISA::getScopedPCRTarget(Address, Operand.getImm());
+    }
+    return std::nullopt;
+  }
+};
 
 class LinxISAObjectTargetStreamer final : public MCTargetStreamer {
 public:
@@ -188,6 +217,10 @@ LLVMInitializeLinxISATargetMC() {
 
   for (Target *T : {&getTheLinx32Target(), &getTheLinx64Target()}) {
     TargetRegistry::RegisterMCInstrInfo(*T, createLinxISAMCInstrInfo);
+    TargetRegistry::RegisterMCInstrAnalysis(
+        *T, [](const MCInstrInfo *Info) -> MCInstrAnalysis * {
+          return new LinxISAInstrAnalysis(Info);
+        });
     TargetRegistry::RegisterMCRegInfo(*T, createLinxISAMCRegisterInfo);
     TargetRegistry::RegisterMCSubtargetInfo(*T, createLinxISAMCSubtargetInfo);
     TargetRegistry::RegisterMCCodeEmitter(*T, createLinxISAMCCodeEmitter);
