@@ -426,6 +426,9 @@ defm relax_gp: BB<"relax-gp",
 def linx_relax_seq_fusion: F<"linx-relax-seq-fusion">,
   HelpText<"Enable experimental Linx relaxation sequence fusion">;
 
+def linx_pto_v0591_scoped: F<"linx-pto-v0591-scoped">,
+  HelpText<"Require the PTO 0.59.1 scoped candidate identity for Linx ELF input and output">;
+
 defm remap_inputs: EEq<"remap-inputs",
   "Remap input files matching <from-glob> to <to-file>">,
   MetaVarName<"<from-glob>=<to-file>">;

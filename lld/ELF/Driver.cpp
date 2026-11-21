@@ -358,6 +358,8 @@ static void initLLVM() {
 // Some command line options or some combinations of them are not allowed.
 // This function checks for such errors.
 static void checkOptions(Ctx &ctx) {
+  if (ctx.arg.linxPtoV0591Scoped && ctx.arg.emachine != EM_LINXISA)
+    Err(ctx) << "--linx-pto-v0591-scoped requires Linx ELF";
   // The MIPS ABI as of 2016 does not support the GNU-style symbol lookup
   // table which is a relatively new feature.
   if (ctx.arg.emachine == EM_MIPS && ctx.arg.gnuHash)
@@ -1530,6 +1532,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.rejectMismatch = !args.hasArg(OPT_no_warn_mismatch);
   ctx.arg.relax = args.hasFlag(OPT_relax, OPT_no_relax, true);
   ctx.arg.linxRelaxSeqFusion = args.hasArg(OPT_linx_relax_seq_fusion);
+  ctx.arg.linxPtoV0591Scoped = args.hasArg(OPT_linx_pto_v0591_scoped);
   ctx.arg.relaxGP = args.hasFlag(OPT_relax_gp, OPT_no_relax_gp, false);
   ctx.arg.rpath = getRpath(args);
   ctx.arg.relocatable = args.hasArg(OPT_relocatable);
