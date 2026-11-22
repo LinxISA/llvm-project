@@ -25,7 +25,7 @@
 
 # ORDINARY:      <_start>:
 # ORDINARY-NEXT: C.BSTART.STD
-# ORDINARY-NEXT: addtpc  1048573, ->a0
+# ORDINARY-NEXT: addtpc  1048574, ->a0
 # ORDINARY-NEXT: addi    a0, 4094, ->a0
 
 # This matches the Linux setup_vm failure: a page-aligned target and a HI20 at
@@ -35,7 +35,7 @@
 
 # GOT:      <_start>:
 # GOT-NEXT: C.BSTART.STD
-# GOT-NEXT: addtpc  1, ->a0
+# GOT-NEXT: addtpc  2, ->a0
 # GOT-NEXT: addi    a0, 4094, ->a0
 
 # The synthetic PLT uses a signed unscaled load. This placement gives the low

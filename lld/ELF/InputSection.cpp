@@ -1025,9 +1025,11 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
     return getAArch64Page(val) - getAArch64Page(p);
   }
   case RE_LINX_PAGE_PC:
-    return (r.sym->getVA(ctx, a) - p) & ~0xfffull;
+    // The paired ADDI interprets its low 12 bits as a signed immediate. Round
+    // the ADDTPC portion so a low part in [0x800, 0xfff] carries into HI20.
+    return (r.sym->getVA(ctx, a) - p + 0x800) & ~0xfffull;
   case RE_LINX_GOT_PAGE_PC:
-    return (r.sym->getGotVA(ctx) + a - p) & ~0xfffull;
+    return (r.sym->getGotVA(ctx) + a - p + 0x800) & ~0xfffull;
   case RE_RISCV_PC_INDIRECT: {
     if (const Relocation *hiRel = getPCRelHi20<RISCVPCRel>(ctx, this, r))
       return getRelocTargetVA(ctx, *hiRel, r.sym->getVA(ctx));
