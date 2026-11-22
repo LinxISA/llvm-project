@@ -16,6 +16,7 @@ on:
       - 'lld/test/ELF/linxisa-pto-v0591-scoped.s'
       - 'lld/test/ELF/linxisa-pto-v0591-scoped-pcr.s'
       - 'lld/test/ELF/linxisa-pto-identity.test'
+      - 'lld/test/ELF/linx-pcrel-nonpage-place.s'
 
 permissions:
   contents: read
@@ -59,5 +60,6 @@ jobs:
             clang/test/Driver/linx-scoped-pcr-reloc.s
           build/bin/llvm-lit -sv lld/test/ELF/linxisa-pto-v0591-scoped.s \
             lld/test/ELF/linxisa-pto-v0591-scoped-pcr.s \
-            lld/test/ELF/linxisa-pto-identity.test
+            lld/test/ELF/linxisa-pto-identity.test \
+            lld/test/ELF/linx-pcrel-nonpage-place.s
           python3 llvm/utils/linxisa/gen_scoped_scalar_forms.py linx-catalog --check --tool-dir build/bin
