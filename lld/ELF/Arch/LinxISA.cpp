@@ -216,12 +216,25 @@ static uint64_t encodeHLPcr29Store(Ctx &ctx, uint8_t *loc, int64_t value,
 
 static uint64_t read48le(const uint8_t *loc);
 
+static uint64_t scopedPcrFieldMask(bool hl, bool store) {
+  if (!hl)
+    return store ? UINT64_C(0xfff00f80) : UINT64_C(0xffff8000);
+  const uint64_t prefix = UINT64_C(0xfff) << 4;
+  return store ? prefix | (UINT64_C(0xfff) << 36) | (UINT64_C(0x1f) << 23)
+               : prefix | (UINT64_C(0x1ffff) << 31);
+}
+
 static bool validateScopedPcrCarrier(Ctx &ctx, uint8_t *loc,
                                      const Relocation &rel, bool hl,
                                      bool store) {
   if (!ctx.arg.linxPtoV0591Scoped) {
     Err(ctx) << getErrorLoc(ctx, loc)
              << "scoped PCR relocation requires --linx-pto-v0591-scoped";
+    return false;
+  }
+  if (!rel.sym) {
+    Err(ctx) << getErrorLoc(ctx, loc)
+             << "scoped PCR relocation requires an allocated instruction carrier";
     return false;
   }
   const uint16_t prefix = read16le(loc);
@@ -248,29 +261,25 @@ static bool validateScopedPcrCarrier(Ctx &ctx, uint8_t *loc,
              << "scoped PCR relocation does not match the embedded PCR form";
     return false;
   }
-  const uint64_t immediateMask =
-      hl ? (store ? ((UINT64_C(0xfff) << 36) | (UINT64_C(0x1f) << 23) |
-                     (UINT64_C(0xfff) << 4))
-                  : ((UINT64_C(0x1ffff) << 31) | (UINT64_C(0xfff) << 4)))
-         : (store ? UINT64_C(0xfe000f80) : UINT64_C(0xffff8000));
-  if (inner & immediateMask) {
-    Err(ctx) << getErrorLoc(ctx, loc)
-             << "scoped PCR relocation requires a zero embedded immediate";
-    return false;
-  }
   return true;
 }
 
-static int64_t scopedPcrImmediate(Ctx &ctx, uint8_t *loc, const Relocation &rel,
-                                  uint64_t val) {
+static std::optional<int64_t> scopedPcrImmediate(Ctx &ctx, uint8_t *loc,
+                                                  const Relocation &rel,
+                                                  uint64_t val) {
   // R_PC supplies S + A - P. PTO uses align_down(P, 4), so add back P[1:0]
   // before scaling the signed byte delta into the inner PCR field.
   const uint64_t pLow = (rel.sym->getVA(ctx, rel.addend) - val) & UINT64_C(0x3);
+  if (pLow & 1) {
+    Err(ctx) << getErrorLoc(ctx, loc)
+             << "scoped PCR carrier is not halfword aligned";
+    return std::nullopt;
+  }
   const int64_t byteDelta = static_cast<int64_t>(val + pLow);
   if (byteDelta % 4 != 0) {
     Err(ctx) << getErrorLoc(ctx, loc)
              << "scoped PCR target is not 4-byte aligned";
-    return 0;
+    return std::nullopt;
   }
   return byteDelta / 4;
 }
@@ -531,6 +540,7 @@ public:
   bool relaxOnce(int pass) const override;
   void finalizeRelax(int passes) const override;
   void relocateAlloc(InputSection &sec, uint8_t *buf) const override;
+  void relocateEh(EhInputSection &sec, uint8_t *buf) const override;
   void relocate(uint8_t *loc, const Relocation &rel,
                 uint64_t val) const override;
 };
@@ -724,21 +734,26 @@ static bool isScopedPcrRelocation(RelType type) {
 }
 
 void LinxISA::relocateAlloc(InputSection &sec, uint8_t *buf) const {
-  const uint64_t secAddr = sec.getOutputSection()->addr + sec.outSecOff;
-  const unsigned bits = ctx.arg.is64 ? 64 : 32;
   for (const Relocation &rel : sec.relocs()) {
     if (isScopedPcrRelocation(rel.type) &&
         (rel.offset > sec.getSize() || sec.getSize() - rel.offset < 8)) {
       Err(ctx) << sec.getLocation(rel.offset)
                << ": scoped PCR relocation requires an 8-byte carrier";
-      continue;
+      return;
     }
-    uint8_t *loc = buf + rel.offset;
-    const uint64_t val = SignExtend64(
-        sec.getRelocTargetVA(ctx, rel, secAddr + rel.offset), bits);
-    if (rel.expr != R_RELAX_HINT)
-      relocate(loc, rel, val);
   }
+  TargetInfo::relocateAlloc(sec, buf);
+}
+
+void LinxISA::relocateEh(EhInputSection &sec, uint8_t *buf) const {
+  for (const Relocation &rel : sec.relocs()) {
+    if (isScopedPcrRelocation(rel.type)) {
+      Err(ctx) << sec.getLocation(rel.offset)
+               << ": scoped PCR relocation is invalid in .eh_frame";
+      return;
+    }
+  }
+  TargetInfo::relocateEh(sec, buf);
 }
 
 void LinxISA::relocate(uint8_t *loc, const Relocation &rel,
@@ -895,10 +910,12 @@ void LinxISA::relocate(uint8_t *loc, const Relocation &rel,
     const bool store = rel.type == R_LINX_SCOPED_PCR17_STORE;
     if (!validateScopedPcrCarrier(ctx, loc, rel, false, store))
       return;
-    const int64_t imm = scopedPcrImmediate(ctx, loc, rel, val);
-    uint32_t cur = read32le(loc + 2);
-    cur |= store ? encodePcr17Store(ctx, loc, imm, rel)
-                 : encodePcr17Load(ctx, loc, imm, rel);
+    const auto imm = scopedPcrImmediate(ctx, loc, rel, val);
+    if (!imm)
+      return;
+    uint32_t cur = read32le(loc + 2) & ~scopedPcrFieldMask(false, store);
+    cur |= store ? encodePcr17Store(ctx, loc, *imm, rel)
+                 : encodePcr17Load(ctx, loc, *imm, rel);
     write32le(loc + 2, cur);
     return;
   }
@@ -907,10 +924,12 @@ void LinxISA::relocate(uint8_t *loc, const Relocation &rel,
     const bool store = rel.type == R_LINX_SCOPED_HL_PCR29_STORE;
     if (!validateScopedPcrCarrier(ctx, loc, rel, true, store))
       return;
-    const int64_t imm = scopedPcrImmediate(ctx, loc, rel, val);
-    uint64_t cur = read48le(loc + 2);
-    cur |= store ? encodeHLPcr29Store(ctx, loc, imm, rel)
-                 : encodeHLPcr29Load(ctx, loc, imm, rel);
+    const auto imm = scopedPcrImmediate(ctx, loc, rel, val);
+    if (!imm)
+      return;
+    uint64_t cur = read48le(loc + 2) & ~scopedPcrFieldMask(true, store);
+    cur |= store ? encodeHLPcr29Store(ctx, loc, *imm, rel)
+                 : encodeHLPcr29Load(ctx, loc, *imm, rel);
     for (unsigned i = 0; i < 6; ++i)
       loc[i + 2] = static_cast<uint8_t>((cur >> (i * 8)) & 0xff);
     return;

@@ -15,8 +15,13 @@
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-padding.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-CARRIER
 # RUN: yaml2obj -DINSN=1F04050000000000 -DRELOC=0x21 %t/bad.yaml -o %t/bad-inner.o
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-inner.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-INNER
-# RUN: yaml2obj -DINSN=1F0439A100000000 -DRELOC=0x21 %t/bad.yaml -o %t/bad-immediate.o
-# RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-immediate.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-IMM
+# RUN: yaml2obj -DINSN=1F046900F0FF0000 -DRELOC=0x22 %t/bad.yaml -o %t/prefilled.o
+# RUN: ld.lld -m elf64linx --linx-pto-v0591-scoped -e target %t/prefilled.o -o %t/overwritten
+# RUN: llvm-objdump -s --section=.text %t/overwritten | FileCheck %s --check-prefix=OVERWRITE
+# RUN: llvm-mc -triple=linx64 -mattr=+pto-v0591-scoped -filetype=obj %t/nonalloc.s -o %t/nonalloc.o
+# RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/nonalloc.o %t/definition.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=NONALLOC
+# RUN: llvm-mc -triple=linx64 -mattr=+pto-v0591-scoped -filetype=obj %t/odd-carrier.s -o %t/odd-carrier.o
+# RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/odd-carrier.o %t/definition.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=ODD-CARRIER
 # RUN: yaml2obj -DINSN=1F04392100000000 -DRELOC=0x23 %t/bad.yaml -o %t/bad-layout.o
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-layout.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-LAYOUT
 # RUN: yaml2obj -DINSN=1F043921 -DRELOC=0x21 %t/bad.yaml -o %t/bad-boundary.o
@@ -40,7 +45,9 @@
 # OLD-ABI: error: {{.*}}release mismatch (expected 0.58.7)
 # BAD-CARRIER: error: {{.*}}scoped PCR relocation requires a matching 64-bit carrier
 # BAD-INNER: error: {{.*}}scoped PCR relocation does not match the embedded PCR form
-# BAD-IMM: error: {{.*}}scoped PCR relocation requires a zero embedded immediate
+# OVERWRITE: 1f046900 20000000
+# NONALLOC: error: {{.*}}scoped PCR relocation requires an allocated instruction carrier
+# ODD-CARRIER: error: {{.*}}scoped PCR carrier is not halfword aligned
 # BAD-LAYOUT: error: {{.*}}scoped PCR relocation requires a matching 64-bit carrier
 # BAD-BOUNDARY: error: {{.*}}scoped PCR relocation requires an 8-byte carrier
 # LEGACY-RELOC: error: {{.*}}scoped PCR relocation requires --linx-pto-v0591-scoped
@@ -78,6 +85,17 @@ _start:
 .globl _start
 _start:
   lw.pcr.private [far], ->a0
+
+#--- nonalloc.s
+.section .debug_linx,"",@progbits
+  lw.pcr.private [external], ->a0
+
+#--- odd-carrier.s
+.text
+.globl _start
+_start:
+  .byte 0
+  lw.pcr.private [external], ->a0
 
 #--- bad.yaml
 --- !ELF
