@@ -145,7 +145,7 @@ static uint64_t encodeHLSetRet32Pcrel(Ctx &ctx, uint8_t *loc, int64_t value,
 static uint32_t encodePcrelHi20(Ctx &ctx, uint8_t *loc, int64_t value,
                                 const Relocation &rel) {
   // ADDTPC uses an imm20 field in bits [31:12] which is added to the current
-  // TPC/PC page base (i.e. the immediate is scaled by 4KiB).
+  // instruction TPC (i.e. the immediate is scaled by 4KiB).
   if (value & 0xFFF)
     Err(ctx) << getErrorLoc(ctx, loc) << "unaligned ADDTPC target";
 
@@ -618,11 +618,11 @@ RelExpr LinxISA::getRelExpr(RelType type, const Symbol &s,
   case R_LINX_32_PCREL:
     return R_PC;
   case R_LINX_GOT_HI20:
-    return RE_AARCH64_GOT_PAGE_PC;
+    return RE_LINX_GOT_PAGE_PC;
   case R_LINX_PCREL_HI20:
-    return RE_AARCH64_PAGE_PC;
+    return RE_LINX_PAGE_PC;
   case R_LINX_GOT_LO12:
-    return R_GOT;
+    return RE_LINX_GOT_PC_INDIRECT;
   case R_LINX_LO12:
     return RE_LINX_PC_INDIRECT;
   case R_LINX_TLS_DTPREL64:
@@ -660,13 +660,13 @@ void LinxISA::writePlt(uint8_t *buf, const Symbol &sym,
   // PLT entry (5 x 32-bit):
   //   0: BSTART.STD IND
   //   4: ADDTPC  %pcrel_hi(.got.plt[sym]), ->t
-  //   8: LD/LW   [t#1, off], ->u
+  //   8: LDI.U/LWI.U [t#1, off], ->u
   //  12: SETC.TGT u#1
   //  16: BSTOP
   constexpr uint32_t BSTART_IND = 0x00005001u;
   constexpr uint32_t ADDTPC_ZERO = 0x00000f87u;
-  constexpr uint32_t LWI_ZERO = 0x00002019u;
-  constexpr uint32_t LDI_ZERO = 0x00003019u;
+  constexpr uint32_t LWI_U_ZERO = 0x00002029u;
+  constexpr uint32_t LDI_U_ZERO = 0x00003029u;
   constexpr uint32_t SETC_TGT_ZERO = 0x0000403bu;
   constexpr uint32_t BSTOP = 0x00000001u;
 
@@ -678,24 +678,19 @@ void LinxISA::writePlt(uint8_t *buf, const Symbol &sym,
 
   const uint64_t gotPltVA = sym.getGotPltVA(ctx);
   const uint64_t addtpcAddr = pltEntryAddr + 4;
-  const int64_t pageDelta = static_cast<int64_t>(getAArch64Page(gotPltVA)) -
-                            static_cast<int64_t>(getAArch64Page(addtpcAddr));
+  const uint64_t delta = gotPltVA - addtpcAddr;
+  const int64_t pageDelta = static_cast<int64_t>((delta + 0x800) & ~0xfffull);
   Relocation rel{R_PC, R_LINX_PCREL_HI20, 0, 0, nullptr};
   const uint32_t addtpc =
       ADDTPC_ZERO | encodePcrelHi20(ctx, buf + 4, pageDelta, rel);
   write32le(buf + 4, addtpc);
 
-  const uint64_t offInPage = gotPltVA & 0xFFFu;
-  const unsigned scale = ctx.arg.is64 ? 3 : 2;
-  const uint64_t mask = (1ull << scale) - 1;
-  if (offInPage & mask)
-    Err(ctx) << "unaligned .got.plt entry for " << sym.getName();
-
-  const uint32_t imm12 = static_cast<uint32_t>(offInPage >> scale);
-  if (imm12 >= (1u << 12))
+  const int64_t lo = static_cast<int64_t>(delta - pageDelta);
+  if (!isInt<12>(lo))
     Err(ctx) << "out of range .got.plt offset for " << sym.getName();
+  const uint32_t imm12 = static_cast<uint32_t>(lo) & 0xfffu;
 
-  uint32_t load = ctx.arg.is64 ? LDI_ZERO : LWI_ZERO;
+  uint32_t load = ctx.arg.is64 ? LDI_U_ZERO : LWI_U_ZERO;
   load |= (imm12 << 20);    // imm12
   load |= (REG_T1 << 15);   // rs1 = t#1
   load |= (REG_U_OUT << 7); // rd = ->u
