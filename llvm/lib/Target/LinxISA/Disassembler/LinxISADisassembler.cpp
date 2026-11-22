@@ -118,6 +118,8 @@ static const linxisa_inst_form *findMatch(uint64_t Insn, unsigned Bits,
   return &linxisa_inst_forms[Best];
 }
 
+static bool isFrameTemplateForm(const linxisa_inst_form &Form);
+
 static void extractFields(const linxisa_inst_form &Form, uint64_t Insn,
                           SmallVectorImpl<int64_t> &Out) {
   Out.clear();
@@ -133,6 +135,8 @@ static void extractFields(const linxisa_inst_form &Form, uint64_t Insn,
     int64_t SignedVal = static_cast<int64_t>(Val);
     if (F.signed_hint == 1)
       SignedVal = signExtend(Val, F.bit_width);
+    if (isFrameTemplateForm(Form) && StringRef(F.name ? F.name : "") == "uimm")
+      SignedVal <<= 3;
     Out.push_back(SignedVal);
   }
 }
@@ -159,7 +163,8 @@ static bool isSignedSetRet(const linxisa_inst_form &Form) {
 static bool isFrameTemplateForm(const linxisa_inst_form &Form) {
   StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
   return AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
-         AsmFmt.contains("[RegDst0 ~ RegDstn]");
+         AsmFmt.contains("[RegDst0 ~ RegDstn]") ||
+         AsmFmt.contains("[ra ~ RegDstn]");
 }
 
 static bool isFrameTemplateEndpoint(uint64_t Reg) {
@@ -175,7 +180,9 @@ static bool isLegalFrameTemplate(const linxisa_inst_form &Form,
   if (!isFrameTemplateForm(Form))
     return true;
 
-  std::optional<uint64_t> Begin;
+  StringRef Mnem(Form.mnemonic ? Form.mnemonic : "");
+  std::optional<uint64_t> Begin =
+      Mnem == "FRET.STK" ? std::optional<uint64_t>(10u) : std::nullopt;
   std::optional<uint64_t> End;
   std::optional<uint64_t> FrameBytes;
 
@@ -201,7 +208,6 @@ static bool isLegalFrameTemplate(const linxisa_inst_form &Form,
   if (*FrameBytes < uint64_t{8} * SavedRegs)
     return false;
 
-  StringRef Mnem(Form.mnemonic ? Form.mnemonic : "");
   if (Mnem == "FRET.STK" && *Begin != 10u)
     return false;
 
