@@ -34,6 +34,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include <functional>
 #include <limits>
@@ -835,7 +836,8 @@ public:
           reject("linx_tile_intrinsic_loop");
           return false;
         }
-        // PTO ISA 0.58.3 reserves every block-body conditional branch form.
+        // The active PTO 0.58 profile and the 0.59.1 scoped profile reserve
+        // every block-body conditional branch form.
         // Reject structurally non-linear candidates before analysis or IR
         // construction can mutate the scalar loop.  A future lowering may
         // accept these only after it can prove a branch-free predicated body.
@@ -1251,6 +1253,14 @@ public:
             reject("tripcount_expand_failed");
             return false;
           }
+        }
+        // Active replay emits a conditional body branch to skip lanes that
+        // have completed a data-dependent loop. Both active PTO profiles
+        // reserve every such branch form, so keep these loops scalar until a
+        // branch-free replay lowering exists.
+        if (NeedsActiveReplay) {
+          reject("pto0583_body_branch_reserved");
+          return false;
         }
         uint64_t ConstTripCount = 0;
         bool HasConstTripCount = false;
@@ -7022,6 +7032,11 @@ public:
                  RemarkAddressModel, layoutPolicyName(LinxSIMTAutoVecLayout),
                  RemarkLayoutKind, RemarkCFStrategy);
     }
+    // A lowered vblock bypasses the original scalar loop.  Remove that now
+    // unreachable CFG before the backend verifier observes header PHIs whose
+    // former preheader edge no longer exists.
+    if (Changed)
+      EliminateUnreachableBlocks(F);
     return Changed;
   }
 
