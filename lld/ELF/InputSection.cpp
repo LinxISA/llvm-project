@@ -745,10 +745,14 @@ static Relocation *getPCRelHi20(Ctx &ctx, const InputSectionBase *loSec,
   return nullptr;
 }
 
-static bool isLinxPCRelHi(RelType type) { return type == R_LINX_PCREL_HI20; }
+struct LinxPCRelHi {
+  const Relocation *rel;
+  const InputSectionBase *sec;
+};
 
 static const Relocation *findLinxPCRelHiByOffset(const InputSection *isec,
-                                                 uint64_t offset) {
+                                                 uint64_t offset,
+                                                 RelType hiType) {
   Relocation hiReloc;
   hiReloc.offset = offset;
   auto range = std::equal_range(
@@ -758,14 +762,15 @@ static const Relocation *findLinxPCRelHiByOffset(const InputSection *isec,
       });
 
   for (auto it = range.first; it != range.second; ++it)
-    if (isLinxPCRelHi(it->type))
+    if (it->type == hiType)
       return &*it;
   return nullptr;
 }
 
 static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
                                                  uint64_t loOffset,
-                                                 const Symbol *sym) {
+                                                 const Symbol *sym,
+                                                 RelType hiType) {
   auto *isec = dyn_cast_or_null<InputSection>(sec);
   if (!isec)
     return nullptr;
@@ -775,7 +780,7 @@ static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
       [](const Relocation &lhs, uint64_t rhs) { return lhs.offset < rhs; });
   while (it != isec->relocs().begin()) {
     --it;
-    if (it->sym == sym && isLinxPCRelHi(it->type))
+    if (it->sym == sym && it->type == hiType)
       return &*it;
   }
 
@@ -783,7 +788,7 @@ static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
       isec->relocs(), loOffset,
       [](const Relocation &lhs, uint64_t rhs) { return lhs.offset < rhs; });
   for (; it != isec->relocs().end(); ++it)
-    if (it->sym == sym && isLinxPCRelHi(it->type))
+    if (it->sym == sym && it->type == hiType)
       return &*it;
 
   return nullptr;
@@ -794,9 +799,9 @@ static const Relocation *findLinxPCRelHiBySymbol(const InputSectionBase *sec,
 // instead target the final symbol directly (for example _DYNAMIC in static
 // PIE), so the linker has to recover the HI relocation by symbol and then use
 // the HI relocation's place when reconstructing the PC-relative target.
-static const Relocation *getLinxPCRelHi20(Ctx &ctx,
-                                          const InputSectionBase *loSec,
-                                          const Relocation &loReloc) {
+static std::optional<LinxPCRelHi>
+getLinxPCRelHi20(Ctx &ctx, const InputSectionBase *loSec,
+                 const Relocation &loReloc, RelType hiType) {
   int64_t addend = loReloc.addend;
   Symbol *sym = loReloc.sym;
   std::string anchor = toStr(ctx, *sym);
@@ -826,20 +831,23 @@ static const Relocation *getLinxPCRelHi20(Ctx &ctx,
                                         : toStr(ctx, *sym) + "+0x" +
                                               utohexstr(targetOffset);
         if (const Relocation *hiRel =
-                findLinxPCRelHiByOffset(hiSec, targetOffset))
-          return hiRel;
+                findLinxPCRelHiByOffset(hiSec, targetOffset, hiType))
+          return LinxPCRelHi{hiRel, hiSec};
       }
     }
   }
 
   if (const Relocation *hiRel =
-          findLinxPCRelHiBySymbol(loSec, loReloc.offset, sym))
-    return hiRel;
+          findLinxPCRelHiBySymbol(loSec, loReloc.offset, sym, hiType))
+    return LinxPCRelHi{hiRel, loSec};
 
   Err(ctx) << loSec->getLocation(loReloc.offset)
            << ": R_LINX_LO12 relocation points to " << anchor
-           << " without an associated R_LINX_PCREL_HI20 relocation";
-  return nullptr;
+           << " without an associated "
+           << (hiType == R_LINX_GOT_HI20 ? "R_LINX_GOT_HI20"
+                                         : "R_LINX_PCREL_HI20")
+           << " relocation";
+  return std::nullopt;
 }
 
 // A TLS symbol's virtual address is relative to the TLS segment. Add a
@@ -1016,14 +1024,29 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
     uint64_t val = r.sym->isUndefWeak() ? p + a : r.sym->getVA(ctx, a);
     return getAArch64Page(val) - getAArch64Page(p);
   }
+  case RE_LINX_PAGE_PC:
+    return (r.sym->getVA(ctx, a) - p) & ~0xfffull;
+  case RE_LINX_GOT_PAGE_PC:
+    return (r.sym->getGotVA(ctx) + a - p) & ~0xfffull;
   case RE_RISCV_PC_INDIRECT: {
     if (const Relocation *hiRel = getPCRelHi20<RISCVPCRel>(ctx, this, r))
       return getRelocTargetVA(ctx, *hiRel, r.sym->getVA(ctx));
     return 0;
   }
   case RE_LINX_PC_INDIRECT: {
-    if (const Relocation *hiRel = getLinxPCRelHi20(ctx, this, r))
-      return hiRel->sym->getVA(ctx, hiRel->addend);
+    if (std::optional<LinxPCRelHi> hi =
+            getLinxPCRelHi20(ctx, this, r, R_LINX_PCREL_HI20))
+      return (hi->rel->sym->getVA(ctx, hi->rel->addend) -
+              hi->sec->getVA(hi->rel->offset)) &
+             0xfffull;
+    return 0;
+  }
+  case RE_LINX_GOT_PC_INDIRECT: {
+    if (std::optional<LinxPCRelHi> hi =
+            getLinxPCRelHi20(ctx, this, r, R_LINX_GOT_HI20))
+      return (hi->rel->sym->getGotVA(ctx) + hi->rel->addend -
+              hi->sec->getVA(hi->rel->offset)) &
+             0xfffull;
     return 0;
   }
   case RE_LOONGARCH_PC_INDIRECT: {

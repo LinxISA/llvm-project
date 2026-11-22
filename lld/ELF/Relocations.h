@@ -125,6 +125,9 @@ enum RelExpr {
   RE_RISCV_ADD,
   RE_RISCV_LEB128,
   RE_RISCV_PC_INDIRECT,
+  RE_LINX_GOT_PAGE_PC,
+  RE_LINX_GOT_PC_INDIRECT,
+  RE_LINX_PAGE_PC,
   RE_LINX_PC_INDIRECT,
   // Same as R_PC but with page-aligned semantics.
   RE_LOONGARCH_PAGE_PC,
