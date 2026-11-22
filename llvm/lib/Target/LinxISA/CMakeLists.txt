@@ -19,6 +19,7 @@ add_llvm_target(LinxISACodeGen
   LinxISAISelDAGToDAG.cpp
   LinxISAISelLowering.cpp
   LinxISAMemOpsCombine.cpp
+  LinxISAPCRelPairing.cpp
   LinxISATileSSABalance.cpp
   LinxISASIMTAutoVectorize.cpp
   LinxISAMCInstLower.cpp

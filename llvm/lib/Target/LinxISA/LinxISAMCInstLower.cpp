@@ -245,6 +245,8 @@ bool LinxISAMCInstLower::lowerOperand(const MachineOperand &MO,
   }
   case MachineOperand::MO_MCSymbol: {
     const MCExpr *Expr = MCSymbolRefExpr::create(MO.getMCSymbol(), Ctx);
+    if (MO.getTargetFlags() & LinxII::MO_GOT)
+      Expr = MCSpecifierExpr::create(Expr, LinxISA::S_GOT, Ctx);
     OutOp = MCOperand::createExpr(Expr);
     return true;
   }

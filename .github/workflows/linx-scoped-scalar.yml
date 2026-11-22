@@ -58,6 +58,7 @@ jobs:
           build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s
           build/bin/llvm-lit -sv clang/test/Driver/linx-march-ext.c \
             clang/test/Driver/linx-scoped-pcr-reloc.s
+          build/bin/llvm-lit -sv llvm/test/CodeGen/LinxISA/pcrel-anchor-pairs.ll
           build/bin/llvm-lit -sv lld/test/ELF/linxisa-pto-v0591-scoped.s \
             lld/test/ELF/linxisa-pto-v0591-scoped-pcr.s \
             lld/test/ELF/linxisa-pto-identity.test \

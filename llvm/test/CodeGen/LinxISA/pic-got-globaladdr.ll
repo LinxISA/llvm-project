@@ -13,6 +13,6 @@ entry:
 ; ASM: @got
 
 ; RELOC: R_LINX_GOT_HI20{{[[:space:]]+}}g
-; RELOC: R_LINX_GOT_LO12{{[[:space:]]+}}g
+; RELOC: R_LINX_GOT_LO12{{[[:space:]]+}}.text
 ; RELOC-NOT: R_LINX_PCR17_LOAD
 ; RELOC-NOT: R_LINX_HL_PCR29_LOAD
