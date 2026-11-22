@@ -9,8 +9,8 @@
 #include "MCTargetDesc/LinxISAFixupKinds.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAssembler.h"
@@ -56,7 +56,8 @@ uint32_t encodeJ22Pcrel(uint64_t Value) {
 }
 
 uint32_t encodeB17Pcrel(uint64_t Value) {
-  // Block-start immediates are encoded in units of 2 bytes (bit 0 is implicit 0).
+  // Block-start immediates are encoded in units of 2 bytes (bit 0 is implicit
+  // 0).
   if (Value & 0x1)
     report_fatal_error("Linx block target is not 2-byte aligned");
 
@@ -95,7 +96,8 @@ uint16_t encodeCBStart12Pcrel(uint64_t Value) {
 }
 
 uint64_t encodeHLBStart30Pcrel(uint64_t Value) {
-  // HL.BSTART uses a signed, instruction-aligned byte offset (bit 0 is implicit 0).
+  // HL.BSTART uses a signed, instruction-aligned byte offset (bit 0 is implicit
+  // 0).
   if (Value & 0x1)
     report_fatal_error("Linx HL block target is not 2-byte aligned");
 
@@ -222,7 +224,8 @@ uint64_t encodeHLPcr29Load(uint64_t Value) {
   //   simm[28:17] -> insn[15:4]
   if (!isInt<29>(static_cast<int64_t>(Value)))
     report_fatal_error("Linx HL.*.PCR load target out of range");
-  uint64_t UImm = static_cast<uint64_t>(static_cast<int64_t>(Value)) & 0x1FFF'FFFFull;
+  uint64_t UImm =
+      static_cast<uint64_t>(static_cast<int64_t>(Value)) & 0x1FFF'FFFFull;
   uint64_t Patch = 0;
   Patch |= (UImm & 0x1FFFFull) << 31;
   Patch |= ((UImm >> 17) & 0x0FFFull) << 4;
@@ -236,7 +239,8 @@ uint64_t encodeHLPcr29Store(uint64_t Value) {
   //   simm[28:17] -> insn[15:4]
   if (!isInt<29>(static_cast<int64_t>(Value)))
     report_fatal_error("Linx HL.*.PCR store target out of range");
-  uint64_t UImm = static_cast<uint64_t>(static_cast<int64_t>(Value)) & 0x1FFF'FFFFull;
+  uint64_t UImm =
+      static_cast<uint64_t>(static_cast<int64_t>(Value)) & 0x1FFF'FFFFull;
   uint64_t Patch = 0;
   Patch |= (UImm & 0x0FFFull) << 36;
   Patch |= ((UImm >> 12) & 0x01Full) << 23;
@@ -256,8 +260,8 @@ static unsigned findSpecOpcodeByAsmFmt(StringRef AsmFmt, unsigned LengthBits) {
 
   SmallString<96> Msg;
   raw_svector_ostream OS(Msg);
-  OS << "Linx: missing spec opcode for asm fmt '" << AsmFmt << "' (" << LengthBits
-     << "b)";
+  OS << "Linx: missing spec opcode for asm fmt '" << AsmFmt << "' ("
+     << LengthBits << "b)";
   report_fatal_error(OS.str());
 }
 
@@ -386,7 +390,8 @@ public:
       return;
     }
 
-    // C.BSTART.{DIRECT,COND} -> BSTART.STD.{DIRECT,COND} -> HL.BSTART.STD.{DIRECT,COND}
+    // C.BSTART.{DIRECT,COND} -> BSTART.STD.{DIRECT,COND} ->
+    // HL.BSTART.STD.{DIRECT,COND}
     if (Mnemonic == "C.BSTART") {
       if (AsmFmt.contains(" DIRECT")) {
         Inst.setOpcode(findSpecOpcodeByAsmFmt("BSTART.STD DIRECT, <label>",
@@ -394,8 +399,8 @@ public:
         return;
       }
       if (AsmFmt.contains(" COND")) {
-        Inst.setOpcode(
-            findSpecOpcodeByAsmFmt("BSTART.STD COND, <label>", /*LengthBits=*/32));
+        Inst.setOpcode(findSpecOpcodeByAsmFmt("BSTART.STD COND, <label>",
+                                              /*LengthBits=*/32));
         return;
       }
     }
@@ -427,51 +432,58 @@ public:
       }
     }
     if (Mnemonic == "BSTART.FP" && AsmFmt.contains("FALL<, fixup_label>")) {
-      Inst.setOpcode(findSpecOpcodeByAsmFmt(
-          "HL.BSTART.FP FALL<, fixup_label>", /*LengthBits=*/48));
+      Inst.setOpcode(findSpecOpcodeByAsmFmt("HL.BSTART.FP FALL<, fixup_label>",
+                                            /*LengthBits=*/48));
       return;
     }
     if (Mnemonic == "BSTART.SYS" && AsmFmt.contains("FALL<, fixup_label>")) {
-      Inst.setOpcode(findSpecOpcodeByAsmFmt(
-          "HL.BSTART.SYS FALL<, fixup_label>", /*LengthBits=*/48));
+      Inst.setOpcode(findSpecOpcodeByAsmFmt("HL.BSTART.SYS FALL<, fixup_label>",
+                                            /*LengthBits=*/48));
       return;
     }
 
     // *.PCR -> HL.*.PCR
     if (!Mnemonic.starts_with("HL.") && Mnemonic.ends_with(".PCR")) {
       if (Mnemonic == "LB.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.lb.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.lb.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
       if (Mnemonic == "LBU.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.lbu.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.lbu.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
       if (Mnemonic == "LH.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.lh.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.lh.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
       if (Mnemonic == "LHU.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.lhu.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.lhu.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
       if (Mnemonic == "LW.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.lw.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.lw.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
       if (Mnemonic == "LWU.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.lwu.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.lwu.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
       if (Mnemonic == "LD.PCR") {
-        Inst.setOpcode(findSpecOpcodeByAsmFmt("hl.ld.pcr [<symbol>], ->{t, u, Rd}",
-                                              /*LengthBits=*/48));
+        Inst.setOpcode(
+            findSpecOpcodeByAsmFmt("hl.ld.pcr [<symbol>], ->{t, u, Rd}",
+                                   /*LengthBits=*/48));
         return;
       }
 
@@ -508,7 +520,11 @@ public:
     // resolvable during assembly, the linker must make the final decision.
     const bool ForceReloc =
         (Fixup.getKind() == LinxISA::FIXUP_LINX_PCREL_HI20 ||
-         Fixup.getKind() == LinxISA::FIXUP_LINX_GOT_HI20);
+         Fixup.getKind() == LinxISA::FIXUP_LINX_GOT_HI20 ||
+         Fixup.getKind() == LinxISA::FIXUP_LINX_SCOPED_PCR17_LOAD ||
+         Fixup.getKind() == LinxISA::FIXUP_LINX_SCOPED_PCR17_STORE ||
+         Fixup.getKind() == LinxISA::FIXUP_LINX_SCOPED_HL_PCR29_LOAD ||
+         Fixup.getKind() == LinxISA::FIXUP_LINX_SCOPED_HL_PCR29_STORE);
     if (ForceReloc)
       IsResolved = false;
 
@@ -612,6 +628,11 @@ public:
       PatchBytes = 6;
       Patch = encodeHLPcr29Store(Value);
       break;
+    case LinxISA::FIXUP_LINX_SCOPED_PCR17_LOAD:
+    case LinxISA::FIXUP_LINX_SCOPED_PCR17_STORE:
+    case LinxISA::FIXUP_LINX_SCOPED_HL_PCR29_LOAD:
+    case LinxISA::FIXUP_LINX_SCOPED_HL_PCR29_STORE:
+      llvm_unreachable("scoped PCR fixups must be applied by the linker");
     default:
       llvm_unreachable("Unknown Linx fixup kind");
     }
@@ -653,8 +674,8 @@ public:
 
   std::unique_ptr<MCObjectTargetWriter>
   createObjectTargetWriter() const override {
-    return createLinxISAELFObjectWriter(MCELFObjectTargetWriter::getOSABI(OSType),
-                                        Is64Bit);
+    return createLinxISAELFObjectWriter(
+        MCELFObjectTargetWriter::getOSABI(OSType), Is64Bit);
   }
 
   MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override {
@@ -686,6 +707,10 @@ public:
         {"FIXUP_LINX_PCR17_STORE", 0, 17, 0},
         {"FIXUP_LINX_HL_PCR29_LOAD", 0, 29, 0},
         {"FIXUP_LINX_HL_PCR29_STORE", 0, 29, 0},
+        {"FIXUP_LINX_SCOPED_PCR17_LOAD", 0, 17, 0},
+        {"FIXUP_LINX_SCOPED_PCR17_STORE", 0, 17, 0},
+        {"FIXUP_LINX_SCOPED_HL_PCR29_LOAD", 0, 29, 0},
+        {"FIXUP_LINX_SCOPED_HL_PCR29_STORE", 0, 29, 0},
     };
 
     if (Kind < FirstTargetFixupKind)

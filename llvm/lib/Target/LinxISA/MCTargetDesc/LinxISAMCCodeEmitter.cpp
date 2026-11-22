@@ -111,9 +111,9 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
 
   const linxisa_inst_form &Form = linxisa_inst_forms[Opcode];
   const unsigned Scope = MI.getFlags();
-  if (Scope && (LinxISA::getScopedScalarSuffix(Scope).empty() ||
-                !LinxISA::isScopedScalarForm(Form.id) ||
-                Form.length_bits > 48)) {
+  if (Scope &&
+      (LinxISA::getScopedScalarSuffix(Scope).empty() ||
+       !LinxISA::isScopedScalarForm(Form.id) || Form.length_bits > 48)) {
     Ctx.reportError(MI.getLoc(), "invalid scoped Scalar form");
     return;
   }
@@ -149,12 +149,6 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     if (!Op.isExpr())
       report_fatal_error("Linx: unsupported MCOperand kind for field");
 
-    if (Scope) {
-      Ctx.reportError(MI.getLoc(),
-                      "scoped Scalar symbol operands require a scoped relocation");
-      return;
-    }
-
     const MCExpr *Expr = Op.getExpr();
     // Minimal fixup support for early bring-up: only branch/jump PC-relative
     // label operands are supported, plus the basic global-address sequence
@@ -162,7 +156,28 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
     MCFixupKind Kind = FK_NONE;
     bool PCRel = true;
     unsigned FixupOffset = 0;
-    if (Name == "simm12" && Mnemonic == "BSTART.CALL") {
+    if (Scope && Mnemonic.ends_with(".PCR")) {
+      if (Name == "simm17")
+        Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_SCOPED_PCR17_LOAD);
+      else if (Name == "simm" && !Mnemonic.starts_with("HL."))
+        Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_SCOPED_PCR17_STORE);
+      else if (Name == "simm" && Mnemonic.starts_with("HL.L"))
+        Kind =
+            static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_SCOPED_HL_PCR29_LOAD);
+      else if (Name == "simm" && Mnemonic.starts_with("HL.S"))
+        Kind =
+            static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_SCOPED_HL_PCR29_STORE);
+      else {
+        Ctx.reportError(MI.getLoc(),
+                        "unsupported scoped Scalar PCR expression");
+        return;
+      }
+    } else if (Scope) {
+      Ctx.reportError(
+          MI.getLoc(),
+          "scoped Scalar symbol operands require a scoped relocation");
+      return;
+    } else if (Name == "simm12" && Mnemonic == "BSTART.CALL") {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_CBSTART12_PCREL);
     } else if (Name == "simm25" && Mnemonic == "HL.BSTART CALL") {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B25_PCREL);
@@ -203,7 +218,8 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
         Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_GOT_HI20);
       else
         Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_PCREL_HI20);
-    } else if (Name == "uimm12" && (Mnemonic == "ADDI" || Mnemonic == "ADDIW")) {
+    } else if (Name == "uimm12" &&
+               (Mnemonic == "ADDI" || Mnemonic == "ADDIW")) {
       if (hasGotVariant(Expr))
         Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_GOT_LO12);
       else
@@ -216,8 +232,8 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
                (Mnemonic == "B.TEXT" || Mnemonic.starts_with("BSTART"))) {
       Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_B25_PCREL);
     } else if (Name == "simm" && Mnemonic.ends_with(".PCR")) {
-      // Stores use a split simm field in the 32-bit form; HL.*.PCR uses a 29-bit
-      // simm field for both loads and stores.
+      // Stores use a split simm field in the 32-bit form; HL.*.PCR uses a
+      // 29-bit simm field for both loads and stores.
       if (Mnemonic.starts_with("HL.")) {
         if (Mnemonic.starts_with("HL.L"))
           Kind = static_cast<MCFixupKind>(LinxISA::FIXUP_LINX_HL_PCR29_LOAD);
@@ -236,15 +252,14 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
       report_fatal_error(OS.str());
     }
 
-    Fixups.push_back(
-        MCFixup::create(FixupOffset, Expr, Kind, /*PCRel=*/PCRel));
+    Fixups.push_back(MCFixup::create(FixupOffset, Expr, Kind, /*PCRel=*/PCRel));
   }
 
   unsigned Bytes = Form.length_bits / 8;
   if (Scope) {
     const unsigned LengthCode = Form.length_bits / 16 - 1;
-    const unsigned Prefix = 0x001f | (LengthCode << 10) |
-                            ((Scope - LinxISA::ScopePrivate) << 8);
+    const unsigned Prefix =
+        0x001f | (LengthCode << 10) | ((Scope - LinxISA::ScopePrivate) << 8);
     Insn = (Insn << 16) | Prefix;
     Bytes = 8;
   }

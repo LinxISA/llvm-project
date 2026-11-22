@@ -83,6 +83,13 @@ enum Fixups {
   FIXUP_LINX_HL_PCR29_LOAD,
   FIXUP_LINX_HL_PCR29_STORE,
 
+  // PTO 0.59.1 scoped carriers. The fixup is anchored at the outer carrier
+  // start and patches the corresponding PCR field in the embedded instruction.
+  FIXUP_LINX_SCOPED_PCR17_LOAD,
+  FIXUP_LINX_SCOPED_PCR17_STORE,
+  FIXUP_LINX_SCOPED_HL_PCR29_LOAD,
+  FIXUP_LINX_SCOPED_HL_PCR29_STORE,
+
   // Marker.
   LastTargetFixupKind,
   NumTargetFixupKinds = LastTargetFixupKind - FirstTargetFixupKind
