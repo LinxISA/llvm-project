@@ -8,8 +8,13 @@ on:
       - 'llvm/test/MC/LinxISA/**'
       - 'llvm/utils/linxisa/gen_scoped_scalar_forms.py'
       - 'llvm/include/llvm/BinaryFormat/PTOISAScoped.h'
+      - 'llvm/include/llvm/BinaryFormat/ELFRelocs/LinxISA.def'
+      - 'clang/lib/Driver/ToolChains/Arch/LinxISA.cpp'
+      - 'clang/test/Driver/linx-march-ext.c'
+      - 'clang/test/Driver/linx-scoped-pcr-reloc.s'
       - 'lld/ELF/**'
       - 'lld/test/ELF/linxisa-pto-v0591-scoped.s'
+      - 'lld/test/ELF/linxisa-pto-v0591-scoped-pcr.s'
       - 'lld/test/ELF/linxisa-pto-identity.test'
 
 permissions:
@@ -18,7 +23,7 @@ permissions:
 jobs:
   scoped-scalar-mc:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Check out LLVM
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -42,12 +47,15 @@ jobs:
         run: |
           cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_TARGETS_TO_BUILD= -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=LinxISA \
-            -DLLVM_ENABLE_PROJECTS=lld
-          cmake --build build --target llvm-mc llvm-objdump llvm-readobj llvm-readelf llvm-config \
+            -DLLVM_ENABLE_PROJECTS='clang;lld'
+          cmake --build build --target clang llvm-mc llvm-objdump llvm-readobj llvm-readelf llvm-config \
             FileCheck count not split-file yaml2obj lld -j 3
       - name: Test scoped disassembly
         run: |
           build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s
+          build/bin/llvm-lit -sv clang/test/Driver/linx-march-ext.c \
+            clang/test/Driver/linx-scoped-pcr-reloc.s
           build/bin/llvm-lit -sv lld/test/ELF/linxisa-pto-v0591-scoped.s \
+            lld/test/ELF/linxisa-pto-v0591-scoped-pcr.s \
             lld/test/ELF/linxisa-pto-identity.test
           python3 llvm/utils/linxisa/gen_scoped_scalar_forms.py linx-catalog --check --tool-dir build/bin

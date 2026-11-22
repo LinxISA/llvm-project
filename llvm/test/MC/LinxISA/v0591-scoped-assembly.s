@@ -7,7 +7,6 @@
 # RUN: not llvm-mc -triple=linx64 -filetype=obj %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=FEATURE
 # RUN: echo 'dma.private [a0], a1' | not llvm-mc -triple=linx64 -mattr=+pto-v0591-scoped 2>&1 | FileCheck %s --check-prefix=EXCLUDED
 # RUN: echo 'C.BSTART.private' | not llvm-mc -triple=linx64 -mattr=+pto-v0591-scoped 2>&1 | FileCheck %s --check-prefix=EXCLUDED
-# RUN: echo 'lw.pcr.intra [external], ->a0' | not llvm-mc -triple=linx64 -mattr=+pto-v0591-scoped 2>&1 | FileCheck %s --check-prefix=SYMBOL
 
         .text
         c.ldi.private [zero, 0], ->t
@@ -33,4 +32,3 @@
 # DIS-NEXT: 28: {{.*}}C.BSTOP
 # FEATURE: error: scoped Scalar requires +pto-v0591-scoped
 # EXCLUDED: error: no matching scoped Scalar form
-# SYMBOL: error: scoped Scalar symbol operands require a scoped relocation

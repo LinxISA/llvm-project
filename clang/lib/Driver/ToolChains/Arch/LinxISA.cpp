@@ -34,6 +34,7 @@ struct ParsedLinxMarch {
   bool HasSys = false;
   bool HasV = false;
   bool HasM = false;
+  bool HasPtoV0591Scoped = false;
 };
 
 static LinxProfile profileFromTriple(const llvm::Triple &Triple) {
@@ -84,6 +85,10 @@ static bool enableExtensionToken(StringRef Token, ParsedLinxMarch &Out) {
   }
   if (Token == "lnx-m") {
     Out.HasM = true;
+    return true;
+  }
+  if (Token == "pto-v0591-scoped") {
+    Out.HasPtoV0591Scoped = true;
     return true;
   }
   return false;
@@ -188,4 +193,6 @@ void linxisa::getLinxISATargetFeatures(const Driver &D,
     Features.push_back(Args.MakeArgString("+lnx-v"));
   if (MarchConfig.HasM)
     Features.push_back(Args.MakeArgString("+lnx-m"));
+  if (MarchConfig.HasPtoV0591Scoped)
+    Features.push_back(Args.MakeArgString("+pto-v0591-scoped"));
 }

@@ -8,8 +8,8 @@
 
 #include "LinxISATileEnginesV058.h"
 #include "MCTargetDesc/LinxISAMCTargetDesc.h"
-#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "MCTargetDesc/LinxISAOpcodeTables.h"
+#include "MCTargetDesc/LinxISAScopedScalar.h"
 #include "TargetInfo/LinxISATargetInfo.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -587,8 +587,7 @@ enum class ParsedSrcRModifier {
   BitwiseNot,
 };
 
-static std::optional<ParsedSrcRModifier>
-parseSrcRTypeSuffix(StringRef Suffix) {
+static std::optional<ParsedSrcRModifier> parseSrcRTypeSuffix(StringRef Suffix) {
   std::string Up = toUpperStr(Suffix);
   if (Up == "SW")
     return ParsedSrcRModifier::SignedWord;
@@ -2842,10 +2841,11 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
             (StringRef(Form.mnemonic).equals_insensitive("HL.PRF") ||
              StringRef(Form.mnemonic).equals_insensitive("HL.PRF.A"));
         if (IsScalarAddress) {
-          if (!require(!M.Index.HasExplicitType || M.Index.SrcRType <= 1,
-                       IsHLPrefetch
-                           ? "HL.PRF register offset does not allow .neg or .not"
-                           : "address register offset does not allow .neg or .not"))
+          if (!require(
+                  !M.Index.HasExplicitType || M.Index.SrcRType <= 1,
+                  IsHLPrefetch
+                      ? "HL.PRF register offset does not allow .neg or .not"
+                      : "address register offset does not allow .neg or .not"))
             return false;
           const unsigned AddressSrcRType =
               M.Index.HasExplicitType ? M.Index.SrcRType + 1 : 0;
@@ -3047,8 +3047,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
       else if (FieldName == "RegSrc2")
         emitFieldImm(RegSrc2 & 0x1fu);
       else
-        return require(false,
-                       ("unsupported B.IOR field: " + FieldName).str());
+        return require(false, ("unsupported B.IOR field: " + FieldName).str());
     }
     return true;
   }
@@ -3086,8 +3085,7 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
                        Value <= 127,
                    "B.IOS Shared register must be S0..S63"))
         return false;
-      const bool RequestedReuse =
-          (static_cast<unsigned>(Value) & 0x40u) != 0u;
+      const bool RequestedReuse = (static_cast<unsigned>(Value) & 0x40u) != 0u;
       if (!require(RequestedReuse == FormHasSizeCode,
                    "B.IOS source reuse does not match encoding form"))
         return false;
@@ -3918,9 +3916,8 @@ bool LinxISAAsmParser::buildMCInstForForm(unsigned FormIndex,
         continue;
       }
 
-      const bool IsComparison =
-          FormMnemonic.starts_with_insensitive("CMP.") ||
-          FormMnemonic.starts_with_insensitive("SETC.");
+      const bool IsComparison = FormMnemonic.starts_with_insensitive("CMP.") ||
+                                FormMnemonic.starts_with_insensitive("SETC.");
       if (IsComparison) {
         const bool IsLogicalComparison =
             FormMnemonic.ends_with_insensitive(".AND") ||
@@ -4723,9 +4720,12 @@ bool LinxISAAsmParser::matchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
 
   if (Scope) {
     for (const MCOperand &Operand : Best->Inst) {
-      if (Operand.isExpr())
-        return Error(IDLoc,
-                     "scoped Scalar symbol operands require a scoped relocation");
+      if (Operand.isExpr() &&
+          !(Best->Index < linxisa_inst_forms_count &&
+            StringRef(linxisa_inst_forms[Best->Index].mnemonic)
+                .ends_with(".PCR")))
+        return Error(
+            IDLoc, "scoped Scalar symbol operands require a scoped relocation");
     }
     Best->Inst.setFlags(Scope);
   }
