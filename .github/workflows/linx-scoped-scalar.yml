@@ -47,7 +47,9 @@ jobs:
         run: |
           cmake -S llvm -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_TARGETS_TO_BUILD= -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=LinxISA \
-            -DLLVM_ENABLE_PROJECTS='clang;lld'
+            -DLLVM_ENABLE_PROJECTS='clang;lld' \
+            -DCMAKE_C_FLAGS_RELEASE='-O1 -DNDEBUG' \
+            -DCMAKE_CXX_FLAGS_RELEASE='-O1 -DNDEBUG'
           cmake --build build --target clang llvm-mc llvm-objdump llvm-readobj llvm-readelf llvm-config \
             FileCheck count not split-file yaml2obj lld -j 3
       - name: Test scoped disassembly

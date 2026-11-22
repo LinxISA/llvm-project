@@ -15,8 +15,14 @@
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-padding.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-CARRIER
 # RUN: yaml2obj -DINSN=1F04050000000000 -DRELOC=0x21 %t/bad.yaml -o %t/bad-inner.o
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-inner.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-INNER
+# RUN: yaml2obj -DINSN=1F0439A100000000 -DRELOC=0x21 %t/bad.yaml -o %t/bad-immediate.o
+# RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-immediate.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-IMM
 # RUN: yaml2obj -DINSN=1F04392100000000 -DRELOC=0x23 %t/bad.yaml -o %t/bad-layout.o
 # RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-layout.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-LAYOUT
+# RUN: yaml2obj -DINSN=1F043921 -DRELOC=0x21 %t/bad.yaml -o %t/bad-boundary.o
+# RUN: not ld.lld -m elf64linx --linx-pto-v0591-scoped %t/bad-boundary.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD-BOUNDARY
+# RUN: yaml2obj -DINSN=1F04392100000000 -DRELOC=0x21 %t/legacy.yaml -o %t/legacy-reloc.o
+# RUN: not ld.lld -m elf64linx %t/legacy-reloc.o -o /dev/null 2>&1 | FileCheck %s --check-prefix=LEGACY-RELOC
 
 # RELOC: 0x2 R_LINX_SCOPED_PCR17_LOAD forward 0x0
 # RELOC: 0xA R_LINX_SCOPED_PCR17_STORE backward 0x0
@@ -34,7 +40,10 @@
 # OLD-ABI: error: {{.*}}release mismatch (expected 0.58.7)
 # BAD-CARRIER: error: {{.*}}scoped PCR relocation requires a matching 64-bit carrier
 # BAD-INNER: error: {{.*}}scoped PCR relocation does not match the embedded PCR form
+# BAD-IMM: error: {{.*}}scoped PCR relocation requires a zero embedded immediate
 # BAD-LAYOUT: error: {{.*}}scoped PCR relocation requires a matching 64-bit carrier
+# BAD-BOUNDARY: error: {{.*}}scoped PCR relocation requires an 8-byte carrier
+# LEGACY-RELOC: error: {{.*}}scoped PCR relocation requires --linx-pto-v0591-scoped
 
 #--- main.s
 .text
@@ -90,6 +99,41 @@ Sections:
     Notes:
       - Name: PTO
         Desc: 7B22656E636F64696E675F616269223A2270746F2D6973612D302E35392E312D6D6F64652D66756E6374696F6E2D7631222C22656E636F64696E675F70726F6A656374696F6E5F736861323536223A2264393063383831373534643636663263643236663630313464306235383263626138383330376537303132333538336438376663353961393138323239633238222C2272656C65617365223A22302E35392E31227D
+        Type: NT_VERSION
+  - Name: .rela.text
+    Type: SHT_RELA
+    Link: .symtab
+    Info: .text
+    Relocations:
+      - Symbol: target
+        Type: [[RELOC]]
+  - Type: SectionHeaderTable
+Symbols:
+  - Name: target
+    Section: .text
+    Value: 8
+...
+
+#--- legacy.yaml
+--- !ELF
+FileHeader:
+  Class: ELFCLASS64
+  Data: ELFDATA2LSB
+  Type: ET_REL
+  Machine: 0xE9
+Sections:
+  - Name: .text
+    Type: SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign: 4
+    Content: [[INSN]]0000
+  - Name: .note.pto.isa
+    Type: SHT_NOTE
+    Flags: [ SHF_ALLOC ]
+    AddressAlign: 4
+    Notes:
+      - Name: PTO
+        Desc: 7B22656E636F64696E675F616269223A2270746F2D6973612D302E35382E372D6D6F64652D66756E6374696F6E2D7631222C22656E636F64696E675F70726F6A656374696F6E5F736861323536223A2261356637386563643730376264653461303134353432313538656132353763373833373936623935666134666263636533373734326534316665653661383831222C2272656C65617365223A22302E35382E37227D
         Type: NT_VERSION
   - Name: .rela.text
     Type: SHT_RELA
