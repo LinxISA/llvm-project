@@ -32,6 +32,7 @@ LLVMInitializeLinxISATarget() {
   initializeLinxISAAsmPrinterPass(PR);
   initializeLinxISATileSSABalancePass(PR);
   initializeLinxISAMemOpsCombinePass(PR);
+  initializeLinxISAPCRelPairingPass(PR);
   initializeLinxISABlockifyPass(PR);
   initializeLinxISASIMTAutoVectorizePass(PR);
   initializeLinxISADAGToDAGISelLegacyPass(PR);
@@ -103,7 +104,10 @@ public:
 
   // Preserve every tile PHI edge as a target pseudo before generic register
   // allocation can erase an identity COPY on only one predecessor.
-  void addPreRegAlloc() override { addPass(createLinxISATileSSABalancePass()); }
+  void addPreRegAlloc() override {
+    addPass(createLinxISATileSSABalancePass());
+    addPass(createLinxISAPCRelPairingPass());
+  }
 
   // Run once before ExpandPostRA so tile PHI/COPY traffic is materialized as
   // target pseudos and never reaches generic reg-to-reg COPY expansion.

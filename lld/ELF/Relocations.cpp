@@ -137,9 +137,9 @@ bool lld::elf::needsGot(RelExpr expr) {
   return oneof<R_GOT, RE_AARCH64_AUTH_GOT, RE_AARCH64_AUTH_GOT_PC, R_GOT_OFF,
                RE_MIPS_GOT_LOCAL_PAGE, RE_MIPS_GOT_OFF, RE_MIPS_GOT_OFF32,
                RE_AARCH64_GOT_PAGE_PC, RE_AARCH64_AUTH_GOT_PAGE_PC,
-               RE_AARCH64_AUTH_GOT_PAGE_PC, RE_LINX_GOT_PAGE_PC,
-               RE_LINX_GOT_PC_INDIRECT, R_GOT_PC, R_GOTPLT, RE_AARCH64_GOT_PAGE,
-               RE_LOONGARCH_GOT, RE_LOONGARCH_GOT_PAGE_PC>(expr);
+               RE_AARCH64_AUTH_GOT_PAGE_PC, RE_LINX_GOT_PAGE_PC, R_GOT_PC,
+               R_GOTPLT, RE_AARCH64_GOT_PAGE, RE_LOONGARCH_GOT,
+               RE_LOONGARCH_GOT_PAGE_PC>(expr);
 }
 
 // True if this expression is of the form Sym - X, where X is a position in the
