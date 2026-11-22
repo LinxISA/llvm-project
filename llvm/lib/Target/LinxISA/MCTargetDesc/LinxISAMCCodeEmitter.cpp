@@ -101,6 +101,13 @@ static void encodeFieldBits(uint64_t &Insn, const linxisa_field &Field,
   }
 }
 
+static bool isFrameTemplateForm(const linxisa_inst_form &Form) {
+  StringRef AsmFmt(Form.asm_fmt ? Form.asm_fmt : "");
+  return AsmFmt.contains("[RegSrc0 ~ RegSrcn]") ||
+         AsmFmt.contains("[RegDst0 ~ RegDstn]") ||
+         AsmFmt.contains("[ra ~ RegDstn]");
+}
+
 void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
                                              SmallVectorImpl<char> &CB,
                                              SmallVectorImpl<MCFixup> &Fixups,
@@ -132,6 +139,17 @@ void LinxISAMCCodeEmitter::encodeInstruction(const MCInst &MI,
       continue;
 
     if (Op.isImm()) {
+      if (Name == "uimm" && isFrameTemplateForm(Form)) {
+        const int64_t FrameBytes = Op.getImm();
+        if (FrameBytes < 0 || (FrameBytes & 7) != 0 ||
+            !isUIntN(F.bit_width, static_cast<uint64_t>(FrameBytes) >> 3)) {
+          Ctx.reportError(MI.getLoc(),
+                          "frame template byte count is not encodable");
+          return;
+        }
+        encodeFieldBits(Insn, F, static_cast<uint64_t>(FrameBytes) >> 3);
+        continue;
+      }
       if (Name == "simm" && Mnemonic.starts_with("L.BSTART")) {
         const int64_t Imm = Op.getImm();
         if (!isInt<42>(Imm)) {

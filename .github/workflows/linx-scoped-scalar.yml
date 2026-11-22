@@ -54,7 +54,8 @@ jobs:
             FileCheck count not split-file yaml2obj lld -j 3
       - name: Test scoped disassembly
         run: |
-          build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s
+          build/bin/llvm-lit -sv llvm/test/MC/LinxISA/v0591-scoped-*.s \
+            llvm/test/MC/LinxISA/frame-template-contract.s
           build/bin/llvm-lit -sv clang/test/Driver/linx-march-ext.c \
             clang/test/Driver/linx-scoped-pcr-reloc.s
           build/bin/llvm-lit -sv lld/test/ELF/linxisa-pto-v0591-scoped.s \

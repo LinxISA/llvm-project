@@ -2197,10 +2197,10 @@ static bool getFrameTemplateMaxBytes(const linxisa_inst_form &Form,
       return false;
     UimmField = &Field;
   }
-  if (!UimmField || UimmField->bit_width < FrameUnitShift)
+  if (!UimmField)
     return false;
 
-  const unsigned EncodedUnitBits = UimmField->bit_width - FrameUnitShift;
+  const unsigned EncodedUnitBits = UimmField->bit_width;
   const uint64_t MaxUnits = EncodedUnitBits >= 64
                                 ? std::numeric_limits<uint64_t>::max()
                                 : ((uint64_t{1} << EncodedUnitBits) - 1u);
