@@ -1,0 +1,132 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=true -o - %s | FileCheck %s
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=false -o - %s | FileCheck %s
+#
+# Column ARG B.DIM encodes source geometry and BSTART encodes source dtype.
+# A copy must instead describe the published 1 x ValidCol U32 result. Cover
+# numeric, named and immediate-operand selectors in both copy lowering modes.
+# NORM preserves physical columns; CUBE uses the destination's U32 CELL width
+# and exact capacity rather than the source element width.
+# CHECK-LABEL: name: col_argmax_numeric
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmin_numeric
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmax_named
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 8, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmin_named
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 8, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmax_operand
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmin_operand
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmax_m16
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, 3, 1, 4, 25, 31
+# CHECK-LABEL: name: col_argmin_m32
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 3, 1, 4, 25, 29
+# CHECK-LABEL: name: col_argmax_dynamic_rows
+# CHECK: $r17 = ORI $r0, 7
+# CHECK-NEXT: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+--- |
+  define void @col_argmax_numeric() { ret void }
+  define void @col_argmin_numeric() { ret void }
+  define void @col_argmax_named() { ret void }
+  define void @col_argmin_named() { ret void }
+  define void @col_argmax_operand() { ret void }
+  define void @col_argmin_operand() { ret void }
+  define void @col_argmax_m16() { ret void }
+  define void @col_argmin_m32() { ret void }
+  define void @col_argmax_dynamic_rows() { ret void }
+...
+---
+name: col_argmax_numeric
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_numeric
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 93, FP32\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_named
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.SFU TCOLARGMAX, S64\0AB.DATR NORM, Null\0AB.DIM zero, 8, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_named
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TCOLARGMIN, U8\0AB.DATR NORM, Null\0AB.DIM zero, 8, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_operand
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL ${3:c}, FP16\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1, 13, 92
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_operand
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.SFU ${3:c}, FP32\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1, 13, 93
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_m16
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR CUBE_M16, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_m32
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TCOLARGMIN, U8\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 3
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_dynamic_rows
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM $3, 0, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1, 2293769, $r17
+    $r17 = ORI $r0, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

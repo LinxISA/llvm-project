@@ -1,0 +1,33 @@
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=false -o - %s | FileCheck %s
+#
+# Nonzero B.DIM register offsets require the legacy descriptor parser. A zero
+# base still makes these static dimensions. Publish U32 indices and one row.
+# CHECK-LABEL: name: col_argmax_legacy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmin_legacy
+# CHECK: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+--- |
+  define void @col_argmax_legacy() { ret void }
+  define void @col_argmin_legacy() { ret void }
+...
+---
+name: col_argmax_legacy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR NORM, Null\0AB.DIM $3, 16, ->lb0\0AB.DIM $3, 16, ->lb1\0AB.DIM $3, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1, 2293769, $r0
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_legacy
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 93, FP32\0AB.DATR NORM, Null\0AB.DIM $3, 16, ->lb0\0AB.DIM $3, 16, ->lb1\0AB.DIM $3, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1, 2293769, $r0
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...

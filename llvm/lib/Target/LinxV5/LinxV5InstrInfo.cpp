@@ -1494,13 +1494,24 @@ static Optional<unsigned> getInlineAsmReductionSelector(MachineInstr &MI,
                      .Case("TCOLMAX", 81)
                      .Case("TCOLMIN", 82)
                      .Case("TCOLPROD", 83)
+                     .Case("TCOLARGMAX", 92)
+                     .Case("TCOLARGMIN", 93)
                      .Default(None);
   }
   if (Selector && ((*Selector >= 64 && *Selector <= 67) ||
                    (*Selector >= 76 && *Selector <= 77) ||
-                   (*Selector >= 80 && *Selector <= 83)))
+                   (*Selector >= 80 && *Selector <= 83) ||
+                   (*Selector >= 92 && *Selector <= 93)))
     return Selector;
   return None;
+}
+
+static bool isColumnReduction(unsigned Selector) {
+  return (Selector >= 80 && Selector <= 83) || Selector == 92 || Selector == 93;
+}
+
+static bool isArgReduction(unsigned Selector) {
+  return Selector == 76 || Selector == 77 || Selector == 92 || Selector == 93;
 }
 
 using DescriptorPosition =
@@ -2053,11 +2064,9 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
                       *Layout == LinxV5Op::ArgFormat::CUBE_M32;
     if (!Cube && *Layout != LinxV5Op::ArgFormat::NORM)
       return None;
-    const bool IsRowArg = *Reduction == 76 || *Reduction == 77;
-    const bool IsColumn = *Reduction >= 80 && *Reduction <= 83;
-    if (IsRowArg)
+    if (isArgReduction(*Reduction))
       *DataType = LinxV5Op::DataType::U32;
-    if (IsColumn) {
+    if (isColumnReduction(*Reduction)) {
       ValidRow = 1;
       if (Cube) {
         unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
@@ -2232,9 +2241,9 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
                       *Layout == LinxV5Op::ArgFormat::CUBE_M32;
     if (!Cube && *Layout != LinxV5Op::ArgFormat::NORM)
       return None;
-    if (*Reduction == 76 || *Reduction == 77)
+    if (isArgReduction(*Reduction))
       *DataType = LinxV5Op::DataType::U32;
-    if (*Reduction >= 80 && *Reduction <= 83) {
+    if (isColumnReduction(*Reduction)) {
       *ValidRow = 1;
       Dimensions.ValidRowReg = Register();
       Dimensions.ValidRowDef = nullptr;
