@@ -23,10 +23,20 @@
 # CHECK-LABEL: name: col_argmax_m16
 # CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, 3, 1, 4, 25, 31
 # CHECK-LABEL: name: col_argmin_m32
-# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 3, 1, 4, 25, 29
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, 4, 1, 4, 25, 29
 # CHECK-LABEL: name: col_argmax_dynamic_rows
 # CHECK: $r17 = ORI $r0, 7
 # CHECK-NEXT: $tile_t2 = PseudoTCOPYDesc 1, $tile_t1, 16, 1, 16, 25, 0
+# CHECK-LABEL: name: col_argmax_m16_four
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, 4, 1, 4, 25, 31
+# CHECK-LABEL: name: col_argmax_dynamic_columns
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, $r17, 1, 4, 25, 31
+# CHECK-LABEL: name: col_argmin_dynamic_columns
+# CHECK: $tile_t2 = PseudoTCOPYDesc 3, $tile_t1, $r17, 1, 4, 25, 29
+# CHECK-LABEL: name: col_argmax_dynamic_source_geometry
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, $r17, 1, 4, 25, 31
+# CHECK-LABEL: name: col_argmin_dynamic_columns_no_lb2
+# CHECK: $tile_t2 = PseudoTCOPYDesc 2, $tile_t1, $r17, 1, 4, 25, 31
 --- |
   define void @col_argmax_numeric() { ret void }
   define void @col_argmin_numeric() { ret void }
@@ -37,6 +47,11 @@
   define void @col_argmax_m16() { ret void }
   define void @col_argmin_m32() { ret void }
   define void @col_argmax_dynamic_rows() { ret void }
+  define void @col_argmax_m16_four() { ret void }
+  define void @col_argmax_dynamic_columns() { ret void }
+  define void @col_argmin_dynamic_columns() { ret void }
+  define void @col_argmax_dynamic_source_geometry() { ret void }
+  define void @col_argmin_dynamic_columns_no_lb2() { ret void }
 ...
 ---
 name: col_argmax_numeric
@@ -114,7 +129,7 @@ tracksRegLiveness: true
 body: |
   bb.0:
     $tile_u1 = IMPLICIT_DEF
-    INLINEASM &"BSTART.TEPL TCOLARGMIN, U8\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 3
+    INLINEASM &"BSTART.TEPL TCOLARGMIN, U8\0AB.DATR CUBE_M32, Null\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 3
     $tile_t2 = COPY $tile_t1
     PseudoRET
 ...
@@ -127,6 +142,62 @@ body: |
     $tile_u1 = IMPLICIT_DEF
     INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR NORM, Null\0AB.DIM zero, 16, ->lb0\0AB.DIM $3, 0, ->lb1\0AB.DIM zero, 16, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 1, 2293769, $r17
     $r17 = ORI $r0, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_m16_four
+tracksRegLiveness: true
+body: |
+  bb.0:
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR CUBE_M16, Null\0AB.DIM zero, 4, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_dynamic_columns
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR CUBE_M16, Null\0AB.DIM $3, 0, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 2293769, $r17
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_dynamic_columns
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL TCOLARGMIN, U8\0AB.DATR CUBE_M32, Null\0AB.DIM $3, 0, ->lb0\0AB.DIM zero, 32, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 3, 2293769, $r17
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmax_dynamic_source_geometry
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17, $r18, $r19
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR CUBE_M16, Null\0AB.DIM $3, 0, ->lb0\0AB.DIM $4, 0, ->lb1\0AB.DIM $5, 0, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 2293769, $r17, 2293769, $r18, 2293769, $r19
+    $r18 = ORI $r0, 7
+    $r19 = ORI $r0, 8
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+---
+name: col_argmin_dynamic_columns_no_lb2
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 93, FP32\0AB.DATR CUBE_M16, Null\0AB.DIM $3, 0, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 2293769, $r17
     $tile_t2 = COPY $tile_t1
     PseudoRET
 ...

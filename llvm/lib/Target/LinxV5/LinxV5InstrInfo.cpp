@@ -1514,6 +1514,32 @@ static bool isArgReduction(unsigned Selector) {
   return Selector == 76 || Selector == 77 || Selector == 92 || Selector == 93;
 }
 
+// Column ARG results use U32 cells, independently of the source dtype and LB2.
+// Static writer geometry must agree with the allocated CUBE capacity before
+// checkedTileDescriptor normalizes the physical columns. For dynamic LB0,
+// preserve the valid-column operand and obtain only the physical width here.
+static unsigned getCubeColumnArgPhysicalCols(MachineInstr &MI, unsigned Layout,
+                                            unsigned SizeCode,
+                                            Optional<int64_t> ValidCol) {
+  if (SizeCode == 0 || SizeCode > 12)
+    LinxV5::reportTileDescriptorError(*MI.getParent(),
+                                    "invalid column ARG result SizeCode");
+  unsigned Rows = Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 16 : 32;
+  unsigned CellCols = Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 2 : 1;
+  uint64_t CapacityBits = (uint64_t{1} << (SizeCode + 6)) * 8;
+  unsigned CapacityCols = CapacityBits / (Rows * 32);
+  if (CapacityBits % (Rows * 32) || CapacityCols % CellCols ||
+      (ValidCol &&
+       (*ValidCol <= 0 ||
+        alignTo(static_cast<uint64_t>(*ValidCol), CellCols) != CapacityCols)))
+    LinxV5::reportTileDescriptorError(
+        *MI.getParent(),
+        Twine("column ARG result shape does not match CUBE capacity: cols=") +
+            Twine(ValidCol.value_or(0)) + ", capacityCols=" +
+            Twine(CapacityCols) + ", size=" + Twine(SizeCode));
+  return CapacityCols;
+}
+
 using DescriptorPosition =
     std::tuple<MachineBasicBlock *, const MachineInstr *, Register>;
 
@@ -2029,6 +2055,22 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
     PhysicalColDim = InlineAsmDimension{
         LinxV5::R0, static_cast<int64_t>(CapacityBits / (Rows * Bits))};
   }
+  Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text);
+  const bool CubeColumnArg =
+      Reduction && isColumnReduction(*Reduction) && isArgReduction(*Reduction) &&
+      DataType && *DataType != LinxV5Op::DataType::EMPTY_DataType && Layout &&
+      (*Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
+       *Layout == LinxV5Op::ArgFormat::CUBE_M32);
+  if (CubeColumnArg) {
+    Optional<int64_t> StaticValidCol;
+    if (ValidColDim->Reg == LinxV5::R0)
+      StaticValidCol = ValidColDim->Imm;
+    DataType = LinxV5Op::DataType::U32;
+    ValidRowDim = InlineAsmDimension{LinxV5::R0, 1};
+    PhysicalColDim = InlineAsmDimension{
+        LinxV5::R0,
+        getCubeColumnArgPhysicalCols(MI, *Layout, *SizeCode, StaticValidCol)};
+  }
   bool HasRuntimeDimensions = ValidColDim->Reg != LinxV5::R0 ||
                               ValidRowDim->Reg != LinxV5::R0 ||
                               PhysicalColDim->Reg != LinxV5::R0;
@@ -2057,7 +2099,7 @@ getLegacyInlineAsmTileDescriptor(MachineInstr &MI, Register Reg,
   // PTO destination-shape defaults resolve an omitted LB2 to ValidCol.  Tile
   // capacity determines the remaining physical rows; it must never invent
   // additional columns.  Public CUBE TCI forms carry LB2 explicitly.
-  if (Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text)) {
+  if (Reduction && !CubeColumnArg) {
     if (HasRuntimeDimensions)
       return None;
     const bool Cube = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
@@ -2248,14 +2290,24 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       Dimensions.ValidRowReg = Register();
       Dimensions.ValidRowDef = nullptr;
       if (Cube) {
-        if (Dimensions.ValidColReg)
-          return None;
-        unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
-        if (!Bits)
-          return None;
-        unsigned CellBits = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 64 : 32;
-        unsigned CellCols = std::max(1u, CellBits / Bits);
-        *PhysicalCol = alignTo(*ValidCol, CellCols);
+        if (isArgReduction(*Reduction)) {
+          Optional<int64_t> StaticValidCol;
+          if (!Dimensions.ValidColReg)
+            StaticValidCol = *ValidCol;
+          *PhysicalCol = getCubeColumnArgPhysicalCols(
+              MI, *Layout, *SizeCode, StaticValidCol);
+          Dimensions.PhysicalColReg = Register();
+          Dimensions.PhysicalColDef = nullptr;
+        } else {
+          if (Dimensions.ValidColReg)
+            return None;
+          unsigned Bits = LinxV5::getTileDataTypeBits(*DataType);
+          if (!Bits)
+            return None;
+          unsigned CellBits = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ? 64 : 32;
+          unsigned CellCols = std::max(1u, CellBits / Bits);
+          *PhysicalCol = alignTo(*ValidCol, CellCols);
+        }
       }
     } else {
       *ValidCol = 1;
