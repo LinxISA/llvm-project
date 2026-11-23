@@ -20,6 +20,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/MachineScheduler.h"
@@ -258,6 +259,16 @@ struct LinxV5InlineAsmConstantPreparePass
             C->hasFnAttr("linx-tile-pe-domain") ||
             !isShapeFactory(*Callee, Active, Budget) ||
             !isInlineViable(*Callee).isSuccess())
+          continue;
+        // Body viability does not establish call-site legality. In particular,
+        // a replaceable definition must remain callable at link time, and
+        // caller/callee attributes must obey the regular inliner's rules.
+        auto GetTLI = [&](Function &F) -> const TargetLibraryInfo & {
+          return FAM.getResult<TargetLibraryAnalysis>(F);
+        };
+        auto Decision = getAttributeBasedInliningDecision(
+            *C, Callee, FAM.getResult<TargetIRAnalysis>(*Callee), GetTLI);
+        if (Decision && !Decision->isSuccess())
           continue;
         // At the entry boundary every sret write must target local storage.
         // The local buffer may be a non-sret argument of a factory with a
