@@ -1,0 +1,45 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=true -o /dev/null %t/modern.mir 2>&1 | FileCheck %s --check-prefix=MODERN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=false -o /dev/null %t/modern.mir 2>&1 | FileCheck %s --check-prefix=MODERN
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos \
+# RUN:   -linxv5-enable-generic-element=false -o /dev/null %t/legacy.mir 2>&1 | FileCheck %s --check-prefix=LEGACY
+#
+# Preserving dynamic LB0 must not allow a COPY to read a replacement value.
+# MODERN: Local tile COPY dimension value is no longer available
+# LEGACY: cannot lower a physical COPY with runtime Tile descriptor registers before reaching-definition proof
+
+#--- modern.mir
+--- |
+  define void @clobber() { ret void }
+...
+---
+name: clobber
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR CUBE_M16, Null\0AB.DIM $3, 0, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 2293769, $r17
+    $r17 = ORI $r0, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
+
+#--- legacy.mir
+--- |
+  define void @clobber() { ret void }
+...
+---
+name: clobber
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    $tile_u1 = IMPLICIT_DEF
+    INLINEASM &"BSTART.TEPL 92, FP16\0AB.DATR CUBE_M16, Null\0AB.DIM $3, 1, ->lb0\0AB.DIM zero, 16, ->lb1\0AB.DIM zero, 8, ->lb2\0AB.IOT $1, mask=1111, last, ->$0<${2:Z}>\0A", 9, 720906, def $tile_t1, 720905, $tile_u1, 13, 2, 2293769, $r17
+    $r17 = ORI $r0, 7
+    $tile_t2 = COPY $tile_t1
+    PseudoRET
+...
