@@ -1450,7 +1450,20 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor,
   if (Descriptor.PhysicalColReg)
     return Descriptor;
   uint64_t RowBits = uint64_t{Descriptor.PhysicalCol} * TypeBits;
-  if (!RowBits || CapacityBits % RowBits ||
+  bool RowMajor = Descriptor.Layout == LinxV5Op::ArgFormat::NORM;
+  bool RowLocalPairs =
+      RowMajor && (Descriptor.DataType == LinxV5Op::DataType::e2m1x2 ||
+                   Descriptor.DataType == LinxV5Op::DataType::e1m2x2);
+  if (RowLocalPairs)
+    RowBits = ((uint64_t{Descriptor.PhysicalCol} + 1) / 2) * 8;
+  // Odd RowMajor FP profiles admit a capacity tail. Match DerivedTileRows:
+  // complete rows fit by floor division; packed FP4 pads each row to a byte.
+  bool AllowsCapacityTail =
+      RowMajor && !isPowerOf2_32(Descriptor.PhysicalCol) &&
+      (RowLocalPairs || Descriptor.DataType == LinxV5Op::DataType::FP32 ||
+       Descriptor.DataType == LinxV5Op::DataType::FP16 ||
+       Descriptor.DataType == LinxV5Op::DataType::BF16);
+  if (!RowBits || (!AllowsCapacityTail && CapacityBits % RowBits) ||
       CapacityBits / RowBits < Descriptor.ValidRow)
     Reject(
         Twine(

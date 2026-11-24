@@ -1,0 +1,140 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5-unknown-linux-musl -verify-machineinstrs -run-pass=postrapseudos %t/good.mir -o - | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos %t/integer.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos %t/cube.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=CUBE
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos %t/too-many-rows.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: not --crash llc -mtriple=linx64v5-unknown-linux-musl -run-pass=postrapseudos %t/packed-row-padding.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
+# CUBE: CUBE descriptor geometry does not fit exact capacity
+# BAD: Local tile descriptor geometry does not fit its SizeCode
+#
+# Odd RowMajor FP descriptors may leave a capacity tail. Packed FP4 requires
+# ceil(Col/2) bytes per row, including for a typed COPY descriptor.
+# CHECK-LABEL: name: fp16
+# CHECK: $tile_t3 = PseudoTCOPYDesc 1, $tile_t2, 3, 21, 3, 4, 0
+# CHECK-LABEL: name: bf16
+# CHECK: $tile_t3 = PseudoTCOPYDesc 1, $tile_t2, 3, 21, 3, 5, 0
+# CHECK-LABEL: name: fp32
+# CHECK: $tile_t3 = PseudoTCOPYDesc 1, $tile_t2, 3, 10, 3, 1, 0
+# CHECK-LABEL: name: e2m1x2
+# CHECK: $tile_t3 = PseudoTCOPYDesc 1, $tile_t2, 3, 64, 3, 11, 0
+# CHECK-LABEL: name: e1m2x2
+# CHECK: $tile_t3 = PseudoTCOPYDesc 1, $tile_t2, 3, 64, 3, 12, 0
+
+#--- good.mir
+--- |
+  define void @fp16() { ret void }
+  define void @bf16() { ret void }
+  define void @fp32() { ret void }
+  define void @e2m1x2() { ret void }
+  define void @e1m2x2() { ret void }
+...
+---
+name: fp16
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, FP16\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 21, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: bf16
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, BF16\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 21, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: fp32
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, FP32\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 10, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: e2m1x2
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, E2M1X2\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+---
+name: e1m2x2
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, E1M2X2\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 64, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- integer.mir
+--- |
+  define void @integer() { ret void }
+...
+---
+name: integer
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, U32\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 8, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- cube.mir
+--- |
+  define void @cube() { ret void }
+...
+---
+name: cube
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, FP16\0AB.DATR CUBE_M32, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 8, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- too-many-rows.mir
+--- |
+  define void @too_many_rows() { ret void }
+...
+---
+name: too_many_rows
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, FP16\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 22, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
+
+#--- packed-row-padding.mir
+--- |
+  define void @packed_row_padding() { ret void }
+...
+---
+name: packed_row_padding
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $r17
+    INLINEASM &"BSTART.TLSU TLOAD, E2M1X2\0AB.DATR NORM, Zero\0AB.DIM zero, 3, ->lb0\0AB.DIM zero, 70, ->lb1\0AB.DIM zero, 3, ->lb2\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [$1], []\0A", 9, 720906, def $tile_t2, 2293769, $r17, 13, 1
+    $tile_t3 = COPY $tile_t2
+    PseudoRET
+...
