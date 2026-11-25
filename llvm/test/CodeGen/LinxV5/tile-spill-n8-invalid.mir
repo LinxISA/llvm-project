@@ -1,0 +1,112 @@
+# RUN: split-file %s %t
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=prologepilog %t/bad_columns.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GEOMETRY
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=prologepilog %t/too_small.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GEOMETRY
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=prologepilog %t/row_overflow.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GEOMETRY
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=prologepilog %t/col_overflow.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=GEOMETRY
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=prologepilog %t/u64.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=DTYPE
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=prologepilog %t/hif4.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=DTYPE
+# GEOMETRY: LLVM ERROR: Tile spill N8 geometry does not fit capacity
+# DTYPE: LLVM ERROR: unsupported N8 Tile spill transport data type
+# U64 is load-only in N8: never silently emit an illegal N82ND U64 store.
+#--- bad_columns.mir
+--- |
+  define void @bad_columns() { ret void }
+...
+---
+name: bad_columns
+tracksRegLiveness: true
+liveins:
+  - { reg: '$tile_u1', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $tile_u1
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 9, 9, 9, 4, 23, 3 :: (store (s4096) into %stack.0, align 256)
+    PseudoRET
+...
+#--- too_small.mir
+--- |
+  define void @too_small() { ret void }
+...
+---
+name: too_small
+tracksRegLiveness: true
+liveins:
+  - { reg: '$tile_u1', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $tile_u1
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 17, 17, 24, 4, 23, 3 :: (store (s4096) into %stack.0, align 256)
+    PseudoRET
+...
+#--- row_overflow.mir
+--- |
+  define void @row_overflow() { ret void }
+...
+---
+name: row_overflow
+tracksRegLiveness: true
+liveins:
+  - { reg: '$tile_u1', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 65536, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $tile_u1
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 1, 65535, 8, 4, 23, 10 :: (store (<8192 x s64>) into %stack.0, align 256)
+    PseudoRET
+...
+#--- col_overflow.mir
+--- |
+  define void @col_overflow() { ret void }
+...
+---
+name: col_overflow
+tracksRegLiveness: true
+liveins:
+  - { reg: '$tile_u1', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 65536, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $tile_u1
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 65535, 1, 65535, 4, 23, 10 :: (store (<8192 x s64>) into %stack.0, align 256)
+    PseudoRET
+...
+#--- u64.mir
+--- |
+  define void @u64() { ret void }
+...
+---
+name: u64
+tracksRegLiveness: true
+liveins:
+  - { reg: '$tile_u1', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 128, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $tile_u1
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 8, 2, 8, 24, 23, 1 :: (store (s1024) into %stack.0, align 256)
+    PseudoRET
+...
+#--- hif4.mir
+--- |
+  define void @hif4() { ret void }
+...
+---
+name: hif4
+tracksRegLiveness: true
+liveins:
+  - { reg: '$tile_u1', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 128, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $tile_u1
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 8, 32, 8, 14, 23, 1 :: (store (s1024) into %stack.0, align 256)
+    PseudoRET
+...

@@ -412,15 +412,38 @@ void LinxV5RegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
       report_fatal_error("invalid Tile spill transport geometry");
     unsigned TransportLayout = Layout;
     unsigned TransportCol = PhysicalCol;
+    const bool IsN8 = Layout == LinxV5Op::ArgFormat::ND2N8;
     if (Layout == LinxV5Op::ArgFormat::CUBE_M32)
       TransportLayout = IsSpill ? LinxV5Op::ArgFormat::M322ND
                                 : LinxV5Op::ArgFormat::ND2M32;
     else if (Layout == LinxV5Op::ArgFormat::CUBE_M16)
       TransportLayout = IsSpill ? LinxV5Op::ArgFormat::M162ND
                                 : LinxV5Op::ArgFormat::ND2M16;
+    else if (IsN8)
+      TransportLayout = IsSpill ? LinxV5Op::ArgFormat::N82ND
+                                : LinxV5Op::ArgFormat::ND2N8;
     else if (Layout != LinxV5Op::ArgFormat::NORM)
       report_fatal_error("unsupported Tile spill transport layout");
-    if (Layout != LinxV5Op::ArgFormat::NORM) {
+    if (IsN8) {
+      // N8 has 128-byte CELLs of (128 / element bits) rows by 8
+      // columns. Unlike M16/M32, both extents are valid-derived and the
+      // CELL envelope may be smaller than the allocated capacity.
+      // PTO-CUBE-CELL-TRANSPORT-001 permits U64 only on ND2N8 loads,
+      // so it cannot be saved using an ordinary N82ND TSTORE.
+      if (TypeBits == 64 || DataType == LinxV5Op::DataType::HiF4x2 ||
+          DataType == LinxV5Op::DataType::e6m2 ||
+          DataType == LinxV5Op::DataType::rcpe6m2)
+        report_fatal_error("unsupported N8 Tile spill transport data type");
+      uint64_t StorageRows = alignTo(uint64_t(ValidRow), 128 / TypeBits);
+      uint64_t StorageCols = alignTo(uint64_t(ValidCol), 8);
+      if (StorageRows > 65535 || StorageCols > 65535 ||
+          PhysicalCol != StorageCols ||
+          StorageRows * StorageCols * TypeBits > uint64_t(RegSize) * 8)
+        report_fatal_error("Tile spill N8 geometry does not fit capacity");
+      // All CUBE transports forbid LB2; one is its implicit default and
+      // causes the MC lowering to omit the command.
+      TransportCol = 1;
+    } else if (Layout != LinxV5Op::ArgFormat::NORM) {
       unsigned ParentRows = Layout == LinxV5Op::ArgFormat::CUBE_M32 ? 32 : 16;
       if (ValidRow > ParentRows ||
           uint64_t(ParentRows) * PhysicalCol * TypeBits != RegSize * 8)

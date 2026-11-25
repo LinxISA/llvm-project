@@ -3086,14 +3086,6 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     bool Elementwise =
         DAG.getMachineFunction().getFunction().hasFnAttribute(
             "linx.elementwise");
-    unsigned ColValid = Elementwise ? VT.getVectorNumElements() / 16
-                                    : VT.getFixedSizeInBits() / 64;
-    unsigned RowValid = Elementwise ? 16 : 1;
-    unsigned Col = Elementwise ? 1 : ColValid;
-    Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
-    Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
-    Ops.push_back(DAG.getTargetConstant(Col, DL, MVT::i64)); // Dim-Z
-
     unsigned DataType = LinxV5Op::DataType::S64;
     if (VT.getVectorElementType() == MVT::f32)
       DataType = LinxV5Op::DataType::FP32;
@@ -3105,6 +3097,20 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
       DataType = LinxV5Op::DataType::S16;
     else if (VT.getVectorElementType() == MVT::i32)
       DataType = LinxV5Op::DataType::S32;
+    // SizeCode describes allocation capacity, not transfer coverage. Match
+    // the column count to the selected transfer dtype, including raw S64
+    // fallback for unmapped element types.
+    unsigned TransferBits = DataType == LinxV5Op::DataType::S64
+                                ? 64
+                                : VT.getScalarSizeInBits();
+    unsigned ColValid = Elementwise ? VT.getVectorNumElements() / 16
+                                    : VT.getFixedSizeInBits() / TransferBits;
+    unsigned RowValid = Elementwise ? 16 : 1;
+    unsigned Col = Elementwise ? 1 : ColValid;
+    Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
+    Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
+    Ops.push_back(DAG.getTargetConstant(Col, DL, MVT::i64)); // Dim-Z
+
     SDValue DataTypeValue =
         DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType
@@ -3152,14 +3158,6 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
     bool Elementwise =
         DAG.getMachineFunction().getFunction().hasFnAttribute(
             "linx.elementwise");
-    unsigned ColValid = Elementwise ? MemVT.getVectorNumElements() / 16
-                                    : MemVT.getFixedSizeInBits() / 64;
-    unsigned RowValid = Elementwise ? 16 : 1;
-    unsigned Col = Elementwise ? 1 : ColValid;
-    Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
-    Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
-    Ops.push_back(DAG.getTargetConstant(Col, DL, MVT::i64)); // Dim-Z
-
     unsigned DataType = LinxV5Op::DataType::S64;
     if (MemVT.getVectorElementType() == MVT::f32)
       DataType = LinxV5Op::DataType::FP32;
@@ -3171,6 +3169,20 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
       DataType = LinxV5Op::DataType::S16;
     else if (MemVT.getVectorElementType() == MVT::i32)
       DataType = LinxV5Op::DataType::S32;
+    // SizeCode describes allocation capacity, not transfer coverage. Match
+    // the column count to the selected transfer dtype, including raw S64
+    // fallback for unmapped element types.
+    unsigned TransferBits = DataType == LinxV5Op::DataType::S64
+                                ? 64
+                                : MemVT.getScalarSizeInBits();
+    unsigned ColValid = Elementwise ? MemVT.getVectorNumElements() / 16
+                                    : MemVT.getFixedSizeInBits() / TransferBits;
+    unsigned RowValid = Elementwise ? 16 : 1;
+    unsigned Col = Elementwise ? 1 : ColValid;
+    Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
+    Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
+    Ops.push_back(DAG.getTargetConstant(Col, DL, MVT::i64)); // Dim-Z
+
     SDValue DataTypeValue =
         DAG.getTargetConstant(DataType, DL, MVT::i64);
     Ops.push_back(DataTypeValue); // DataType

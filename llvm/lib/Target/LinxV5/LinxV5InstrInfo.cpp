@@ -927,51 +927,43 @@ struct InlineAsmDimension {
   int64_t Imm = 1;
 };
 
+// Match the assembler's case-insensitive LB tokens and optional whitespace
+// after the arrow. Keep slices into the original template so operand-reference
+// offsets (including ${N:modifier}) remain valid.
+static size_t findInlineAsmDimension(StringRef Text, unsigned Dimension) {
+  std::string Name = (Twine("lb") + Twine(Dimension)).str();
+  size_t Pos = 0;
+  while ((Pos = Text.find("->", Pos)) != StringRef::npos) {
+    StringRef Token = Text.drop_front(Pos + 2).ltrim();
+    if (Token.take_front(Name.size()).equals_insensitive(Name) &&
+        (Token.size() == Name.size() ||
+         (!isAlnum(Token[Name.size()]) && Token[Name.size()] != '_')))
+      return Pos;
+    Pos += 2;
+  }
+  return StringRef::npos;
+}
+
 static Optional<InlineAsmDimension>
 getInlineAsmDimensionOperand(MachineInstr &MI, StringRef Text,
                              unsigned Dimension) {
-  std::string Suffix = (Twine("->lb") + Twine(Dimension)).str();
-  size_t End = Text.find(Suffix);
+  size_t End = findInlineAsmDimension(Text, Dimension);
   if (End == StringRef::npos)
-    return InlineAsmDimension{};
-  size_t Start = Text.take_front(std::min(End + 1, Text.size())).rfind("B.DIM");
-  if (Start == StringRef::npos)
+    return InlineAsmDimension{}; // Only truly omitted dimensions default to one.
+  std::string Lower = Text.take_front(End).lower();
+  size_t Start = StringRef(Lower).rfind("b.dim");
+  if (Start == StringRef::npos ||
+      (Start && (isAlnum(Text[Start - 1]) || Text[Start - 1] == '_')))
     return None;
   StringRef Line = Text.slice(Start + strlen("B.DIM"), End).trim();
   auto Fields = Line.split(',');
   StringRef Base = Fields.first.trim();
   StringRef Offset = Fields.second.rtrim(" \t,").ltrim();
-  if (Base == "zero") {
-    size_t Zero = Line.find("zero,");
-    StringRef Value = Line.drop_front(Zero + strlen("zero,")).trim();
-    if (Value.startswith("${")) {
-      Optional<unsigned> Imm = getInlineAsmOperandImmediate(
-          MI, Text, Start + strlen("B.DIM") + Zero + strlen("zero,") +
-                        Value.find(':'));
-      if (!Imm)
-        return None;
-      return InlineAsmDimension{LinxV5::R0, *Imm};
-    }
-    size_t Digits = 0;
-    while (Digits < Value.size() && isDigit(Value[Digits]))
-      ++Digits;
-    unsigned Imm = 0;
-    if (!Digits || Value.take_front(Digits).getAsInteger(10, Imm))
-      return None;
-    return InlineAsmDimension{LinxV5::R0, Imm};
-  }
-
-  if (!Base.consume_front("$"))
-    return None;
-  unsigned Index = 0;
-  if (Base.getAsInteger(10, Index))
-    return None;
-  MachineOperand *MO = getAsmOperand(&MI, Index);
-  if (!MO || !MO->isReg())
-    return None;
   int64_t Imm = 0;
   if (Offset.startswith("${")) {
     size_t Marker = Offset.find(':');
+    if (Marker == StringRef::npos)
+      return None;
     Optional<unsigned> Value = getInlineAsmOperandImmediate(
         MI, Text, Offset.data() - Text.data() + Marker);
     if (!Value)
@@ -980,6 +972,13 @@ getInlineAsmDimensionOperand(MachineInstr &MI, StringRef Text,
   } else if (Offset.getAsInteger(10, Imm)) {
     return None;
   }
+  if (Base.equals_insensitive("zero"))
+    return InlineAsmDimension{LinxV5::R0, Imm};
+
+  MachineOperand *MO = nullptr;
+  const char *After = parseAsmOperand(&MI, Base.data(), MO);
+  if (!After || After != Base.end() || !MO || !MO->isReg())
+    return None;
   return InlineAsmDimension{MO->getReg(), Imm};
 }
 
@@ -1017,41 +1016,17 @@ static Optional<unsigned> getStaticTileDimensionRegister(
 static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
                                                 StringRef Text,
                                                 unsigned Dimension) {
-  std::string Suffix = (Twine("->lb") + Twine(Dimension)).str();
-  size_t End = Text.find(Suffix);
-  if (End == StringRef::npos)
-    return 1u; // Omitted dimensions have architectural value one.
-  size_t Start = Text.take_front(std::min(End + 1, Text.size())).rfind("B.DIM");
-  if (Start == StringRef::npos)
+  auto Binding = getInlineAsmDimensionOperand(MI, Text, Dimension);
+  if (!Binding)
     return None;
-  StringRef Line = Text.slice(Start, End);
-  size_t Zero = Line.find("zero,");
-  if (Zero == StringRef::npos) {
-    StringRef RegisterText = Line.drop_front(strlen("B.DIM")).trim();
-    MachineOperand *Operand = nullptr;
-    const char *After = parseAsmOperand(&MI, RegisterText.data(), Operand);
-    if (!After || !Operand || !Operand->isReg())
-      return None;
-    StringRef Immediate = Text.slice(After - Text.data(), End)
-                              .split(',').second.split(',').first.trim();
-    unsigned Offset;
-    if (Immediate.getAsInteger(10, Offset) || Offset != 0)
-      return None;
-    return getStaticTileDimensionRegister(*MI.getParent(), MI.getIterator(),
-                                          Operand->getReg());
-  }
-  StringRef Value = Line.drop_front(Zero + strlen("zero,")).trim();
-  if (Value.startswith("${"))
-    return getInlineAsmOperandImmediate(MI, Text, Start + Zero +
-                                                      strlen("zero,") +
-                                                      Value.find(':'));
-  size_t Digits = 0;
-  while (Digits < Value.size() && isDigit(Value[Digits]))
-    ++Digits;
-  unsigned Result = 0;
-  if (!Digits || Value.take_front(Digits).getAsInteger(10, Result))
+  auto Base = getStaticTileDimensionRegister(*MI.getParent(), MI.getIterator(),
+                                             Binding->Reg);
+  if (!Base)
     return None;
-  return Result;
+  int64_t Value = *Base + Binding->Imm;
+  if (Value < 0 || static_cast<uint64_t>(Value) > UINT32_MAX)
+    return None;
+  return static_cast<unsigned>(Value);
 }
 
 using DimensionValue = std::pair<Register, const MachineInstr *>;
@@ -1122,23 +1097,11 @@ static Optional<DimensionValue> resolveDimensionValue(
 static bool getDynamicInlineAsmDimension(
     MachineInstr &MI, StringRef Text, unsigned Dimension, Register &Reg,
     const MachineInstr *&Definition) {
-  size_t End = Text.find((Twine("->lb") + Twine(Dimension)).str());
-  if (End == StringRef::npos)
-    return false;
-  size_t Start = Text.take_front(End).rfind("B.DIM");
-  if (Start == StringRef::npos)
-    return false;
-  StringRef Binding = Text.slice(Start + strlen("B.DIM"), End).trim();
-  MachineOperand *Operand = nullptr;
-  const char *After = parseAsmOperand(&MI, Binding.data(), Operand);
-  if (!After || !Operand || !Operand->isReg())
-    return false;
-  unsigned Offset;
-  if (Text.slice(After - Text.data(), End).split(',').second.split(',')
-          .first.trim().getAsInteger(10, Offset) || Offset != 0)
+  auto Binding = getInlineAsmDimensionOperand(MI, Text, Dimension);
+  if (!Binding || Binding->Reg == LinxV5::R0 || Binding->Imm != 0)
     return false;
   auto Value = resolveDimensionValue(*MI.getParent(), MI.getIterator(),
-                                     Operand->getReg());
+                                     Binding->Reg);
   if (!Value)
     return false;
   Reg = Value->first;
@@ -1177,7 +1140,7 @@ unsigned LinxV5::getTileCopyPEMask(const MachineInstr &MI) {
 }
 
 static bool hasInlineAsmDimension(StringRef Text, unsigned Dimension) {
-  return Text.contains((Twine("->lb") + Twine(Dimension)).str());
+  return findInlineAsmDimension(Text, Dimension) != StringRef::npos;
 }
 
 static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
@@ -1411,6 +1374,23 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor,
 
   uint64_t CapacityBits =
       (uint64_t{1} << (Descriptor.SizeCode + 6)) * 8;
+  if (Descriptor.Layout == LinxV5Op::ArgFormat::ND2N8) {
+    // N8 storage is the valid rectangle rounded to K x 8 CELLs, not a
+    // capacity-derived row-major rectangle. In particular, its physical
+    // row stride need not divide the power-of-two allocation capacity.
+    if (Descriptor.ValidRowReg || Descriptor.ValidColReg ||
+        Descriptor.PhysicalColReg)
+      Reject("dynamic N8 Local tile COPY descriptor is unsupported");
+    uint64_t StorageRows =
+        alignTo(uint64_t(Descriptor.ValidRow), 128 / TypeBits);
+    uint64_t StorageCols = alignTo(uint64_t(Descriptor.ValidCol), 8);
+    if ((TypeBits == 64 && Descriptor.DataType != LinxV5Op::DataType::U64) ||
+        StorageRows > 65535 || StorageCols > 65535 ||
+        StorageRows * StorageCols * TypeBits > CapacityBits)
+      Reject("N8 descriptor geometry does not fit capacity");
+    Descriptor.PhysicalCol = StorageCols;
+    return Descriptor;
+  }
   if (Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
       Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M32) {
     unsigned Rows = Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16

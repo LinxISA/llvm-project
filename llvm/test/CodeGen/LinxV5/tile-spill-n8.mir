@@ -1,0 +1,132 @@
+# RUN: llc -mtriple=linx64v5 -run-pass=prologepilog %s -o - | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -start-before=prologepilog %s -o %t.s
+# RUN: FileCheck %s --check-prefix=ASM < %t.s
+# RUN: llc -mtriple=linx64v5 -start-before=prologepilog -filetype=obj %s -o %t.o
+# RUN: llvm-mc -triple=linx64v5 -filetype=obj %t.s -o %t.roundtrip.o
+# RUN: llvm-objdump -d --no-show-raw-insn -M no-tile-macros %t.o | FileCheck %s --check-prefix=PHYS --implicit-check-not=lb2
+# RUN: llvm-objdump -d --no-show-raw-insn -M no-tile-macros %t.roundtrip.o | FileCheck %s --check-prefix=PHYS --implicit-check-not=lb2
+#
+# N8 uses valid-derived CELL geometry, including partial CELLs and spare
+# capacity. Reload must preserve the original descriptor, dtype and SizeCode.
+# CUBE conversions must not emit LB2 (which defaults to one).
+# ASM-NOT: lb2
+# ASM: BSTART.TLSU
+# ASM: B.DATR ND2N8
+# ASM-NOT: lb2
+# PHYS-LABEL: <fp16>:
+# PHYS: B.DATR N82ND
+# PHYS: B.DATR ND2N8
+# CHECK-LABEL: name: fp16
+# CHECK: $r{{[0-9]+}} = ADDI $r0, 64
+# CHECK-NEXT: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 32, $r0, 32, $r0, 1, 4, 26,
+# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 32, $r0, 32, $r0, 1, 4, 5, 23, 0, 32, 32, 32, 4, 23, 5,
+# PHYS-LABEL: <bf16_tail>:
+# PHYS: B.DATR N82ND
+# PHYS: B.DATR ND2N8
+# CHECK-LABEL: name: bf16_tail
+# CHECK: $r{{[0-9]+}} = ADDI $r0, 18
+# CHECK-NEXT: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 9, $r0, 9, $r0, 1, 5, 26,
+# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 9, $r0, 9, $r0, 1, 5, 3, 23, 0, 9, 9, 16, 5, 23, 3,
+# PHYS-LABEL: <fp32_spare_capacity>:
+# PHYS: B.DATR N82ND
+# PHYS: B.DATR ND2N8
+# CHECK-LABEL: name: fp32_spare_capacity
+# CHECK: $r{{[0-9]+}} = ADDI $r0, 68
+# CHECK-NEXT: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 17, $r0, 5, $r0, 1, 1, 26,
+# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 17, $r0, 5, $r0, 1, 1, 4, 23, 0, 17, 5, 24, 1, 23, 4,
+# PHYS-LABEL: <u8_tail>:
+# PHYS: B.DATR N82ND
+# PHYS: B.DATR ND2N8
+# CHECK-LABEL: name: u8_tail
+# CHECK: $r{{[0-9]+}} = ADDI $r0, 7
+# CHECK-NEXT: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 7, $r0, 17, $r0, 1, 27, 26,
+# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 7, $r0, 17, $r0, 1, 27, 2, 23, 0, 7, 17, 8, 27, 23, 2,
+# PHYS-LABEL: <s4_tail>:
+# PHYS: B.DATR N82ND
+# PHYS: B.DATR ND2N8
+# CHECK-LABEL: name: s4_tail
+# CHECK: $r{{[0-9]+}} = ADDI $r0, 9
+# CHECK-NEXT: PseudoTSTORE_noDsrc_noDdst killed $tile_u1, $r0, 17, $r0, 33, $r0, 1, 20, 26,
+# CHECK: $tile_n1 = PseudoTLOADSpillDesc $r0, 17, $r0, 33, $r0, 1, 20, 4, 23, 0, 17, 33, 24, 20, 23, 4,
+--- |
+  define void @fp16() { ret void }
+  define void @bf16_tail() { ret void }
+  define void @fp32_spare_capacity() { ret void }
+  define void @u8_tail() { ret void }
+  define void @s4_tail() { ret void }
+...
+---
+name: fp16
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r20', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 2048, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r20
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 32, $r0, 32, $r0, 1, 4, 5, 23, 0, $r20
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 32, 32, 32, 4, 23, 5 :: (store (s16384) into %stack.0, align 256)
+    $tile_n1 = PseudoTReloadDesc %stack.0, 32, 32, 32, 4, 23, 5 :: (load (s16384) from %stack.0, align 256)
+    PseudoRET
+...
+---
+name: bf16_tail
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r20', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 512, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r20
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 9, $r0, 9, $r0, 1, 5, 3, 23, 0, $r20
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 9, 9, 16, 5, 23, 3 :: (store (s4096) into %stack.0, align 256)
+    $tile_n1 = PseudoTReloadDesc %stack.0, 9, 9, 16, 5, 23, 3 :: (load (s4096) from %stack.0, align 256)
+    PseudoRET
+...
+---
+name: fp32_spare_capacity
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r20', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 1024, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r20
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 17, $r0, 5, $r0, 1, 1, 4, 23, 0, $r20
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 17, 5, 24, 1, 23, 4 :: (store (s8192) into %stack.0, align 256)
+    $tile_n1 = PseudoTReloadDesc %stack.0, 17, 5, 24, 1, 23, 4 :: (load (s8192) from %stack.0, align 256)
+    PseudoRET
+...
+---
+name: u8_tail
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r20', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 256, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r20
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 7, $r0, 17, $r0, 1, 27, 2, 23, 0, $r20
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 7, 17, 8, 27, 23, 2 :: (store (s2048) into %stack.0, align 256)
+    $tile_n1 = PseudoTReloadDesc %stack.0, 7, 17, 8, 27, 23, 2 :: (load (s2048) from %stack.0, align 256)
+    PseudoRET
+...
+---
+name: s4_tail
+tracksRegLiveness: true
+liveins:
+  - { reg: '$r20', virtual-reg: '' }
+stack:
+  - { id: 0, type: spill-slot, offset: 0, size: 1024, alignment: 256, stack-id: default }
+body: |
+  bb.0:
+    liveins: $r20
+    $tile_u1 = PseudoTLOAD_noDsrc_noDdst $r0, 17, $r0, 33, $r0, 1, 20, 4, 23, 0, $r20
+    PseudoTSpillDesc killed $tile_u1, %stack.0, 17, 33, 24, 20, 23, 4 :: (store (s8192) into %stack.0, align 256)
+    $tile_n1 = PseudoTReloadDesc %stack.0, 17, 33, 24, 20, 23, 4 :: (load (s8192) from %stack.0, align 256)
+    PseudoRET
+...
