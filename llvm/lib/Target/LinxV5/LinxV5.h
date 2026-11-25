@@ -146,6 +146,9 @@ struct LinxV5ElementRegionVerifierPass
 // layout transports, and strip non-boundary annotations before SROA.
 struct LinxV5TileCarrierTransportPass
     : PassInfoMixin<LinxV5TileCarrierTransportPass> {
+  bool RowMajorOnly;
+  explicit LinxV5TileCarrierTransportPass(bool RowMajorOnly = false)
+      : RowMajorOnly(RowMajorOnly) {}
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
   static bool isRequired() { return true; }
 };

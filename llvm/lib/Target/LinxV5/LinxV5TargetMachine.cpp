@@ -462,6 +462,11 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // This does not optimize externally visible GM accesses, but prevents
         // a marked loop's local control storage becoming a scoped GM request.
         FPM.addPass(SROAPass());
+        // Resolve surviving full RowMajor carrier accesses before GVN/PRE
+        // can clone a load without its frontend type metadata. Local carrier
+        // temporaries have already been promoted by SROA.
+        if (!EnableGenericElement)
+          FPM.addPass(LinxV5TileCarrierTransportPass(/*RowMajorOnly=*/true));
         FPM.addPass(LinxV5CarrierPreparePass());
         FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
@@ -488,10 +493,9 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
   // Issue #120: at -O0 the OptimizerLast hook never fires and nothing is
-  // inlined, so rewrite the boundary carrier accesses early there. At any
-  // optimization level the rewrite must happen after inlining/SROA (see
-  // the OptimizerLast hook), otherwise purely local carriers would pay
-  // transports after their templates get inlined.
+  // inlined, so rewrite the boundary carrier accesses early there. At -O1+
+  // full RowMajor accesses are resolved just after initial inlining/SROA;
+  // CUBE accesses and cross-call demotion retain the OptimizerLast hook.
   PB.registerPipelineEarlySimplificationEPCallback(
       [](ModulePassManager &MPM, OptimizationLevel Level) {
         if (Level.getSpeedupLevel() > 0 || Level.getSizeLevel() > 0)

@@ -47,6 +47,7 @@ using namespace llvm;
 namespace {
 
 // pto BLayout template values (common/layout.hpp).
+constexpr unsigned BLayout_RowMajor = 0;
 constexpr unsigned BLayout_CubeM16 = 2;
 constexpr unsigned BLayout_CubeM32 = 3;
 constexpr unsigned BLayout_CubeN8 = 4;
@@ -114,8 +115,8 @@ struct CarrierContract {
   int ValidRow = 0;      // -1 = dynamic (read the object field)
   int ValidCol = 0;      // -1 = dynamic
   bool isValid() const {
-    return (Layout == BLayout_CubeM16 || Layout == BLayout_CubeM32 ||
-            Layout == BLayout_CubeN8) &&
+    return (Layout == BLayout_RowMajor || Layout == BLayout_CubeM16 ||
+            Layout == BLayout_CubeM32 || Layout == BLayout_CubeN8) &&
            Rows > 0 && Cols > 0 && dataTypeElementBytes(DataType) > 0;
   }
 };
@@ -178,6 +179,7 @@ static Value *getTileObject(Value *P) {
 
 class TileCarrierTransport {
   Function &F;
+  bool RowMajorOnly;
 
   // RowMaskInternal / ColMaskInternal are the first two int fields of the
   // Tile object (byte offsets 0 and 4); they hold the runtime valid shape
@@ -196,6 +198,34 @@ class TileCarrierTransport {
       CarrierPtr = LI->getPointerOperand();
     else
       CarrierPtr = cast<StoreInst>(Access)->getPointerOperand();
+    if (C.Layout == BLayout_RowMajor) {
+      // Ordinary vector loads/stores observe the entire carrier, including
+      // inactive bytes. Only rewrite full numeric carriers; partial/dynamic
+      // valid regions need an explicit padding/preservation contract. Do not
+      // erase volatile/atomic semantics or reinterpret packed predicate data.
+      Type *Ty;
+      if (auto *LI = dyn_cast<LoadInst>(Access)) {
+        if (!LI->isSimple())
+          return false;
+        Ty = LI->getType();
+      } else {
+        auto *SI = cast<StoreInst>(Access);
+        if (!SI->isSimple())
+          return false;
+        Ty = SI->getValueOperand()->getType();
+      }
+      auto *VT = dyn_cast<FixedVectorType>(Ty);
+      if (!VT)
+        return false;
+      uint64_t CarrierBits = VT->getPrimitiveSizeInBits().getFixedValue();
+      // TLOAD/TSTORE need an encodable active tile size (128B through 256KB).
+      if (CarrierBits < 128 * 8 || CarrierBits > 262144 * 8 ||
+          (CarrierBits & (CarrierBits - 1)) ||
+          C.ValidRow != C.Rows || C.ValidCol != C.Cols ||
+          CarrierBits !=
+              uint64_t(C.Rows) * C.Cols * dataTypeElementBytes(C.DataType) * 8)
+        return false;
+    }
     Value *Obj = getTileObject(CarrierPtr);
     IRBuilder<> B(Access);
 
@@ -217,7 +247,8 @@ class TileCarrierTransport {
     }
     Value *Col = C.Layout == BLayout_CubeM16 || C.Layout == BLayout_CubeM32
                      ? B.getInt64(1)
-                     : ValidCol;
+                     : C.Layout == BLayout_RowMajor ? B.getInt64(C.Cols)
+                                                    : ValidCol;
     Value *Stride =
         B.getInt64((uint64_t)C.Cols * dataTypeElementBytes(C.DataType));
 
@@ -248,7 +279,8 @@ class TileCarrierTransport {
   }
 
 public:
-  TileCarrierTransport(Function &F) : F(F) {}
+  TileCarrierTransport(Function &F, bool RowMajorOnly)
+      : F(F), RowMajorOnly(RowMajorOnly) {}
 
   bool run() {
     bool Changed = false;
@@ -273,6 +305,8 @@ public:
                           << *Access << "\n");
         continue;
       }
+      if (RowMajorOnly && C.Layout != BLayout_RowMajor)
+        continue;
       LLVM_DEBUG(dbgs() << "carrier transport " << *Access << " -> layout="
                         << C.Layout << "\n");
       if (rewriteAccess(C, Access))
@@ -650,9 +684,11 @@ namespace llvm {
 
 PreservedAnalyses LinxV5TileCarrierTransportPass::run(Function &F,
                                                       FunctionAnalysisManager &AM) {
-  bool Changed = TileCarrierTransport(F).run();
-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  Changed |= TileCallCrossing(F, DT).run();
+  bool Changed = TileCarrierTransport(F, RowMajorOnly).run();
+  if (!RowMajorOnly) {
+    auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+    Changed |= TileCallCrossing(F, DT).run();
+  }
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
 

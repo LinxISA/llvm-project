@@ -4241,8 +4241,8 @@ EmitExtVectorElementExpr(const ExtVectorElementExpr *E) {
 
 // Issue #120: pto::Tile<..., CubeM16/M32/N8, ...> carrier ABI support.
 //
-// A CUBE Tile whose object crosses a function boundary must keep its
-// layout: the backend turns the marked carrier accesses into
+// A Tile whose object crosses a function boundary must keep its dtype
+// and layout: the backend turns the marked carrier accesses into
 // M322ND/M162ND/N82ND (store) and ND2M32/ND2M16/ND2N8 (load) transports.
 // Clang records a "linx.tile.carrier:v1;..." contract for every
 // data()/data_ carrier lvalue pointer and attaches it as a
@@ -4252,11 +4252,11 @@ EmitExtVectorElementExpr(const ExtVectorElementExpr *E) {
 // or PipelineEarlySimplification at -O0) only ever rewrites genuine
 // boundary accesses.
 
-static unsigned linxTileDTypeCode(ASTContext &Ctx, QualType T) {
+static Optional<unsigned> linxTileDTypeCode(ASTContext &Ctx, QualType T) {
   const BuiltinType *BT =
       dyn_cast<BuiltinType>(T.getCanonicalType()->getUnqualifiedDesugaredType());
-  if (!BT)
-    return 0; // fp4/fp8 packs and custom types: no contract, raw fallback
+  if (!BT || BT->getKind() == BuiltinType::Bool)
+    return None; // Packed predicates and custom fp4/fp8 types need a contract.
   switch (BT->getKind()) {
   case BuiltinType::Double:
     return 0;  // FP64
@@ -4284,15 +4284,14 @@ static unsigned linxTileDTypeCode(ASTContext &Ctx, QualType T) {
       break;
     }
   }
-  return 0;
+  return None;
 }
 
-// Build the carrier contract for a pto::Tile<..., CUBE layout, ...> record
-// (or a reference/pointer to one). Returns false for NORM tiles, unmapped
-// element types, or dynamic physical shapes, where the raw S64/NORM
-// behaviour must be kept.
-static bool getLinxCubeTileCarrierContract(ASTContext &Ctx, QualType BaseTy,
-                                            std::string &Contract) {
+// Build a typed carrier contract for supported Local numeric Tile storage.
+// RowMajor is restricted to ordinary, unboxed Vec storage; packed predicates,
+// compact/element profiles and Shared storage require their own contracts.
+static bool getLinxTileCarrierContract(ASTContext &Ctx, QualType BaseTy,
+                                       std::string &Contract) {
   if (const auto *Ref = BaseTy->getAs<ReferenceType>())
     BaseTy = Ref->getPointeeType();
   else if (BaseTy->isPointerType())
@@ -4318,17 +4317,27 @@ static bool getLinxCubeTileCarrierContract(ASTContext &Ctx, QualType BaseTy,
   unsigned Layout = Args[4].getAsIntegral().getZExtValue();
   int64_t ValidRow = Args[5].getAsIntegral().getSExtValue();
   int64_t ValidCol = Args[6].getAsIntegral().getSExtValue();
-  // 2 CubeM16 / 3 CubeM32 / 4 CubeN8
-  if (Layout < 2 || Layout > 4)
+  // 0 RowMajor / 2 CubeM16 / 3 CubeM32 / 4 CubeN8
+  if (Layout != 0 && (Layout < 2 || Layout > 4))
     return false;
+  if (Layout == 0) {
+    auto IsZeroArg = [&](unsigned Index) {
+      return Index >= Args.size() ||
+             (Args[Index].getKind() == TemplateArgument::Integral &&
+              Args[Index].getAsIntegral() == 0);
+    };
+    if (!IsZeroArg(0) || !IsZeroArg(7) || !IsZeroArg(10) ||
+        !IsZeroArg(11))
+      return false;
+  }
   if (!Rows.isStrictlyPositive() || !Cols.isStrictlyPositive())
     return false;
-  unsigned DType = linxTileDTypeCode(Ctx, Args[1].getAsType());
+  Optional<unsigned> DType = linxTileDTypeCode(Ctx, Args[1].getAsType());
   if (!DType)
     return false;
 
   Contract = ("linx.tile.carrier:v1;layout=" + Twine(Layout) +
-              ";dtype=" + Twine(DType) +
+              ";dtype=" + Twine(*DType) +
               ";rows=" + Twine(Rows.getSExtValue()) +
               ";cols=" + Twine(Cols.getSExtValue()) +
               ";vrow=" + Twine(ValidRow) + ";vcol=" + Twine(ValidCol))
@@ -4403,12 +4412,12 @@ LValue CodeGenFunction::EmitMemberExpr(const MemberExpr *E) {
           BaseLV.isNontemporal())
         LV.setNontemporal(/*Value=*/true);
     }
-    // Issue #120: mark the CUBE Tile carrier member so the backend can turn
-    // boundary accesses into layout transports. See
-    // getLinxCubeTileCarrierContract.
+    // Mark the typed Tile carrier member so the backend can turn boundary
+    // accesses into dtype/layout-preserving transports. See
+    // getLinxTileCarrierContract.
     if (Field->getName() == "data_") {
       std::string Contract;
-      if (getLinxCubeTileCarrierContract(getContext(), BaseExpr->getType(),
+      if (getLinxTileCarrierContract(getContext(), BaseExpr->getType(),
                                          Contract))
         recordLinxCubeTileCarrier(*this, LV.getAddress(*this).getPointer(),
                                   Contract);
@@ -5382,16 +5391,15 @@ LValue CodeGenFunction::EmitCallExprLValue(const CallExpr *E) {
       break;
     }
 
-    // Issue #120: pto::Tile<..., CUBE, ...>::data() returns a reference to
-    // the carrier member; record the contract so boundary accesses keep the
-    // CUBE layout (see getLinxCubeTileCarrierContract).
+    // pto::Tile<...>::data() returns a reference to the carrier member;
+    // record the contract so boundary accesses keep the dtype and layout (see getLinxTileCarrierContract).
     if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee)) {
       std::string Contract;
       // getName() requires an identifier; reference-returning operators
       // (operator[]/operator=/conversions) reach here as lvalue callees.
       if (Method->getDeclName().isIdentifier() && Method->getName() == "data" &&
           Method->param_empty() &&
-          getLinxCubeTileCarrierContract(
+          getLinxTileCarrierContract(
               getContext(), getContext().getRecordType(Method->getParent()),
               Contract))
         recordLinxCubeTileCarrier(*this, Pointer, Contract);
