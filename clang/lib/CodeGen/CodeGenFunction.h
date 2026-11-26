@@ -269,6 +269,11 @@ public:
   // backend's boundary transport rewrite (LinxV5TileCarrierTransport).
   llvm::DenseMap<llvm::Value *, std::string> LinxTileCarrierContracts;
 
+  // Split an ordinary Tile copy into typed member accesses before memcpy /
+  // SROA can erase the carrier contract. Returns false for other records.
+  bool tryEmitLinxTileAggregateCopy(LValue Dest, LValue Src, QualType Ty,
+                                  bool IsVolatile);
+
   // For EH/SEH outlined funclets, this field points to parent's CGF
   CodeGenFunction *ParentCGF = nullptr;
 

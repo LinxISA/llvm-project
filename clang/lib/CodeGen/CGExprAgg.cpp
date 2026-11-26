@@ -2058,6 +2058,9 @@ void CodeGenFunction::EmitAggregateCopy(LValue Dest, LValue Src, QualType Ty,
                                         bool isVolatile) {
   assert(!Ty->isAnyComplexType() && "Shouldn't happen for complex");
 
+  if (tryEmitLinxTileAggregateCopy(Dest, Src, Ty, isVolatile))
+    return;
+
   Address DestPtr = Dest.getAddress(*this);
   Address SrcPtr = Src.getAddress(*this);
 

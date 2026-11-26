@@ -4253,6 +4253,17 @@ EmitExtVectorElementExpr(const ExtVectorElementExpr *E) {
 // boundary accesses.
 
 static Optional<unsigned> linxTileDTypeCode(ASTContext &Ctx, QualType T) {
+  // -mlxbc's public __bf16 is a resource-header wrapper, not the builtin
+  // BFloat16 type. Recognize its exact name and storage ABI, never an
+  // arbitrary same-width record (predicates and packed types differ).
+  if (const auto *RT = T->getAs<RecordType>()) {
+    const auto *RD = dyn_cast<CXXRecordDecl>(RT->getDecl());
+    if (RD && RD->getQualifiedNameAsString() == "__blkc_bf16" &&
+        RD->hasDefinition() && RD->isTriviallyCopyable() &&
+        Ctx.getTypeSize(T) == 16)
+      return 5;
+    return None;
+  }
   const BuiltinType *BT =
       dyn_cast<BuiltinType>(T.getCanonicalType()->getUnqualifiedDesugaredType());
   if (!BT || BT->getKind() == BuiltinType::Bool)
@@ -4301,11 +4312,40 @@ static bool getLinxTileCarrierContract(ASTContext &Ctx, QualType BaseTy,
     return false;
   const auto *Spec =
       dyn_cast<ClassTemplateSpecializationDecl>(RT->getDecl());
-  if (!Spec || Spec->getName() != "Tile" ||
+  if (!Spec ||
       !StringRef(Spec->getQualifiedNameAsString()).startswith("pto::"))
     return false;
 
   const TemplateArgumentList &Args = Spec->getTemplateArgs();
+  // A reference returned by ReinterpretedTileView::data() is loaded in its
+  // caller. Mark that returned pointer too: annotating only the forwarding
+  // Tile::data() call inside the accessor cannot describe the caller's load.
+  // The view changes dtype, but not storage, pitch, layout or valid shape.
+  if (Spec->getName() == "ReinterpretedTileView") {
+    if (Args.size() != 2 || Args[0].getKind() != TemplateArgument::Type ||
+        Args[1].getKind() != TemplateArgument::Type)
+      return false;
+    const auto *ParentRecord = Args[1].getAsType()->getAs<RecordType>();
+    const auto *Parent = ParentRecord
+        ? dyn_cast<ClassTemplateSpecializationDecl>(ParentRecord->getDecl())
+        : nullptr;
+    if (!Parent || Parent->getName() != "Tile" ||
+        Parent->getTemplateArgs().size() < 2 ||
+        Parent->getTemplateArgs()[1].getKind() != TemplateArgument::Type ||
+        Ctx.getTypeSize(Args[0].getAsType()) !=
+            Ctx.getTypeSize(Parent->getTemplateArgs()[1].getAsType()) ||
+        !getLinxTileCarrierContract(Ctx, Args[1].getAsType(), Contract))
+      return false;
+    Optional<unsigned> DType = linxTileDTypeCode(Ctx, Args[0].getAsType());
+    if (!DType)
+      return false;
+    size_t Begin = Contract.find(";dtype=") + 7;
+    size_t End = Contract.find(';', Begin);
+    Contract.replace(Begin, End - Begin, Twine(*DType).str());
+    return true;
+  }
+  if (Spec->getName() != "Tile")
+    return false;
   if (Args.size() <= 6 || Args[2].getKind() != TemplateArgument::Integral ||
       Args[3].getKind() != TemplateArgument::Integral ||
       Args[4].getKind() != TemplateArgument::Integral ||
@@ -4368,6 +4408,68 @@ void attachLinxCubeTileMetadata(CodeGenFunction &CGF,
   llvm::LLVMContext &Ctx = I->getContext();
   I->setMetadata("linx.tile.transport",
                  llvm::MDNode::get(Ctx, llvm::MDString::get(Ctx, It->second)));
+}
+
+bool CodeGenFunction::tryEmitLinxTileAggregateCopy(LValue Dest, LValue Src,
+                                                 QualType Ty,
+                                                 bool IsVolatile) {
+  if (getTarget().getTriple().getArch() != llvm::Triple::linx64v5 &&
+      getTarget().getTriple().getArch() != llvm::Triple::linx64v5be)
+    return false;
+  std::string Contract;
+  if (!getLinxTileCarrierContract(getContext(), Ty, Contract) || IsVolatile ||
+      Ty.isVolatileQualified() || Dest.isVolatileQualified() ||
+      Src.isVolatileQualified())
+    return false;
+  const auto *RD = cast<CXXRecordDecl>(Ty->getAs<RecordType>()->getDecl());
+  // Tile owns its masks and carrier directly. A user record with bases or
+  // special copying semantics must keep the ordinary C++ copy path.
+  if (RD->getNumBases() || !RD->isTriviallyCopyable())
+    return false;
+
+  // Validate before emitting anything. The real API carrier is a one-field
+  // linx_tile_carrier record; lightweight frontend tests use a vector field.
+  for (const FieldDecl *Field : RD->fields()) {
+    QualType FT = Field->getType();
+    if (Field->isBitField() || Field->isZeroSize(getContext()) ||
+        (!FT->isScalarType() && !FT->isVectorType() &&
+         !(Field->getName() == "data_" && FT->isRecordType())))
+      return false;
+    if (FT->isRecordType()) {
+      const auto *Carrier = dyn_cast<CXXRecordDecl>(
+          FT->getAs<RecordType>()->getDecl());
+      if (!Carrier || Carrier->getNumBases() ||
+          !Carrier->isTriviallyCopyable() ||
+          std::distance(Carrier->field_begin(), Carrier->field_end()) != 1 ||
+          !(*Carrier->field_begin())->getType()->isVectorType())
+        return false;
+    }
+  }
+  for (const FieldDecl *Field : RD->fields()) {
+    LValue D = EmitLValueForField(Dest, Field);
+    LValue S = EmitLValueForField(Src, Field);
+    if (Field->getName() != "data_") {
+      // Static Tile masks may be indeterminate. Copy their representation
+      // without introducing typed scalar reads that the original trivial
+      // memcpy did not perform.
+      Builder.CreateMemCpy(D.getAddress(*this), S.getAddress(*this),
+                          getContext().getTypeSizeInChars(Field->getType())
+                              .getQuantity());
+      continue;
+    }
+    if (Field->getType()->isRecordType()) {
+      const auto *Carrier = Field->getType()->getAs<RecordType>()->getDecl();
+      const FieldDecl *Register = *Carrier->field_begin();
+      D = EmitLValueForField(D, Register);
+      S = EmitLValueForField(S, Register);
+    }
+    if (Field->getName() == "data_") {
+      recordLinxCubeTileCarrier(*this, S.getAddress(*this).getPointer(), Contract);
+      recordLinxCubeTileCarrier(*this, D.getAddress(*this).getPointer(), Contract);
+    }
+    EmitStoreThroughLValue(EmitLoadOfLValue(S, SourceLocation()), D);
+  }
+  return true;
 }
 
 } // namespace CodeGen

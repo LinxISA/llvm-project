@@ -212,10 +212,12 @@ class TileCarrierTransport {
       return false;
     }
     if (C.Layout == BLayout_RowMajor) {
-      // Ordinary vector loads/stores observe the entire carrier, including
-      // inactive bytes. Only rewrite full numeric carriers; partial/dynamic
-      // valid regions need an explicit padding/preservation contract. Do not
-      // erase volatile/atomic semantics or reinterpret packed predicate data.
+      // This metadata describes a numeric Tile, whose valid rectangle is
+      // independent of its allocated carrier. Use that rectangle and the
+      // physical pitch, rather than publishing the i32 storage vector as a
+      // flat S32 Tile. Inactive Tile elements are not payload: ordinary
+      // TLOAD defines its padding as Zero and TSTORE writes only valid data.
+      // Do not apply this contract to volatile/atomic or packed accesses.
       Type *Ty;
       if (auto *LI = dyn_cast<LoadInst>(Access)) {
         if (!LI->isSimple())
@@ -230,11 +232,28 @@ class TileCarrierTransport {
       auto *VT = dyn_cast<FixedVectorType>(Ty);
       if (!VT)
         return false;
+      if (C.ValidRow != C.Rows || C.ValidCol != C.Cols) {
+        auto IsTileAsm = [](const Value *U) {
+          const auto *Call = dyn_cast<CallBase>(U);
+          const auto *Asm = Call ? dyn_cast<InlineAsm>(
+                                      Call->getCalledOperand()) : nullptr;
+          return Asm && Asm->getConstraintString().find("Tr") !=
+                            std::string::npos;
+        };
+        // A plain C++ vector copy (or scalar inspection) observes inactive
+        // bytes too. Narrow only the Tile-asm boundary, where the logical
+        // valid rectangle owns the operation. Leave ordinary copies intact.
+        if (auto *LI = dyn_cast<LoadInst>(Access)) {
+          if (LI->use_empty() || !all_of(LI->users(), IsTileAsm))
+            return false;
+        } else if (!IsTileAsm(cast<StoreInst>(Access)->getValueOperand())) {
+          return false;
+        }
+      }
       uint64_t CarrierBits = VT->getPrimitiveSizeInBits().getFixedValue();
       // TLOAD/TSTORE need an encodable active tile size (128B through 256KB).
       if (CarrierBits < 128 * 8 || CarrierBits > 262144 * 8 ||
           (CarrierBits & (CarrierBits - 1)) ||
-          C.ValidRow != C.Rows || C.ValidCol != C.Cols ||
           CarrierBits !=
               uint64_t(C.Rows) * C.Cols * dataTypeElementBytes(C.DataType) * 8)
         return false;
