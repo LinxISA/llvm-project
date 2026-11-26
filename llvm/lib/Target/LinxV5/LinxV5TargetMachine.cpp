@@ -298,6 +298,88 @@ struct LinxV5InlineAsmConstantPreparePass
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
   }
 };
+
+// Tile handles are register values even when their C++ wrappers are passed by
+// reference. Expose small helpers before assigning memory request scopes:
+// scoping an unpromoted wrapper first makes its stack traffic irreversible.
+// Inline only; do not run GM load/store optimizations at this point.
+// The runtime intra ABI attaches the default scope to every call site. It is
+// compatible with an unannotated native caller/callee; explicit function
+// contracts and non-default call-site scopes remain boundaries.
+struct LinxV5TileHelperPreparePass
+    : PassInfoMixin<LinxV5TileHelperPreparePass> {
+  static bool hasTileAsm(Function &F) {
+    for (Instruction &I : instructions(F))
+      if (auto *C = dyn_cast<CallInst>(&I))
+        if (auto *Asm = dyn_cast<InlineAsm>(C->getCalledOperand()))
+          for (const auto &Constraint : Asm->ParseConstraints())
+            for (const auto &Code : Constraint.Codes)
+              if (Code == "Sr" || Code == "Tr")
+                return true;
+    return false;
+  }
+
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
+    auto &FAM =
+        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+    bool Changed = false;
+    for (unsigned Round = 0; Round != 8; ++Round) {
+      SmallVector<CallInst *, 32> Calls;
+      for (Function &F : M) {
+        if (F.hasFnAttribute(Attribute::OptimizeNone) ||
+            F.hasFnAttribute("linx-scalar-shareability") ||
+            F.hasFnAttribute("linx-tile-pe-domain"))
+          continue;
+        for (Instruction &I : instructions(F)) {
+          auto *C = dyn_cast<CallInst>(&I);
+          Function *Callee = C ? C->getCalledFunction() : nullptr;
+          if (!Callee || Callee == &F || Callee->isDeclaration() ||
+              Callee->isVarArg() || C->isMustTailCall() ||
+              Callee->getInstructionCount() > 8192 ||
+              F.getInstructionCount() + Callee->getInstructionCount() > 65536 ||
+              C->hasFnAttr(Attribute::NoInline) ||
+              Callee->hasFnAttribute(Attribute::NoInline) ||
+              Callee->hasFnAttribute(Attribute::OptimizeNone) ||
+              (C->hasFnAttr("linx-scalar-shareability") &&
+               C->getFnAttr("linx-scalar-shareability").getValueAsString() !=
+                   "intra") ||
+              C->hasFnAttr("linx-tile-pe-domain") ||
+              Callee->hasFnAttribute("linx-scalar-shareability") ||
+              Callee->hasFnAttribute("linx-tile-pe-domain") ||
+              !hasTileAsm(*Callee) || !isInlineViable(*Callee).isSuccess())
+            continue;
+          auto GetTLI = [&](Function &Fn) -> const TargetLibraryInfo & {
+            return FAM.getResult<TargetLibraryAnalysis>(Fn);
+          };
+          auto Decision = getAttributeBasedInliningDecision(
+              *C, Callee, FAM.getResult<TargetIRAnalysis>(*Callee), GetTLI);
+          if (!Decision || Decision->isSuccess())
+            Calls.push_back(C);
+        }
+      }
+      SmallPtrSet<Function *, 16> Modified;
+      for (CallInst *C : Calls) {
+        Function *Caller = C->getCaller();
+        if (Caller->getInstructionCount() +
+                C->getCalledFunction()->getInstructionCount() >
+            65536)
+          continue;
+        InlineFunctionInfo IFI;
+        if (InlineFunction(*C, IFI).isSuccess())
+          Modified.insert(Caller);
+      }
+      if (Modified.empty())
+        break;
+      Changed = true;
+      for (Function *F : Modified) {
+        FAM.invalidate(*F, PreservedAnalyses::none());
+        auto PA = LinxV5CarrierPreparePass().run(*F, FAM);
+        FAM.invalidate(*F, PA);
+      }
+    }
+    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+};
 } // namespace
 
 static StringRef computeDataLayout(const Triple &TT) {
@@ -401,6 +483,10 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           MPM.addPass(LinxV5InlineAsmConstantPreparePass());
           return true;
         }
+        if (Name == "linx-v5-tile-helper-prepare") {
+          MPM.addPass(LinxV5TileHelperPreparePass());
+          return true;
+        }
         if (Name == "linx-v5-pe-domain-specialize") {
           MPM.addPass(LinxV5PEDomainSpecializePass());
           return true;
@@ -457,6 +543,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         MPM.addPass(LinxV5PEDomainPreparePass());
         MPM.addPass(AlwaysInlinerPass());
         MPM.addPass(LinxV5InlineAsmConstantPreparePass());
+        MPM.addPass(LinxV5TileHelperPreparePass());
         FunctionPassManager FPM;
         // Promote local induction/control and Tile carrier temporaries first.
         // This does not optimize externally visible GM accesses, but prevents
