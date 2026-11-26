@@ -449,13 +449,18 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
     break;
   case LinxV5::PseudoTSTORE_noDsrc_noDdst:
   case LinxV5::PseudoTSTORE_noDsrc_Ddst:
+    // Ordinary stores require zero padding; only explicit CUBE conversion
+    // stores permit the legacy Null encoding.
     MCVec.push_back(
         MCInstBuilder(LinxV5::BDATR)
             .addOperand(Inst.getOperand(8))
             .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
             .addOperand(
                 MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
-            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Null))
+            .addOperand(MCOperand::createImm(
+                LinxV5Op::isCubeStoreConversion(Inst.getOperand(8).getImm())
+                    ? LinxV5Op::PadValue::Null
+                    : LinxV5Op::PadValue::Zero))
             .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
             .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
             .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))
@@ -469,7 +474,10 @@ llvm::SmallVector<MCInst> getBARGFromInst(const MCInst &Inst, const MCInstrInfo 
             .addOperand(MCOperand::createImm(LinxV5Op::Canon::NORMAL_CANON))
             .addOperand(
                 MCOperand::createImm(LinxV5Op::DataType::EMPTY_DataType))
-            .addOperand(MCOperand::createImm(LinxV5Op::PadValue::Null))
+            .addOperand(MCOperand::createImm(
+                LinxV5Op::isCubeStoreConversion(Inst.getOperand(9).getImm())
+                    ? LinxV5Op::PadValue::Null
+                    : LinxV5Op::PadValue::Zero))
             .addOperand(MCOperand::createImm(LinxV5Op::CmpMode::EQ))
             .addOperand(MCOperand::createImm(LinxV5Op::RMode::RNONE))
             .addOperand(MCOperand::createImm(LinxV5Op::Sat::NOSAT))

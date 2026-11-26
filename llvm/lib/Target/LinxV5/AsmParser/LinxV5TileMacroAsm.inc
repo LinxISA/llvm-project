@@ -1196,6 +1196,12 @@ bool LinxV5AsmParser::emitTileMacroLine(SMLoc IDLoc, MCStreamer &Out) {
     if (!BType->HasValue)
       DstType = P.HeaderType;
 
+  // An explicit ordinary/shared TSTORE DATR must encode zero padding.
+  // CUBE conversion forms own their optional PadValue and retain it here.
+  if (StringRef(Operation.Mnemonic) == "TSTORE" &&
+      !LinxV5Op::isCubeStoreConversion(Layout))
+    Pad = PadValue::Zero;
+
   bool ExecutionMask = findConfig(P, "PredInv") != nullptr;
   if (HasDATR) {
     MCInstBuilder Builder(ExecutionMask ? LinxV5::BDATR_EXEC_MASK : LinxV5::BDATR);

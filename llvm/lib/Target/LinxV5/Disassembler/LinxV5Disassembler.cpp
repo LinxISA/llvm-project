@@ -1232,9 +1232,12 @@ static bool tryDecodeTileMacro(MCInst &MI, uint64_t &Size,
           StringRef(PadConfig->Constraint) == "InternalAccHint" && Pad != 2)
         return false;
       if (!PadConfig) {
-        unsigned DefaultPad = Operation->HeaderKind == TileMacroHeaderKind::CUBE
-                                  ? 0
-                                  : LinxV5Op::PadValue::Null;
+        bool OrdinaryStore = StringRef(Operation->Mnemonic) == "TSTORE" &&
+                             !LinxV5Op::isCubeStoreConversion(Layout);
+        unsigned DefaultPad =
+            Operation->HeaderKind == TileMacroHeaderKind::CUBE || OrdinaryStore
+                ? LinxV5Op::PadValue::Zero
+                : LinxV5Op::PadValue::Null;
         if (Pad != DefaultPad || Byte != 0)
           return false;
       }

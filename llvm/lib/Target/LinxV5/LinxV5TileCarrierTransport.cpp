@@ -152,7 +152,7 @@ static bool parseCarrierContract(StringRef S, CarrierContract &C) {
 }
 
 // Recover the Tile object base pointer from a carrier pointer. Supported
-// shapes: the constant carrier-field GEP (..., 0, 3) of the object, or a
+// shapes: a constant carrier-field GEP of the object, or a
 // not-yet-inlined pto::Tile<...>::data() call result (the callee takes the
 // object pointer as its only parameter).
 static Value *getTileObject(Value *P) {
@@ -161,11 +161,15 @@ static Value *getTileObject(Value *P) {
     if (!GEP->hasAllConstantIndices())
       return nullptr;
     SmallVector<Value *, 4> Ops(GEP->idx_begin(), GEP->idx_end());
-    if (Ops.size() != 2)
+    if (Ops.size() < 2 || !GEP->getSourceElementType()->isStructTy() ||
+        !cast<ConstantInt>(Ops[0])->isZero())
       return nullptr;
-    auto *FieldIdx = dyn_cast<ConstantInt>(Ops[1]);
-    if (!FieldIdx || FieldIdx->getZExtValue() != 3)
-      return nullptr; // not the carrier member
+    // The frontend contract identifies the carrier. Padding and register
+    // wrappers can change its field index; nested zero indices merely unwrap
+    // that member and do not change the Tile object base.
+    for (Value *Index : drop_begin(Ops, 2))
+      if (!cast<ConstantInt>(Index)->isZero())
+        return nullptr;
     return GEP->getPointerOperand();
   }
   if (auto *CI = dyn_cast<CallInst>(P)) {
@@ -198,6 +202,15 @@ class TileCarrierTransport {
       CarrierPtr = LI->getPointerOperand();
     else
       CarrierPtr = cast<StoreInst>(Access)->getPointerOperand();
+    // ND2N8 can import U64 auxiliary cells, but there is no inverse b64
+    // N82ND store. Never turn a C++ carrier store into an illegal transport.
+    if (isa<StoreInst>(Access) && C.Layout == BLayout_CubeN8 &&
+        dataTypeElementBytes(C.DataType) == 8) {
+      Access->getContext().emitError(
+          Access, "64-bit CUBE_N8 tile carrier cannot be stored to memory; "
+                  "keep the tile in registers or inline its consumer");
+      return false;
+    }
     if (C.Layout == BLayout_RowMajor) {
       // Ordinary vector loads/stores observe the entire carrier, including
       // inactive bytes. Only rewrite full numeric carriers; partial/dynamic
