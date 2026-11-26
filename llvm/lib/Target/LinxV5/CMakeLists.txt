@@ -23,6 +23,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5ExpandPseudoInsts.cpp
   LinxV5FrameLowering.cpp
   LinxV5InstrInfo.cpp
+  LinxV5PrivateObjectPromotion.cpp
   LinxV5ScalarShareability.cpp
   LinxV5ISelDAGToDAG.cpp
   LinxV5ISelLowering.cpp
@@ -45,6 +46,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5SharedCopyElim.cpp
   LinxV5EmitHeader.cpp
   LinxV5TileFixup.cpp
+  LinxV5TileDefinedness.cpp
   LinxV5SIMTSpillFixup.cpp
   LinxV5StackSizeFixup.cpp
   LinxV5AnnotateControlFlow.cpp

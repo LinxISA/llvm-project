@@ -72,6 +72,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5TRegToOffsetOptPass(*PR);
   initializeLinxV5InlineAsmTileLifetimePass(*PR);
   initializeLinxV5TileFixupPass(*PR);
+  initializeLinxV5TileDefinednessPass(*PR);
   initializeLinxV5EmitHeaderPass(*PR);
   initializeLinxV5ExpandPseudoPass(*PR);
   initializeLinxV5AnnotateControlFlowPass(*PR);
@@ -504,6 +505,10 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerPipelineParsingCallback(
       [this](StringRef Name, FunctionPassManager &FPM,
          ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "linx-v5-private-object-promotion") {
+          FPM.addPass(LinxV5PrivateObjectPromotionPass());
+          return true;
+        }
         if (Name == "linx-v5-scalar-shareability") {
           FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
           return true;
@@ -555,6 +560,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         if (!EnableGenericElement)
           FPM.addPass(LinxV5TileCarrierTransportPass(/*Early=*/true));
         FPM.addPass(LinxV5CarrierPreparePass());
+        FPM.addPass(LinxV5PrivateObjectPromotionPass());
         FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
@@ -576,6 +582,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         FPM.addPass(LinxV5ElementRegionPromotePass());
         FPM.addPass(LinxV5ElementRegionPass());
         FPM.addPass(LinxV5ElementRegionVerifierPass());
+        FPM.addPass(LinxV5PrivateObjectPromotionPass());
         FPM.addPass(LinxV5TileCarrierTransportPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
@@ -589,6 +596,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           return;
         MPM.addPass(LinxV5PEDomainUnsupportedPass());
         FunctionPassManager FPM;
+        FPM.addPass(LinxV5PrivateObjectPromotionPass());
         FPM.addPass(LinxV5TileCarrierTransportPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
@@ -728,6 +736,7 @@ bool LinxV5PassConfig::addPostFastRegAllocRewrite() {
 void LinxV5PassConfig::addPostRegAlloc() {}
 
 void LinxV5PassConfig::addPreRegAlloc() {
+  addPass(createLinxV5TileDefinednessPass());
   if (getOptLevel() != CodeGenOpt::None)
     addPass(createLinxV5SharedHandleLegalizePass());
   addPass(createLinxV5CanonicalizeBlockPass());

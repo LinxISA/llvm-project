@@ -984,6 +984,25 @@ getInlineAsmDimensionOperand(MachineInstr &MI, StringRef Text,
 
 static Optional<unsigned> getStaticTileDimensionRegister(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg) {
+  if (Reg.isVirtual() && MBB.getParent()->getRegInfo().isSSA()) {
+    DenseSet<Register> Seen;
+    while (Reg.isVirtual() && Seen.insert(Reg).second) {
+      MachineInstr *Def = MBB.getParent()->getRegInfo().getVRegDef(Reg);
+      if (!Def)
+        return None;
+      if (Def->isCopy()) {
+        Reg = Def->getOperand(1).getReg();
+        continue;
+      }
+      if (Def->getOpcode() == LinxV5::ADDI &&
+          Def->getOperand(1).getReg() == LinxV5::R0 &&
+          Def->getOperand(2).getImm() >= 0 &&
+          Def->getOperand(2).getImm() <= 65535)
+        return static_cast<unsigned>(Def->getOperand(2).getImm());
+      return None;
+    }
+    return Reg == LinxV5::R0 ? Optional<unsigned>(0u) : None;
+  }
   SmallPtrSet<MachineBasicBlock *, 8> Visited;
   MachineBasicBlock *Block = &MBB;
   while (Visited.insert(Block).second) {
@@ -1254,15 +1273,14 @@ getInlineAsmLayout(MachineInstr &MI, StringRef Text,
     Line = Line.trim();
     auto Fields = Line.split(',');
     StringRef Type = Fields.first.trim();
-    StringRef Rounding = Fields.second.trim();
-    if (!Type.startswith("${") || !Type.endswith(":D}") ||
-        (Rounding != "RNONE" && Rounding != "RNE" && Rounding != "RTZ" &&
+    std::string UpperRounding = Fields.second.trim().upper();
+    StringRef Rounding = UpperRounding;
+    if (Rounding != "RNONE" && Rounding != "RNE" && Rounding != "RTZ" &&
          Rounding != "RTM" && Rounding != "RTP" && Rounding != "RNA" &&
-         Rounding != "RTO" && Rounding != "RHB"))
+         Rounding != "RTO" && Rounding != "RHB")
       return None;
-    size_t Marker = Type.data() - Text.data() + Type.find(":D}");
-    Optional<unsigned> ResultType =
-        getInlineAsmOperandImmediate(MI, Text, Marker);
+    Optional<unsigned> ResultType = getInlineAsmDataType(
+        MI, (Twine("BSTART.TEPL TCVT, ") + Type).str());
     if (!ResultType ||
         *ResultType == LinxV5Op::DataType::EMPTY_DataType ||
         (!IsConvert && *ResultType != *HeaderType))
@@ -1274,10 +1292,8 @@ getInlineAsmLayout(MachineInstr &MI, StringRef Text,
 
 static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
                                                StringRef Text) {
-  size_t Marker = Text.find(":D}");
-  if (Marker != StringRef::npos)
-    return getInlineAsmOperandImmediate(MI, Text, Marker);
-
+  // Read the header's type field, never a later attribute's :D operand.
+  // TileOP also binds dtype immediates with the ordinary :c modifier.
   size_t BStart = Text.find("BSTART.");
   if (BStart == StringRef::npos)
     return None;
@@ -1290,12 +1306,27 @@ static Optional<unsigned> getInlineAsmDataType(MachineInstr &MI,
       Header.startswith("BSTART.CUBE ")) {
     if (Comma == StringRef::npos)
       return None;
-    Token = Header.drop_front(Comma + 1).ltrim();
+    Token = Header.drop_front(Comma + 1).trim();
   } else {
     size_t Space = Header.find_first_of(" \t");
     if (Space == StringRef::npos)
       return None;
-    Token = Header.drop_front(Space + 1).ltrim();
+    Token = Header.drop_front(Space + 1).trim();
+  }
+  Token = Token.split(',').first.trim();
+  if (Token.startswith("${")) {
+    StringRef Index = Token;
+    Index.consume_front("${");
+    if (!Index.consume_back(":D}") && !Index.consume_back(":c}"))
+      return None;
+    unsigned Number;
+    if (Index.getAsInteger(10, Number))
+      return None;
+    MachineOperand *Operand = getAsmOperand(&MI, Number);
+    if (!Operand || !Operand->isImm() || Operand->getImm() < 0 ||
+        Operand->getImm() > LinxV5Op::DataType::EMPTY_DataType)
+      return None;
+    return static_cast<unsigned>(Operand->getImm());
   }
   Token = Token.take_while(
       [](char C) { return isAlnum(C) || C == '_'; });
@@ -1544,6 +1575,7 @@ struct DescriptorResolutionContext : SmallVector<DescriptorPosition, 8> {
   DenseMap<DescriptorPosition, CachedDescriptor> Cache;
   unsigned Cycles = 0;
   Optional<unsigned> UnsupportedCooperativeGroupM;
+  bool VirtualSSA = false;
 };
 
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
@@ -2200,23 +2232,18 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     return getLegacyInlineAsmTileDescriptor(MI, Reg, Active);
   bool IsConvert = Text.startswith("BSTART.TEPL 27,") ||
                    Text.startswith("BSTART.TEPL TCVT,");
-  if (IsConvert && Text.contains(":D}")) {
+  if (IsConvert) {
     size_t Attributes = Text.find("B.DATR");
     if (Attributes == StringRef::npos)
       return None;
-    StringRef ResultType = Text.drop_front(Attributes + strlen("B.DATR"))
-                               .split(',').first.trim();
-    if (!ResultType.startswith("${") || !ResultType.endswith(":D}"))
-      return None;
-    DataType = getInlineAsmOperandImmediate(
-        MI, Text, ResultType.data() - Text.data() + ResultType.find(":D}"));
-  } else if (IsConvert) {
-    size_t Attributes = Text.find("B.DATR");
-    if (Attributes == StringRef::npos)
-      return None;
-    StringRef AttributeLine =
-        Text.drop_front(Attributes + strlen("B.DATR")).split('\n').first;
-    StringRef ResultType = AttributeLine.split(',').second.split(',').first.trim();
+    StringRef AttributeLine = Text.drop_front(Attributes + strlen("B.DATR"))
+                                  .split('\n').first;
+    auto Fields = AttributeLine.split(',');
+    StringRef ResultType = Fields.first.trim();
+    // The named legacy spelling includes layout before the result dtype.
+    if (ResultType == "NORM" || ResultType == "CUBE_M16" ||
+        ResultType == "CUBE_M32")
+      ResultType = Fields.second.split(',').first.trim();
     DataType = getInlineAsmDataType(
         MI, (Twine("BSTART.TEPL TCVT, ") + ResultType).str());
   }
@@ -2803,6 +2830,61 @@ static Optional<LinxV5::TileDescriptor> resolveTileDescriptorImpl(
 static Optional<LinxV5::TileDescriptor> resolveTileDescriptor(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
     DescriptorResolutionContext &Active, bool *Absent) {
+  if (Active.VirtualSSA && Reg.isVirtual()) {
+    MachineInstr *Definition = MBB.getParent()->getRegInfo().getVRegDef(Reg);
+    if (!Definition || Definition->isImplicitDef()) {
+      if (Absent)
+        *Absent = true;
+      return None;
+    }
+    DescriptorPosition Position{Definition->getParent(), Definition, Reg};
+    auto Cached = Active.Cache.find(Position);
+    if (Cached != Active.Cache.end()) {
+      if (Absent)
+        *Absent = Cached->second.Absent;
+      return Cached->second.Descriptor;
+    }
+    if (is_contained(Active, Position)) {
+      ++Active.Cycles;
+      if (Absent)
+        *Absent = true;
+      return None;
+    }
+    unsigned Cycles = Active.Cycles;
+    bool ResultAbsent = false;
+    Active.push_back(Position);
+    Optional<LinxV5::TileDescriptor> Result;
+    if (Definition->isCopy()) {
+      Result = resolveTileDescriptor(*Definition->getParent(),
+                                     Definition->getIterator(),
+                                     Definition->getOperand(1).getReg(), Active,
+                                     &ResultAbsent);
+    } else if (Definition->isPHI()) {
+      for (unsigned I = 1; I < Definition->getNumOperands(); I += 2) {
+        bool Missing = false;
+        auto Incoming = resolveTileDescriptor(
+            *Definition->getParent(), Definition->getIterator(),
+            Definition->getOperand(I).getReg(), Active, &Missing);
+        if (!Incoming && Missing)
+          continue;
+        if (!Incoming || (Result && !(*Result == *Incoming))) {
+          Active.pop_back();
+          return None;
+        }
+        Result = Incoming;
+      }
+      if (!Result)
+        ResultAbsent = true;
+    } else {
+      Result = getDefinedTileDescriptor(*Definition, Reg, Active, &ResultAbsent);
+    }
+    Active.pop_back();
+    if (Cycles == Active.Cycles)
+      Active.Cache.insert({Position, {Result, ResultAbsent}});
+    if (Absent)
+      *Absent = ResultAbsent;
+    return Result;
+  }
   DescriptorPosition Key{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
   auto Cached = Active.Cache.find(Key);
   if (Cached != Active.Cache.end()) {
@@ -2846,6 +2928,13 @@ LinxV5::tryGetTileRegDescriptor(MachineBasicBlock &MBB,
                                 MCRegister Reg) {
   DescriptorResolutionContext Active;
   return resolveTileDescriptor(MBB, MBBI, Reg, Active);
+}
+
+Optional<LinxV5::TileDescriptor>
+LinxV5::tryGetVirtualTileDescriptor(MachineFunction &MF, Register Reg) {
+  DescriptorResolutionContext Active;
+  Active.VirtualSSA = true;
+  return resolveTileDescriptor(MF.front(), MF.front().begin(), Reg, Active);
 }
 
 static bool instructionClobbersPhysReg(const MachineInstr &MI, Register Reg,

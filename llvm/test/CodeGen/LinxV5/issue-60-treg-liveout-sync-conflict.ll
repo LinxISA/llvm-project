@@ -1,21 +1,17 @@
-; RUN: not --crash llc -mtriple=linx64v5 -O2 -enable-all-vector-as-tilereg=true \
+; RUN: llc -mtriple=linx64v5 -O2 -enable-all-vector-as-tilereg=true \
 ; RUN:     -linxv5-enable-HL-Inst-Opt=true -linxv5-enable-dim-opt=true \
 ; RUN:     -linxv5-enable-ldst-bridge=false \
 ; RUN:     -linxv5-enable-continuous-mem-opt=true \
 ; RUN:     -linxv5-enable-tile-clock-hand=false \
 ; RUN:     -linxv5-enable-simt-clock-hand=true -enable-misched=false \
-; RUN:     %s -o /dev/null 2>&1 | FileCheck %s --check-prefix=CONFLICT
+; RUN:     %s -o %t.s
+; RUN: FileCheck %s --check-prefix=PUBLISHED < %t.s
 
-;; Issue #60: an unrolled if-select (`if (j == cid) TMOV(upd[j], cur)` over a
-;; Local tile array) leaves a different tile live-out at the same tail-aligned
-;; window depth per successor arm. getLiveoutLimits used to abort with
-;; "Liveouts sync-up error!". The conflicting register classes (here the T/U
-;; tile windows) has multiple reaching native distances at the synchronization
-;; use. Until guard correlation proves one unique distance, lowering must stop
-;; with a stable diagnostic instead of selecting one path or emitting an
-;; absolute-register compatibility fallback.
-
-; CONFLICT: Local tile synchronization conflict use has no unique reaching native distance
+;; Issue #60: loop-carried Local tile slots begin as LLVM undef. Publish
+;; their inferred numeric zero values before PHI elimination so every path
+;; carries a real tile identity into live-out synchronization.
+; PUBLISHED: TCI
+; PUBLISHED: TSTORE
 
 ; ModuleID = 'i60.cpp'
 source_filename = "i60.cpp"

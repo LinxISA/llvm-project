@@ -6,6 +6,7 @@
 
 #include "LinxV5.h"
 #include "LinxV5TargetMachine.h"
+#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -527,6 +528,20 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
     llvm_unreachable("atomic order");
   };
   for (Instruction *I : Work) {
+    // Request scope does not make an immutable initializer mutable. Fold
+    // ordinary constant loads before scoping hides them from IPO/SCCP; shape
+    // factories and host tiling constants must remain visible to those passes.
+    if (!Explicit)
+      if (auto *L = dyn_cast<LoadInst>(I))
+        if (L->isSimple())
+          if (auto *P = dyn_cast<Constant>(L->getPointerOperand()))
+            if (Constant *V = ConstantFoldLoadFromConstPtr(P, L->getType(), DL)) {
+              if (!isa<UndefValue>(V) && !isa<PoisonValue>(V)) {
+                L->replaceAllUsesWith(V);
+                L->eraseFromParent();
+                continue;
+              }
+            }
     IRBuilder<> B(I);
     B.SetCurrentDebugLocation(I->getDebugLoc());
     if (auto *R = dyn_cast<AtomicRMWInst>(I)) {
@@ -683,11 +698,18 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         if (ValueIn) {
           Value *Part = B.CreateLShr(All, Shift);
           Part = B.CreateZExtOrTrunc(Part, B.getInt64Ty());
-          B.CreateCall(Store, {P, Part, B.getInt32(N), B.getInt32(Scope)});
+          CallInst *Request =
+              B.CreateCall(Store, {P, Part, B.getInt32(N), B.getInt32(Scope)});
+          if (!Explicit && !cast<StoreInst>(I)->isVolatile())
+            Request->setMetadata("linx.scalar.implicit",
+                                 MDNode::get(F.getContext(), {}));
         } else {
-          Value *Part =
+          CallInst *Request =
               B.CreateCall(Load, {P, B.getInt32(N), B.getInt32(Scope)});
-          Part = B.CreateZExtOrTrunc(Part, IntTy);
+          if (!Explicit && !cast<LoadInst>(I)->isVolatile())
+            Request->setMetadata("linx.scalar.implicit",
+                                 MDNode::get(F.getContext(), {}));
+          Value *Part = B.CreateZExtOrTrunc(Request, IntTy);
           All = B.CreateOr(All, B.CreateShl(Part, Shift));
         }
         Offset += N;

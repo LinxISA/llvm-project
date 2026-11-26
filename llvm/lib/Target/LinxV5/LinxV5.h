@@ -141,6 +141,14 @@ struct LinxV5ElementRegionVerifierPass
   static bool isRequired() { return true; }
 };
 
+FunctionPass *createLinxV5TileDefinednessPass();
+void initializeLinxV5TileDefinednessPass(PassRegistry &);
+
+struct LinxV5PrivateObjectPromotionPass
+    : PassInfoMixin<LinxV5PrivateObjectPromotionPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
+
 // Promote private carrier fields and rewrite marked numeric boundaries into
 // typed layout transports. Early preparation protects M-layout accesses from
 // GVN/PRE; N8 and cross-call handling stay after normal optimization/inlining.

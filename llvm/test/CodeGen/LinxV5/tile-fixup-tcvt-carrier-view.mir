@@ -6,6 +6,7 @@
 # RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/packed.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
 # RUN: llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/rcpe.mir -o - | FileCheck %s --check-prefix=RCPE
 # RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/rcpe-invalid.mir -o /dev/null 2>&1 | FileCheck %s --check-prefix=BAD
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-tile-fixup %t/c-modifier.mir -o - | FileCheck %s --check-prefix=CUBE
 # An equal-width operation view does not retag its source backing descriptor.
 # ROW32: PseudoTSpillDesc $tile_t1, %stack.0, 1, 32, 1, 25, 0, 1
 # ROW32: PseudoTSpillDesc $tile_u1, %stack.1, 1, 32, 1, 5, 0, 1
@@ -140,6 +141,25 @@ body: |
   bb.0:
     $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 27, 0, 1, $r0, $r0
     INLINEASM &"BSTART.TEPL 27, ${1:D}\0AB.DATR ${2:D}, RNONE\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.DIM zero, ${7:c}, ->lb2\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 786442, def $tile_u1, 13, 21, 13, 5, 786441, $tile_t1, 13, 1, 13, 1, 13, 32, 13, 1
+    PseudoTSpill $tile_t1, %stack.0 :: (store (s64) into %stack.0)
+    PseudoTSpill $tile_u1, %stack.1 :: (store (s64) into %stack.1)
+...
+
+
+#--- c-modifier.mir
+--- |
+  define void @cube32() { ret void }
+...
+---
+name: cube32
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 128, alignment: 256 }
+  - { id: 1, type: spill-slot, size: 128, alignment: 256 }
+body: |
+  bb.0:
+    $tile_t1 = PseudoTCI_EW_SizeI $r0, 32, $r0, 1, 25, 29, 1, $r0, $r0
+    INLINEASM &"BSTART.TEPL 27, ${1:c}\0AB.DATR ${2:c}, RNone\0AB.DIM zero, ${5:c}, ->lb0\0AB.DIM zero, ${6:c}, ->lb1\0AB.IOT $3, mask=1111, last, ->$0<${4:Z}>\0A", 9, 786442, def $tile_u1, 13, 1, 13, 5, 786441, $tile_t1, 13, 1, 13, 1, 13, 32
     PseudoTSpill $tile_t1, %stack.0 :: (store (s64) into %stack.0)
     PseudoTSpill $tile_u1, %stack.1 :: (store (s64) into %stack.1)
 ...

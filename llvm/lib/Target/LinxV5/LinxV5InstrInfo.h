@@ -226,6 +226,11 @@ Optional<TileDescriptor>
 tryGetTileRegDescriptor(MachineBasicBlock &MBB,
                         MachineBasicBlock::iterator MBBI, MCRegister Reg);
 
+/// Resolve an SSA Tile value before PHI elimination. Undefined PHI inputs do
+/// not establish a descriptor; all concrete inputs must agree.
+Optional<TileDescriptor> tryGetVirtualTileDescriptor(MachineFunction &MF,
+                                                    Register Reg);
+
 bool runtimeDimensionsReachCopy(const TileDescriptor &Descriptor,
                                 MachineBasicBlock &Target,
                                 MachineBasicBlock::iterator Before,
