@@ -212,6 +212,7 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
   SmallVector<MemIntrinsic *, 8> Mem;
   SmallVector<CallBase *, 8> Library;
   SmallVector<CallBase *, 4> VaCopies;
+  SmallVector<Instruction *, 4> PrefetchHints;
   for (Instruction &I : instructions(F)) {
     if (TileBlocks.contains(I.getParent()))
       continue;
@@ -267,6 +268,14 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         case Intrinsic::vacopy:
           VaCopies.push_back(C);
           continue;
+        case Intrinsic::prefetch:
+          if (!Explicit && F.hasFnAttribute("linx-runtime-intra-abi")) {
+            // Prefetch is optional; omit the hint until a scoped form exists.
+            PrefetchHints.push_back(C);
+            continue;
+          }
+          Fail("prefetch needs an explicit scoped lowering");
+          continue;
         default:
           if (!C->doesNotAccessMemory())
             Fail(Twine("memory intrinsic '") + Callee->getName() +
@@ -291,8 +300,13 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
       auto CalleeContract = Callee ? Callee->getFnAttribute(
                                         "linx-scalar-shareability")
                                   : Attribute();
-      if (CallContract.isStringAttribute() &&
-          CallContract.getValueAsString() == Name &&
+      // EH preparation and optimization can synthesize calls after Clang
+      // attaches call-site contracts. Only runtime builds assert this default;
+      // explicit function scopes and incompatible callee scopes stay checked.
+      if (((CallContract.isStringAttribute() &&
+            CallContract.getValueAsString() == Name) ||
+           (!Explicit && F.hasFnAttribute("linx-runtime-intra-abi") &&
+            Name == "intra")) &&
           (!CalleeContract.isStringAttribute() ||
            CalleeContract.getValueAsString() == Name))
         continue;
@@ -316,6 +330,8 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
            "definition");
     }
   }
+  for (Instruction *Hint : PrefetchHints)
+    Hint->eraseFromParent();
   // Linx va_list is a single pointer. Materialize its copy before the scoped
   // memory sweep, so even escaped/shared source and destination lists retain
   // the appropriate request scope (vfprintf uses this across calls).
@@ -389,6 +405,64 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
       if (ValueTy->isFloatingPointTy())
         Loaded = B.CreateBitCast(Loaded, ValueTy);
     });
+  // Split aggregate accesses into their typed fields before applying scope.
+  // Struct padding is not a value and must not be turned into scalar data.
+  SmallVector<Instruction *, 8> Aggregates;
+  for (Instruction &I : instructions(F)) {
+    if (TileBlocks.contains(I.getParent()))
+      continue;
+    if (auto *L = dyn_cast<LoadInst>(&I)) {
+      if (L->getType()->isAggregateType() && NeedsScope(L->getPointerOperand()))
+        Aggregates.push_back(L);
+    } else if (auto *S = dyn_cast<StoreInst>(&I)) {
+      if (S->getValueOperand()->getType()->isAggregateType() &&
+          NeedsScope(S->getPointerOperand()))
+        Aggregates.push_back(S);
+    }
+  }
+  for (Instruction *I : Aggregates) {
+    IRBuilder<> B(I);
+    B.SetCurrentDebugLocation(I->getDebugLoc());
+    auto *L = dyn_cast<LoadInst>(I);
+    auto *S = dyn_cast<StoreInst>(I);
+    bool Volatile = L ? L->isVolatile() : S->isVolatile();
+    auto Split = [&](auto &&Self, Type *Ty, Value *P, Value *V,
+                     Align A) -> Value * {
+      if (!Ty->isAggregateType()) {
+        if (V) {
+          B.CreateAlignedStore(V, P, A, Volatile);
+          return nullptr;
+        }
+        return B.CreateAlignedLoad(Ty, P, A, Volatile);
+      }
+      auto *ST = dyn_cast<StructType>(Ty);
+      uint64_t Count = ST ? ST->getNumElements()
+                          : cast<ArrayType>(Ty)->getNumElements();
+      Value *Result = UndefValue::get(Ty);
+      for (uint64_t N = 0; N < Count; ++N) {
+        Type *FieldTy = ST ? ST->getElementType(N)
+                            : cast<ArrayType>(Ty)->getElementType();
+        uint64_t Offset = ST ? DL.getStructLayout(ST)->getElementOffset(N)
+                             : N * DL.getTypeAllocSize(FieldTy).getFixedValue();
+        Value *FieldP = B.CreateConstGEP2_32(Ty, P, 0, N);
+        Value *FieldV = V ? B.CreateExtractValue(V, N) : nullptr;
+        Value *Field = Self(Self, FieldTy, FieldP, FieldV,
+                            commonAlignment(A, Offset));
+        if (!V)
+          Result = B.CreateInsertValue(Result, Field, N);
+      }
+      return Result;
+    };
+    if (L) {
+      Value *Result = Split(Split, L->getType(), L->getPointerOperand(),
+                            nullptr, L->getAlign());
+      L->replaceAllUsesWith(Result);
+    } else {
+      Split(Split, S->getValueOperand()->getType(), S->getPointerOperand(),
+            S->getValueOperand(), S->getAlign());
+    }
+    I->eraseFromParent();
+  }
   SmallVector<Instruction *, 32> Work;
   for (Instruction &I : instructions(F)) {
     if (TileBlocks.contains(I.getParent()))
@@ -418,7 +492,8 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
       Work.push_back(&I);
   }
   if (Work.empty())
-    return !Mem.empty() || !VaCopies.empty();
+    return !Mem.empty() || !VaCopies.empty() || !Aggregates.empty() ||
+           !PrefetchHints.empty();
   // Scoped intrinsics conservatively model normal GM aliasing and effects.
   // Do not leave preexisting function summaries claiming these new calls are
   // readonly/argmemonly/speculatable or cannot synchronize.

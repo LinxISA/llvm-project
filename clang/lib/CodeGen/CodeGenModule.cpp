@@ -1962,6 +1962,11 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
                                                            llvm::Function *F) {
   llvm::AttrBuilder B(F->getContext());
 
+  // Preserve the runtime build's ABI assertion for calls synthesized by
+  // later LLVM passes, including exception-resume lowering.
+  if (getLangOpts().LinxRuntimeIntraABI && getTriple().isLinxV5())
+    B.addAttribute("linx-runtime-intra-abi");
+
   if (CodeGenOpts.UnwindTables)
     B.addUWTableAttr(llvm::UWTableKind(CodeGenOpts.UnwindTables));
 
@@ -4174,6 +4179,12 @@ CodeGenModule::CreateRuntimeFunction(llvm::FunctionType *FTy, StringRef Name,
   if (auto *F = dyn_cast<llvm::Function>(C)) {
     if (F->empty()) {
       F->setCallingConv(getRuntimeCC());
+
+      // ABI helpers bypass EmitCall, where ordinary runtime calls receive
+      // their IntraCore contract. Keep an explicitly declared scope intact.
+      if (getLangOpts().LinxRuntimeIntraABI && getTriple().isLinxV5() &&
+          !F->hasFnAttribute("linx-scalar-shareability"))
+        F->addFnAttr("linx-scalar-shareability", "intra");
 
       // In Windows Itanium environments, try to mark runtime functions
       // dllimport. For Mingw and MSVC, don't. We don't really know if the user
