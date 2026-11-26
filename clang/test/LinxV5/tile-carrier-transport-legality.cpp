@@ -19,8 +19,8 @@ using Dynamic = pto::Tile<pto::Location::Vec, float, 32, 256,
 // Alignment padding changes the carrier field index. Runtime dimensions
 // still come from the Tile object, rather than a fixed field-3 assumption.
 // CHECK-LABEL: define {{.*}} @dynamic_carrier(
-// CHECK: load i32, ptr
-// CHECK: zext i32
+// CHECK: call i64 @llvm.linx.scalar.load
+// CHECK: and i64
 // CHECK: call <8192 x float> @llvm.linx.blk.tload{{.*}}(i64 1, i64 %{{.*}}, i64 1, i64 1, i64 0, i64 21,
 extern "C" void dynamic_carrier(Dynamic &tile) {
   asm volatile("" : : "Tr"(tile.data()));

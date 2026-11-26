@@ -549,11 +549,11 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         // This does not optimize externally visible GM accesses, but prevents
         // a marked loop's local control storage becoming a scoped GM request.
         FPM.addPass(SROAPass());
-        // Resolve surviving full RowMajor carrier accesses before GVN/PRE
-        // can clone a load without its frontend type metadata. Local carrier
-        // temporaries have already been promoted by SROA.
+        // Protect surviving RowMajor and M-layout carrier accesses before
+        // GVN/PRE can clone a load without its frontend type metadata. Local
+        // carriers are promoted first; N8 transport waits for fixp inlining.
         if (!EnableGenericElement)
-          FPM.addPass(LinxV5TileCarrierTransportPass(/*RowMajorOnly=*/true));
+          FPM.addPass(LinxV5TileCarrierTransportPass(/*Early=*/true));
         FPM.addPass(LinxV5CarrierPreparePass());
         FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));

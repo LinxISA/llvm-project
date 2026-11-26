@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -39,12 +40,129 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "linxv5-tile-carrier-transport"
 
 namespace {
+
+// Shape fields can keep a Tile wrapper addressable after SROA. Its carrier
+// field is still an SSA register when every access to that byte range is an
+// ordinary same-type load/store and the wrapper does not escape. Promote that
+// field separately before numeric transport can erase Predicate storage kind.
+static bool promoteLocalCarriers(Function &F, DominatorTree &DT) {
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  SmallVector<Instruction *, 16> Candidates;
+  for (Instruction &I : instructions(F))
+    if (I.getMetadata("linx.tile.transport") &&
+        (isa<LoadInst>(I) || isa<StoreInst>(I)))
+      Candidates.push_back(&I);
+  SmallVector<AllocaInst *, 16> Slots;
+  SmallPtrSet<Value *, 16> Seen;
+  for (Instruction *Candidate : Candidates) {
+    Value *Pointer = isa<LoadInst>(Candidate)
+                         ? cast<LoadInst>(Candidate)->getPointerOperand()
+                         : cast<StoreInst>(Candidate)->getPointerOperand();
+    int64_t Offset;
+    auto *Object = dyn_cast<AllocaInst>(
+        GetPointerBaseWithConstantOffset(Pointer, Offset, DL));
+    Type *Ty = isa<LoadInst>(Candidate)
+                   ? Candidate->getType()
+                   : cast<StoreInst>(Candidate)->getValueOperand()->getType();
+    if (!Object || !Object->isStaticAlloca() || !isa<FixedVectorType>(Ty) ||
+        !Seen.insert(Pointer).second)
+      continue;
+    uint64_t Bytes = DL.getTypeStoreSize(Ty).getFixedValue();
+    SmallVector<Value *, 16> Work{Object};
+    SmallPtrSet<Value *, 32> Visited;
+    SmallVector<Instruction *, 16> Accesses;
+    bool Safe = true;
+    while (!Work.empty() && Safe) {
+      Value *P = Work.pop_back_val();
+      if (!Visited.insert(P).second)
+        continue;
+      for (User *U : P->users()) {
+        if (isa<GetElementPtrInst>(U) || isa<BitCastInst>(U)) {
+          Work.push_back(cast<Value>(U));
+          continue;
+        }
+        if (auto *II = dyn_cast<IntrinsicInst>(U)) {
+          if (II->isLifetimeStartOrEnd())
+            continue;
+        }
+        Value *Address = nullptr;
+        Type *AccessTy = nullptr;
+        bool Ordinary = false;
+        uint64_t Extent = 0;
+        if (auto *L = dyn_cast<LoadInst>(U)) {
+          Address = L->getPointerOperand();
+          AccessTy = L->getType();
+          Ordinary = L->isSimple();
+        } else if (auto *S = dyn_cast<StoreInst>(U)) {
+          if (S->getValueOperand() == P) {
+            Safe = false;
+            break;
+          }
+          Address = S->getPointerOperand();
+          AccessTy = S->getValueOperand()->getType();
+          Ordinary = S->isSimple();
+        } else if (auto *II = dyn_cast<IntrinsicInst>(U)) {
+          if (II->getIntrinsicID() == Intrinsic::linx_scalar_load ||
+              II->getIntrinsicID() == Intrinsic::linx_scalar_store) {
+            Address = II->getArgOperand(0);
+            unsigned WidthArg =
+                II->getIntrinsicID() == Intrinsic::linx_scalar_load ? 1 : 2;
+            if (auto *Width = dyn_cast<ConstantInt>(II->getArgOperand(WidthArg)))
+              Extent = Width->getZExtValue();
+          }
+        }
+        int64_t At = 0;
+        if (!Address || Address != P ||
+            GetPointerBaseWithConstantOffset(Address, At, DL) != Object) {
+          Safe = false;
+          break;
+        }
+        if (AccessTy && AccessTy->isSized()) {
+          TypeSize Size = DL.getTypeStoreSize(AccessTy);
+          if (Size.isScalable()) {
+            Safe = false;
+            break;
+          }
+          Extent = Size.getFixedValue();
+        }
+        if (!Extent || At < 0 || Offset < 0) {
+          Safe = false;
+          break;
+        }
+        if ((At >= Offset && uint64_t(At - Offset) >= Bytes) ||
+            (Offset >= At && uint64_t(Offset - At) >= Extent))
+          continue;
+        if (!Ordinary || At != Offset || AccessTy != Ty) {
+          Safe = false;
+          break;
+        }
+        Accesses.push_back(cast<Instruction>(U));
+      }
+    }
+    if (!Safe || Accesses.empty())
+      continue;
+    auto *Slot = new AllocaInst(Ty, DL.getAllocaAddrSpace(), nullptr,
+                               Object->getAlign(), "linx.tile.local",
+                               &*F.getEntryBlock().getFirstInsertionPt());
+    for (Instruction *Access : Accesses)
+      if (auto *L = dyn_cast<LoadInst>(Access))
+        L->setOperand(0, Slot);
+      else
+        cast<StoreInst>(Access)->setOperand(1, Slot);
+    Slots.push_back(Slot);
+  }
+  if (Slots.empty())
+    return false;
+  PromoteMemToReg(Slots, DT);
+  return true;
+}
 
 // pto BLayout template values (common/layout.hpp).
 constexpr unsigned BLayout_RowMajor = 0;
@@ -183,7 +301,7 @@ static Value *getTileObject(Value *P) {
 
 class TileCarrierTransport {
   Function &F;
-  bool RowMajorOnly;
+  bool Early;
 
   // RowMaskInternal / ColMaskInternal are the first two int fields of the
   // Tile object (byte offsets 0 and 4); they hold the runtime valid shape
@@ -311,8 +429,7 @@ class TileCarrierTransport {
   }
 
 public:
-  TileCarrierTransport(Function &F, bool RowMajorOnly)
-      : F(F), RowMajorOnly(RowMajorOnly) {}
+  TileCarrierTransport(Function &F, bool Early) : F(F), Early(Early) {}
 
   bool run() {
     bool Changed = false;
@@ -337,7 +454,9 @@ public:
                           << *Access << "\n");
         continue;
       }
-      if (RowMajorOnly && C.Layout != BLayout_RowMajor)
+      // N8 auxiliary U64 carriers must remain promotable until their fixp
+      // consumers inline: the ISA has no corresponding N82ND b64 store.
+      if (Early && C.Layout == BLayout_CubeN8)
         continue;
       LLVM_DEBUG(dbgs() << "carrier transport " << *Access << " -> layout="
                         << C.Layout << "\n");
@@ -716,9 +835,10 @@ namespace llvm {
 
 PreservedAnalyses LinxV5TileCarrierTransportPass::run(Function &F,
                                                       FunctionAnalysisManager &AM) {
-  bool Changed = TileCarrierTransport(F, RowMajorOnly).run();
-  if (!RowMajorOnly) {
-    auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  bool Changed = promoteLocalCarriers(F, DT);
+  Changed |= TileCarrierTransport(F, Early).run();
+  if (!Early) {
     Changed |= TileCallCrossing(F, DT).run();
   }
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
