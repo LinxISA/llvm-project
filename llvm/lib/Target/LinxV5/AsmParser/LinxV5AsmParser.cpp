@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "LinxV5Subtarget.h"
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5CompressInst.h"
 #include "MCTargetDesc/LinxV5FPATR.h"
@@ -149,7 +148,8 @@ class LinxV5AsmParser : public MCTargetAsmParser {
   bool validateInstruction(MCInst &Inst, OperandVector &Operands, SMLoc IDLoc);
 
   void startParsingInlineAsm() override {
-    bool isSIMT = static_cast<const LinxV5Subtarget *>(&getSTI())->isSIMT();
+    // File-scope inline asm has an MCSubtargetInfo, not a LinxV5Subtarget.
+    bool isSIMT = getSTI().getFeatureBits()[LinxV5::FeatureSIMT];
     if (isSIMT)
       IAVS = IA_SIMT_START;
     else
