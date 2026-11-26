@@ -2237,8 +2237,22 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     bool CubeSource = SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
                       SourceDescriptor->Layout == LinxV5Op::ArgFormat::CUBE_M32;
     auto SourceType = getInlineAsmDataType(MI, Text.split('\n').first);
-    if (!SourceType || *SourceType != SourceDescriptor->DataType)
+    // PTO-TILE-TCVT permits a numeric operation view over a differently
+    // typed backing carrier. Equal-width non-packed types preserve physical
+    // geometry; the persistent source descriptor must not be retagged.
+    // Packed 4-bit carriers still require an exact dtype match.
+    if (!SourceType)
       return None;
+    if (*SourceType != SourceDescriptor->DataType) {
+      unsigned ViewBits = LinxV5::getTileDataTypeBits(*SourceType);
+      unsigned BackingBits =
+          LinxV5::getTileDataTypeBits(SourceDescriptor->DataType);
+      if (!ViewBits || ViewBits == 4 || ViewBits != BackingBits ||
+          SourceDescriptor->PackedPredicate ||
+          (*SourceType == LinxV5Op::DataType::rcpe6m2 &&
+           SourceDescriptor->DataType != LinxV5Op::DataType::e6m2))
+        return None;
+    }
     if (!DataType || !ValidCol || !ValidRow)
       return None;
     if (CubeSource) {
