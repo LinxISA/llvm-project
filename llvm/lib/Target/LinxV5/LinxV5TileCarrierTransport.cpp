@@ -686,20 +686,9 @@ class TileCallCrossing {
 
     if (!ElemBytes)
       return;
-    switch (ElemBytes) {
-    case 1:
-      P.DataType = 27; // U8
-      break;
-    case 2:
-      P.DataType = 26; // U16
-      break;
-    case 4:
-      P.DataType = 17; // S32
-      break;
-    case 8:
-      P.DataType = 16; // S64
-      break;
-    }
+    // Preserve the backing dtype as well as layout. CUBE transport preflight
+    // checks the source's persistent descriptor; equal-width scalar bitcasts
+    // do not retag a Tile. Reload must publish the same descriptor too.
 
     BasicBlock &Entry = F.getEntryBlock();
     AllocaInst *Slot = new AllocaInst(

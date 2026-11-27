@@ -87,8 +87,21 @@ public:
       Register Published = MRI.getRegClass(Target) == &LinxV5::Tile_ABS_CGRegClass
                                ? MRI.createVirtualRegister(&LinxV5::Tile_ABSRegClass)
                                : Target;
-      BuildMI(*Seed->getParent(), Seed->getIterator(), Seed->getDebugLoc(),
-              TII->get(LinxV5::PseudoTCI_EW_Row_SizeI), Published)
+      // TCI only generates integer sequences. A floating undef may choose
+      // zero too, but must publish it with a typed scalar broadcast rather
+      // than an illegal floating TCI. Keep the complete storage descriptor.
+      const bool IntegerSequence =
+          D.DataType == LinxV5Op::DataType::S16 ||
+          D.DataType == LinxV5Op::DataType::U16 ||
+          D.DataType == LinxV5Op::DataType::S32 ||
+          D.DataType == LinxV5Op::DataType::U32 ||
+          D.DataType == LinxV5Op::DataType::S64 ||
+          D.DataType == LinxV5Op::DataType::U64;
+      auto Publish = BuildMI(
+          *Seed->getParent(), Seed->getIterator(), Seed->getDebugLoc(),
+          TII->get(IntegerSequence ? LinxV5::PseudoTCI_EW_Row_SizeI
+                                   : LinxV5::PseudoTEXPANDS_Row_SizeI),
+          Published)
           .addReg(LinxV5::R0)
           .addImm(D.ValidRow)
           .addReg(LinxV5::R0)
@@ -96,9 +109,10 @@ public:
           .addImm(D.DataType)
           .addImm(D.Layout)
           .addImm(D.SizeCode)
-          .addReg(LinxV5::R0)
-          .addReg(LinxV5::R0)
-          .addImm(D.PhysicalCol);
+          .addReg(LinxV5::R0);
+      if (IntegerSequence)
+        Publish.addReg(LinxV5::R0);
+      Publish.addImm(D.PhysicalCol);
       if (Published != Target)
         BuildMI(*Seed->getParent(), Seed->getIterator(), Seed->getDebugLoc(),
                 TII->get(TargetOpcode::COPY), Target).addReg(Published);

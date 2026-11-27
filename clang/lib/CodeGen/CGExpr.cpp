@@ -4317,6 +4317,16 @@ static bool getLinxTileCarrierContract(ASTContext &Ctx, QualType BaseTy,
     return false;
 
   const TemplateArgumentList &Args = Spec->getTemplateArgs();
+  // A source range forwards the parent's complete carrier. Its data()
+  // result must retain the parent storage contract, not the subview's shape:
+  // B.SUBVIEW applies the range only after the source has been bound.
+  if (Spec->getName() == "Subview" || Spec->getName() == "Assemble" ||
+      Spec->getName() == "SubTileView" ||
+      Spec->getName() == "ReductionPrefixView") {
+    if (Args.size() == 0 || Args[0].getKind() != TemplateArgument::Type)
+      return false;
+    return getLinxTileCarrierContract(Ctx, Args[0].getAsType(), Contract);
+  }
   // A reference returned by ReinterpretedTileView::data() is loaded in its
   // caller. Mark that returned pointer too: annotating only the forwarding
   // Tile::data() call inside the accessor cannot describe the caller's load.

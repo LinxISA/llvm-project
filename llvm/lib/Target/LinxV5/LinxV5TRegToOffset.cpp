@@ -5333,7 +5333,10 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
           unsigned Distance = Use->second.lookup(MO.getReg());
           if (Distance < 1 || Distance > RC->getNumRegs())
             report_fatal_error("reserved B.ASSEMBLE hand use exceeds its window");
-          MO.setReg(OffsetBase + Distance - 1);
+          Register NewReg = OffsetBase + Distance - 1;
+          if (&MO == ParentRef || !MO.isKill())
+            NewReg = getTileReuseReg(NewReg);
+          MO.setReg(NewReg);
         }
         for (MachineOperand *Def : Defs)
           Def->setReg(RCInfo.second[0]);
@@ -5380,7 +5383,10 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(MachineBasicBlock &MBB) {
             report_fatal_error(
                 "Local tile synchronization conflict use lacks a proved "
                 "native distance");
-          MO.setReg(OffsetBase + *Distance - 1);
+          Register NewReg = OffsetBase + *Distance - 1;
+          if (isTileReg(RC) && (&MO == ParentRef || !MO.isKill()))
+            NewReg = getTileReuseReg(NewReg);
+          MO.setReg(NewReg);
         }
         if (getTSlotOccupation(MI, RC) != 0)
           for (MachineOperand *Def : Defs)
@@ -5539,7 +5545,10 @@ void LinxV5TRegToOffsetOpt::rewriteMBB(
             if (DistanceIt != OrdinaryUseIt->second.end()) {
               unsigned Distance = DistanceIt->second;
               assert(Distance >= 1 && Distance <= RC->getNumRegs());
-              MO.setReg(OffsetBase + (Distance - 1));
+              Register NewReg = OffsetBase + (Distance - 1);
+              if (!MO.isKill())
+                NewReg = getTileReuseReg(NewReg);
+              MO.setReg(NewReg);
               continue;
             }
           }
