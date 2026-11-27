@@ -73,3 +73,19 @@ extern "C" void view_carrier(P &src) {
   pto::ReinterpretedTileView<short,P> view{src};
   asm volatile("" : : "Tr"(view.data()));
 }
+
+namespace pto { namespace region {
+template<class Parent, class Part> struct SubTileView {
+  Parent *parent;
+  __attribute__((always_inline)) auto &data() { return parent->data(); }
+};
+} }
+// A view binds the complete parent, before the consumer applies B.SUBVIEW.
+// FRONTEND-LABEL: define {{.*}} @subview_parent_carrier(
+// FRONTEND: load <32 x i32>{{.*}}!linx.tile.transport
+// CHECK-LABEL: define {{.*}} @subview_parent_carrier(
+// CHECK-NOT: load <32 x i32>
+// CHECK: @llvm.linx.blk.tload{{.*}}i64 21,
+extern "C" void subview_parent_carrier(pto::region::SubTileView<F,F> &view) {
+  asm volatile("" : : "Tr"(view.data()));
+}

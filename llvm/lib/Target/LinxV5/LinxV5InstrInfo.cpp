@@ -2359,7 +2359,11 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
        Text.startswith("BSTART.TEPL TCMP,") ||
        Text.startswith("BSTART.TEPL 45,") ||
        Text.startswith("BSTART.TEPL 13,");
-  if (IsPredicate && *Layout == LinxV5Op::ArgFormat::NORM) {
+  bool IsSelect = Text.startswith("BSTART.TEPL TSEL,") ||
+                  Text.startswith("BSTART.TEPL TSELS,") ||
+                  Text.startswith("BSTART.TEPL 26,") ||
+                  Text.startswith("BSTART.TEPL 58,");
+  if ((IsPredicate || IsSelect) && *Layout == LinxV5Op::ArgFormat::NORM) {
     size_t Binding = Text.find("B.IOT");
     MachineOperand *Source = nullptr;
     if (Binding == StringRef::npos ||
