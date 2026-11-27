@@ -151,6 +151,11 @@ struct TileDescriptor {
   const MachineInstr *ValidRowDef = nullptr;
   const MachineInstr *ValidColDef = nullptr;
   const MachineInstr *PhysicalColDef = nullptr;
+  // Dynamic scalar PHIs retain an entry identity through spill/reload.
+  // Keep these separate from real defining instructions.
+  const MachineBasicBlock *ValidRowMerge = nullptr;
+  const MachineBasicBlock *ValidColMerge = nullptr;
+  const MachineBasicBlock *PhysicalColMerge = nullptr;
 
   std::array<Register, 3> DimensionRegs = {Register(), Register(), Register()};
   std::array<int64_t, 3> DimensionImms = {1, 1, 1};
@@ -168,6 +173,9 @@ struct TileDescriptor {
            PhysicalColReg == Other.PhysicalColReg &&
            ValidRowDef == Other.ValidRowDef && ValidColDef == Other.ValidColDef &&
            PhysicalColDef == Other.PhysicalColDef &&
+           ValidRowMerge == Other.ValidRowMerge &&
+           ValidColMerge == Other.ValidColMerge &&
+           PhysicalColMerge == Other.PhysicalColMerge &&
            DimensionRegs == Other.DimensionRegs &&
            DimensionImms == Other.DimensionImms &&
            HasRuntimeDimensions == Other.HasRuntimeDimensions &&
@@ -177,7 +185,8 @@ struct TileDescriptor {
 };
 
 void addTileCopyDimensions(MachineInstrBuilder &Copy,
-                          const TileDescriptor &Descriptor);
+                          const TileDescriptor &Descriptor,
+                          bool RecoverDimensions = false);
 unsigned getTileCopyPEMask(const MachineInstr &MI);
 
 struct LocalTileABIInfo {

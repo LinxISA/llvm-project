@@ -920,7 +920,7 @@ static void buildTileDescriptorCopy(
       .addReg(Dst, DstFlags)
       .addImm(Descriptor.SizeCode)
       .addReg(Src, SrcFlags);
-  LinxV5::addTileCopyDimensions(Copy, Descriptor);
+  LinxV5::addTileCopyDimensions(Copy, Descriptor, /*RecoverDimensions=*/true);
   Copy.addImm(Descriptor.DataType).addImm(Descriptor.Layout);
   if (Descriptor.PEMask != 0b1111)
     Copy.addImm(Descriptor.PEMask);
