@@ -23,6 +23,7 @@ add_llvm_target(LinxV5CodeGen
   LinxV5ExpandPseudoInsts.cpp
   LinxV5FrameLowering.cpp
   LinxV5InstrInfo.cpp
+  LinxV5TileDimension.cpp
   LinxV5PrivateObjectPromotion.cpp
   LinxV5ScalarShareability.cpp
   LinxV5ISelDAGToDAG.cpp

@@ -15,6 +15,7 @@
 #include "LinxV5MachineFunctionInfo.h"
 #include "LinxV5Subtarget.h"
 #include "LinxV5TargetMachine.h"
+#include "LinxV5TileDimension.h"
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "MCTargetDesc/LinxV5MatInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -24,11 +25,13 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/CodeGen/LiveIntervals.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -984,52 +987,9 @@ getInlineAsmDimensionOperand(MachineInstr &MI, StringRef Text,
 
 static Optional<unsigned> getStaticTileDimensionRegister(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg) {
-  if (Reg.isVirtual() && MBB.getParent()->getRegInfo().isSSA()) {
-    DenseSet<Register> Seen;
-    while (Reg.isVirtual() && Seen.insert(Reg).second) {
-      MachineInstr *Def = MBB.getParent()->getRegInfo().getVRegDef(Reg);
-      if (!Def)
-        return None;
-      if (Def->isCopy()) {
-        Reg = Def->getOperand(1).getReg();
-        continue;
-      }
-      if (Def->getOpcode() == LinxV5::ADDI &&
-          Def->getOperand(1).getReg() == LinxV5::R0 &&
-          Def->getOperand(2).getImm() >= 0 &&
-          Def->getOperand(2).getImm() <= 65535)
-        return static_cast<unsigned>(Def->getOperand(2).getImm());
-      return None;
-    }
-    return Reg == LinxV5::R0 ? Optional<unsigned>(0u) : None;
-  }
-  SmallPtrSet<MachineBasicBlock *, 8> Visited;
-  MachineBasicBlock *Block = &MBB;
-  while (Visited.insert(Block).second) {
-    if (Reg == LinxV5::R0)
-      return 0u;
-    for (MachineInstr &Def : reverse(make_range(Block->begin(), Before))) {
-      if (!Def.definesRegister(Reg))
-        continue;
-      if (Def.isCopy()) {
-        Reg = Def.getOperand(1).getReg();
-        if (Reg == LinxV5::R0)
-          return 0u;
-        continue;
-      }
-      if (Def.getOpcode() == LinxV5::ADDI &&
-          Def.getOperand(1).getReg() == LinxV5::R0 &&
-          Def.getOperand(2).getImm() >= 0 &&
-          Def.getOperand(2).getImm() <= 65535)
-        return static_cast<unsigned>(Def.getOperand(2).getImm());
-      return None;
-    }
-    if (Block->pred_size() != 1)
-      return None;
-    Block = *Block->pred_begin();
-    Before = Block->end();
-  }
-  return None;
+  LinxV5::TileDimensionValueAnalysis Values(*MBB.getParent());
+  auto Value = Values.resolve(MBB, Before, Reg);
+  return Value ? Value->Constant : None;
 }
 
 static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
@@ -1048,74 +1008,21 @@ static Optional<unsigned> getInlineAsmDimension(MachineInstr &MI,
   return static_cast<unsigned>(Value);
 }
 
-using DimensionValue = std::pair<Register, const MachineInstr *>;
-using DimensionPosition =
-    std::tuple<MachineBasicBlock *, const MachineInstr *, Register>;
-
-static Optional<DimensionValue> resolveDimensionValue(
-    MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg,
-    SmallVectorImpl<DimensionPosition> &Active, bool *Cycle = nullptr) {
-  if (Cycle)
-    *Cycle = false;
-  DimensionPosition Position{&MBB, Before == MBB.end() ? nullptr : &*Before, Reg};
-  if (is_contained(Active, Position)) {
-    if (Cycle)
-      *Cycle = true;
-    return None;
-  }
-  Active.push_back(Position);
-  for (MachineInstr &Definition : reverse(make_range(MBB.begin(), Before))) {
-    if (!Definition.modifiesRegister(
-            Reg, MBB.getParent()->getSubtarget().getRegisterInfo()))
-      continue;
-    bool IsCopy = Definition.isCopy() ||
-                  (Definition.getOpcode() == LinxV5::ORI &&
-                   Definition.getOperand(2).getImm() == 0);
-    Optional<DimensionValue> Result;
-    if (IsCopy) {
-      Result = resolveDimensionValue(MBB, Definition.getIterator(),
-                                    Definition.getOperand(1).getReg(), Active,
-                                    Cycle);
-    } else if (!Definition.isCall() && Definition.definesRegister(Reg)) {
-      Result = DimensionValue{Reg, &Definition};
-    }
-    Active.pop_back();
-    return Result;
-  }
-  Optional<DimensionValue> Joined;
-  if (MBB.pred_empty())
-    Joined = DimensionValue{Reg, nullptr};
-  for (MachineBasicBlock *Predecessor : MBB.predecessors()) {
-    bool IncomingCycle = false;
-    auto Incoming = resolveDimensionValue(*Predecessor, Predecessor->end(), Reg,
-                                         Active, &IncomingCycle);
-    if (!Incoming && IncomingCycle)
-      continue;
-    if (!Incoming) {
-      Active.pop_back();
-      return None;
-    }
-    if (Joined && *Joined != *Incoming) {
-      Active.pop_back();
-      return None;
-    }
-    Joined = Incoming;
-  }
-  Active.pop_back();
-  if (!Joined && Cycle)
-    *Cycle = true;
-  return Joined;
-}
+using DimensionValue = LinxV5::TileDimensionValue;
 
 static Optional<DimensionValue> resolveDimensionValue(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator Before, Register Reg) {
-  SmallVector<DimensionPosition, 8> Active;
-  return resolveDimensionValue(MBB, Before, Reg, Active);
+  LinxV5::TileDimensionValueAnalysis Values(*MBB.getParent());
+  auto Value = Values.resolve(MBB, Before, Reg);
+  if (!Value || Value->Constant)
+    return None;
+  return *Value;
 }
 
-static bool getDynamicInlineAsmDimension(
-    MachineInstr &MI, StringRef Text, unsigned Dimension, Register &Reg,
-    const MachineInstr *&Definition) {
+static bool getDynamicInlineAsmDimension(MachineInstr &MI, StringRef Text,
+                                         unsigned Dimension, Register &Reg,
+                                         const MachineInstr *&Definition,
+                                         const MachineBasicBlock *&Merge) {
   auto Binding = getInlineAsmDimensionOperand(MI, Text, Dimension);
   if (!Binding || Binding->Reg == LinxV5::R0 || Binding->Imm != 0)
     return false;
@@ -1123,32 +1030,173 @@ static bool getDynamicInlineAsmDimension(
                                      Binding->Reg);
   if (!Value)
     return false;
-  Reg = Value->first;
-  Definition = Value->second;
+  Reg = Value->Reg;
+  Definition = Value->Definition;
+  Merge = Value->Merge;
   return true;
 }
 
+// A late queue COPY introduces scalar uses after register allocation. Resolve
+// the logical shape value first, then find a location that still contains it.
+// Recovery is opt-in for the queue pass; ordinary physical COPY lowering keeps
+// rejecting clobbered dimensions unless a current register can prove the value.
+static Optional<Register> prepareCopyDimension(MachineInstr &Copy,
+                                               Register IdentityReg,
+                                               const MachineInstr *IdentityDef,
+                                               const MachineBasicBlock *Merge,
+                                               bool Recover) {
+  MachineBasicBlock &MBB = *Copy.getParent();
+  MachineFunction &MF = *MBB.getParent();
+  MachineBasicBlock::iterator Before = Copy.getIterator();
+  const auto &ST = MF.getSubtarget<LinxV5Subtarget>();
+  const auto &TRI = *ST.getRegisterInfo();
+  const auto &TII = *ST.getInstrInfo();
+  LinxV5::TileDimensionValue Wanted{IdentityReg, IdentityDef, None, Merge};
+  LinxV5::TileDimensionValueAnalysis Values(MF);
+  auto HasValue = [&](Register R) {
+    auto V = Values.resolve(MBB, Before, R);
+    return V && *V == Wanted;
+  };
+  Register Available;
+  if (HasValue(IdentityReg))
+    Available = IdentityReg;
+  if (!Available)
+    for (MCPhysReg R : LinxV5::GRRegClass)
+      if (R != LinxV5::R0 && R != LinxV5::R1 && HasValue(R)) {
+        Available = R;
+        break;
+      }
+  if (Available) {
+    // The proof above covers reaching definitions. Keep liveness consistent
+    // with the extra use as well, including paths crossing basic blocks.
+    SmallVector<MachineBasicBlock *, 8> Work(1, &MBB);
+    SmallPtrSet<MachineBasicBlock *, 16> Visited;
+    while (!Work.empty()) {
+      auto *B = Work.pop_back_val();
+      if (!Visited.insert(B).second)
+        continue;
+      auto End = B == &MBB ? Before : B->end();
+      bool FoundDef = false;
+      for (MachineInstr &MI : reverse(make_range(B->begin(), End))) {
+        for (MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.isUse() && MO.getReg() &&
+              TRI.regsOverlap(MO.getReg(), Available))
+            MO.setIsKill(false);
+        if (MI.modifiesRegister(Available, &TRI)) {
+          for (MachineOperand &MO : MI.operands())
+            if (MO.isReg() && MO.isDef() && MO.getReg() &&
+                TRI.regsOverlap(MO.getReg(), Available))
+              MO.setIsDead(false);
+          FoundDef = true;
+          break;
+        }
+      }
+      if (!FoundDef) {
+        if (!B->isLiveIn(Available))
+          B->addLiveIn(Available);
+        Work.append(B->pred_begin(), B->pred_end());
+      }
+    }
+    return Available;
+  }
+  if (!Recover || ST.isSIMT())
+    return None;
+
+  // Search only existing, private spill slots whose reaching contents agree
+  // on every path. Frame indices alone are not value identities.
+  auto &MFI = MF.getFrameInfo();
+  Optional<int> Spill;
+  for (int FI = MFI.getObjectIndexBegin(), E = MFI.getObjectIndexEnd(); FI != E;
+       ++FI) {
+    if (MFI.isDeadObjectIndex(FI) || !MFI.isSpillSlotObjectIndex(FI) ||
+        MFI.isAliasedObjectIndex(FI) || MFI.getObjectSize(FI) != 8)
+      continue;
+    auto V = Values.resolveSpill(MBB, Before, FI);
+    if (V && *V == Wanted) {
+      Spill = FI;
+      break;
+    }
+  }
+  if (!Spill)
+    return None;
+
+  LivePhysRegs Live(TRI);
+  Live.addLiveOuts(MBB);
+  for (MachineInstr &MI : reverse(make_range(Before, MBB.end())))
+    Live.stepBackward(MI);
+  // Earlier dimensions have already been appended to the partially built COPY.
+  // They must not be selected as scratch for a subsequent dimension reload.
+  for (const MachineOperand &MO : Copy.operands())
+    if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical())
+      Live.addReg(MO.getReg());
+  BitVector Allocatable = TRI.getAllocatableSet(MF, &LinxV5::GRRegClass);
+  Register Scratch;
+  const uint32_t *Preserved =
+      TRI.getCallPreservedMask(MF, MF.getFunction().getCallingConv());
+  for (MCPhysReg R : LinxV5::GRRegClass) {
+    // Never introduce a new callee-saved clobber after prologue insertion.
+    if (Allocatable.test(R) &&
+        (!Preserved || MachineOperand::clobbersPhysReg(Preserved, R)) &&
+        Live.available(MF.getRegInfo(), R)) {
+      Scratch = R;
+      break;
+    }
+  }
+  if (!Scratch)
+    return None;
+  Register Base;
+  int64_t Offset = ST.getFrameLowering()
+                       ->getFrameIndexReference(MF, *Spill, Base)
+                       .getFixed();
+  auto *MMO = MF.getMachineMemOperand(
+      MachinePointerInfo::getFixedStack(MF, *Spill), MachineMemOperand::MOLoad,
+      8, MFI.getObjectAlign(*Spill));
+  // This pass runs after PEI. Emit final physical instructions, without new
+  // frame objects, virtual registers or frame-index operands.
+  if (Offset % 8 == 0 && isInt<12>(Offset / 8)) {
+    BuildMI(MBB, Before, Copy.getDebugLoc(), TII.get(LinxV5::LDI), Scratch)
+        .addReg(Base)
+        .addImm(Offset / 8)
+        .addMemOperand(MMO);
+  } else {
+    TII.movImm(MBB, Before, Copy.getDebugLoc(), Scratch, Offset);
+    BuildMI(MBB, Before, Copy.getDebugLoc(), TII.get(LinxV5::LD), Scratch)
+        .addReg(Base)
+        .addReg(Scratch, RegState::Kill)
+        .addImm(0)
+        .addMemOperand(MMO);
+  }
+  // Recheck the emitted load through the same analysis used for descriptors.
+  LinxV5::TileDimensionValueAnalysis Recheck(MF);
+  auto Actual = Recheck.resolve(MBB, Before, Scratch);
+  if (!Actual || *Actual != Wanted)
+    report_fatal_error("recovered Local tile COPY dimension changed value");
+  return Scratch;
+}
+
 void LinxV5::addTileCopyDimensions(MachineInstrBuilder &Copy,
-                                  const TileDescriptor &Descriptor) {
+                                   const TileDescriptor &Descriptor,
+                                   bool RecoverDimensions) {
   MachineInstr &Instruction = *Copy;
   auto AddDimension = [&](unsigned Immediate, Register Reg,
-                          const MachineInstr *Definition) {
+                          const MachineInstr *Definition,
+                          const MachineBasicBlock *Merge) {
     if (!Reg) {
       Copy.addImm(Immediate);
       return;
     }
-    auto Value = resolveDimensionValue(*Instruction.getParent(),
-                                      Instruction.getIterator(), Reg);
-    if (!Value || *Value != DimensionValue(Reg, Definition))
+    auto Prepared = prepareCopyDimension(Instruction, Reg, Definition, Merge,
+                                         RecoverDimensions);
+    if (!Prepared)
       report_fatal_error("Local tile COPY dimension value is no longer available");
-    Copy.addReg(Reg);
+    Copy.addReg(*Prepared);
   };
   AddDimension(Descriptor.ValidCol, Descriptor.ValidColReg,
-               Descriptor.ValidColDef);
+               Descriptor.ValidColDef, Descriptor.ValidColMerge);
   AddDimension(Descriptor.ValidRow, Descriptor.ValidRowReg,
-               Descriptor.ValidRowDef);
+               Descriptor.ValidRowDef, Descriptor.ValidRowMerge);
   AddDimension(Descriptor.PhysicalCol, Descriptor.PhysicalColReg,
-               Descriptor.PhysicalColDef);
+               Descriptor.PhysicalColDef, Descriptor.PhysicalColMerge);
 }
 
 unsigned LinxV5::getTileCopyPEMask(const MachineInstr &MI) {
@@ -1436,6 +1484,7 @@ checkedTileDescriptor(LinxV5::TileDescriptor Descriptor,
     Descriptor.PhysicalCol = CapacityBits / (Rows * TypeBits);
     Descriptor.PhysicalColReg = Register();
     Descriptor.PhysicalColDef = nullptr;
+    Descriptor.PhysicalColMerge = nullptr;
   }
   if (!Descriptor.PhysicalColReg && !Descriptor.ValidColReg &&
       Descriptor.PhysicalCol < Descriptor.ValidCol)
@@ -1671,10 +1720,13 @@ static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
         Known->PredicateBasisType == 31 && !Known->PackedPredicate &&
         LinxV5::getTileDataTypeBits(Known->DataType) == 8 &&
         Known->Layout == Result.Layout && Known->ValidRow == Result.ValidRow &&
-        Known->ValidCol == Result.ValidCol && Known->SizeCode == Result.SizeCode &&
+        Known->ValidCol == Result.ValidCol &&
+        Known->SizeCode == Result.SizeCode &&
         Known->ValidRowReg == Result.ValidRowReg &&
         Known->ValidColReg == Result.ValidColReg &&
+        Known->ValidRowMerge == Result.ValidRowMerge &&
         Known->ValidRowDef == Result.ValidRowDef &&
+        Known->ValidColMerge == Result.ValidColMerge &&
         Known->ValidColDef == Result.ValidColDef)
       return checkedTileDescriptor(Result);
     if (Absent && (LeftDescriptor || LeftAbsent) &&
@@ -1686,12 +1738,16 @@ static Optional<LinxV5::TileDescriptor> getLogicalTileDescriptor(
       RightDescriptor->PredicateBasisType == 31)
     return checkedTileDescriptor(Result);
   for (const auto &Source : {*LeftDescriptor, *RightDescriptor})
-    if (Source.PackedPredicate || LinxV5::getTileDataTypeBits(Source.DataType) != 8 ||
+    if (Source.PackedPredicate ||
+        LinxV5::getTileDataTypeBits(Source.DataType) != 8 ||
         Source.Layout != Result.Layout || Source.ValidRow != Result.ValidRow ||
-        Source.ValidCol != Result.ValidCol || Source.SizeCode != Result.SizeCode ||
+        Source.ValidCol != Result.ValidCol ||
+        Source.SizeCode != Result.SizeCode ||
         Source.ValidRowReg != Result.ValidRowReg ||
         Source.ValidColReg != Result.ValidColReg ||
+        Source.ValidRowMerge != Result.ValidRowMerge ||
         Source.ValidRowDef != Result.ValidRowDef ||
+        Source.ValidColMerge != Result.ValidColMerge ||
         Source.ValidColDef != Result.ValidColDef)
       return None;
   if (LeftDescriptor->PredicateBasisType != 31 &&
@@ -2208,21 +2264,28 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
   Optional<unsigned> PhysicalCol = getInlineAsmDimension(MI, Text, 2);
   LinxV5::TileDescriptor Dimensions;
   if (!ValidCol && getDynamicInlineAsmDimension(
-          MI, Text, 0, Dimensions.ValidColReg, Dimensions.ValidColDef))
+                       MI, Text, 0, Dimensions.ValidColReg,
+                       Dimensions.ValidColDef, Dimensions.ValidColMerge))
     ValidCol = 0;
   if (!ValidRow && getDynamicInlineAsmDimension(
-          MI, Text, 1, Dimensions.ValidRowReg, Dimensions.ValidRowDef))
+                       MI, Text, 1, Dimensions.ValidRowReg,
+                       Dimensions.ValidRowDef, Dimensions.ValidRowMerge))
     ValidRow = 0;
-  if (!PhysicalCol && getDynamicInlineAsmDimension(
-          MI, Text, 2, Dimensions.PhysicalColReg, Dimensions.PhysicalColDef))
+  if (!PhysicalCol &&
+      getDynamicInlineAsmDimension(MI, Text, 2, Dimensions.PhysicalColReg,
+                                   Dimensions.PhysicalColDef,
+                                   Dimensions.PhysicalColMerge))
     PhysicalCol = 0;
   auto WithDimensions = [&](LinxV5::TileDescriptor Result) {
     Result.ValidColReg = Dimensions.ValidColReg;
     Result.ValidRowReg = Dimensions.ValidRowReg;
     Result.PhysicalColReg = Dimensions.PhysicalColReg;
     Result.ValidColDef = Dimensions.ValidColDef;
+    Result.ValidColMerge = Dimensions.ValidColMerge;
     Result.ValidRowDef = Dimensions.ValidRowDef;
+    Result.ValidRowMerge = Dimensions.ValidRowMerge;
     Result.PhysicalColDef = Dimensions.PhysicalColDef;
+    Result.PhysicalColMerge = Dimensions.PhysicalColMerge;
     return Result;
   };
   bool HasPhysicalCol = hasInlineAsmDimension(Text, 2);
@@ -2311,6 +2374,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
     *PhysicalCol = *ValidCol;
     Dimensions.PhysicalColReg = Dimensions.ValidColReg;
     Dimensions.PhysicalColDef = Dimensions.ValidColDef;
+    Dimensions.PhysicalColMerge = Dimensions.ValidColMerge;
   }
   if (Optional<unsigned> Reduction = getInlineAsmReductionSelector(MI, Text)) {
     const bool Cube = *Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
@@ -2323,6 +2387,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       *ValidRow = 1;
       Dimensions.ValidRowReg = Register();
       Dimensions.ValidRowDef = nullptr;
+      Dimensions.ValidRowMerge = nullptr;
       if (Cube) {
         if (isArgReduction(*Reduction)) {
           Optional<int64_t> StaticValidCol;
@@ -2332,6 +2397,7 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
               MI, *Layout, *SizeCode, StaticValidCol);
           Dimensions.PhysicalColReg = Register();
           Dimensions.PhysicalColDef = nullptr;
+          Dimensions.PhysicalColMerge = nullptr;
         } else {
           if (Dimensions.ValidColReg)
             return None;
@@ -2347,10 +2413,12 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
       *ValidCol = 1;
       Dimensions.ValidColReg = Register();
       Dimensions.ValidColDef = nullptr;
+      Dimensions.ValidColMerge = nullptr;
       if (!Cube) {
         *PhysicalCol = 1;
         Dimensions.PhysicalColReg = Register();
         Dimensions.PhysicalColDef = nullptr;
+        Dimensions.PhysicalColMerge = nullptr;
       }
     }
   }
@@ -2454,7 +2522,9 @@ static Optional<LinxV5::TileDescriptor> getInlineAsmTileDescriptor(
            Source->SizeCode != Result.SizeCode ||
            Source->ValidColReg != Result.ValidColReg ||
            Source->ValidRowReg != Result.ValidRowReg ||
+           Source->ValidColMerge != Result.ValidColMerge ||
            Source->ValidColDef != Result.ValidColDef ||
+           Source->ValidRowMerge != Result.ValidRowMerge ||
            Source->ValidRowDef != Result.ValidRowDef))
         return None;
       Result.PredicateBasisType = Source->PredicateBasisType;
@@ -2511,16 +2581,21 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
   if ((MI.getOpcode() == LinxV5::PseudoTCOPYDesc ||
        MI.getOpcode() == LinxV5::PseudoPCOPYDesc)) {
     auto Dimension = [&](unsigned Index, Register &DimensionReg,
-                         const MachineInstr *&Definition) -> unsigned {
+                         const MachineInstr *&Definition,
+                         const MachineBasicBlock *&Merge) -> unsigned {
       const MachineOperand &Operand = MI.getOperand(Index);
       if (Operand.isImm())
         return Operand.getImm();
+      if (auto Constant = getStaticTileDimensionRegister(
+              *MI.getParent(), MI.getIterator(), Operand.getReg()))
+        return *Constant;
       auto Value = resolveDimensionValue(*MI.getParent(), MI.getIterator(),
                                          Operand.getReg());
       if (!Value)
         report_fatal_error("cannot resolve Local tile COPY dimension value");
-      DimensionReg = Value->first;
-      Definition = Value->second;
+      DimensionReg = Value->Reg;
+      Definition = Value->Definition;
+      Merge = Value->Merge;
       return 0;
     };
     LinxV5::TileDescriptor Result;
@@ -2529,10 +2604,13 @@ static Optional<LinxV5::TileDescriptor> getDefinedTileDescriptor(
     Result.SizeCode = MI.getOperand(1).getImm();
     Result.PEMask = LinxV5::getTileCopyPEMask(MI);
     Result.PackedPredicate = MI.getOpcode() == LinxV5::PseudoPCOPYDesc;
-    Result.ValidCol = Dimension(3, Result.ValidColReg, Result.ValidColDef);
-    Result.ValidRow = Dimension(4, Result.ValidRowReg, Result.ValidRowDef);
+    Result.ValidCol = Dimension(3, Result.ValidColReg, Result.ValidColDef,
+                                Result.ValidColMerge);
+    Result.ValidRow = Dimension(4, Result.ValidRowReg, Result.ValidRowDef,
+                                Result.ValidRowMerge);
     Result.PhysicalCol =
-        Dimension(5, Result.PhysicalColReg, Result.PhysicalColDef);
+        Dimension(5, Result.PhysicalColReg, Result.PhysicalColDef,
+                  Result.PhysicalColMerge);
     auto Descriptor = checkedTileDescriptor(Result);
     if (Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M16 ||
         Descriptor.Layout == LinxV5Op::ArgFormat::CUBE_M32) {

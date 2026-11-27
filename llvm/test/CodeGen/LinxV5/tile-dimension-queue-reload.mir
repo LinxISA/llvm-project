@@ -1,0 +1,121 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset -o - %t/good.mir | FileCheck %s
+# RUN: not --crash llc -mtriple=linx64v5 -run-pass=linxv5-treg-to-offset -o /dev/null %t/overwritten.mir 2>&1 | FileCheck %s --check-prefix=BAD
+#
+# Queue synchronization must reload the original rows, not the replacement r5.
+# CHECK: bb.2:
+# CHECK: $r2 = LDI $r1, 1 :: (load (s64) from %stack.0)
+# CHECK-NEXT: $tile_t = PseudoTCOPYDesc 1, $tile_tos{{[0-9]+}}_ru, 1, $r2, 1, 1, 0
+# CHECK-LABEL: name: queue_reload_large_offset
+# CHECK: bb.2:
+# CHECK: $r2 = LUI 16
+# CHECK-NEXT: $r2 = LD $r1, killed $r2, 0 :: (load (s64) from %stack.0)
+# CHECK-NEXT: $tile_t = PseudoTCOPYDesc 1, $tile_tos{{[0-9]+}}_ru, 1, $r2, 1, 1, 0
+# BAD: Local tile COPY dimension value is no longer available
+#--- good.mir
+--- |
+  define void @queue_reload() { ret void }
+  define void @queue_reload_large_offset() { ret void }
+...
+---
+name: queue_reload
+tracksRegLiveness: true
+frameInfo:
+  stackSize: 16
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8, offset: -8 }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r5, $r7, $r1
+    SDI $r5, $r1, 1 :: (store (s64) into %stack.0)
+    INLINEASM &"BSTART.TEPL 59, FP32\0AB.DATR NORM, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM $1, 0, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [zero],[]\0A", 9, 720906, def $tile_t1, 2293769, $r5, 13, 1
+    $tile_t2 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 1, 1, 0, 1, $r0, $r0, 1
+    $r5 = ADDI $r0, 7
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2, %bb.3
+    liveins: $r7, $tile_t1, $tile_t2, $r1
+    BEQ $r7, $r0, %bb.3
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1
+    liveins: $r7, $tile_t1, $tile_t2, $r1
+    $tile_t2 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 1, 1, 0, 1, $r0, $r0, 1
+    PseudoBR %bb.1
+  bb.3:
+    liveins: $tile_t1, $tile_t2, $r1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.IOT $0, mask=1111, last\0AB.IOR [zero],[]\0A", 9, 720905, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.IOT $0, mask=1111, last\0AB.IOR [zero],[]\0A", 9, 720905, $tile_t2
+    PseudoRET
+...
+---
+name: queue_reload_large_offset
+tracksRegLiveness: true
+frameInfo:
+  stackSize: 65544
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8, offset: -8 }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r5, $r7, $r1
+    $r2 = LUI 16
+    SD $r5, $r1, killed $r2 :: (store (s64) into %stack.0)
+    INLINEASM &"BSTART.TEPL 59, FP32\0AB.DATR NORM, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM $1, 0, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [zero],[]\0A", 9, 720906, def $tile_t1, 2293769, $r5, 13, 1
+    $tile_t2 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 1, 1, 0, 1, $r0, $r0, 1
+    $r5 = ADDI $r0, 7
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2, %bb.3
+    liveins: $r7, $tile_t1, $tile_t2, $r1
+    BEQ $r7, $r0, %bb.3
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1
+    liveins: $r7, $tile_t1, $tile_t2, $r1
+    $tile_t2 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 1, 1, 0, 1, $r0, $r0, 1
+    PseudoBR %bb.1
+  bb.3:
+    liveins: $tile_t1, $tile_t2, $r1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.IOT $0, mask=1111, last\0AB.IOR [zero],[]\0A", 9, 720905, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.IOT $0, mask=1111, last\0AB.IOR [zero],[]\0A", 9, 720905, $tile_t2
+    PseudoRET
+...
+#--- overwritten.mir
+--- |
+  define void @queue_reload() { ret void }
+...
+---
+name: queue_reload
+tracksRegLiveness: true
+frameInfo:
+  stackSize: 16
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8, offset: -8 }
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $r5, $r7, $r1
+    SDI $r5, $r1, 1 :: (store (s64) into %stack.0)
+    INLINEASM &"BSTART.TEPL 59, FP32\0AB.DATR NORM, Null\0AB.DIM zero, 1, ->lb0\0AB.DIM $1, 0, ->lb1\0AB.IOT mask=1111, last, ->$0<${2:Z}>\0AB.IOR [zero],[]\0A", 9, 720906, def $tile_t1, 2293769, $r5, 13, 1
+    $tile_t2 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 1, 1, 0, 1, $r0, $r0, 1
+    $r5 = ADDI $r0, 7
+    SDI $r5, $r1, 1 :: (store (s64) into %stack.0)
+    PseudoBR %bb.1
+  bb.1:
+    successors: %bb.2, %bb.3
+    liveins: $r7, $tile_t1, $tile_t2, $r1
+    BEQ $r7, $r0, %bb.3
+    PseudoBR %bb.2
+  bb.2:
+    successors: %bb.1
+    liveins: $r7, $tile_t1, $tile_t2, $r1
+    $tile_t2 = PseudoTCI_EW_Row_SizeI $r0, 1, $r0, 1, 1, 0, 1, $r0, $r0, 1
+    PseudoBR %bb.1
+  bb.3:
+    liveins: $tile_t1, $tile_t2, $r1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.IOT $0, mask=1111, last\0AB.IOR [zero],[]\0A", 9, 720905, $tile_t1
+    INLINEASM &"BSTART.TLSU TSTORE, FP32\0AB.DIM zero, 1, ->lb0\0AB.IOT $0, mask=1111, last\0AB.IOR [zero],[]\0A", 9, 720905, $tile_t2
+    PseudoRET
+...
