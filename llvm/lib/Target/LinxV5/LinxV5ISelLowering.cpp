@@ -3068,6 +3068,17 @@ SDValue LinxV5TargetLowering::lowerACCCVT(SDLoc &DL, SDValue Op,
   return Res;
 }
 
+// B.DIM values are consumed as unsigned 16-bit dimensions. Keep a flat
+// vector contiguous by factoring oversized rows into an encodable rectangle.
+static void fitVectorMemoryRectangle(unsigned &Cols, unsigned &Rows) {
+  while (Cols > UINT16_MAX) {
+    assert(Cols % 2 == 0 && "tile vector size must admit an exact rectangle");
+    Cols /= 2;
+    Rows *= 2;
+  }
+  assert(Rows <= UINT16_MAX && "tile vector rows must fit B.DIM");
+}
+
 SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   LoadSDNode *LD = cast<LoadSDNode>(Op);
@@ -3106,6 +3117,8 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
     unsigned ColValid = Elementwise ? VT.getVectorNumElements() / 16
                                     : VT.getFixedSizeInBits() / TransferBits;
     unsigned RowValid = Elementwise ? 16 : 1;
+    if (!Elementwise)
+      fitVectorMemoryRectangle(ColValid, RowValid);
     unsigned Col = Elementwise ? 1 : ColValid;
     Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
     Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
@@ -3128,9 +3141,10 @@ SDValue LinxV5TargetLowering::lowerLOAD(SDValue Op, SelectionDAG &DAG) const {
 
     Ops.push_back(LD->getBasePtr());
     SDValue RowStride = DAG.getRegister(LinxV5::R0, MVT::i64);
-    if (Elementwise) {
-      const unsigned ElementBytes =
-          VT.getVectorElementType().getStoreSize().getFixedValue();
+    if (Elementwise || RowValid > 1) {
+      const unsigned ElementBytes = Elementwise
+          ? VT.getVectorElementType().getStoreSize().getFixedValue()
+          : TransferBits / 8;
       RowStride = DAG.getConstant(ColValid * ElementBytes, DL, MVT::i64);
     }
     Ops.push_back(RowStride);
@@ -3178,6 +3192,8 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
     unsigned ColValid = Elementwise ? MemVT.getVectorNumElements() / 16
                                     : MemVT.getFixedSizeInBits() / TransferBits;
     unsigned RowValid = Elementwise ? 16 : 1;
+    if (!Elementwise)
+      fitVectorMemoryRectangle(ColValid, RowValid);
     unsigned Col = Elementwise ? 1 : ColValid;
     Ops.push_back(DAG.getTargetConstant(ColValid, DL, MVT::i64)); // Dim-X
     Ops.push_back(DAG.getTargetConstant(RowValid, DL, MVT::i64)); // Dim-Y
@@ -3195,9 +3211,10 @@ SDValue LinxV5TargetLowering::lowerSTORE(SDValue Op, SelectionDAG &DAG) const {
 
     Ops.push_back(ST->getBasePtr());
     SDValue RowStride = DAG.getRegister(LinxV5::R0, MVT::i64);
-    if (Elementwise) {
-      const unsigned ElementBytes =
-          MemVT.getVectorElementType().getStoreSize().getFixedValue();
+    if (Elementwise || RowValid > 1) {
+      const unsigned ElementBytes = Elementwise
+          ? MemVT.getVectorElementType().getStoreSize().getFixedValue()
+          : TransferBits / 8;
       RowStride = DAG.getConstant(ColValid * ElementBytes, DL, MVT::i64);
     }
     Ops.push_back(RowStride);
