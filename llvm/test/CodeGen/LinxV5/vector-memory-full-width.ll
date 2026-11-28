@@ -59,3 +59,14 @@ define void @copy_fp64(ptr %src, ptr %dst) {
   store volatile <1024 x double> %v, ptr %dst, align 32
   ret void
 }
+
+; 65536 is not a legal architectural dimension: execution truncates to 16 bits.
+; Preserve the full 64 KiB using two contiguous rows and a real byte stride.
+; CHECK-LABEL: name: copy_u8_64k
+; CHECK: PseudoTLOAD_noDsrc_noDdst $r0, 32768, $r0, 2, $r0, 32768, 27, 10, 0, 0, {{.*}}, [[PITCH:%[0-9]+]]
+; CHECK: PseudoTSTORE_noDsrc_noDdst {{.*}}, $r0, 32768, $r0, 2, $r0, 32768, 27, 0, {{.*}}, [[PITCH]]
+define void @copy_u8_64k(ptr %src, ptr %dst) {
+  %v = load volatile <65536 x i8>, ptr %src, align 32
+  store volatile <65536 x i8> %v, ptr %dst, align 32
+  ret void
+}
