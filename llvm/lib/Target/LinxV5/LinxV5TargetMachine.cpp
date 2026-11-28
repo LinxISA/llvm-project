@@ -70,7 +70,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5SharedHandleLegalizePass(*PR);
   initializeLinxV5SharedCopyElimPass(*PR);
   initializeLinxV5TRegToOffsetOptPass(*PR);
-  initializeLinxV5InlineAsmTileLifetimePass(*PR);
+  initializeLinxV5SharedReuseFinalizePass(*PR);
   initializeLinxV5TileFixupPass(*PR);
   initializeLinxV5TileDefinednessPass(*PR);
   initializeLinxV5EmitHeaderPass(*PR);
@@ -681,8 +681,8 @@ void LinxV5PassConfig::addPreEmitPass() { addPass(&BranchRelaxationPassID); }
 void LinxV5PassConfig::addPreEmitPass2() {
   addPass(createLinxV5PreEmitBlockOptPass());
   addPass(createLinxV5ExpandPseudoPass());
-  addPass(createLinxV5InlineAsmTileLifetimePass());
   addPass(createLinxV5TRegToOffsetOptPass());
+  addPass(createLinxV5SharedReuseFinalizePass());
   addPass(createLinxV5EmitHeaderPass());
 }
 

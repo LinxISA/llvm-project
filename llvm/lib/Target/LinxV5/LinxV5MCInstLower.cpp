@@ -26,12 +26,6 @@
 
 using namespace llvm;
 
-static MCRegister sharedReuseAlias(MCRegister Reg) {
-  if (Reg >= LinxV5::Shared_S0 && Reg <= LinxV5::Shared_S63)
-    return LinxV5::Shared_S0_RU + Reg - LinxV5::Shared_S0;
-  return Reg;
-}
-
 static MCOperand lowerSymbolOperand(const MachineOperand &MO, MCSymbol *Sym,
                                     const AsmPrinter &AP) {
   MCContext &Ctx = AP.OutContext;
@@ -127,14 +121,6 @@ void llvm::LowerLinxV5MachineInstrToMCInst(const MachineInstr *MI,
     const MachineOperand &MO = MI->getOperand(OpNo);
     MCOperand MCOp;
     if (LowerLinxV5MachineOperandToMCOperand(MO, MCOp, AP)) {
-      bool IsSharedSource =
-          (MI->getOpcode() == LinxV5::PseudoV5SharedS2L && OpNo == 3) ||
-          (MI->getOpcode() == LinxV5::PseudoMAMULB_SharedRight_SizeI &&
-           OpNo == 11);
-      // A proven kill is the final use of this Shared SSA generation. Any
-      // uncertainty (including CFG live-out) retains the physical payload.
-      if (IsSharedSource && !MO.isKill())
-        MCOp.setReg(sharedReuseAlias(MCOp.getReg()));
       OutMI.addOperand(MCOp);
     }
   }

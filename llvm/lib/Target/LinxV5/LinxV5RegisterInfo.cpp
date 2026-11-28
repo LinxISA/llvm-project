@@ -214,6 +214,10 @@ BitVector LinxV5RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, LinxV5ABI::getBPReg()); // bp
   }
 
+  // Final output aliases encode a retain bit, never an allocatable value.
+  for (unsigned R = LinxV5::Shared_S0_RU; R <= LinxV5::Shared_S63_RU; ++R)
+    markSuperRegs(Reserved, R);
+
   assert(checkAllSuperRegsMarked(Reserved));
   return Reserved;
 }

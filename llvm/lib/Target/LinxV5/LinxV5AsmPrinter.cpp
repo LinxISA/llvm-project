@@ -448,40 +448,20 @@ bool LinxV5AsmPrinter::PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                                        const char *ExtraCode, raw_ostream &OS) {
   const MachineOperand &MO = MI->getOperand(OpNo);
 
-  if (ExtraCode && ExtraCode[1] == 0 &&
-      (ExtraCode[0] == 'P' || ExtraCode[0] == 'Q')) {
-    if (!MO.isReg() ||
-        (!LinxV5::Shared_ABSRegClass.contains(MO.getReg()) &&
-         !LinxV5::TILE_SRCRegClass.contains(MO.getReg())))
-      return true;
-    StringRef Name = LinxV5InstPrinter::getRegisterName(
-        MO.getReg(), LinxV5::Shared_ABSRegClass.contains(MO.getReg())
-                         ? LinxV5::ABIRegAltName
-                         : 0);
-    bool AllocatorRetain = Name.consume_back(".reuse");
-    OS << Name;
-    if (ExtraCode[0] == 'P' || AllocatorRetain)
-      OS << ".reuse";
-    return false;
-  }
-
-  // Handle LinxV5-specific Shared modifiers before the generic printer:
-  //   %S: ordinary operand (definitions bare, inputs conservatively .reuse)
-  //   %K: one exact final-use source occurrence (bare)
-  //   %R: one exact retain source occurrence (.reuse), including a tied def
-  // MachineOperand::isKill applies to the whole INLINEASM operand, not to each
-  // textual placeholder occurrence, so it cannot safely select a bare source.
+  // SharedReuseFinalize selects the MIR alias. Explicit R forces retention;
+  // K requires a proven consuming input and must never print a reuse alias.
   if (ExtraCode && ExtraCode[1] == 0 &&
       (ExtraCode[0] == 'S' || ExtraCode[0] == 'K' || ExtraCode[0] == 'R')) {
     if (!MO.isReg() ||
-        !LinxV5::Shared_ABSRegClass.contains(MO.getReg()))
+        !LinxV5::Shared_SRCRegClass.contains(MO.getReg()))
       return true;
-    if (ExtraCode[0] == 'K' && (!MO.isUse() || MO.isDef() || !MO.isKill()))
+    if (ExtraCode[0] == 'K' && (!MO.isUse() || MO.isDef() || !MO.isKill() ||
+                                 !LinxV5::Shared_ABSRegClass.contains(MO.getReg())))
       return true;
     OS << LinxV5InstPrinter::getRegisterName(MO.getReg(),
                                              LinxV5::ABIRegAltName);
-    if (ExtraCode[0] == 'R' ||
-        (ExtraCode[0] == 'S' && MO.isUse() && !MO.isDef()))
+    if ((ExtraCode[0] == 'R' || (MO.isUse() && MO.isTied())) &&
+        LinxV5::Shared_ABSRegClass.contains(MO.getReg()))
       OS << ".reuse";
     return false;
   }

@@ -1,49 +1,61 @@
-# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-inline-asm-tile-lifetime %s -o - | FileCheck %s
+# RUN: llc -mtriple=linx64v5 -run-pass=linxv5-shared-reuse-finalize %s -o - | FileCheck %s
 
 # CHECK-LABEL: name: local_repeated
-# CHECK: B.IOT ${0:P}, mask=1111, last
-# CHECK-SAME: B.IOT ${0:Q}, mask=1111, last
+# CHECK: B.IOT $0, mask=1111
 # CHECK-LABEL: name: local_duplicate
-# CHECK: B.IOT ${0:P}, ${1:P}, mask=1111, last
+# CHECK: $tile_t1
 # CHECK-LABEL: name: loop_liveout
-# CHECK: B.IOS ${0:P}, mask=1111
-# CHECK: B.IOS ${0:Q}, mask=1111
+# CHECK: $shared_s0_ru
+# CHECK: killed $shared_s0
 # CHECK-LABEL: name: branch_liveout
-# CHECK: B.IOS ${0:P}, mask=1111
-# CHECK: B.IOS ${0:Q}, mask=1111
-# CHECK: B.IOS ${0:Q}, mask=1111
+# CHECK: $shared_s0_ru
+# CHECK: killed $shared_s0
+# CHECK: killed $shared_s0
 # CHECK-LABEL: name: tied_definition
-# CHECK: B.IOS ${0:R}, mask=1111
+# CHECK: $shared_s0(tied-def 3)
 # CHECK-LABEL: name: shared_copy_escape
-# CHECK: B.IOS ${0:P}, mask=1111
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: literal_source
-# CHECK: B.IOS ${0:P}, mask=1111
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: partial_domain
-# CHECK: B.IOS ${0:P}, mask=1111
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: hidden_later_source
-# CHECK: B.IOS ${0:P}, mask=1111
-# CHECK: B.IOS S0, mask=1111
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: constant_mask
-# CHECK: B.IOS ${0:Q}, mask=1111
-# CHECK-NOT: .elseif
+# CHECK: .elseif
+# CHECK-SAME: killed $shared_s0,
 # CHECK-LABEL: name: constant_partial_mask
-# CHECK: B.IOS ${0:P}, mask=0001
-# CHECK-NOT: .elseif
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: nested_else
-# CHECK: B.IOS ${0:Q}, mask=1111
-# CHECK-NOT: .else
+# CHECK: killed $shared_s0,
 # CHECK-LABEL: name: unresolved_condition
-# CHECK: .if ${1:c} == 15
-# CHECK-SAME: B.IOS ${0:S}, mask=1111
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: malformed_condition
-# CHECK: .if 1 == 1
-# CHECK-SAME: B.IOS ${0:S}, mask=1111
+# CHECK: $shared_s0_ru
 # CHECK-LABEL: name: exclusive_arms
-# CHECK: B.IOS ${0:Q}, mask=1111
-# CHECK-NOT: .else
+# CHECK: killed $shared_s0
 # CHECK-LABEL: name: octal_condition
-# CHECK: .if 010 == 10
-# CHECK-SAME: B.IOS ${0:S}, mask=1111
+# CHECK: $shared_s0_ru
+
+# CHECK-LABEL: name: redefined_slot
+# CHECK: killed $shared_s0
+# CHECK: killed $shared_s0
+# CHECK-LABEL: name: partial_definition
+# CHECK: $shared_s0_ru
+# CHECK-LABEL: name: literal_s37
+# CHECK: $shared_s0_ru
+# CHECK-LABEL: name: partial_then_full
+# CHECK: $shared_s0_ru
+# CHECK: killed $shared_s0
+# CHECK-LABEL: name: preexisting_retain
+# CHECK: $shared_s0_ru
+# CHECK-LABEL: name: duplicate_inputs
+# CHECK: $shared_s0_ru
+# CHECK-LABEL: name: generated_partial_definition
+# CHECK: $shared_s0_ru
+# CHECK-LABEL: name: mixed_generated
+# CHECK: $shared_s0_ru
+# CHECK: killed $shared_s0
 
 --- |
   define void @local_repeated() { ret void }
@@ -62,6 +74,14 @@
   define void @malformed_condition() { ret void }
   define void @exclusive_arms() { ret void }
   define void @octal_condition() { ret void }
+  define void @redefined_slot() { ret void }
+  define void @partial_definition() { ret void }
+  define void @literal_s37() { ret void }
+  define void @partial_then_full() { ret void }
+  define void @preexisting_retain() { ret void }
+  define void @duplicate_inputs() { ret void }
+  define void @generated_partial_definition() { ret void }
+  define void @mixed_generated() { ret void }
 ...
 ---
 name: local_repeated
@@ -92,12 +112,12 @@ body: |
   bb.1:
     successors: %bb.1, %bb.2
     liveins: $shared_s0, $r2
-    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 4194313, $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
     BEQ $r2, $r0, %bb.1
     PseudoBR %bb.2
   bb.2:
     liveins: $shared_s0
-    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 4194313, $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
     PseudoRET
 ...
 ---
@@ -107,16 +127,16 @@ body: |
   bb.0:
     successors: %bb.1, %bb.2
     liveins: $shared_s0, $r2
-    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 4194313, $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
     BEQ $r2, $r0, %bb.2
     PseudoBR %bb.1
   bb.1:
     liveins: $shared_s0
-    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 4194313, $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
     PseudoRET
   bb.2:
     liveins: $shared_s0
-    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 4194313, $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
     PseudoRET
 ...
 ---
@@ -125,7 +145,7 @@ tracksRegLiveness: true
 body: |
   bb.0:
     liveins: $shared_s0
-    INLINEASM &"B.IOS ${0:R}, mask=1111", 1, 4194314, def $shared_s0, 2147483657, $shared_s0(tied-def 3)
+    INLINEASM &"B.IOS ${0:R}, mask=1111", 1, 720906, def $shared_s0, 2147483657, $shared_s0(tied-def 3)
     PseudoRET
 ...
 ---
@@ -228,5 +248,86 @@ body: |
   bb.0:
     liveins: $shared_s0
     INLINEASM &".if 010 == 10\0AB.IOS ${0:S}, mask=1111\0A.else\0AB.IOS ${0:S}, mask=0001\0A.endif", 1, 720905, $shared_s0
+    PseudoRET
+...
+---
+name: redefined_slot
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    INLINEASM &"B.IOS mask=1111, ->${0:S}<128B>", 1, 720906, def $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    PseudoRET
+...
+---
+name: partial_definition
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    INLINEASM &"B.IOS mask=0001, ->${0:S}<128B>", 1, 720906, def $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    PseudoRET
+...
+---
+name: literal_s37
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    INLINEASM &"B.IOS S37, mask=1111", 1
+    PseudoRET
+...
+---
+name: partial_then_full
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=0001", 1, 720905, $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    PseudoRET
+...
+---
+name: preexisting_retain
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0_ru
+    PseudoRET
+...
+---
+name: duplicate_inputs
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    INLINEASM &"B.IOS ${0:S}, ${1:S}, mask=1111", 1, 720905, $shared_s0, 720905, $shared_s0
+    PseudoRET
+...
+---
+name: generated_partial_definition
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0, $tile_t1
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    $shared_s0 = PseudoV5SharedL2S 1, 3, 1, 1, $tile_t1
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
+    PseudoRET
+...
+---
+name: mixed_generated
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $shared_s0
+    $tile_t = PseudoV5SharedS2L 1, 3, $shared_s0, 15, 1
+    INLINEASM &"B.IOS ${0:S}, mask=1111", 1, 720905, $shared_s0
     PseudoRET
 ...

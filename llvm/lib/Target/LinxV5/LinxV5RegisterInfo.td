@@ -702,8 +702,8 @@ def Shared_ABS : RegisterClass<"LinxV5", [i64], 64,
 
 // Source-only aliases carry an explicit retain decision through macro MC
 // expansion. They are not allocation candidates: compiler-generated Shared
-// values remain in Shared_ABS and are mapped to these aliases from kill flags
-// while lowering MachineInstrs to MCInsts.
+// values remain in Shared_ABS until SharedReuseFinalize selects the encoding
+// aliases immediately before header emission.
 def Shared_SRC : RegisterClass<"LinxV5", [i64], 64, (add
   (sequence "Shared_S%u", 0, 63),
   (sequence "Shared_S%u_RU", 0, 63)

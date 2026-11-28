@@ -33,7 +33,7 @@ define void @insert_broadcast(ptr %in, ptr %out) {
 ; CHECK-NEXT: B.IOS mask=1100, ->S0<1KB>
 ; CHECK-NEXT: B.IOT {{.*}}mask=1100, last
 ; CHECK: BSTART.TMOV FP32
-; CHECK-NEXT: B.IOS S0, mask=1000
+; CHECK-NEXT: B.IOS S0.reuse, mask=1000
 define void @publish_extract(ptr %in, ptr %out) {
   %src = call <256 x float> @llvm.linx.blk.tload.v256f32(i64 1, i64 1, i64 1, i64 1, i64 0, i64 0, ptr %in, i64 0)
   %shared = call i64 @llvm.linx.v5.shared.l2s.publish.v256f32(i64 1, i64 12, <256 x float> %src)
