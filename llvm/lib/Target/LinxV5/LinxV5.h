@@ -50,8 +50,8 @@ struct LinxV5ScalarShareabilityEarlyPass
 FunctionPass *
 createLinxV5ScalarShareabilityPass(const LinxV5TargetMachine *TM = nullptr);
 void initializeLinxV5ScalarShareabilityPass(PassRegistry &);
-FunctionPass *createLinxV5InlineAsmTileLifetimePass();
-void initializeLinxV5InlineAsmTileLifetimePass(PassRegistry &);
+FunctionPass *createLinxV5SharedReuseFinalizePass();
+void initializeLinxV5SharedReuseFinalizePass(PassRegistry &);
 
 FunctionPass *createLinxV5AnnotateControlFlowPass();
 void initializeLinxV5AnnotateControlFlowPass(PassRegistry &);

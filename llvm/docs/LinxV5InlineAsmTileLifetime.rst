@@ -1,73 +1,37 @@
-Automatic Tile lifetimes in inline assembly
-==========================================
+Tile source lifetimes in MIR
+============================
 
-The ``linxv5-inline-asm-tile-lifetime`` machine pass recognizes a restricted
-straight-line subset of existing Tile inline assembly. TileOP headers and
-public APIs do not need new modifiers or source changes. The pass runs after
-pseudo expansion and before Local Tile relative-reference conversion.
+Local sources use the existing ``TRegToOffset`` lifecycle and relative-register
+conversion. Shared sources use ``linxv5-shared-reuse-finalize`` immediately after
+``TRegToOffset`` and before ``EmitHeader``. The latter uses LLVM
+``LivePhysRegs`` and CFG live-ins to distinguish uses of physical Shared slots,
+including loops, successor uses and redefinitions. It handles generated Shared
+consumers and inline assembly through the same final register encoding.
 
-The pass computes physical Tile liveness to a CFG fixed point, including
-loop backedges and successor uses. For recognized ``B.IOT`` and ``B.IOS``
-source placeholders, it retains a source when it is live after the asm or
-referenced again within the asm. Repeated reads of one source in the same
-bundle conservatively retain all occurrences; sequential distinct bundles
-can consume the final occurrence. Destination placeholders are unchanged.
+A retained source becomes ``Shared_Sn_RU``; a safe final use remains
+``Shared_Sn`` with a kill flag. These source-only encoding registers are reserved
+and never allocation candidates. Implicit uses of the original Shared register
+preserve the data dependence after the final alias conversion. Header emission
+preserves these decisions and the output paths print the selected registers.
+The ordinary ``%S`` modifier prints that MIR encoding; explicit ``%R`` retains,
+and ``%K`` requires a proven consuming input. Tied operands remain identical
+and retain their input. Destinations remain ordinary Shared registers.
 
-Rewriting uses internal ``P`` (retain) and ``Q`` (consume) modifiers rather
-than appending text to register names. These remove any register-name reuse
-suffix before printing the selected lifetime, avoiding duplicate suffixes.
-Explicit lifetime modifiers and textual ``.reuse`` remain unchanged. The
-pass does not interpret arbitrary assembly or promise to fix explicitly
-incorrect lifetimes.
+The pass inspects PE masks and input roles in a restricted Tile assembly
+vocabulary, without rewriting the assembly string. Constant equality ``.if`` /
+``.elseif`` conditions with decimal or immediate ``${N:c}`` operands are
+interpreted only for safety classification, with a maximum nesting of sixteen.
+Repeated inputs, tied inputs, partial PE reads and unsupported consumer forms
+retain. Recognized full-PE TLSU TMOV, TMOV.S2L.BROADCAST,
+TMOV.S2L.EXTRACT and TSTORE sources may consume at their final use.
 
-The recognized instruction vocabulary is ``BSTART.TLSU``, ``BSTART.TEPL``,
-``B.DIM``, ``B.DATR``, ``B.IOR``, ``B.IOT`` and ``B.IOS``. Unknown instructions,
-directives, labels, comments, semicolon-separated statements, dialect
-alternatives and escaped dollar syntax leave the entire template unchanged.
-Constant ``.if`` / ``.elseif`` equality conditions, ``.else`` and ``.endif``
-are evaluated before recognition. Operands must be decimal integers or
-immediate ``${N:c}`` references; nesting is limited to sixteen levels.
-Leading-zero integer spellings are left untouched to avoid confusing
-assembler octal literals with decimal constants.
-Only the selected arm participates in lifetime inference. Unresolved,
-unsupported or malformed conditions leave the entire template unchanged.
-Only known read-only TLSU forms (TMOV, TMOV.S2L.BROADCAST,
-TMOV.S2L.EXTRACT and TSTORE) can consume sources. Other TLSU operations,
-including associated TLOAD, retain their recognized sources.
+Calls, opaque assembly, literal Shared references, escaped Shared identities,
+conditional or partial Shared definitions, partial function PE domains and
+generic-element mode conservatively disable inferred consumption for the
+function. ``INLINEASM_BR`` is also conservative. These limits protect whole-slot
+MIR liveness from architectural uses or definitions it cannot represent.
 
-Partial or nonliteral PE masks, a partial function PE domain, generic-element
-mode, ``B.IOR`` (whose execution-mask role is not inferred), tied or overlapping
-definitions, literal source registers, and Tile registers involved in COPY
-or memory operations conservatively prevent inferred consumption. Functions
-containing machine calls or an unrecognized inline assembly template also
-retain inferred sources. A literal source reference in another template
-likewise prevents inferred consumption, since it has no machine operand
-participating in liveness analysis. Allocator-required retain decisions take
-precedence over an inferred consume modifier. These restrictions
-avoid treating an escaped Shared identity or a partially executed consumer
-as a proven final use. They are coverage limits rather than optimal lifetime
-analysis for every API or aliasing pattern.
-
-Integration status
-------------------
-
-TileOP PE-mask macros expand to assembler ``.if`` / ``.elseif`` directives.
-Constant full-PE instances are recognized through condition normalization;
-partial-PE instances retain their sources. An unrecognized template still
-prevents inferred consumption elsewhere in its function. This intentionally
-restricted coverage must not be described as arbitrary inline-asm support.
-
-The real API integration probe loads a Local Tile, publishes a Shared Tile,
-then calls ``TMOV_S2L_BROADCAST`` twice with the same Shared value. The desired
-full-PE final-use pattern is retain followed by consume. With unchanged
-TileOP headers, this probe generates that pattern and compiles to an object.
-Disassembly tests also check lifetime encoding for constant-condition
-templates. These compiler checks are not a successful model execution gate.
-A compatible model lifetime/publication-order test and broader alias
-validation remain necessary before claiming general end-to-end readiness.
-
-``-linxv5-enable-inline-asm-tile-lifetime=false`` disables rewriting. For Clang, pass
-the option through ``-mllvm``. Unsupported templates keep the existing
-behavior; this fallback is not a new correctness guarantee for arbitrary
-inline assembly. Model execution and publication-order validation remain
-separate from compiler and object-encoding tests.
+The former ``InlineAsmTileLifetime`` pass, its enable/disable flag and internal
+``P/Q`` modifiers have been removed. Public TileOP source needs no new modifier.
+Compiler regression tests cover MIR decisions, final assembly and object
+encoding. They do not establish model or hardware execution correctness.
