@@ -183,8 +183,12 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
   }
 
   for (MVT VT : MVT::fixedlen_vector_valuetypes()) {
-    setOperationAction(ISD::LOAD, VT, Custom);
-    setOperationAction(ISD::STORE, VT, Custom);
+    // Sub-Tile vectors use ordinary Scalar requests. In particular, do not
+    // widen a small memory access into a legal, fixed-IntraCore Tile carrier.
+    bool ScalarVector = Subtarget.isScalar() && !Subtarget.enableLegacyISel() &&
+                        VT.getStoreSize() < TypeSize::Fixed(128);
+    setOperationAction(ISD::LOAD, VT, ScalarVector ? Expand : Custom);
+    setOperationAction(ISD::STORE, VT, ScalarVector ? Expand : Custom);
   }
   setOperationAction(ISD::STACKSAVE, MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE, MVT::Other, Expand);
@@ -370,6 +374,14 @@ LinxV5TargetLowering::LinxV5TargetLowering(const TargetMachine &TM,
 
   if (!Subtarget.enableLegacyISel())
     setTargetDAGCombine(ISD::GlobalAddress);
+}
+
+TargetLowering::LegalizeTypeAction
+LinxV5TargetLowering::getPreferredVectorAction(MVT VT) const {
+  if (Subtarget.isScalar() && !Subtarget.enableLegacyISel() &&
+      VT.isFixedLengthVector() && VT.getStoreSize() < TypeSize::Fixed(128))
+    return VT.getVectorNumElements() == 1 ? TypeScalarizeVector : TypeSplitVector;
+  return TargetLowering::getPreferredVectorAction(VT);
 }
 
 TargetLowering::AtomicExpansionKind

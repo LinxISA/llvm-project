@@ -1,7 +1,7 @@
 ; RUN: opt -mtriple=linx64v5 -passes=linx-v5-scalar-shareability -S %s | FileCheck %s
 ; RUN: llc -mtriple=linx64v5 -mcpu=janus -filetype=obj %s -o %t.o
 declare void @llvm.va_copy(ptr, ptr)
-define void @copy(ptr %destination, ptr %source) {
+define void @copy(ptr %destination, ptr %source) "linx-scalar-shareability"="intra" {
   call void @llvm.va_copy(ptr %destination, ptr %source)
   ret void
 }

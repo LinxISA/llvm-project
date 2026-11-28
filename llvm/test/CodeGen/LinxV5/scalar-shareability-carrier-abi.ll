@@ -2,8 +2,7 @@
 ;
 ; Inlining an aggregate-returning C++ range factory leaves integer ABI
 ; plumbing around its reference. SROA alone cannot see through this chain.
-; The opaque Shared handle must be promoted before Scalar GM scope lowering.
-; External accesses must still be scoped before DSE can eliminate them.
+; Normal optimization promotes the handle and eliminates overwritten stores.
 target triple = "linx64v5"
 %Shared = type { i64, i32 }
 
@@ -12,8 +11,8 @@ define void @carrier(ptr %external) {
 ; CHECK-NOT: alloca
 ; CHECK: [[HANDLE:%.*]] = {{(tail )?}}call i64 asm sideeffect "", "=Sr"()
 ; CHECK: call void asm sideeffect "", "Sr"(i64 [[HANDLE]])
-; CHECK: call void @llvm.linx.scalar.store(ptr %external, i64 1, i32 4, i32 1)
-; CHECK: call void @llvm.linx.scalar.store(ptr %external, i64 2, i32 4, i32 1)
+; CHECK-NOT: store i32 1
+; CHECK: store i32 2, ptr %external
 ; CHECK: ret void
   %local = alloca %Shared, align 8
   %address = ptrtoint ptr %local to i64

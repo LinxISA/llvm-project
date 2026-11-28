@@ -6,36 +6,43 @@
 #error "the Linx group worker runtime is target-only"
 #endif
 
-#define PTO_RUNTIME_INTRA
 #include "../../../include/linx/pto_runtime.h"
-#define GROUP_INTRA __attribute__((linx_scalar_shareability("intra")))
+
+/* The launcher and participating PEs publish these fields with IntraCore
+ * requests. Keep every reader in that domain, including immutable fields. */
+#define GROUP_FIELD(ctx, field)                                                \
+  ((__typeof__((ctx)->field))(uintptr_t)__builtin_linx_scalar_load(            \
+      &(ctx)->field, sizeof((ctx)->field), 1))
 
 /* Only PE0 reads/writes this process-lifetime state. Workers never poll it. */
 static volatile unsigned process_state;
 
-extern int __pto_runtime_process_initialize(void)
-    __attribute__((weak)) GROUP_INTRA;
-extern int __pto_runtime_invocation_initialize(
-    const struct pto_runtime_group_context *) __attribute__((weak)) GROUP_INTRA;
+extern int __pto_runtime_process_initialize(void) __attribute__((weak));
+extern int
+__pto_runtime_invocation_initialize(const struct pto_runtime_group_context *)
+    __attribute__((weak));
 
 extern const struct pto_runtime_group_context *
-__pto_runtime_group_context_get(void) __attribute__((weak)) GROUP_INTRA;
-extern int __linx_group_pe_main(
-    unsigned, const struct pto_runtime_group_context *) __attribute__((weak)) GROUP_INTRA;
-extern void __pto_runtime_group_complete(
-    const struct pto_runtime_group_context *, int)
-    __attribute__((weak, noreturn)) GROUP_INTRA;
+__pto_runtime_group_context_get(void) __attribute__((weak));
+extern int __linx_group_pe_main(unsigned,
+                                const struct pto_runtime_group_context *)
+    __attribute__((weak));
+extern void
+__pto_runtime_group_complete(const struct pto_runtime_group_context *, int)
+    __attribute__((weak, noreturn));
 
 static __attribute__((noreturn)) void group_abort(void) {
   /* LLVM's generic trap expands to libc abort on this target. This runtime
    * has no libc dependency: use the accepted SYS software-breakpoint fault.
    * The platform must treat it as unrecoverable group failure. */
   __asm__ volatile("BSTART.SYS FALL\nEBREAK 0\nBSTOP\n" ::: "memory");
-  for (;;) __asm__ volatile("" ::: "memory");
+  for (;;)
+    __asm__ volatile("" ::: "memory");
 }
 
 static __attribute__((noreturn)) void group_park(void) {
-  for (;;) __asm__ volatile("" ::: "memory");
+  for (;;)
+    __asm__ volatile("" ::: "memory");
 }
 
 static inline void group_sync_core(void) {
@@ -45,23 +52,23 @@ static inline void group_sync_core(void) {
 }
 
 static inline void group_store_state(volatile uint32_t *p, uint32_t value) {
-  *p = value;
+  __builtin_linx_scalar_store((void *)p, value, sizeof(*p), 1);
   __asm__ volatile("" ::: "memory");
 }
 
 static inline uint32_t group_load_state(const volatile uint32_t *p) {
-  const uint32_t value = *p;
+  const uint32_t value = __builtin_linx_scalar_load((const void *)p, 4, 1);
   __asm__ volatile("" ::: "memory");
   return value;
 }
 
 static inline void group_store_result(volatile int32_t *p, int32_t value) {
-  *p = value;
+  __builtin_linx_scalar_store((void *)p, value, sizeof(*p), 1);
   __asm__ volatile("" ::: "memory");
 }
 
 static inline int32_t group_load_result(const volatile int32_t *p) {
-  const int32_t value = *p;
+  const int32_t value = __builtin_linx_scalar_load((const void *)p, 4, 1);
   __asm__ volatile("" ::: "memory");
   return value;
 }
@@ -69,11 +76,11 @@ static inline int32_t group_load_result(const volatile int32_t *p) {
 __attribute__((noreturn, used, visibility("default"))) void
 __linx_group_entry(const struct pto_runtime_group_context *ctx) {
   const unsigned pe_id = __builtin_linx_get_thread_idx();
-  if (!ctx || ctx->magic != PTO_RUNTIME_GROUP_CONTEXT_MAGIC ||
-      ctx->version != PTO_RUNTIME_GROUP_CONTEXT_VERSION ||
-      ctx->participant_count != PTO_RUNTIME_GROUP_PARTICIPANTS ||
-      pe_id >= PTO_RUNTIME_GROUP_PARTICIPANTS || !ctx->state ||
-      !ctx->result || !ctx->error)
+  if (!ctx || GROUP_FIELD(ctx, magic) != PTO_RUNTIME_GROUP_CONTEXT_MAGIC ||
+      GROUP_FIELD(ctx, version) != PTO_RUNTIME_GROUP_CONTEXT_VERSION ||
+      GROUP_FIELD(ctx, participant_count) != PTO_RUNTIME_GROUP_PARTICIPANTS ||
+      pe_id >= PTO_RUNTIME_GROUP_PARTICIPANTS || !GROUP_FIELD(ctx, state) ||
+      !GROUP_FIELD(ctx, result) || !GROUP_FIELD(ctx, error))
     group_abort();
 
   /* PR #415: workers can reach this site's generation zero first. Only PE0
@@ -87,9 +94,10 @@ __linx_group_entry(const struct pto_runtime_group_context *ctx) {
       if (__pto_runtime_process_initialize)
         status = __pto_runtime_process_initialize();
       if (status) {
-        group_store_result(&ctx->result[0], status);
-        group_store_state(&ctx->state[0], PTO_RUNTIME_GROUP_STATE_ABORT);
-        *ctx->error = 1;
+        group_store_result(&GROUP_FIELD(ctx, result)[0], status);
+        group_store_state(&GROUP_FIELD(ctx, state)[0],
+                          PTO_RUNTIME_GROUP_STATE_ABORT);
+        group_store_state(GROUP_FIELD(ctx, error), 1);
         group_abort();
       }
       process_state = 2;
@@ -97,9 +105,10 @@ __linx_group_entry(const struct pto_runtime_group_context *ctx) {
     if (__pto_runtime_invocation_initialize)
       status = __pto_runtime_invocation_initialize(ctx);
     if (status) {
-      group_store_result(&ctx->result[0], status);
-      group_store_state(&ctx->state[0], PTO_RUNTIME_GROUP_STATE_ABORT);
-      *ctx->error = 1;
+      group_store_result(&GROUP_FIELD(ctx, result)[0], status);
+      group_store_state(&GROUP_FIELD(ctx, state)[0],
+                        PTO_RUNTIME_GROUP_STATE_ABORT);
+      group_store_state(GROUP_FIELD(ctx, error), 1);
       group_abort();
     }
   }
@@ -107,14 +116,15 @@ __linx_group_entry(const struct pto_runtime_group_context *ctx) {
   // A missing callback is a group error, not a reason for one PE to leave the
   // rendezvous.  Every participating PE must execute both static SYNC.CORE
   // sites or the remaining PEs can deadlock indefinitely.
-  group_store_state(&ctx->state[pe_id], PTO_RUNTIME_GROUP_STATE_RUNNING);
+  group_store_state(&GROUP_FIELD(ctx, state)[pe_id],
+                    PTO_RUNTIME_GROUP_STATE_RUNNING);
   group_sync_core();
 
   const int status = __linx_group_pe_main
                          ? __linx_group_pe_main(pe_id, ctx)
                          : -22; /* -EINVAL, without a libc dependency */
-  group_store_result(&ctx->result[pe_id], status);
-  group_store_state(&ctx->state[pe_id],
+  group_store_result(&GROUP_FIELD(ctx, result)[pe_id], status);
+  group_store_state(&GROUP_FIELD(ctx, state)[pe_id],
                     status ? PTO_RUNTIME_GROUP_STATE_ABORT
                            : PTO_RUNTIME_GROUP_STATE_DONE);
   group_sync_core();
@@ -122,14 +132,14 @@ __linx_group_entry(const struct pto_runtime_group_context *ctx) {
   if (pe_id == 0) {
     int group_status = 0;
     for (unsigned i = 0; i != PTO_RUNTIME_GROUP_PARTICIPANTS; ++i) {
-      if (group_load_state(&ctx->state[i]) != PTO_RUNTIME_GROUP_STATE_DONE &&
-          !group_status)
-        {
-          const int pe_status = group_load_result(&ctx->result[i]);
-          group_status = pe_status ? pe_status : -1;
-        }
+      if (group_load_state(&GROUP_FIELD(ctx, state)[i]) !=
+              PTO_RUNTIME_GROUP_STATE_DONE &&
+          !group_status) {
+        const int pe_status = group_load_result(&GROUP_FIELD(ctx, result)[i]);
+        group_status = pe_status ? pe_status : -1;
+      }
     }
-    *ctx->error = group_status != 0;
+    group_store_state(GROUP_FIELD(ctx, error), group_status != 0);
     __asm__ volatile("" ::: "memory");
     if (__pto_runtime_group_complete)
       __pto_runtime_group_complete(ctx, group_status);
@@ -142,12 +152,11 @@ __attribute__((noreturn, used, visibility("default"))) void
 __linx_group_worker_start(void) {
   const struct pto_runtime_group_context *ctx =
       __pto_runtime_group_context_get ? __pto_runtime_group_context_get() : 0;
-  if (!ctx ||
-      ctx->magic != PTO_RUNTIME_GROUP_CONTEXT_MAGIC ||
-      ctx->version != PTO_RUNTIME_GROUP_CONTEXT_VERSION ||
-      ctx->participant_count != PTO_RUNTIME_GROUP_PARTICIPANTS || !ctx->state ||
-      !ctx->result ||
-      !ctx->error)
+  if (!ctx || GROUP_FIELD(ctx, magic) != PTO_RUNTIME_GROUP_CONTEXT_MAGIC ||
+      GROUP_FIELD(ctx, version) != PTO_RUNTIME_GROUP_CONTEXT_VERSION ||
+      GROUP_FIELD(ctx, participant_count) != PTO_RUNTIME_GROUP_PARTICIPANTS ||
+      !GROUP_FIELD(ctx, state) || !GROUP_FIELD(ctx, result) ||
+      !GROUP_FIELD(ctx, error))
     group_abort();
   __linx_group_entry(ctx);
   group_abort();

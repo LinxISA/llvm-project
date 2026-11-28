@@ -7,5 +7,5 @@ define void @runtime_prefetch(ptr %p) "linx-runtime-intra-abi" {
   ret void
 }
 ; CHECK-LABEL: define void @runtime_prefetch(
-; CHECK-NOT: call void @llvm.prefetch
+; CHECK: call void @llvm.prefetch
 ; CHECK: ret void

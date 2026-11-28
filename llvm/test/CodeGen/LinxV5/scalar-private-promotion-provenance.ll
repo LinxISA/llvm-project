@@ -1,44 +1,23 @@
-; RUN: opt -mtriple=linx64v5 -passes=linx-v5-scalar-shareability -S %s | FileCheck %s
+; RUN: opt -mtriple=linx64v5 -passes='default<O2>' -S %s | FileCheck %s
+; Ordinary temporary fields promote, while explicit requests retain effects.
+declare i64 @llvm.linx.scalar.load(ptr, i32 immarg, i32 immarg)
+declare void @llvm.linx.scalar.store(ptr, i64, i32 immarg, i32 immarg)
 
-@shape = private constant i32 8192
-
-; Keep immutable tiling visible to constant propagation before scoped calls
-; obscure it. Volatile and explicitly scoped loads retain their requests.
-; CHECK-LABEL: define i32 @constant_shape
-; CHECK-NEXT: ret i32 8192
-define i32 @constant_shape() {
-  %v = load i32, ptr @shape, align 4
-  ret i32 %v
+; CHECK-LABEL: define i64 @private_field(
+; CHECK-NEXT: ret i64 %value
+define i64 @private_field(i64 %value) {
+  %object = alloca { i64, i32 }
+  store i64 %value, ptr %object
+  %r = load i64, ptr %object
+  ret i64 %r
 }
 
-; CHECK-LABEL: define i64 @normal_load
-; CHECK: call i64 @llvm.linx.scalar.load{{.*}}!linx.scalar.implicit
-define i64 @normal_load(ptr %p) {
-  %v = load i64, ptr %p, align 8
-  ret i64 %v
-}
-
-; CHECK-LABEL: define void @normal_store
-; CHECK: call void @llvm.linx.scalar.store{{.*}}!linx.scalar.implicit
-define void @normal_store(ptr %p, i64 %v) {
-  store i64 %v, ptr %p, align 8
-  ret void
-}
-
-; CHECK-LABEL: define i64 @volatile_load
-; CHECK: call i64 @llvm.linx.scalar.load
-; CHECK-NOT: !linx.scalar.implicit
-; CHECK: ret
-define i64 @volatile_load(ptr %p) {
-  %v = load volatile i64, ptr %p, align 8
-  ret i64 %v
-}
-
-; CHECK-LABEL: define i64 @explicit_load
-; CHECK: call i64 @llvm.linx.scalar.load
-; CHECK-NOT: !linx.scalar.implicit
-; CHECK: ret
-define i64 @explicit_load(ptr %p) "linx-scalar-shareability"="intra" {
-  %v = load i64, ptr %p, align 8
-  ret i64 %v
+; CHECK-LABEL: define i64 @explicit_shared(
+; CHECK: call void @llvm.linx.scalar.store(ptr {{.*}}%object, i64 %value, i32 8, i32 1)
+; CHECK: call i64 @llvm.linx.scalar.load(ptr {{.*}}%object, i32 8, i32 1)
+define i64 @explicit_shared(i64 %value) {
+  %object = alloca i64
+  call void @llvm.linx.scalar.store(ptr %object, i64 %value, i32 8, i32 1)
+  %r = call i64 @llvm.linx.scalar.load(ptr %object, i32 8, i32 1)
+  ret i64 %r
 }

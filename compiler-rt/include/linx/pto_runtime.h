@@ -6,13 +6,14 @@
 
 /* Platform ABI, not an ISA launch instruction. Keep layout in sync with musl,
  * Linux and TileOP. The launcher publishes this immutable descriptor before
- * entering the same PC on PE0..3, with separate valid stacks and TLS. */
+ * entering the same PC on PE0..3, with separate valid stacks and TLS.
+ * Publish/read the descriptor and state/result/error through explicit IntraCore
+ * Scalar interfaces. Callback functions use the ordinary Private call ABI;
+ * each callback must explicitly scope any shared accesses of its own. */
 #ifndef PTO_RUNTIME_INTRA
-#if defined(__linx) && defined(__clang__)
-#define PTO_RUNTIME_INTRA __attribute__((linx_scalar_shareability("intra")))
-#else
+/* Compatibility macro: sharing is expressed at each runtime memory access,
+ * rather than imposed on every access and callee of a function. */
 #define PTO_RUNTIME_INTRA
-#endif
 #endif
 
 #define PTO_RUNTIME_GROUP_CONTEXT_MAGIC 0x50544f47u

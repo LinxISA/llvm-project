@@ -1,12 +1,12 @@
 ; RUN: split-file %s %t
 ; RUN: not llc -mtriple=linx64v5 %t/callee.ll 2>&1 | FileCheck %s --check-prefix=CALLEE
 ; RUN: not llc -mtriple=linx64v5 %t/caller.ll 2>&1 | FileCheck %s --check-prefix=CALLER
-; CALLEE: external memory call 'private_callee' needs
+; CALLEE: memory-accessing callee needs a matching shareability contract
 ; CALLER: memory-accessing callee needs a matching shareability contract
 
 ;--- callee.ll
 declare void @private_callee(ptr) "linx-scalar-shareability"="private"
-define void @runtime(ptr %p) "linx-runtime-intra-abi" {
+define void @runtime(ptr %p) "linx-scalar-shareability"="intra" {
   call void @private_callee(ptr %p)
   ret void
 }
