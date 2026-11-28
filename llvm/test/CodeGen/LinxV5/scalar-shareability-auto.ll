@@ -8,18 +8,22 @@ target triple = "linx64v5"
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
 declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1 immarg)
-declare void @borrow(ptr nocapture) "linx-scalar-shareability"="intra"
+declare void @borrow(ptr nocapture)
+declare void @llvm.linx.scalar.store(ptr, i64, i32 immarg, i32 immarg)
 
-; A noalias parameter can still be passed to Tile by a caller.
+; Ordinary pointers retain standard C/C++ optimization opportunities.
 ; IR-LABEL: define i32 @parameter
-; IR: call void @llvm.linx.scalar.store(ptr %{{[^,]+}}, i64 42, i32 4, i32 1)
-; IR: call i64 @llvm.linx.scalar.load(ptr %{{[^,]+}}, i32 4, i32 1)
+; IR: store i32 42, ptr %p
+; IR: load i32, ptr %
 ; OPT-LABEL: define i32 @parameter
-; OPT: call void @llvm.linx.scalar.store
-; OPT: call i64 @llvm.linx.scalar.load
+; OPT: store i32 42, ptr %p
+; OPT-NOT: load
+; OPT: ret i32 42
 ; ASM-LABEL: parameter:
-; ASM: swi.intra
-; ASM: lwui.intra
+; ASM-NOT: .intra
+; ASM: sw
+; ASM-NOT: lw
+; ASM: c.setc.tgt
 define i32 @parameter(ptr noalias %p) {
   store i32 42, ptr %p, align 4
   %v = load i32, ptr %p, align 4
@@ -41,18 +45,19 @@ define i32 @private_stack(i32 %x) {
   ret i32 %v
 }
 
-; Even nocapture cannot prove an object is not accessed by Tile.
+; Escaping a pointer does not change its ordinary Private access contract.
 ; IR-LABEL: define i32 @escaping_stack
-; IR: call void @llvm.linx.scalar.store
+; IR: store i32 0
 ; IR: call void @borrow
-; IR: call i64 @llvm.linx.scalar.load
+; IR: load i32
 ; OPT-LABEL: define i32 @escaping_stack
-; OPT: call void @llvm.linx.scalar.store
+; OPT: store i32 0
 ; OPT: call void @borrow
-; OPT: call i64 @llvm.linx.scalar.load
+; OPT: load i32
 ; ASM-LABEL: escaping_stack:
-; ASM: swi.intra
-; ASM: lwui.intra
+; ASM-NOT: .intra
+; ASM: sw
+; ASM: lw
 define i32 @escaping_stack() {
   %p = alloca i32, align 4
   store i32 0, ptr %p, align 4
@@ -62,7 +67,7 @@ define i32 @escaping_stack() {
 }
 
 ; IR-LABEL: define i32 @unknown_address
-; IR: call i64 @llvm.linx.scalar.load(ptr %{{[^,]+}}, i32 4, i32 1)
+; IR: load i32, ptr %
 define i32 @unknown_address(i64 %a) {
   %p = inttoptr i64 %a to ptr
   %v = load i32, ptr %p, align 4
@@ -70,15 +75,15 @@ define i32 @unknown_address(i64 %a) {
 }
 
 ; IR-LABEL: define i32 @global
-; IR: call i64 @llvm.linx.scalar.load(ptr @g, i32 4, i32 1)
+; IR: load i32, ptr @g
 define i32 @global() {
   %v = load i32, ptr @g, align 4
   ret i32 %v
 }
 
 ; IR-LABEL: define i32 @merged
-; IR: call void @llvm.linx.scalar.store({{.*}}i32 4, i32 1)
-; IR: call i64 @llvm.linx.scalar.load(ptr %{{[^,]+}}, i32 4, i32 1)
+; IR: store i32 0
+; IR: load i32, ptr %
 define i32 @merged(ptr %external, i1 %b) {
   %local = alloca i32
   store i32 0, ptr %local
@@ -88,13 +93,13 @@ define i32 @merged(ptr %external, i1 %b) {
 }
 
 ; IR-LABEL: define void @copies
-; IR-NOT: call void @llvm.mem
-; IR: call i64 @llvm.linx.scalar.load
-; IR: call void @llvm.linx.scalar.store
+; IR: call void @llvm.memset
+; IR: call void @llvm.memcpy
+; IR: call void @llvm.memmove
 ; IR: ret void
 ; OPT-LABEL: define void @copies
-; OPT-NOT: call void @llvm.mem
-; OPT: call void @llvm.linx.scalar.store
+; OPT-NOT: @llvm.linx.scalar
+; OPT: ret void
 define void @copies(ptr %p, ptr %q, i64 %n) {
   call void @llvm.memset.p0.i64(ptr align 1 %p, i8 -1, i64 %n, i1 false)
   call void @llvm.memcpy.p0.p0.i64(ptr align 1 %p, ptr align 1 %q, i64 %n, i1 false)
@@ -115,17 +120,17 @@ define void @tile_carrier(ptr %src, ptr %dst) {
   ret void
 }
 
-; Small vectors become Scalar requests and must not use Private.
+; Small vectors retain ordinary Scalar memory semantics.
 ; IR-LABEL: define void @small_vector
-; IR: call i64 @llvm.linx.scalar.load(ptr %{{[^,]+}}, i32 8, i32 1)
-; IR: call void @llvm.linx.scalar.store(ptr %{{[^,]+}}, i64 {{.*}}, i32 8, i32 1)
+; IR: load <2 x i32>
+; IR: store <2 x i32>
 define void @small_vector(ptr %src, ptr %dst) {
   %v = load <2 x i32>, ptr %src, align 8
   store <2 x i32> %v, ptr %dst, align 8
   ret void
 }
 
-; Scalar initialization of a nonescaping object still aliases its Tile read.
+; Scalar initialization for a Tile reader explicitly requests IntraCore.
 ; IR-LABEL: define void @stack_tile
 ; IR: call void @llvm.linx.scalar.store({{.*}}i32 4, i32 1)
 ; IR: load <32 x i64>
@@ -134,7 +139,7 @@ define void @small_vector(ptr %src, ptr %dst) {
 ; ASM: TLOAD
 define void @stack_tile(ptr %dst) {
   %p = alloca <32 x i64>, align 128
-  store i32 42, ptr %p, align 4
+  call void @llvm.linx.scalar.store(ptr %p, i64 42, i32 4, i32 1)
   %v = load <32 x i64>, ptr %p, align 128
   store <32 x i64> %v, ptr %dst, align 8
   ret void

@@ -13,6 +13,8 @@ unsigned long long add(void *p, unsigned long long v) {
   return __builtin_linx_scalar_atomic(p, v, 0, 8, 2, 3, 0);
 }
 // CHECK: define {{.*}}@ordinary
+// CHECK: call void @llvm.linx.scalar.store({{.*}}i32 4, i32 1)
+// CHECK: call i64 @llvm.linx.scalar.load({{.*}}i32 4, i32 1)
 // CHECK: "linx-scalar-shareability"="intra"
 __attribute__((linx_scalar_shareability("intra")))
 int ordinary(int *p) { *p = 7; return *p; }

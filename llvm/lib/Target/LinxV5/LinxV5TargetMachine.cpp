@@ -17,20 +17,11 @@
 #include "LinxV5TargetTransformInfo.h"
 #include "MCTargetDesc/LinxV5BaseInfo.h"
 #include "TargetInfo/LinxV5TargetInfo.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Analysis/InlineCost.h"
-#include "llvm/Analysis/InstructionSimplify.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
-#include "llvm/IR/InlineAsm.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -40,7 +31,6 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/SROA.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 
 using namespace llvm;
 
@@ -49,7 +39,8 @@ cl::opt<bool> EnableClockHandSched("linxv5-enable-clock-hand-sched",
 namespace llvm {
 cl::opt<bool> EnableGenericElement(
     "linxv5-enable-generic-element", cl::init(false),
-    cl::desc("Use generic CFG/VP predication and explicit PTO Tile legalization"));
+    cl::desc(
+        "Use generic CFG/VP predication and explicit PTO Tile legalization"));
 } // namespace llvm
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
@@ -85,303 +76,6 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeLinxV5Target() {
   initializeLinxV5ConstantRegOptPass(*PR);
   initializeLinxV5SIMTSpillFixupPass(*PR);
 }
-
-namespace {
-// SROA can expose an aggregate ABI's pointer -> integer -> pointer round trip.
-// Fold only address/aggregate plumbing, then promote the newly visible local
-// carrier. Do not run memory optimizations before request scopes are assigned.
-struct LinxV5CarrierPreparePass : PassInfoMixin<LinxV5CarrierPreparePass> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
-    bool Changed = false, Again;
-    do {
-      Again = false;
-      for (Instruction &I : make_early_inc_range(instructions(F))) {
-        if (!isa<CastInst>(I) && !isa<ExtractValueInst>(I) &&
-            !isa<InsertValueInst>(I) && !isa<GetElementPtrInst>(I))
-          continue;
-        if (Value *V = simplifyInstruction(
-                &I, SimplifyQuery(F.getParent()->getDataLayout()))) {
-          I.replaceAllUsesWith(V);
-          I.eraseFromParent();
-          Again = Changed = true;
-        } else if (I.use_empty()) {
-          I.eraseFromParent();
-          Again = Changed = true;
-        }
-      }
-    } while (Again);
-    if (Changed)
-      AM.invalidate(F, PreservedAnalyses::none());
-    auto PA = SROAPass().run(F, AM);
-    return Changed ? PreservedAnalyses::none() : PA;
-  }
-};
-
-// Ordinary inline shape factories must disappear before their sret stores are
-// scoped. Once converted to Scalar GM intrinsics those stores cannot be
-// promoted, even when later inlining exposes a constant asm operand. Restrict
-// this preparation to small scalar computations: never optimize real GM
-// accesses, Tile/Shared operations or explicit scope/domain boundaries here.
-struct LinxV5InlineAsmConstantPreparePass
-    : PassInfoMixin<LinxV5InlineAsmConstantPreparePass> {
-  static bool isShapeFactory(Function &F, SmallPtrSetImpl<Function *> &Active,
-                             unsigned &Budget, unsigned Depth = 0) {
-    if (F.isDeclaration() || F.isVarArg() || Depth == 8 ||
-        F.getInstructionCount() > Budget ||
-        F.hasFnAttribute(Attribute::NoInline) ||
-        F.hasFnAttribute(Attribute::OptimizeNone) ||
-        F.hasFnAttribute("linx-scalar-shareability") ||
-        F.hasFnAttribute("linx-tile-pe-domain") ||
-        F.hasFnAttribute("target-cpu") || !Active.insert(&F).second)
-      return false;
-    Budget -= F.getInstructionCount();
-    auto Allowed = [&]() {
-      for (Instruction &I : instructions(F)) {
-        if (auto *L = dyn_cast<LoadInst>(&I)) {
-          if (!L->isSimple() || !L->getType()->isSingleValueType() ||
-              L->getType()->isVectorTy() ||
-              !isa<AllocaInst>(getUnderlyingObject(L->getPointerOperand())))
-            return false;
-        } else if (auto *S = dyn_cast<StoreInst>(&I)) {
-          Value *Object = getUnderlyingObject(S->getPointerOperand());
-          auto *A = dyn_cast<Argument>(Object);
-          if (!S->isSimple() || S->getValueOperand()->getType()->isVectorTy() ||
-              (!isa<AllocaInst>(Object) && (!A || !A->hasStructRetAttr())))
-            return false;
-        } else if (auto *C = dyn_cast<CallBase>(&I)) {
-          if (auto *II = dyn_cast<IntrinsicInst>(C)) {
-            if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
-                II->getIntrinsicID() == Intrinsic::lifetime_end ||
-                isa<DbgInfoIntrinsic>(II))
-              continue;
-            return false;
-          }
-          Function *Callee = C->getCalledFunction();
-          if (!isa<CallInst>(C) || !Callee || C->isMustTailCall() ||
-              C->hasFnAttr(Attribute::NoInline) ||
-              C->hasFnAttr("linx-scalar-shareability") ||
-              C->hasFnAttr("linx-tile-pe-domain") ||
-              !isShapeFactory(*Callee, Active, Budget, Depth + 1))
-            return false;
-          // A nested sret factory may write only this factory's return
-          // object or a temporary local object, never another pointer arg.
-          for (unsigned N = 0; N != C->arg_size(); ++N) {
-            if (!Callee->hasParamAttribute(N, Attribute::StructRet))
-              continue;
-            Value *Object = getUnderlyingObject(C->getArgOperand(N));
-            auto *A = dyn_cast<Argument>(Object);
-            if (!isa<AllocaInst>(Object) && (!A || !A->hasStructRetAttr()))
-              return false;
-          }
-        } else if (I.mayReadOrWriteMemory() || I.mayHaveSideEffects() ||
-                   I.getType()->isVectorTy() || isa<PtrToIntInst>(I) ||
-                   isa<IntToPtrInst>(I)) {
-          return false;
-        }
-      }
-      return true;
-    };
-    bool Result = Allowed();
-    Active.erase(&F);
-    return Result;
-  }
-
-  static void collectFactories(Value *V, SmallPtrSetImpl<Value *> &Seen,
-                               SmallPtrSetImpl<CallBase *> &Calls) {
-    if (Seen.size() == 512 || !Seen.insert(V).second)
-      return;
-    auto *I = dyn_cast<Instruction>(V);
-    if (!I)
-      return;
-    if (auto *C = dyn_cast<CallBase>(I))
-      Calls.insert(C);
-    if (auto *L = dyn_cast<LoadInst>(I)) {
-      auto *A =
-          dyn_cast<AllocaInst>(getUnderlyingObject(L->getPointerOperand()));
-      if (A) {
-        // Follow uses of the return buffer to discover its sret producer.
-        SmallVector<Value *, 16> Work{A};
-        SmallPtrSet<Value *, 32> Uses;
-        while (!Work.empty() && Uses.size() < 128) {
-          Value *P = Work.pop_back_val();
-          if (!Uses.insert(P).second)
-            continue;
-          for (User *U : P->users()) {
-            if (auto *C = dyn_cast<CallBase>(U))
-              Calls.insert(C);
-            else if (isa<GetElementPtrInst>(U) || isa<BitCastInst>(U))
-              Work.push_back(cast<Value>(U));
-          }
-        }
-      }
-    }
-    for (Value *Operand : I->operands())
-      collectFactories(Operand, Seen, Calls);
-  }
-
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-    auto &FAM =
-        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-    bool Changed = false;
-    for (unsigned Round = 0; Round != 8; ++Round) {
-      SmallPtrSet<CallBase *, 32> Calls;
-      for (Function &F : M) {
-        if (F.hasFnAttribute(Attribute::OptimizeNone))
-          continue;
-        for (Instruction &I : instructions(F)) {
-          auto *C = dyn_cast<CallInst>(&I);
-          auto *Asm = C ? dyn_cast<InlineAsm>(C->getCalledOperand()) : nullptr;
-          if (!Asm)
-            continue;
-          unsigned Arg = 0;
-          for (const auto &Constraint : Asm->ParseConstraints()) {
-            if (!Constraint.hasArg())
-              continue;
-            if (Arg >= C->arg_size())
-              break;
-            if (Constraint.Type == InlineAsm::isInput &&
-                !Constraint.isIndirect && !Constraint.isMultipleAlternative &&
-                Constraint.Codes.size() == 1 && Constraint.Codes[0] == "i") {
-              SmallPtrSet<Value *, 32> Seen;
-              collectFactories(C->getArgOperand(Arg), Seen, Calls);
-            }
-            ++Arg;
-          }
-        }
-      }
-      SmallPtrSet<Function *, 16> Modified;
-      for (CallBase *C : Calls) {
-        Function *Callee = C->getCalledFunction();
-        SmallPtrSet<Function *, 8> Active;
-        unsigned Budget = 256;
-        if (!isa<CallInst>(C) || !Callee || C->isMustTailCall() ||
-            C->hasFnAttr(Attribute::NoInline) ||
-            C->hasFnAttr("linx-scalar-shareability") ||
-            C->hasFnAttr("linx-tile-pe-domain") ||
-            !isShapeFactory(*Callee, Active, Budget) ||
-            !isInlineViable(*Callee).isSuccess())
-          continue;
-        // Body viability does not establish call-site legality. In particular,
-        // a replaceable definition must remain callable at link time, and
-        // caller/callee attributes must obey the regular inliner's rules.
-        auto GetTLI = [&](Function &F) -> const TargetLibraryInfo & {
-          return FAM.getResult<TargetLibraryAnalysis>(F);
-        };
-        auto Decision = getAttributeBasedInliningDecision(
-            *C, Callee, FAM.getResult<TargetIRAnalysis>(*Callee), GetTLI);
-        if (Decision && !Decision->isSuccess())
-          continue;
-        // At the entry boundary every sret write must target local storage.
-        // The local buffer may be a non-sret argument of a factory with a
-        // separate GM output. Do not pull that write into the caller's scope.
-        bool LocalReturn = true;
-        for (unsigned N = 0; N != C->arg_size(); ++N)
-          if (Callee->hasParamAttribute(N, Attribute::StructRet) &&
-              !isa<AllocaInst>(getUnderlyingObject(C->getArgOperand(N))))
-            LocalReturn = false;
-        if (!LocalReturn)
-          continue;
-        Function *Caller = C->getCaller();
-        InlineFunctionInfo IFI;
-        if (InlineFunction(*C, IFI).isSuccess())
-          Modified.insert(Caller);
-      }
-      if (Modified.empty())
-        break;
-      Changed = true;
-      for (Function *F : Modified) {
-        FAM.invalidate(*F, PreservedAnalyses::none());
-        // SROA only promotes local storage; no GM CSE/DSE is allowed here.
-        auto PA = LinxV5CarrierPreparePass().run(*F, FAM);
-        FAM.invalidate(*F, PA);
-      }
-    }
-    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
-  }
-};
-
-// Tile handles are register values even when their C++ wrappers are passed by
-// reference. Expose small helpers before assigning memory request scopes:
-// scoping an unpromoted wrapper first makes its stack traffic irreversible.
-// Inline only; do not run GM load/store optimizations at this point.
-// The runtime intra ABI attaches the default scope to every call site. It is
-// compatible with an unannotated native caller/callee; explicit function
-// contracts and non-default call-site scopes remain boundaries.
-struct LinxV5TileHelperPreparePass
-    : PassInfoMixin<LinxV5TileHelperPreparePass> {
-  static bool hasTileAsm(Function &F) {
-    for (Instruction &I : instructions(F))
-      if (auto *C = dyn_cast<CallInst>(&I))
-        if (auto *Asm = dyn_cast<InlineAsm>(C->getCalledOperand()))
-          for (const auto &Constraint : Asm->ParseConstraints())
-            for (const auto &Code : Constraint.Codes)
-              if (Code == "Sr" || Code == "Tr")
-                return true;
-    return false;
-  }
-
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-    auto &FAM =
-        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-    bool Changed = false;
-    for (unsigned Round = 0; Round != 8; ++Round) {
-      SmallVector<CallInst *, 32> Calls;
-      for (Function &F : M) {
-        if (F.hasFnAttribute(Attribute::OptimizeNone) ||
-            F.hasFnAttribute("linx-scalar-shareability") ||
-            F.hasFnAttribute("linx-tile-pe-domain"))
-          continue;
-        for (Instruction &I : instructions(F)) {
-          auto *C = dyn_cast<CallInst>(&I);
-          Function *Callee = C ? C->getCalledFunction() : nullptr;
-          if (!Callee || Callee == &F || Callee->isDeclaration() ||
-              Callee->isVarArg() || C->isMustTailCall() ||
-              Callee->getInstructionCount() > 8192 ||
-              F.getInstructionCount() + Callee->getInstructionCount() > 65536 ||
-              C->hasFnAttr(Attribute::NoInline) ||
-              Callee->hasFnAttribute(Attribute::NoInline) ||
-              Callee->hasFnAttribute(Attribute::OptimizeNone) ||
-              (C->hasFnAttr("linx-scalar-shareability") &&
-               C->getFnAttr("linx-scalar-shareability").getValueAsString() !=
-                   "intra") ||
-              C->hasFnAttr("linx-tile-pe-domain") ||
-              Callee->hasFnAttribute("linx-scalar-shareability") ||
-              Callee->hasFnAttribute("linx-tile-pe-domain") ||
-              !hasTileAsm(*Callee) || !isInlineViable(*Callee).isSuccess())
-            continue;
-          auto GetTLI = [&](Function &Fn) -> const TargetLibraryInfo & {
-            return FAM.getResult<TargetLibraryAnalysis>(Fn);
-          };
-          auto Decision = getAttributeBasedInliningDecision(
-              *C, Callee, FAM.getResult<TargetIRAnalysis>(*Callee), GetTLI);
-          if (!Decision || Decision->isSuccess())
-            Calls.push_back(C);
-        }
-      }
-      SmallPtrSet<Function *, 16> Modified;
-      for (CallInst *C : Calls) {
-        Function *Caller = C->getCaller();
-        if (Caller->getInstructionCount() +
-                C->getCalledFunction()->getInstructionCount() >
-            65536)
-          continue;
-        InlineFunctionInfo IFI;
-        if (InlineFunction(*C, IFI).isSuccess())
-          Modified.insert(Caller);
-      }
-      if (Modified.empty())
-        break;
-      Changed = true;
-      for (Function *F : Modified) {
-        FAM.invalidate(*F, PreservedAnalyses::none());
-        auto PA = LinxV5CarrierPreparePass().run(*F, FAM);
-        FAM.invalidate(*F, PA);
-      }
-    }
-    return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
-  }
-};
-} // namespace
 
 static StringRef computeDataLayout(const Triple &TT) {
   assert(TT.isArch64Bit() && "only 64-bits are currently supported");
@@ -480,14 +174,6 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           MPM.addPass(LinxV5PEDomainPreparePass());
           return true;
         }
-        if (Name == "linx-v5-inline-asm-constant-prepare") {
-          MPM.addPass(LinxV5InlineAsmConstantPreparePass());
-          return true;
-        }
-        if (Name == "linx-v5-tile-helper-prepare") {
-          MPM.addPass(LinxV5TileHelperPreparePass());
-          return true;
-        }
         if (Name == "linx-v5-pe-domain-specialize") {
           MPM.addPass(LinxV5PEDomainSpecializePass());
           return true;
@@ -504,11 +190,7 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       });
   PB.registerPipelineParsingCallback(
       [this](StringRef Name, FunctionPassManager &FPM,
-         ArrayRef<PassBuilder::PipelineElement>) {
-        if (Name == "linx-v5-private-object-promotion") {
-          FPM.addPass(LinxV5PrivateObjectPromotionPass());
-          return true;
-        }
+             ArrayRef<PassBuilder::PipelineElement>) {
         if (Name == "linx-v5-scalar-shareability") {
           FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
           return true;
@@ -547,20 +229,15 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
       [this](ModulePassManager &MPM, OptimizationLevel) {
         MPM.addPass(LinxV5PEDomainPreparePass());
         MPM.addPass(AlwaysInlinerPass());
-        MPM.addPass(LinxV5InlineAsmConstantPreparePass());
-        MPM.addPass(LinxV5TileHelperPreparePass());
         FunctionPassManager FPM;
-        // Promote local induction/control and Tile carrier temporaries first.
-        // This does not optimize externally visible GM accesses, but prevents
-        // a marked loop's local control storage becoming a scoped GM request.
+        // Promote local induction/control and Tile carrier temporaries before
+        // protecting the surviving typed Tile transport accesses.
         FPM.addPass(SROAPass());
         // Protect surviving RowMajor and M-layout carrier accesses before
         // GVN/PRE can clone a load without its frontend type metadata. Local
         // carriers are promoted first; N8 transport waits for fixp inlining.
         if (!EnableGenericElement)
           FPM.addPass(LinxV5TileCarrierTransportPass(/*Early=*/true));
-        FPM.addPass(LinxV5CarrierPreparePass());
-        FPM.addPass(LinxV5PrivateObjectPromotionPass());
         FPM.addPass(LinxV5ScalarShareabilityEarlyPass(this));
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
@@ -582,7 +259,6 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
         FPM.addPass(LinxV5ElementRegionPromotePass());
         FPM.addPass(LinxV5ElementRegionPass());
         FPM.addPass(LinxV5ElementRegionVerifierPass());
-        FPM.addPass(LinxV5PrivateObjectPromotionPass());
         FPM.addPass(LinxV5TileCarrierTransportPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });
@@ -596,7 +272,6 @@ void LinxV5TargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
           return;
         MPM.addPass(LinxV5PEDomainUnsupportedPass());
         FunctionPassManager FPM;
-        FPM.addPass(LinxV5PrivateObjectPromotionPass());
         FPM.addPass(LinxV5TileCarrierTransportPass());
         MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
       });

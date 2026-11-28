@@ -137,6 +137,8 @@ class LinxV5TargetLowering : public TargetLowering {
   const LinxV5Subtarget &Subtarget;
 
 public:
+  LegalizeTypeAction getPreferredVectorAction(MVT VT) const override;
+
   explicit LinxV5TargetLowering(const TargetMachine &TM,
                                 const LinxV5Subtarget &STI);
 

@@ -6,16 +6,13 @@
 
 #include "LinxV5.h"
 #include "LinxV5TargetMachine.h"
-#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/CodeGen/AtomicExpandUtils.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsLinx.h"
@@ -27,9 +24,10 @@
 using namespace llvm;
 
 namespace {
-// Run both before generic optimization and immediately before selection.
-// Early conversion prevents DSE, vectorization and libc formation from losing
-// request scope; the late sweep covers accesses synthesized by target passes.
+// Lower only explicitly attributed functions. Unmarked Scalar memory keeps
+// ordinary LLVM semantics and selects Private requests. The early conversion
+// protects explicit shared accesses from generic optimization; the late sweep
+// covers accesses synthesized inside those explicit contracts.
 
 class LinxV5ScalarShareability : public FunctionPass {
 public:
@@ -58,110 +56,6 @@ INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_END(LinxV5ScalarShareability, "linxv5-scalar-shareability",
                     "LinxV5 Scalar shareability", false, false)
 
-// A private object must be a complete, nonescaping allocation. noalias on a
-// parameter only separates parameters; it says nothing about the same buffer
-// being passed to Tile work in another function. ptrtoint, stores of pointers,
-// calls (including nocapture Tile intrinsics), returns and inline asm all make
-// an alloca potentially shared. This deliberately uses no byte-range AA: one
-// object can be reached through GEP/PHI/select at several Tile request ranges.
-static bool
-isPrivateObject(Value *P, SmallDenseMap<const Value *, bool, 8> &Cache,
-                const SmallPtrSetImpl<const BasicBlock *> &TileBlocks) {
-  const Value *Object = getUnderlyingObject(P);
-  auto *Allocation = dyn_cast<AllocaInst>(Object);
-  if (!Allocation)
-    return false;
-  auto Found = Cache.find(Object);
-  if (Found != Cache.end())
-    return Found->second;
-  bool Private = true;
-  {
-    SmallVector<const Value *, 16> Work{Object};
-    SmallPtrSet<const Value *, 32> Seen;
-    while (!Work.empty() && Private) {
-      const Value *V = Work.pop_back_val();
-      if (!Seen.insert(V).second)
-        continue;
-      for (const User *U : V->users()) {
-        if (auto *I = dyn_cast<Instruction>(U))
-          if (TileBlocks.contains(I->getParent())) {
-            Private = false;
-            break;
-          }
-        if (auto *C = dyn_cast<CallBase>(U)) {
-          if (isa<MemIntrinsic>(C) ||
-              (C->getCalledFunction() &&
-               (C->getCalledFunction()->getIntrinsicID() ==
-                    Intrinsic::lifetime_start ||
-                C->getCalledFunction()->getIntrinsicID() == Intrinsic::vastart ||
-                C->getCalledFunction()->getIntrinsicID() == Intrinsic::vacopy ||
-                C->getCalledFunction()->getIntrinsicID() == Intrinsic::vaend ||
-                C->getCalledFunction()->getIntrinsicID() ==
-                    Intrinsic::lifetime_end)))
-            continue;
-          Private = false;
-          break;
-        }
-        if (isa<PHINode>(U) || isa<SelectInst>(U)) {
-          // A merge with a shared object requires IntraCore, including
-          // initialization through the alloca before the merge is optimized.
-          for (const Use &Input : U->operands())
-            if (Input->getType()->isPointerTy() &&
-                getUnderlyingObject(Input.get()) != Object) {
-              Private = false;
-              break;
-            }
-          if (!Private)
-            break;
-          Work.push_back(cast<Value>(U));
-          continue;
-        }
-        if (isa<GetElementPtrInst>(U) || isa<BitCastInst>(U) ||
-            isa<AddrSpaceCastInst>(U)) {
-          Work.push_back(cast<Value>(U));
-          continue;
-        }
-        if (auto *L = dyn_cast<LoadInst>(U)) {
-          // Native Tile carriers access this object through IntraCore even
-          // when its address never escapes. Scalar initialization must match.
-          if (isa<FixedVectorType>(L->getType()) &&
-              L->getModule()->getDataLayout().getTypeStoreSize(L->getType()) >=
-                  TypeSize::Fixed(128)) {
-            Private = false;
-            break;
-          }
-          continue;
-        }
-        if (isa<ICmpInst>(U))
-          continue;
-        if (auto *S = dyn_cast<StoreInst>(U)) {
-          Type *T = S->getValueOperand()->getType();
-          if (isa<FixedVectorType>(T) &&
-              S->getModule()->getDataLayout().getTypeStoreSize(T) >=
-                  TypeSize::Fixed(128)) {
-            Private = false;
-            break;
-          }
-          if (S->getValueOperand() != V)
-            continue;
-        }
-        if (auto *R = dyn_cast<AtomicRMWInst>(U)) {
-          if (R->getValOperand() != V)
-            continue;
-        }
-        if (auto *C = dyn_cast<AtomicCmpXchgInst>(U)) {
-          if (C->getNewValOperand() != V && C->getCompareOperand() != V)
-            continue;
-        }
-        Private = false;
-        break;
-      }
-    }
-  }
-  Cache[Object] = Private;
-  return Private;
-}
-
 static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
                                     const TargetLibraryInfo &TLI) {
   if (F.isDeclaration() || F.hasFnAttribute("__vec__") ||
@@ -170,72 +64,54 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
        F.getFnAttribute("target-cpu").getValueAsString() == "simt"))
     return false;
   auto Attr = F.getFnAttribute("linx-scalar-shareability");
-  bool Explicit = Attr.isStringAttribute();
-  StringRef Name = Explicit ? Attr.getValueAsString() : "intra";
+  if (!Attr.isStringAttribute())
+    return false;
+  StringRef Name = Attr.getValueAsString();
   unsigned Scope = Name == "private" ? 0
                    : Name == "intra" ? 1
                    : Name == "inter" ? 2
                                      : 3;
   if (Scope == 3)
     report_fatal_error("invalid linx-scalar-shareability attribute");
+  // An explicit Private contract has the same memory semantics as the default.
+  if (Scope == 0)
+    return false;
   const DataLayout &DL = F.getParent()->getDataLayout();
   auto Fail = [&](const Twine &Why) {
     F.getContext().diagnose(DiagnosticInfoUnsupported(
         F, Twine("Scalar shareability: ") + Why, DebugLoc(), DS_Error));
     report_fatal_error("Scalar shareability lowering failed", false);
   };
-  // A marked element loop is an IndexedGenerated program. Its memory
-  // operations must remain recognizable by element predication/legalization;
-  // that pipeline verifies complete conversion to fixed-IntraCore requests.
-  // Scalar accesses outside these loops still require ordinary alias handling.
+  // IndexedGenerated loops keep their fixed-IntraCore Tile legalization.
   SmallPtrSet<const BasicBlock *, 32> TileBlocks;
-  if (!Explicit) {
-    DominatorTree DT(F);
-    LoopInfo LI(DT);
-    for (Loop *L : LI.getLoopsInPreorder()) {
-      MDNode *ID = L->getLoopID();
-      if (!ID)
+  DominatorTree DT(F);
+  LoopInfo LI(DT);
+  for (Loop *L : LI.getLoopsInPreorder()) {
+    MDNode *ID = L->getLoopID();
+    if (!ID)
+      continue;
+    for (const MDOperand &Operand : drop_begin(ID->operands())) {
+      auto *Property = dyn_cast_or_null<MDNode>(Operand.get());
+      if (!Property || Property->getNumOperands() == 0)
         continue;
-      for (const MDOperand &Operand : drop_begin(ID->operands())) {
-        auto *Property = dyn_cast_or_null<MDNode>(Operand.get());
-        if (!Property || Property->getNumOperands() == 0)
-          continue;
-        auto *Key = dyn_cast_or_null<MDString>(Property->getOperand(0));
-        if (Key && Key->getString() == "llvm.loop.linx.pto.element.region")
-          TileBlocks.insert(L->block_begin(), L->block_end());
-      }
+      auto *Key = dyn_cast_or_null<MDString>(Property->getOperand(0));
+      if (Key && Key->getString() == "llvm.loop.linx.pto.element.region")
+        TileBlocks.insert(L->block_begin(), L->block_end());
     }
   }
-  SmallDenseMap<const Value *, bool, 8> PrivateCache;
-  auto NeedsScope = [&](Value *P) {
-    return Explicit || !isPrivateObject(P, PrivateCache, TileBlocks);
-  };
   SmallVector<MemIntrinsic *, 8> Mem;
   SmallVector<CallBase *, 8> Library;
   SmallVector<CallBase *, 4> VaCopies;
-  SmallVector<Instruction *, 4> PrefetchHints;
   for (Instruction &I : instructions(F)) {
     if (TileBlocks.contains(I.getParent()))
       continue;
     if (auto *M = dyn_cast<MemIntrinsic>(&I)) {
-      bool Shared = NeedsScope(M->getRawDest());
-      if (auto *T = dyn_cast<MemTransferInst>(M))
-        Shared |= NeedsScope(T->getRawSource());
-      if (Shared)
-        Mem.push_back(M);
+      Mem.push_back(M);
     } else if (auto *C = dyn_cast<CallBase>(&I)) {
       Function *Callee = C->getCalledFunction();
-      if (C->isInlineAsm()) {
-        if (Explicit)
-          Fail("inline assembly needs explicit scoped builtins");
-        // Assembly owns its encoded requests. Its pointer operands still
-        // prevent an underlying alloca from being classified Private.
-        continue;
-      }
+      if (C->isInlineAsm())
+        Fail("inline assembly needs explicit scoped builtins");
       if (Callee && Callee->isIntrinsic()) {
-        // Target requests own their architectural scope.
-        if (!Explicit && Callee->getName().startswith("llvm.linx."))
-          continue;
         switch (Callee->getIntrinsicID()) {
         case Intrinsic::linx_scalar_load:
         case Intrinsic::linx_scalar_store:
@@ -260,21 +136,12 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         case Intrinsic::experimental_noalias_scope_decl:
           continue;
         case Intrinsic::vastart:
-          // The varargs ABI lowers these to pointer stores/copies. Keep the
-          // ordinary private lowering only for nonescaping stack va_lists;
-          // shared va_list objects still need explicit scoped operations.
-          if (NeedsScope(C->getArgOperand(0)))
-            Fail("shared va_list needs an explicit scoped lowering");
+          Fail("shared va_list needs an explicit scoped lowering");
           continue;
         case Intrinsic::vacopy:
           VaCopies.push_back(C);
           continue;
         case Intrinsic::prefetch:
-          if (!Explicit && F.hasFnAttribute("linx-runtime-intra-abi")) {
-            // Prefetch is optional; omit the hint until a scoped form exists.
-            PrefetchHints.push_back(C);
-            continue;
-          }
           Fail("prefetch needs an explicit scoped lowering");
           continue;
         default:
@@ -293,46 +160,22 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         Library.push_back(C);
         continue;
       }
-      // Runtime libraries may explicitly assert a uniform call ABI at each
-      // call site (including constructor/function-pointer calls). Ordinary
-      // code still requires a checked direct callee contract. Do not override
-      // a visible incompatible callee with the call-site assertion.
+      // Shared function contracts must also hold across direct and indirect
+      // calls. A call-site assertion cannot override an incompatible callee.
       auto CallContract = C->getFnAttr("linx-scalar-shareability");
-      auto CalleeContract = Callee ? Callee->getFnAttribute(
-                                        "linx-scalar-shareability")
-                                  : Attribute();
-      // EH preparation and optimization can synthesize calls after Clang
-      // attaches call-site contracts. Only runtime builds assert this default;
-      // explicit function scopes and incompatible callee scopes stay checked.
-      if (((CallContract.isStringAttribute() &&
-            CallContract.getValueAsString() == Name) ||
-           (!Explicit && F.hasFnAttribute("linx-runtime-intra-abi") &&
-            Name == "intra")) &&
-          (!CalleeContract.isStringAttribute() ||
-           CalleeContract.getValueAsString() == Name))
+      auto CalleeContract =
+          Callee ? Callee->getFnAttribute("linx-scalar-shareability")
+                 : Attribute();
+      if (CalleeContract.isStringAttribute() &&
+          CalleeContract.getValueAsString() == Name)
         continue;
-      if (!Callee)
-        Fail("indirect memory call needs a scoped callee contract");
-      auto Contract = Callee->getFnAttribute("linx-scalar-shareability");
-      if (Contract.isStringAttribute() && Contract.getValueAsString() == Name)
+      if (!CalleeContract.isStringAttribute() &&
+          CallContract.isStringAttribute() &&
+          CallContract.getValueAsString() == Name)
         continue;
-      // Every definition in this native compilation receives the same early
-      // and late sweep. Module boundaries require an explicit ABI contract.
-      if (!Explicit && !Contract.isStringAttribute() &&
-          !Callee->isDeclaration() && !Callee->hasFnAttribute("__vec__") &&
-          !Callee->hasFnAttribute("__mtc__") &&
-          (!Callee->hasFnAttribute("target-cpu") ||
-           Callee->getFnAttribute("target-cpu").getValueAsString() != "simt"))
-        continue;
-      if (Explicit)
-        Fail("memory-accessing callee needs a matching shareability contract");
-      Fail(Twine("external memory call '") + Callee->getName() +
-           "' needs linx_scalar_shareability(\"intra\") or a visible "
-           "definition");
+      Fail("memory-accessing callee needs a matching shareability contract");
     }
   }
-  for (Instruction *Hint : PrefetchHints)
-    Hint->eraseFromParent();
   // Linx va_list is a single pointer. Materialize its copy before the scoped
   // memory sweep, so even escaped/shared source and destination lists retain
   // the appropriate request scope (vfprintf uses this across calls).
@@ -381,11 +224,10 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
   for (Instruction &I : instructions(F))
     if (!TileBlocks.contains(I.getParent()))
       if (auto *R = dyn_cast<AtomicRMWInst>(&I))
-        if (NeedsScope(R->getPointerOperand()) &&
-            (R->getOperation() == AtomicRMWInst::Nand ||
-             R->isFloatingPointOperation() ||
-             (DL.getTypeStoreSize(R->getType()) < 4 &&
-              R->getOperation() != AtomicRMWInst::Xchg)))
+        if (R->getOperation() == AtomicRMWInst::Nand ||
+            R->isFloatingPointOperation() ||
+            (DL.getTypeStoreSize(R->getType()) < 4 &&
+             R->getOperation() != AtomicRMWInst::Xchg))
           Expand.push_back(R);
   for (AtomicRMWInst *R : Expand)
     expandAtomicRMWToCmpXchg(R, [](IRBuilder<> &B, Value *P, Value *Old,
@@ -413,11 +255,10 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
     if (TileBlocks.contains(I.getParent()))
       continue;
     if (auto *L = dyn_cast<LoadInst>(&I)) {
-      if (L->getType()->isAggregateType() && NeedsScope(L->getPointerOperand()))
+      if (L->getType()->isAggregateType())
         Aggregates.push_back(L);
     } else if (auto *S = dyn_cast<StoreInst>(&I)) {
-      if (S->getValueOperand()->getType()->isAggregateType() &&
-          NeedsScope(S->getPointerOperand()))
+      if (S->getValueOperand()->getType()->isAggregateType())
         Aggregates.push_back(S);
     }
   }
@@ -437,18 +278,18 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         return B.CreateAlignedLoad(Ty, P, A, Volatile);
       }
       auto *ST = dyn_cast<StructType>(Ty);
-      uint64_t Count = ST ? ST->getNumElements()
-                          : cast<ArrayType>(Ty)->getNumElements();
+      uint64_t Count =
+          ST ? ST->getNumElements() : cast<ArrayType>(Ty)->getNumElements();
       Value *Result = UndefValue::get(Ty);
       for (uint64_t N = 0; N < Count; ++N) {
-        Type *FieldTy = ST ? ST->getElementType(N)
-                            : cast<ArrayType>(Ty)->getElementType();
+        Type *FieldTy =
+            ST ? ST->getElementType(N) : cast<ArrayType>(Ty)->getElementType();
         uint64_t Offset = ST ? DL.getStructLayout(ST)->getElementOffset(N)
                              : N * DL.getTypeAllocSize(FieldTy).getFixedValue();
         Value *FieldP = B.CreateConstGEP2_32(Ty, P, 0, N);
         Value *FieldV = V ? B.CreateExtractValue(V, N) : nullptr;
-        Value *Field = Self(Self, FieldTy, FieldP, FieldV,
-                            commonAlignment(A, Offset));
+        Value *Field =
+            Self(Self, FieldTy, FieldP, FieldV, commonAlignment(A, Offset));
         if (!V)
           Result = B.CreateInsertValue(Result, Field, N);
       }
@@ -477,24 +318,12 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
       P = R->getPointerOperand();
     if (auto *C = dyn_cast<AtomicCmpXchgInst>(&I))
       P = C->getPointerOperand();
-    // Native vectors of at least 128 bytes use BLK_TLOAD/TSTORE, whose
-    // requests are fixed IntraCore. Preserve carriers for inlining, SROA
-    // and element-region legalization instead of extracting Scalar lanes.
-    Type *AccessTy = nullptr;
-    if (auto *L = dyn_cast<LoadInst>(&I))
-      AccessTy = L->getType();
-    if (auto *S = dyn_cast<StoreInst>(&I))
-      AccessTy = S->getValueOperand()->getType();
-    if (!Explicit && AccessTy && isa<FixedVectorType>(AccessTy) &&
-        DL.getTypeStoreSize(AccessTy) >= TypeSize::Fixed(128))
-      continue;
     // CUBE Local Tile ABI carriers are transported by their own pass.
-    if (P && !I.getMetadata("linx.tile.transport") && NeedsScope(P))
+    if (P && !I.getMetadata("linx.tile.transport"))
       Work.push_back(&I);
   }
   if (Work.empty())
-    return !Mem.empty() || !VaCopies.empty() || !Aggregates.empty() ||
-           !PrefetchHints.empty();
+    return !Mem.empty() || !VaCopies.empty() || !Aggregates.empty();
   // Scoped intrinsics conservatively model normal GM aliasing and effects.
   // Do not leave preexisting function summaries claiming these new calls are
   // readonly/argmemonly/speculatable or cannot synchronize.
@@ -528,20 +357,6 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
     llvm_unreachable("atomic order");
   };
   for (Instruction *I : Work) {
-    // Request scope does not make an immutable initializer mutable. Fold
-    // ordinary constant loads before scoping hides them from IPO/SCCP; shape
-    // factories and host tiling constants must remain visible to those passes.
-    if (!Explicit)
-      if (auto *L = dyn_cast<LoadInst>(I))
-        if (L->isSimple())
-          if (auto *P = dyn_cast<Constant>(L->getPointerOperand()))
-            if (Constant *V = ConstantFoldLoadFromConstPtr(P, L->getType(), DL)) {
-              if (!isa<UndefValue>(V) && !isa<PoisonValue>(V)) {
-                L->replaceAllUsesWith(V);
-                L->eraseFromParent();
-                continue;
-              }
-            }
     IRBuilder<> B(I);
     B.SetCurrentDebugLocation(I->getDebugLoc());
     if (auto *R = dyn_cast<AtomicRMWInst>(I)) {
@@ -698,17 +513,10 @@ static bool lowerScalarShareability(Function &F, const TargetTransformInfo &TTI,
         if (ValueIn) {
           Value *Part = B.CreateLShr(All, Shift);
           Part = B.CreateZExtOrTrunc(Part, B.getInt64Ty());
-          CallInst *Request =
-              B.CreateCall(Store, {P, Part, B.getInt32(N), B.getInt32(Scope)});
-          if (!Explicit && !cast<StoreInst>(I)->isVolatile())
-            Request->setMetadata("linx.scalar.implicit",
-                                 MDNode::get(F.getContext(), {}));
+          B.CreateCall(Store, {P, Part, B.getInt32(N), B.getInt32(Scope)});
         } else {
           CallInst *Request =
               B.CreateCall(Load, {P, B.getInt32(N), B.getInt32(Scope)});
-          if (!Explicit && !cast<LoadInst>(I)->isVolatile())
-            Request->setMetadata("linx.scalar.implicit",
-                                 MDNode::get(F.getContext(), {}));
           Value *Part = B.CreateZExtOrTrunc(Request, IntTy);
           All = B.CreateOr(All, B.CreateShl(Part, Shift));
         }

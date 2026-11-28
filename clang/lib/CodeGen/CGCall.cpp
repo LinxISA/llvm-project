@@ -5430,10 +5430,6 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
   }
 
   // Apply the attributes and calling convention.
-  if (getLangOpts().LinxRuntimeIntraABI &&
-      getTarget().getTriple().isLinxV5())
-    Attrs = Attrs.addFnAttribute(getLLVMContext(),
-                               "linx-scalar-shareability", "intra");
   CI->setAttributes(Attrs);
   CI->setCallingConv(static_cast<llvm::CallingConv::ID>(CallingConv));
 

@@ -67,3 +67,25 @@ define i64 @explicit_private(ptr %p) #1 {
 }
 attributes #0 = { "linx-scalar-shareability"="intra" }
 attributes #1 = { "linx-scalar-shareability"="inter" }
+
+; Ordinary atomics retain their memory order and use the Private default.
+; CHECK-LABEL: private_atomic:
+; CHECK-NOT: .intra
+; CHECK-NOT: .inter
+; CHECK: ld.add.aqrl
+; CHECK: c.setc.tgt
+define i64 @private_atomic(ptr %p, i64 %v) {
+  %old = atomicrmw add ptr %p, i64 %v acq_rel
+  ret i64 %old
+}
+; CHECK-LABEL: private_volatile:
+; CHECK-NOT: .intra
+; CHECK-NOT: .inter
+; CHECK: sw
+; CHECK: lw
+; CHECK: c.setc.tgt
+define i32 @private_volatile(ptr %p, i32 %v) {
+  store volatile i32 %v, ptr %p, align 4
+  %r = load volatile i32, ptr %p, align 4
+  ret i32 %r
+}

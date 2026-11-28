@@ -15,11 +15,10 @@ Object &guarded_object() {
 void throw_exception() { throw 42; }
 void cleanup_resume() { Object object; work(); }
 
-// CHECK-DAG: declare {{.*}}@__cxa_begin_catch({{.*}}) #[[CATCH:[0-9]+]]
-// CHECK-DAG: declare {{.*}}@__cxa_guard_acquire({{.*}}) #[[GUARD:[0-9]+]]
-// CHECK-DAG: declare {{.*}}@__cxa_allocate_exception({{.*}}) #[[CATCH]]
-// CHECK-DAG: attributes #{{[0-9]+}} = { {{.*}}"linx-runtime-intra-abi"{{.*}} }
-// CHECK-DAG: attributes #[[CATCH]] = { {{.*}}"linx-scalar-shareability"="intra"{{.*}} }
-// CHECK-DAG: attributes #[[GUARD]] = { {{.*}}"linx-scalar-shareability"="intra"{{.*}} }
+// CHECK-DAG: declare {{.*}}@__cxa_begin_catch
+// CHECK-DAG: declare {{.*}}@__cxa_guard_acquire
+// CHECK-DAG: declare {{.*}}@__cxa_allocate_exception
+// CHECK-NOT: "linx-runtime-intra-abi"
+// CHECK-NOT: "linx-scalar-shareability"="intra"
 // DEFAULT-NOT: "linx-runtime-intra-abi"
 // DEFAULT-NOT: "linx-scalar-shareability"="intra"

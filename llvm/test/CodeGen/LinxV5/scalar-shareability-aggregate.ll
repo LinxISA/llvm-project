@@ -5,7 +5,7 @@ target datalayout = "e-p:64:64-i64:64-n32:64-S128"
 
 %Record = type { i8, [2 x i64] }
 
-define void @copy_record(ptr %out, ptr %in) {
+define void @copy_record(ptr %out, ptr %in) "linx-scalar-shareability"="intra" {
   %value = load %Record, ptr %in, align 8
   store %Record %value, ptr %out, align 8
   ret void

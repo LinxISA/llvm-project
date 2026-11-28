@@ -1,6 +1,57 @@
 LinxV5 scalar PTO instructions
 =============================
 
+Scalar memory scope
+-------------------
+
+Ordinary Scalar loads, stores, memcpy, memmove and memset use the Private
+contract. They retain ordinary LLVM memory operations and C/C++ optimization
+rules, including dead-store elimination and forwarding a stored value to a
+subsequent load. Volatile accesses and atomics retain their respective LLVM
+semantics. Parameters, globals, escaping pointers and function calls do not
+implicitly select IntraCore. Scalar stack spills and reloads remain Private.
+
+Shared accesses must explicitly select IntraCore (PEs within one Core) or
+InterCore (Cores within one device), using scoped Scalar builtins/intrinsics
+or the API's scalar views and atomic interfaces. Explicit requests retain
+their declared scope, including reads whose result is otherwise unused.
+Ordinary pointer arithmetic and parameter passing do not carry a scope;
+a scoped view must be retained or a scoped interface used at each access.
+Converting a shared view to an ordinary pointer and dereferencing it uses
+Private, with the caller responsible for meeting that contract.
+
+Tile and IndexedGenerated requests have fixed IntraCore scope. Scalar
+initialization consumed by Tile must therefore explicitly use IntraCore,
+even when the same PE issues both requests. Tile transport, spills and
+reloads retain their Tile request scope; ordinary Scalar accesses must not
+be used to initialize or inspect that storage as shared data. InterCore
+Scalar requests do not by themselves communicate with IntraCore Tile
+requests. All participating requests must satisfy ISA scope and domain
+identity rules.
+
+Scope selection does not provide atomicity, completion or synchronization.
+Use the required atomic order, release/acquire, fences, barriers and Tile
+completion waits separately. Tile intrinsics and inline assembly must
+accurately describe their memory effects (including an asm memory clobber
+where required) to preserve dependencies through ordinary optimization.
+
+The optional ``linx_scalar_shareability("intra")`` or ``("inter")`` function
+attribute is an explicit contract. Its ordinary accesses, including memory
+copies, lower to scoped requests before optimization. Explicit builtins
+keep their own selectors. Such functions are not inlined by Clang and
+memory-accessing callees need a matching declaration or call-site contract;
+inline assembly and unsupported memory intrinsics are diagnosed. An
+explicit ``("private")`` function uses ordinary memory semantics.
+
+Unmarked external functions, indirect calls and runtime helpers use the
+ordinary Private ABI. Shared copies/initialization must use explicit scoped
+interfaces or attributed implementations, including across runtime library
+boundaries. The legacy ``-mlinx-runtime-intra-abi`` option is accepted for
+build-script compatibility and has no effect: it no longer injects sharing
+contracts into definitions, external declarations or calls. Libraries that
+previously relied on automatic IntraCore conversion must migrate shared
+operations to explicit interfaces and be rebuilt with their callers.
+
 Scalar floating-point profiles
 ------------------------------
 

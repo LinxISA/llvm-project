@@ -4,11 +4,11 @@
 // Scalar initialization and consumption surround fixed-IntraCore indexed work.
 extern "C" unsigned mixed(unsigned *__restrict counters,
                            const unsigned *__restrict indices) {
-  counters[0] = 0;
+  __builtin_linx_scalar_store(counters, 0, 4, 1);
 #pragma pto element for
   for (unsigned e = 0; e < 32; ++e)
     __atomic_fetch_add(&counters[indices[e]], 1u, __ATOMIC_RELAXED);
-  return counters[0];
+  return __builtin_linx_scalar_load(counters, 4, 1);
 }
 // CHECK-LABEL: define{{.*}} @mixed
 // CHECK: call void @llvm.linx.scalar.store({{.*}}i32 4, i32 1)

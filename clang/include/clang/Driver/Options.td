@@ -3526,7 +3526,7 @@ def mlinx_group_runtime : Flag<["-"], "mlinx-group-runtime">,
 
 def mlinx_runtime_intra_abi : Flag<["-"], "mlinx-runtime-intra-abi">,
   Group<m_linx_Features_Group>, Flags<[CC1Option]>,
-  HelpText<"Assert that all runtime callees, including indirect calls, use the Linx IntraCore scalar memory ABI">,
+  HelpText<"Deprecated compatibility option; ordinary Linx runtime memory accesses use Private scope">,
   MarshallingInfoFlag<LangOpts<"LinxRuntimeIntraABI">>;
 
 def mlinx_single_layer : Flag<["-"], "mlinx-single-layer">, Group<m_linx_Features_Group>,
